@@ -1,0 +1,221 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Read image and write to bb data file</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='For packing images in executable, language=bb, category=File Utilities'><meta name='author' content='markcw'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=8>File Utilities</a>/Read image and write to bb data file</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="1820.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Read image and write to bb data file by markcw</td><td align="right">2006 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This is a 2-part code entry. It is designed to pack any images inside a blitz executable and then write them from data labels. <br><br>The first part is to read an image and write the data to a bb data file. The second is to read the data (as an include) and create the image.<br><br>It uses a run-length encoded system for 24-bit color (where the run count is the first byte and the 24-bit color is the higher 3 bytes). Since it is RLE it is best used on images with few colors.<br><br>It uses the width and height to calculate the end of data instead of an end of data signature.<br><br>I'm actually really surprised i got this working as i found it very tricky to work out. </td></tr><tr ><td class="cell"><pre class="code">;Read Image Write Data, on 21/9/06
+
+Graphics 640,480,0,2
+SetBuffer BackBuffer()
+
+fileout$="temp.bb"
+filein$="yourname.bmp" ;image in
+
+image=LoadImage(filein$)
+ok=ReadImageWriteData(filein$,fileout$,image)
+
+;Main loop
+While Not KeyHit(1)
+ Cls
+
+ DrawImage image,50,50 ;draw image in
+
+ Text 0,0,"ok="+ok+" filein$="+filein$+" fileout$="+fileout$
+ Text 0,20,"width="+ImageWidth(image)+" height="+ImageHeight(image)
+
+ Flip
+Wend
+
+;Functions
+Function ReadImageWriteData(filein$,fileout$,image)
+ ;Read an image and write 24-bit color data to bb file
+ ;filein$=image file, fileout$=bb file, image=image handle
+
+ Local file,width,height,buffer,imagesize,x,y,rgb,nextrgb,count
+
+ ;Write fileout.bb
+ If fileout$="" Then Return False ;fail code
+ file=WriteFile(fileout$)
+ If Not file Then Return False ;write fail
+
+ width=ImageWidth(image)
+ height=ImageHeight(image)
+ buffer=ImageBuffer(image)
+ imagesize=width Or (height Shl 16)
+
+ ;write title comment, image data label and data command
+ WriteStringAscii(file,";"+fileout$)
+ WriteByte file,13 : WriteByte file,10 ;newline
+ WriteByte file,13 : WriteByte file,10 ;newline
+ WriteStringAscii(file,"."+Left(filein$,Len(filein$)-4))
+ WriteStringAscii(file,"_"+Right(filein$,3))
+ WriteByte file,13 : WriteByte file,10 ;newline
+ WriteStringAscii(file,"Data ")
+ WriteValueAscii(file,imagesize) ;first value is width/height
+
+ ;read pixels to 8-bit run/24-bit color integer
+ LockBuffer buffer
+ For y=0 To height-1
+  For x=0 To width-1
+   rgb=ReadPixelFast(x,y,buffer) And $00FFFFFF
+   If x&lt;width-1
+    nextrgb=ReadPixelFast(x+1,y,buffer) And $00FFFFFF
+   Else
+    nextrgb=$FF000000
+   EndIf
+   If rgb=nextrgb Then count=count+1
+   If rgb&lt;&gt;nextrgb Or x=width-1 Or count=254
+    integer=(count+1) Or (rgb Shl 8)
+    WriteByte file,Asc(",")
+    WriteValueAscii(file,integer)
+    If count=254 Then count=-1 Else count=0
+   EndIf
+  Next
+ Next
+ UnlockBuffer buffer
+
+ ;write end comment
+ WriteByte file,13 : WriteByte file,10 ;newline
+ WriteStringAscii(file,";end "+Left(filein$,Len(filein$)-4))
+ WriteStringAscii(file,"_"+Right(filein$,3))
+
+ CloseFile file
+ Return True ;success code
+
+End Function
+
+Function WriteValueAscii(file,value)
+ ;file=file handle, value=byte/short/integer
+
+ Local ascii$,i,char$
+ ascii$=Str(value)
+ For i=1 To Len(ascii$)
+  char$=Mid(ascii$,i,1)
+  WriteByte(file,Asc(char$))
+ Next
+
+End Function
+
+Function WriteStringAscii(file,ascii$)
+ ;file=file handle, ascii$=ascii string
+
+ Local i,char$
+ For i=1 To Len(ascii$)
+  char$=Mid(ascii$,i,1)
+  WriteByte(file,Asc(char$))
+ Next
+
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >markcw</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> This is the second part. It writes images from the data labels.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;Read Data Write Image, on 21/9/06
+
+Graphics3D 640,480,0,2
+SetBuffer BackBuffer()
+
+Restore yourname_bmp ;image data label
+
+image=ReadDataWriteImage() ;image out
+
+;Main loop
+While Not KeyHit(1)
+ Cls
+
+ DrawImage image,50,50 ;draw image out
+
+ Text 0,0,"width="+ImageWidth(image)+" height="+ImageHeight(image)
+
+ Flip
+Wend
+
+;Includes
+Include "temp.bb"
+
+;Functions
+Function ReadDataWriteImage()
+ ;Read a data label, create image and write 24-bit color data
+
+ Local imagesize,width,height,image,buffer,i,integer,count,rgb,x,y,ix
+
+ ;create image
+ Read imagesize ;first value is width/height
+ width=imagesize And $0000FFFF
+ height=(imagesize And $FFFF0000) Shr 16
+ image=CreateImage(width,height)
+ buffer=ImageBuffer(image)
+
+ ;write pixels from 8-bit run/24-bit color integer
+ LockBuffer buffer
+ While i&lt;width*height
+  Read integer
+  count=integer And $000000FF
+  rgb=(integer And $FFFFFF00) Shr 8
+  For x=ix To ix+count-1
+   WritePixelFast x,y,rgb,buffer
+  Next
+  ix=ix+count
+  i=i+count
+  If ix&gt;=width Then y=y+1 : ix=0
+ Wend
+ UnlockBuffer buffer
+
+ Return image ;image handle
+
+End Function
+</textarea> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >markcw</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> Here is the second part for textures. <br><br>edit: I just noticed CreateTexture only works on ^2 sizes. Maybe it is just my gfx card, i don't know.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;Read Data Write Texture, on 21/9/06
+
+Graphics3D 640,480,0,2
+SetBuffer BackBuffer()
+
+camera=CreateCamera()
+light=CreateLight()
+RotateEntity light,45,45,0
+
+Restore yourname_bmp ;image data label
+
+tex=ReadDataWriteTexture() ;texture out
+
+cube=CreateCube()
+PositionEntity cube,0,0,5
+EntityTexture cube,tex
+
+;Main loop
+While Not KeyHit(1)
+ RenderWorld
+
+ TurnEntity cube,0.4,0.3,0.2
+
+ Text 0,0,"width="+TextureWidth(tex)+" height="+TextureHeight(tex)
+
+ Flip
+Wend
+
+;Includes
+Include "temp.bb"
+
+;Functions
+Function ReadDataWriteTexture()
+ ;Read a data label, create texture and write 24-bit color data
+
+ Local texsize,width,height,tex,buffer,i,integer,count,rgb,x,y,ix
+
+ ;create texture
+ Read texsize ;first value is width/height
+ width=texsize And $0000FFFF
+ height=(texsize And $FFFF0000) Shr 16
+ tex=CreateTexture(width,height)
+ buffer=TextureBuffer(tex)
+
+ ;write pixels from 8-bit run/24-bit color integer
+ LockBuffer buffer
+ While i&lt;width*height
+  Read integer
+  count=integer And $000000FF
+  rgb=(integer And $FFFFFF00) Shr 8
+  For x=ix To ix+count-1
+   WritePixelFast x,y,rgb,buffer
+  Next
+  ix=ix+count
+  i=i+count
+  If ix&gt;=width Then y=y+1 : ix=0
+ Wend
+ UnlockBuffer buffer
+
+ Return tex ;texture handle
+
+End Function
+</textarea> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Terra1</td><td align="right"><font class=tiny>2007</font></td></tr></table></td></tr><tr ><td class="posttext"> ...your a genius. Works a charm, now I don't have to include images with my .exe file, which people are tempted to edit.<br>Thanks. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >mv333</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> What's the difference between this, and the older code you posted <a href="/codearcs.php?code=1505" target="_blank">here</a>?<br><br>I tried to see which one creates smaller bb data files. With my first pic, the older was better. But with another pic, this one was better...... <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >markcw</td><td align="right"><font class=tiny>2012</font></td></tr></table></td></tr><tr ><td class="posttext"> The run length encoding is not a very good compression algorithm, sometimes it may be longer than the straight data. It works best on simple graphics with large areas of the same color, it would be good for masked/simple graphics but I would recommend the older code for all other purposes. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

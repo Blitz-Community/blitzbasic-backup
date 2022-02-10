@@ -1,0 +1,87 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Ultra Fast Draw Pixmap on Pixmap</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='The fastest method I could find to draw Pixmap onto another Pixmap with alpha, language=bmx, category=Graphics'><meta name='author' content='AdamRedwoods'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=1>Graphics</a>/Ultra Fast Draw Pixmap on Pixmap</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2658.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ultra Fast Draw Pixmap on Pixmap by AdamRedwoods</td><td align="right">2010 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This is the fastest method I could come up with to draw a pixmap onto another pixmap. On a 2.4Ghz its about 7-8ms for 1000x1000px per pixmap (no debug). (ReadPixel and WritePixel are a little slower than using this direct memory method.)<br><br>The caveats are you are using only RGBA, and you are plotting a source alpha pixmap onto a static alpha-ignored pixmap. It's best to convert RGBA before sending your pixmaps to this function. <br><br>Additionally, this is unmultiplied alpha. If anyone needs multiplied alpha, I can offer some code assistance (may be even faster).<br><br>Added an x,y offset and opacity when applying the source pixmap to destination.<br><br>Big thanks to ImaginaryHuman for starting this out. Optimized alpha-blending code found on various places with Google.<br><br>Edit: use at your own risk, but let me know if there are problems, I'd be happy to help. Also, I experienced a wrap-around defect or large vaules of x offset, but easily fixed-- but let me know if anyone gets this problem. </td></tr><tr ><td class="cell"><pre class="code">Function UltraDrawPixmapOnPixmap(spix:TPixmap,  pixmap:TPixmap, x:Int, y:Int, opacity:Int = $ff) NoDebug
+        	'' if your pixmaps are rgba8888 then it will work faster
+		'' ARGB is byte order
+		'' non-multiplied alpha
+	Local sourcepixel:Int Ptr, osp:Int Ptr
+        Local destpixel:Int Ptr, dsp:Int Ptr
+        Local sAlpha:Int
+        
+        If (Not spix Or Not pixmap) Then Return
+        If spix.format&lt;&gt;PF_RGBA8888 spix = ConvertPixmap(spix, PF_RGBA8888 )
+        If pixmap.format&lt;&gt;PF_RGBA8888 pixmap = ConvertPixmap(pixmap, PF_RGBA8888 )
+
+        Local sWidth:Int=spix.Width
+        Local sHeight:Int=spix.Height
+        Local dWidth:Int=pixmap.Width
+        Local dHeight:Int=pixmap.Height
+        sourcepixel=Int Ptr(PixmapPixelPtr(spix,0,0))
+        destpixel=Int Ptr(PixmapPixelPtr(pixmap,0,0))
+        Local sRowInts:Int= spix.pitch Shr 2 '' 4 bytes to int 
+        Local dRowInts:Int= pixmap.pitch Shr 2
+
+		''crop the image
+		If ( (x+sWidth)&gt;=dWidth) Then sWidth=dWidth-x '-2 'if you get wraparound issues
+        	If ( (y+sHeight)&gt;=dHeight) Then sHeight=dHeight-y
+		
+		If(y&lt;0) 
+			y = Abs(y)
+			sourcepixel :+(y*sRowInts)
+			sHeight :-y
+			y=0
+		EndIf
+		
+		If(x&lt;0) 
+			sourcepixel :+(-x)
+			sWidth :+x
+			x=0
+		EndIf
+		
+		destpixel = destpixel + x +(y*dRowInts)
+                dsp = destpixel
+                osp = sourcepixel
+		Local Mask:Int=$000000FF
+
+		For Local j:Int=0 To (sHeight)
+			For Local i:Int =0 To (sWidth) Step 2 'dRowInts
+					Local sPixel:Int 
+					sPixel = sourcepixel[i]
+					sAlpha=(sPixel Shr 24) &amp; $000000ff &amp; opacity
+				
+                      	                Local dPixel:Int = destpixel[i] 
+					
+					''''straight alpha (unmultiplied)
+					'Local dAlpha:Int = dPixel Shr 24 &amp; Mask ''untested: alpha onto alpha
+					'Local fa:Int = sAlpha  + ((256-sAlpha)*dAlpha) Shr 8 ''untested: alpha onto alpha
+					Local srb:Int = sPixel &amp; $00ff00ff
+					Local sg:Int = sPixel &amp; $0000ff00
+					Local drb:Int = dPixel &amp; $00ff00ff
+					Local dg:Int = dPixel &amp; $0000ff00
+					
+					Local orb:Int = (drb + (((srb - drb) * sAlpha + $00800080) Shr 8)) &amp; $00ff00ff
+					Local og:Int = (dg + (((sg - dg ) * sAlpha + $00008000) Shr 8)) &amp; $0000ff00
+
+					destPixel[i] = orb | og | $ff000000 ''no need for alpha blending if its on static bg
+					
+					''lets do it again
+                                        If ( i &gt;= dWidth And (sWidth &amp; 1))
+						''odd length, dont draw
+					Else
+					sPixel = sourcepixel[i+1]
+					sAlpha=(sPixel Shr 24) &amp; $000000ff &amp; opacity
+				
+                      	                dPixel:Int = destpixel[i+1] 
+					srb:Int = sPixel &amp; $00ff00ff
+					sg:Int = sPixel &amp; $0000ff00
+					drb:Int = dPixel &amp; $00ff00ff
+					dg:Int = dPixel &amp; $0000ff00
+					
+					orb:Int = (drb + (((srb - drb) * sAlpha + $00800080) Shr 8)) &amp; $00ff00ff
+					og:Int = (dg + (((sg - dg ) * sAlpha + $00008000) Shr 8)) &amp; $0000ff00
+
+					destPixel[i+1] = orb | og | $ff000000
+		                        EndIf				
+                Next
+                sourcepixel= osp + sRowInts*j ''need these to truncate off any extra bytes
+                destpixel = dsp + dRowInts*j         
+        Next        
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br>None.<br><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

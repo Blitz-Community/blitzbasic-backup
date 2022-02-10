@@ -1,0 +1,222 @@
+<!DOCTYPE html><html lang="en" ><head ><title >BRL.Random: Thread Safety</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >BRL.Random: Thread Safety</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=110" >BlitzMax Module Tweaks</a>/<a href="#bottom" >BRL.Random: Thread Safety</a><br><br>
+<a name="1299589"></a>
+
+<a name="1299590"></a>
+
+<a name="1299625"></a>
+
+<a name="1299626"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thread Safe <b>BRL.Random</b>.  Updated: <b>March 13 2016 - v1.09</b><br><br>Each thread has its own seed using a thread-data slot instead of a global.<br>A thread starts with the main thread seed of so its important to call <b>SeedRnd</b> inside the thread to get different random values.<br>An additional function <b>RndSeedMain</b> for getting the main thread seed manually.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Strict
+
+Rem
+bbdoc: Math/Random numbers
+End Rem
+Module BRL.Random
+
+ModuleInfo "Version: 1.09"
+ModuleInfo "Author: Mark Sibly, Floyd"
+ModuleInfo "License: zlib/libpng"
+ModuleInfo "Copyright: Blitz Research Ltd"
+ModuleInfo "Modserver: BRL"
+
+ModuleInfo "History: 1.09 [grable]"
+ModuleInfo "History: Made seed==0 get seed from main thread (so threads start with main thread seed)"
+ModuleInfo "History: 1.08 [grable]"
+ModuleInfo "History: Added RndSeedMain() to get seed of main thread"
+ModuleInfo "History: 1.07 [grable]"
+ModuleInfo "History: Now thread-safe, each thread has its own seed"
+ModuleInfo "History: 1.05 Release"
+ModuleInfo "History: Fixed Rand() with negative min value bug"
+
+Private
+Const	RND_A=48271,RND_M=2147483647,RND_Q=44488,RND_R=3399
+
+?Not Threaded
+Global	rnd_state=$1234
+
+?Threaded
+Extern "C"
+	Function bbThreadAllocData:Int()
+	Function bbThreadSetData( index:Int, data:Int )
+'	Function bbThreadGetData:Int( index:Int )
+	Function bbThreadGetMain:Int Ptr()
+	Function bbThreadGetCurrent:Int Ptr()
+EndExtern
+
+' reimplemented to allow 0
+Function bbThreadGetData:Int( index:Int)
+'	Return bbThreadGetCurrent()[2 + index]
+	Local slots:Int Ptr = bbThreadGetCurrent() + 2
+	Local rnd_state:Int = slots[index]
+	If rnd_state = 0 Then
+		slots[index] = rnd_state_init
+		Return rnd_state_init
+	EndIf
+	Return rnd_state
+EndFunction
+
+Function bbThreadGetMainData:Int( index:Int)
+	Return bbThreadGetMain()[2 + index]
+EndFunction
+
+Global rnd_state_init:Int = $1234
+Global rnd_state_index:Int = bbThreadAllocData()
+bbThreadSetData rnd_state_index, rnd_state_init
+?
+Public
+
+Rem
+bbdoc: Generate random float
+returns: A random float in the range 0 (inclusive) to 1 (exclusive)
+End Rem
+Function RndFloat#()
+?Threaded
+	Local rnd_state:Int = bbThreadGetData(rnd_state_index)
+?
+	rnd_state=RND_A*(rnd_state Mod RND_Q)-RND_R*(rnd_state/RND_Q)
+	If rnd_state&lt;0 rnd_state=rnd_state+RND_M
+	
+?Threaded
+	bbThreadSetData( rnd_state_index, rnd_state)
+?
+	Return (rnd_state &amp; $ffffff0) / 268435456#  'divide by 2^28
+End Function
+
+Rem
+bbdoc: Generate random double
+returns: A random double in the range 0 (inclusive) to 1 (exclusive)
+End Rem
+Function RndDouble!()
+	Const TWO27! = 134217728.0		'2 ^ 27
+	Const TWO29! = 536870912.0		'2 ^ 29
+	
+?Threaded
+	Local rnd_state:Int = bbThreadGetData(rnd_state_index)
+?
+
+	rnd_state=RND_A*(rnd_state Mod RND_Q)-RND_R*(rnd_state/RND_Q)
+	If rnd_state&lt;0 rnd_state=rnd_state+RND_M
+	Local r_hi! = rnd_state &amp; $1ffffffc
+
+	rnd_state=RND_A*(rnd_state Mod RND_Q)-RND_R*(rnd_state/RND_Q)
+	If rnd_state&lt;0 rnd_state=rnd_state+RND_M
+	Local r_lo! = rnd_state &amp; $1ffffff8
+
+?Threaded
+	bbThreadSetData( rnd_state_index, rnd_state)
+?
+	Return (r_hi + r_lo/TWO27)/TWO29
+End Function
+
+Rem
+bbdoc: Generate random double
+returns: A random double in the range min (inclusive) to max (exclusive)
+about: 
+The optional parameters allow you to use Rnd in 3 ways:
+
+[ @Format | @Result
+* &amp;Rnd() | Random double in the range 0 (inclusive) to 1 (exclusive)
+* &amp;Rnd(_x_) | Random double in the range 0 (inclusive) to n (exclusive)
+* &amp;Rnd(_x,y_) | Random double in the range x (inclusive) to y (exclusive)
+]
+End Rem
+Function Rnd!( min_value!=1,max_value!=0 )
+	If max_value&gt;min_value Return RndDouble()*(max_value-min_value)+min_value
+	Return RndDouble()*(min_value-max_value)+max_value
+End Function
+
+Rem
+bbdoc: Generate random integer
+returns: A random integer in the range min (inclusive) to max (inclusive)
+about:
+The optional parameter allows you to use #Rand in 2 ways:
+
+[ @Format | @Result
+* &amp;Rand(x) | Random integer in the range 1 to x (inclusive)
+* &amp;Rand(x,y) | Random integer in the range x to y (inclusive)
+]
+End Rem
+Function Rand( min_value,max_value=1 )
+	Local range=max_value-min_value
+	If range&gt;0 Return Int( RndDouble()*(1+range) )+min_value
+	Return Int( RndDouble()*(1-range) )+max_value
+End Function
+
+Rem
+bbdoc: Set random number generator seed
+End Rem
+Function SeedRnd( seed )
+?Not Threaded
+	rnd_state=seed &amp; $7fffffff             				'enforces rnd_state &gt;= 0
+?Threaded
+	Local rnd_state:Int = seed &amp; $7fffffff			'enforces rnd_state &gt;= 0
+?
+	If rnd_state=0 Or rnd_state=RND_M rnd_state=$1234	'disallow 0 and M
+	
+?Threaded
+	If bbThreadGetCurrent() = bbThreadGetMain() Then rnd_state_init = rnd_state
+	bbThreadSetData( rnd_state_index, rnd_state)
+?
+End Function
+
+Rem
+bbdoc: Get random number generator seed
+returns: The current random number generator seed
+about: Use in conjunction with SeedRnd, RndSeed allows you to reproduce sequences of random
+numbers.
+End Rem
+Function RndSeed()
+?Not Threaded
+	Return rnd_state
+?Threaded
+	Return bbThreadGetData(rnd_state_index)
+?
+End Function
+
+?Threaded
+Rem
+bbdoc: Get random number generator seed of Main thread
+returns: The current random number generator seed of the Main thread
+about: Use in conjunction with SeedRnd, RndSeedMain allows you to reproduce sequences of random
+numbers.
+End Rem
+Function RndSeedMain()
+	Return bbThreadGetMainData(rnd_state_index)
+End Function
+?
+</textarea><br><br>Test:<br><pre class=code>
+Function test:Object( data:Object)
+	Print data.ToString()
+	Print "~tmain="+RndSeedMain()
+	Print "~tseed="+RndSeed()
+	SeedRnd data.ToString().ToInt()
+	Print "~tnewseed="+RndSeed()
+EndFunction
+
+SeedRnd 10
+CreateThread test, "20"
+Delay 250
+CreateThread test, "30"
+Delay 250
+CreateThread test, "40"
+Delay 250
+CreateThread test, "50"
+Delay 250
+
+Print "10"
+Print "~tmain="+RndSeedMain()
+Print "~tseed="+RndSeed()
+
+</pre> <br><br></td></tr></table><br>
+<a name="1299605"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Shouldn't SeedRnd adjust some kind of "global" - which is the initial seed of each thread started _afterwards_<br><br>Reading a simple numeric value should be threadsafe, isn't it?<br>Running SeedRnd within a thread should then write to a thread-scoped variable.<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1299608"></a>
+
+<a name="1299609"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> It changes the seed for each new random number as well, so it was never really thread safe ;)<br>It still produced random numbers, but they were not deterministic in threaded mode as they would all clobber the same global.<br><br>I cant see a way to change the ThreadData slot of a new thread without modifying the threading api (and then adding a dependency on BRL.Random in the process).<br>Which is why i added RndSeedMain() so one can do that manually. <br><br></td></tr></table><br>
+<a name="1299627"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> I took your suggestion Derron, and made it start with main thread seed.<br>I had to steal <b>seed 0</b> for myself though, using it as an init signal when i get the thread data.<br><br>Version 1.09 - Made seed==0 get seed from main thread (so threads new always start with main thread seed) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

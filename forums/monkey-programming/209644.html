@@ -1,0 +1,88 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Destructor/Finalize for OpenGL resources</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Destructor/Finalize for OpenGL resources</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=507" >Monkey Programming</a>/<a href="#bottom" >Destructor/Finalize for OpenGL resources</a><br><br>
+<a name="2101391"></a>
+
+<a name="2101392"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nullterm</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Short version is I have a bunch of OpenGL resources (textures, vertex buffers) that I need to cleanup. But I'm fairly certain Monkey has no concept of destructors/finalize for objects.  Right?  So going from one level to the next, I need to cleanup everything myself, and can't rely reference counting to tell me when a texture is no long used.<br><br>So I need to implement discard functionality for all the different bits and manually manage when these non-GCed resources get deleted... ?  <br><br>Just curious if anyone has thought up any nifty, reliable and/or time saving strategies to help make it a bit more auto-magic.  I had the thought of keeping a list of specific resources that were loaded during the level, and at the level end then purge everything there.  But I need to be careful of special cases like textures were loaded during the level, but will want to be re-used in the next level or in HUD or UI. <br><br></td></tr></table><br>
+<a name="2101394"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I think you're out of luck. Most GC systems provide a "Dispose" or "Free" mechanism for this kind of resources and it needs to be handled manually. Even if there was finalize, it would not be called until the object is collected, which may be too late, and a destructor on a GC language... You could make all your image/resource handler objects implement a given interface ("iDisposable" or the like) and use reflection on each level "unload" to iterate any existing iDisposable field and call its "Free" method. <br>That's the most "automatic" I can think of. <br><br></td></tr></table><br>
+<a name="2101393"></a>
+
+<a name="2101446"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nullterm</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I ended up having Shader/Texture/VertexBuffer derive from a Resource class.<br><br>reload method - creates the OpenGL buffer/texture/shader from the path or data<br>unload method - deletes the OpenGL data<br>discard method - unload and also remove from<br><br>Each Shader/Texture/VertexBuffer overrides the reload/unload method to do it's specific gl() calls.<br><br>I separated reload/unload from discard because on Android when the app leaves/returns I need an easy way to restore all the GL data that gets wiped out.  And...<br><br>Next step, adding some simple reference count.  So calling release on an object decrements the ref count, if it's zero then discard (or wait until level finished).  I have a load cache system so data is re-used across multiple objects. Need a way to allow different objects to say "I'm done with this texture" without discarding the data another object may be using.<br><br>It's also been helpful tracking down resource/memory leaks.  I can call this function and it spits out everything currently loaded.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Class SgResource
+	
+	Field resType:String = "SgResource"
+	Field resName:String = "&lt;unknown&gt;"
+
+...
+
+	Function dumpAll:Void ()
+	
+		SgLog.enter "SgResource.dumpAll"
+		
+		For Local i:Int = 0 Until resources.count
+			Local r:SgResource = resources.get(i)
+			r.dump
+		Next
+		
+		SgLog.leave
+		
+	End
+	
+	Method dump:Void ()
+	
+		SgLog.write resType + " " + resName
+		
+	End
+
+...
+</textarea><br><br>... like so...<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SgResource.dumpAll
+    SgVertexBuffer VgWireframe:circle
+    SgVertexBuffer VgWireframe:monkey://data/icon/invader2.json
+    SgVertexBuffer VgWireframe:circle
+    SgVertexBuffer VgWireframe:monkey://data/icon/crown.json
+    SgVertexBuffer VgWireframe:circle
+    SgVertexBuffer VgWireframe:monkey://data/icon/crown.json
+    SgShader flat
+    SgVertexBuffer VoxelModel:icon/config.json
+    SgShader effect/bloom/bloom
+    SgVertexBuffer Bloom
+    SgTexture monkey://data/white.png
+    SgVertexBuffer VgDevice
+    SgShader brush
+    SgTexture monkey://data/brush.png
+    SgTexture monkey://data/filter2.png
+    SgShader &lt;code&gt;
+    SgTexture SgRenderTexture
+    SgTexture SgRenderTexture
+    SgVertexBuffer VoxelModel:icon/voxel-teleport-a.json
+    SgVertexBuffer VgWireframe:monkey://data/card/card-block.json
+    SgVertexBuffer VoxelModel:icon/voxel-swap.json
+    SgVertexBuffer VoxelModel:
+    SgVertexBuffer Board.vb
+    SgTexture SgRenderTexture
+    SgVertexBuffer Board.lightVB
+    SgVertexBuffer VoxelModel:char/robot-sad.json
+    SgVertexBuffer VoxelModel:char/robot-red-stripe.json
+    SgVertexBuffer VoxelModel:card/card-voxel.json
+    SgVertexBuffer VoxelModel:world/back-8x8.json
+    SgVertexBuffer cylinder
+    SgVertexBuffer cylinder
+    SgVertexBuffer darkenVB
+    SgShader &lt;code&gt;
+    SgTexture monkey://data/ui-shadow.png
+    SgVertexBuffer Button.backVB
+</textarea> <br><br></td></tr></table><br>
+<a name="2101445"></a>
+
+<a name="2101444"></a>
+
+<a name="2101443"></a>
+
+<a name="2101442"></a>
+
+<a name="2101448"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looks like a nice approach <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

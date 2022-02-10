@@ -1,0 +1,106 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Problems w/ condition variables and multi-threadin</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Problems w/ condition variables and multi-threadin</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Problems w/ condition variables and multi-threadin</a><br><br>
+<a name="1058498"></a>
+
+<a name="1058503"></a>
+
+<a name="1059030"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey folks,<br><br>I have some strange threading behavior going on here. I only notice this when I use multi-threading in my app.<br><br>Pretty much I have a function that checks for new player data with the server. I want to periodically call it so that the game can update over time with other player data. The function that does the checking is called "syncCitizenPositions". I've wrapped it up into a wrapper function for usage with a thread. The logic works by the threaded function starting, hitting a loop, and then waiting on a condition variable to be broadcast from the main thread. Condition variable gets broadcast when the player is actually in gameplay, the syncing occurs, and then the loop repeats, waiting for the next condition to be broadcast.<br><br>Only problem is that in reality it doesn't end up working like that. Instead:<br><br>a) somehow this function (t_handleRequests) is getting called several times after only a single CreateThread call. I know CreateThread is only getting called once because I log out to a file when it does, and I just get one entry. However, the code inside the function that is passed to CreateThread gets triggered a bunch of times.<br><br>For example, here's what the log file looks like after just a few seconds of running the app:<br><br>(more explanation of the function producing this output after the jump)<br><br><pre class=code>
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+I think I'll take a nap
+</pre><br><br><br>b) the syncCitizenPositions() is being executed even WITHOUT the condition variable being broadcast! I've done grep's on the codebase and this is the only place this function is referenced.<br><br><pre class=code>
+Function t_handleRequests:Object(data:Object)
+	toLog "Just getting ready for work..."
+	While(True)
+	LockMutex(theConditionMutex)
+	toLog "I think I'll take a nap"
+	WaitCondVar(theCondition, theConditionMutex)
+	RUNTIME.mGK.syncCitizenPositions();
+	UnlockMutex(theConditionMutex)
+	Wend
+	
+	toLog "Processing thread complete."
+EndFunction
+</pre><br><br><br>I'm using BlitzMax 1.41 . I figure I must be doing something fundamentally wrong. Any ideas of what's going on?<br><br>Thanks,<br><br>Jason<br><br><font class="tiny">Last edited 2010</font><br><br><font class="tiny">Last edited 2010</font> <br><br></td></tr></table><br>
+<a name="1058584"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> what does your condvar braodcast look like? if it's firing syncCitizenPositions() multiple times the assumption would be that theCondition is receiving multiple signals. <br><br></td></tr></table><br>
+<a name="1059028"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I created the condition variable like this:<br><br><pre class=code>
+Global theConditionMutex:TMutex = CreateMutex()
+</pre><br><br>And here's the function I call when ever I want to trigger syncCitizenPositions():<br><br><pre class=code>
+Method wakeupServerThread()
+		toLog "Server::wakeupServerThread()";
+		saveLog();
+		LockMutex(theConditionMutex)
+		BroadcastCondVar(theCondition)
+		UnlockMutex(theConditionMutex)
+		mLastSyncedServer = MilliSecs();
+	EndMethod
+</pre><br><br>The toLog/saveLog() functions write out text to a logfile. They use mutexes since I didn't want multiple threads calling toLog()/saveLog() to cause problems.<br><br>Any ideas? <br><br></td></tr></table><br>
+<a name="1059042"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've confirmed the problem doesn't occur if I comment out the call to syncCitizenPositions. That function makes use of curl, and it appears like I'm crashing somewhere in curl. Here's the Mac OS X stack trace:<br><br><pre class=code>
+Exception Type:  EXC_BAD_ACCESS (SIGSEGV)
+Exception Codes: KERN_INVALID_ADDRESS at 0x00000000c023cd9f
+Crashed Thread:  0
+
+Thread 0 Crashed:
+0   client.debug.mt               	0x001d0aef Curl_formclean + 28
+1   client.debug.mt               	0x001cbdfd Curl_http_done + 189
+2   client.debug.mt               	0x001c1e7a Curl_done + 334
+3   client.debug.mt               	0x001bcb07 Curl_perform + 923
+4   client.debug.mt               	0x001a3741 1306 + 11
+5   client.debug.mt               	0x000dbcdb 61784 + 8
+6   client.debug.mt               	0x0000a02d 10583 + 23
+7   client.debug.mt               	0x00006afe 9811 + 25
+8   client.debug.mt               	0x00002be6 4 + 25
+9   client.debug.mt               	0x00002ef1 run + 82
+10  client.debug.mt               	0x00003129 -[BlitzMaxAppDelegate applicationDidFinishLaunching:] + 353
+</pre><br><br>And here's what MaxIDE shows me:<br><br><pre class=code>
+Building client
+Compiling:client.bmx
+Linking:client.debug.mt
+Executing:client.debug.mt
+client.debug.mt(86971,0xa041d720) malloc: *** error for object 0x8ef790: double free
+*** set a breakpoint in malloc_error_break to debug
+client.debug.mt(86971,0xa041d720) malloc: *** error for object 0x8e9d30: double free
+*** set a breakpoint in malloc_error_break to debug
+client.debug.mt(86971,0xa041d720) malloc: *** error for object 0x17514930: double free
+*** set a breakpoint in malloc_error_break to debug
+
+Process complete
+
+</pre> <br><br></td></tr></table><br>
+<a name="1059047"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> This sounds like two different problems. 1) I was getting erratic / repeated calling of a function triggered from a condition variable-controlled child thread, and 2) crashing when making curl calls (on what looks like a garbage cleanup related thing in curl) <br><br></td></tr></table><br>
+<a name="1059209"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >H&amp;K</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>While(True)
+	LockMutex(theConditionMutex)
+	toLog "I think I'll take a nap"
+	WaitCondVar(theCondition, theConditionMutex)
+	RUNTIME.mGK.syncCitizenPositions();
+	UnlockMutex(theConditionMutex)
+	Wend</pre><br><br>read this again.<br><br>When is true true? <br><br></td></tr></table><br>
+<a name="1059290"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> re the curl crashing and garbage collector take a poke at:<br><a href="http://www.blitzbasic.com/Community/posts.php?topic=91117" target="_blank">http://www.blitzbasic.com/Community/posts.php?topic=91117</a><br><a href="http://www.blitzbasic.com/Community/posts.php?topic=91511" target="_blank">http://www.blitzbasic.com/Community/posts.php?topic=91511</a><br><a href="http://www.blitzbasic.com/Community/posts.php?topic=92541" target="_blank">http://www.blitzbasic.com/Community/posts.php?topic=92541</a><br><br>I suspect you may be bumping into the threaded garbage collector issues, or curl may not be behaving in a thread safe manner some how (don't use it much myself so I don't know, just a guess). <br><br></td></tr></table><br>
+<a name="1059713"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> it definitely looks like curl thread-safety issues. What's interesting is that even calls to curl from the main thread cause the error --- just only when a child thread is created though. If no additional threads are used, then the curl calls appear to behave as normal.<br><br>I'll have to look into where I can find more issue on curl &amp; threads <br><br></td></tr></table><br>
+<a name="1059714"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> From libcurl-tutorial:<br><br>Multi-threading Issues<br><br>The first basic rule is that you must never share a libcurl handle (be it easy or multi or whatever) between multiple threads. Only use one handle in one thread at a time.<br><br>libcurl is completely thread safe, except for two issues: signals and SSL/TLS handlers. Signals are used timeouting name resolves (during DNS lookup) - when built without c-ares support and not on Windows..<br><br>If you are accessing HTTPS or FTPS URLs in a multi-threaded manner, you are then of course using OpenSSL/GnuTLS multi-threaded and those libs have their own requirements on this issue. Basically, you need to provide one or two functions to allow it to function properly. For all details, see this:<br><br>OpenSSL<br><br><a href="http://www.openssl.org/docs/crypto/threads.html#DESCRIPTION" target="_blank">http://www.openssl.org/docs/crypto/threads.html#DESCRIPTION</a><br><br>GnuTLS<br><br><a href="http://www.gnu.org/software/gnutls/manual/html_node/Multi_002dthreaded-applications.html" target="_blank">http://www.gnu.org/software/gnutls/manual/html_node/Multi_002dthreaded-applications.html</a><br><br>When using multiple threads you should set the CURLOPT_NOSIGNAL option to TRUE for all handles. Everything will or might work fine except that timeouts are not honored during the DNS lookup - which you can work around by building libcurl with c-ares support. c-ares is a library that provides asynchronous name resolves. Unfortunately, c-ares does not yet fully support IPv6. On some platforms, libcurl simply will not function properly multi-threaded unless this option is set.<br><br>Also, note that CURLOPT_DNS_USE_GLOBAL_CACHE is not thread-safe. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

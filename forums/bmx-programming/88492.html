@@ -1,0 +1,155 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Large 2GB+ file stream</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Large 2GB+ file stream</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Large 2GB+ file stream</a><br><br>
+<a name="1004885"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Azathoth</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is my first attempt at creating a file stream that exceeds the current 32bit limit.<br>I haven't tested it much, it does however work writing to a file past the 32bit barrier. You should use the PosEx, SizeEx, and SeekEx to handle the larger 64bit positions and size.<br><br>It's Win32 only.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Strict
+
+Import Pub.Win32
+
+Const INVALID_HANDLE_VALUE = -1 
+
+Const GENERIC_READ = $80000000
+Const GENERIC_WRITE = $40000000
+
+Const OPEN_EXISTING = 3
+
+Extern "win32"
+	Function CreateFileW(lpFileName:Byte Ptr,dwDesiredAccess,dwShareMode,lpSecurityAttributes:Byte Ptr,dwCreationDisposition,dwFlagsAndAttributes,hTemplateFile)
+	Function GetFileSizeEx(hFile, lpFileSize:Byte Ptr)
+	Function SetFilePointerEx(hFile, liDistanceToMove:Long, lpNewFilePointer:Byte Ptr, dwMoveMethod)
+	Function ReadFile(hFile, lpBuffer:Byte Ptr, nNumberOfBytesToRead, lpNumberOfBytesRead:Byte Ptr, lpOverlapped:Byte Ptr)
+	Function WriteFile(hFile, lpBuffer:Byte Ptr, nNumberOfBytesToWrite, lpNumberOfBytesWritten:Byte Ptr, lpOverlapped:Byte Ptr)
+	Function FlushFileBuffers(hFile)
+
+	Function CloseHandle(hObject)
+	Function GetLastError()
+	
+	
+EndExtern
+
+Function FileSizeEx:Long(path:String)
+	Local size:Long, handle:Int
+
+	handle=CreateFileW(path.ToWString(),GENERIC_READ,0,Null,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0)
+	If handle&lt;&gt;INVALID_HANDLE_VALUE
+		If GetFileSizeEx(handle, Varptr size)=0 Then size=-1
+		CloseHandle(handle)
+	EndIf
+	Return size
+EndFunction
+
+Type TFileStream Extends TStream
+	Field _pos:Long, _size:Long, _handle=INVALID_HANDLE_VALUE, _mode
+	
+	Method PosEx:Long()
+		Return _pos
+	EndMethod
+	
+	Method SizeEx:Long()
+		Return _size
+	EndMethod
+	
+	Method Eof()
+		Return (PosEx()=SizeEx())
+	EndMethod
+	
+	Method SeekEx:Long(pos:Long)
+		Assert _handle&lt;&gt;INVALID_HANDLE_VALUE Else "Attempt to seek closed stream"
+		SetFilePointerEx(_handle,pos,Varptr _pos,0)
+		Return _pos
+	EndMethod
+	
+	Method Read(buf:Byte Ptr, count)
+		Assert _handle&lt;&gt;INVALID_HANDLE_VALUE Else "Attempt to read from closed stream"
+		Assert _mode &amp; GENERIC_READ Else "Attempt to read from write-only stream"
+		If ReadFile(_handle,buf,count, Varptr count, Null)=0 Then Return 0
+		_pos:+count
+		Return count
+	EndMethod
+	
+	Method Write( buf:Byte Ptr,count )
+		Assert _handle&lt;&gt;INVALID_HANDLE_VALUE Else "Attempt to write to closed stream"
+		Assert _mode &amp; GENERIC_WRITE Else "Attempt to write to read-only stream"
+		If WriteFile(_handle,buf,count,Varptr count, Null )=0 Then Return 0
+		_pos:+count
+		If _pos&gt;_size _size=_pos
+		Return count
+	End Method
+	
+	Method Pos()
+		Return Int(_pos)
+	EndMethod
+	
+	Method Size()
+		Return Int(_size)
+	EndMethod
+	
+	Method Seek(pos)
+		Return SeekEx(pos)
+	EndMethod
+	
+	Method Flush()
+		If _handle&lt;&gt;INVALID_HANDLE_VALUE Then FlushFileBuffers(_handle)
+	EndMethod	
+	
+	Method Close()
+		If _handle=INVALID_HANDLE_VALUE Then Return
+		Flush()
+		CloseHandle(_handle)
+		_handle=INVALID_HANDLE_VALUE
+		_pos=0
+		_size=0
+	EndMethod
+	
+	Function OpenFile:TFileStream(path:String,readable,writeable )
+		Local m, handle
+		
+		If readable m:|GENERIC_READ
+		If writeable m:|GENERIC_WRITE
+		
+		handle=CreateFileW(path.ToWString(),m,0,Null,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0)
+		
+		If handle&lt;&gt;INVALID_HANDLE_VALUE
+			Local stream:TFileStream=New TFileStream
+			
+			stream._handle=handle
+			SetFilePointerEx(handle,0,Varptr stream._pos,1)
+			SetFilePointerEx(handle,0,Varptr stream._size,2)
+			SetFilePointerEx(handle,stream._pos,Null,0)
+			stream._mode=m
+			Return stream
+		EndIf
+	EndFunction
+		
+EndType
+</textarea> <br><br></td></tr></table><br>
+<a name="1004896"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >beanage</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Couldnt you also use file mapping for this? I use file mapping to manipulate large database files, which is, afaik, what it's intended to be used for [in addition to shared memory]. <br><br></td></tr></table><br>
+<a name="1004898"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Azathoth</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Actually this is just meant to be an alternative file stream that can read and write files larger than 2GB which the standard module doesn't support. <br><br></td></tr></table><br>
+<a name="1005095"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >beanage</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh I propably behaved a little ignorant, sry, I realy like this solution! It was just a thought, that immidiately came to my mind when I saw your solution. <br><br></td></tr></table><br>
+<a name="1005164"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >*</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> fraggin heck that would be one hell of a level to have a file thats 2Gb :s <br><br></td></tr></table><br>
+<a name="1016007"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Czar Flavius</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> What can I say, I like my whole world defined to the last blade of grass ;) <br><br></td></tr></table><br>
+<a name="1189960"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sub_Zero</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've encountered a problem with this 2gb limit...<br><br>A couple of questions:<br><br>How do I do this in linux?<br><br>How do i do file mapping? <br><br></td></tr></table><br>
+<a name="1189961"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> How do I do this in linux? <br></div><br>Use Wine ? :-) <br><br></td></tr></table><br>
+<a name="1189962"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sub_Zero</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ah thanks Brucey, but i'm looking for another approach :) <br><br></td></tr></table><br>
+<a name="1189963"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ah! Well, there is a module called BaH.SStream, which could do with some proper testing. It's basically a port of BRL.Stream with large file support.<br><br>Type names have an extra "S". So, TSStream instead of TStream.<br>And of course, most things return Long instead of Int.<br><br>It's in SVN. <br><br></td></tr></table><br>
+<a name="1189984"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sub_Zero</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> thanks <br><br></td></tr></table><br>
+<a name="1189991"></a>
+
+<a name="1189992"></a>
+
+<a name="1189993"></a>
+
+<a name="1189994"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sub_Zero</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> I get this:<br><br>Compile error:<br>Duplicate identifier 'WriteStream' in modules 'brl.stream' and 'bah.sstream'<br><br>I tried to comment out "import brl.stream", but to no luck<br><br>So i edited sstream.bmx, just changing some of the function names, and then rebuilt the module.<br>Then building my program gave me this error:<br><br>/home/BlitzMax/mod/bah.mod/sstream.mod/sstream.release.linux.x86.a(glue.c.release.linux.x86.o): In function `ftell64_':<br>glue.c:(.text+0x4b): undefined reference to `ftell64'<br><br>So i replaced line 33 of glue.c with:<br><pre class=code>
+	*pos = ftello64(stream);
+</pre><br><br>And now it works in linux :)<br><br>ps. and it's really fast too :) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

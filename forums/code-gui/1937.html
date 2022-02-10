@@ -1,0 +1,893 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Process Tree - BlitzMax version</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Displays tree view of running processes and their children, language=bmx, category=BlitzPlus Gui'><meta name='author' content='BlitzSupport'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=10>BlitzPlus Gui</a>/Process Tree - BlitzMax version</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="1937.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Process Tree - BlitzMax version by BlitzSupport</td><td align="right">2007 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Quick port of <a href="/codearcs/codearcs.php?code=755" target="_blank">this BlitzPlus code</a>. </td></tr><tr ><td class="cell"><pre class="code">Import maxgui.drivers
+
+' -----------------------------------------------------------------------------
+' Process list... see which processes spawned which programs!
+' -----------------------------------------------------------------------------
+
+k32 = LoadLibraryA ("kernel32.dll")
+
+If Not k32 Then Notify "No kernel! Yikes!"; End
+
+Global CreateToolhelp32Snapshot (flags, th32processid) "Win32" = GetProcAddress (k32, "CreateToolhelp32Snapshot")
+Global Process32First (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Process32First")
+Global Process32Next (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Process32Next")
+Global Module32First (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Module32First")
+Global Module32Next (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Module32Next")
+Global Thread32First (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Thread32First")
+Global Thread32Next (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Thread32Next")
+Global Heap32First (snapshot, entry:Byte Ptr, th32heapid) "Win32" = GetProcAddress (k32, "Heap32First")
+Global Heap32Next (entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Heap32Next")
+Global Heap32ListFirst (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Heap32ListFirst")
+Global Heap32ListNext (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Heap32ListNext")
+Global Toolhelp32ReadProcessMemory (th32processid, baseaddress, buffer:Byte Ptr, Read_bytes, _bytesread) "Win32" = GetProcAddress (k32, "Toolhelp32ReadProcessMemory")
+Global CloseHandle (_Object) "Win32" = GetProcAddress (k32, "CloseHandle")
+
+' -----------------------------------------------------------------------------
+' PROCESSENTRY32 structure hack...
+' -----------------------------------------------------------------------------
+' Hopefully won't have to do this in BlitzMax... hint hint, Mark... :)
+' -----------------------------------------------------------------------------
+
+Const SizeOf_PE32 = 296
+
+Type PE32
+
+	Field bank:TBank
+	
+'    dwSize.l
+'    cntUsage.l
+'    th32ProcessID.l
+'    th32DefaultHeapID.l
+'    th32ModuleID.l
+'    cntThreads.l
+'    th32ParentProcessID.l
+'    pcPriClassBase.l
+'    dwFlags.l
+'    szExeFile.b [#MAX_PATH]
+
+End Type
+
+Global PE32List:TList = CreateList ()
+
+' -----------------------------------------------------------------------------
+
+' -----------------------------------------------------------------------------
+' Create a new 'process' list entry...
+' -----------------------------------------------------------------------------
+
+Function CreatePE32:PE32 ()
+	p:PE32 = New PE32
+	ListAddLast PE32List, p
+	p.bank = CreateBank (SizeOf_PE32)
+	If p.bank
+		PokeInt p.bank, 0, SizeOf_PE32
+	Else
+		ListRemove PE32List, p
+		Return Null
+	EndIf
+	Return p
+End Function
+
+' -----------------------------------------------------------------------------
+' Free process list entry...
+' -----------------------------------------------------------------------------
+
+Function FreePE32 (p:PE32)
+	If p.bank
+		ListRemove PE32List, p
+	EndIf
+End Function
+
+' -----------------------------------------------------------------------------
+' Redundant info...
+' -----------------------------------------------------------------------------
+
+Function PrintProc (bank)
+	Print ""
+	Print "Name    : " + ProcessName$ (bank)
+	Print "Usage   : " + PeekInt (bank, 4)
+	Print "Proc ID : " + PeekInt (bank, 8)
+	Print "Heap ID : " + PeekInt (bank, 12)
+	Print "Mod  ID : " + PeekInt (bank, 16)
+	Print "Threads : " + PeekInt (bank, 20)
+	Print "Parent  : " + PeekInt (bank, 24)
+	Print "ClasBas : " + PeekInt (bank, 28)
+	Print "Flags   : " + PeekInt (bank, 32)
+End Function
+
+' -----------------------------------------------------------------------------
+' Eeuurrggghhhh... leech process name from bank...
+' -----------------------------------------------------------------------------
+
+Function ProcessName$ (bank:TBank)
+	For s = 36 To BankSize (bank) - 1
+		_byte = PeekByte (bank, s)
+		If _byte
+			result$ = result$ + Chr (_byte)
+		Else
+			Exit
+		EndIf
+	Next
+	Return result$
+End Function
+
+Global PROC_COUNT
+
+' -----------------------------------------------------------------------------
+' Constants required by process functions, etc...
+' -----------------------------------------------------------------------------
+
+Const TH32CS_SNAPHEAPLIST = $1
+Const TH32CS_SNAPPROCESS = $2
+Const TH32CS_SNAPTHREAD = $4
+Const TH32CS_SNAPMODULE = $8
+Const TH32CS_SNAPALL = (TH32CS_SNAPHEAPLIST | TH32CS_SNAPPROCESS | TH32CS_SNAPTHREAD | TH32CS_SNAPMODULE)
+Const TH32CS_INHERIT = $80000000
+Const INVALID_HANDLE_VALUE = -1
+Const MAX_PATH = 260
+
+' -----------------------------------------------------------------------------
+' Take snapshot of running processes...
+' -----------------------------------------------------------------------------
+
+Function CreateProcessList ()
+	PROC_COUNT = 0
+	Return CreateToolhelp32Snapshot (TH32CS_SNAPPROCESS, 0)
+End Function
+
+' -----------------------------------------------------------------------------
+' Free list of processes (created via CreateProcessList and GetProcesses)...
+' -----------------------------------------------------------------------------
+
+Function FreeProcessList (snap)
+	For p:PE32 = EachIn PE32List
+		FreePE32 (p)
+	Next
+	CloseHandle (snap)
+	PROC_COUNT = 0
+End Function
+
+Function GetProcesses (snap)
+
+	PROC_COUNT = 0
+	
+	' Check snapshot is valid...
+	
+	If snap &lt;&gt; INVALID_HANDLE_VALUE
+
+		' Hack up a PE32 (PROCESSENTRY32) structure...
+		
+		p:PE32 = CreatePE32 ()
+
+		' Find the first process, stick info into PE32 bank...
+		
+		If Process32First (snap, BankBuf (p.bank))
+	
+			' Increase global process counter...
+			
+			PROC_COUNT = PROC_COUNT + 1
+			
+			Repeat
+		
+				' Create a new PE32 structure for every following process...
+				
+				p:PE32 = CreatePE32 ()
+			
+				' Find the next process, stick into PE32 bank...
+				
+				nextproc = Process32Next (snap, BankBuf (p.bank))
+		
+				' Got one? Increase process count. If not, free the last PE32 structure...
+				
+				If nextproc	
+					PROC_COUNT = PROC_COUNT + 1
+				Else
+					FreePE32 (p)
+				EndIf
+				
+			' OK, no more processes...
+			
+			Until nextproc = 0
+			
+		Else
+		
+			' No first process found, so delete the PE32 structure it used...
+			
+			FreePE32 (p)
+			Return False
+			
+		EndIf
+				
+		Return True
+	
+	Else
+	
+		Return False
+		
+	EndIf
+	
+End Function
+
+' -----------------------------------------------------------------------------
+' Fill treeview gadget...
+' -----------------------------------------------------------------------------
+
+Function FillProcessTree (root:TGadget)
+
+	snap = CreateProcessList ()
+
+	If GetProcesses (snap)
+	
+		For p:PE32 = EachIn PE32List
+			pid = PeekInt (p.bank, 8)
+			parent = PeekInt (p.bank, 24)
+			proc$ = ProcessName$ (p.bank)
+			node = AddTreeViewNode (proc$, root)
+			CompareProcs (p, node)
+		Next
+	
+		FreeProcessList (snap)
+
+	Else
+		Notify "Failed to create process list!", True
+	EndIf			
+
+End Function
+
+' -----------------------------------------------------------------------------
+' Find child processes (ah, the joys of trial and error)...
+' -----------------------------------------------------------------------------
+
+Function CompareProcs (p:PE32, pnode:TGadget)
+
+	For q:PE32 = EachIn PE32List
+		
+		If p &lt;&gt; q
+		
+			pid		= PeekInt (p.bank, 8)
+			qid		= PeekInt (q.bank, 8)
+			qparent = PeekInt (q.bank, 24)
+		
+			If pid = qparent
+			
+				proc$ = ProcessName (q.bank)
+				node = AddTreeViewNode (proc$, pnode)
+				CompareProcs (q, node)
+				ListRemove PE32List, q
+				
+			EndIf
+		
+		EndIf
+		
+	Next
+	
+End Function
+
+' -----------------------------------------------------------------------------
+' D E M O . . .
+' -----------------------------------------------------------------------------
+
+' Slight oddity: if it crashes, try sticking a second's Delay () in here. Seems
+' to sometimes do this when run from the IDE (maybe snapshotting while a process
+' is being spawned is buggy in Windoze? That's my story and I'm sticking to it)...
+
+AppTitle = "Process Tree..."
+
+window:TGadget = CreateWindow ("Process Tree...", 300, 200, 500, 350)
+
+tree:TGadget = CreateTreeView (0, 0, ClientWidth (window), ClientHeight (window) - 30, window)
+root:TGadget = TreeViewRoot (tree)
+SetGadgetLayout tree, 1, 1, 1, 1
+
+button:TGadget = CreateButton ("Refresh list", 0, ClientHeight (window) - 25, 150, 21, window)
+SetGadgetLayout button, 1, 0, 0, 1
+
+menu:TGadget = CreateMenu ("&amp;File", 0, WindowMenu (window))
+CreateMenu "&amp;Refresh", 1, menu
+CreateMenu "", 2, menu
+CreateMenu "&amp;About", 3, menu
+CreateMenu "E&amp;xit", 4, menu
+UpdateWindowMenu window
+
+FillProcessTree (root)
+
+Repeat
+
+	Select WaitEvent ()
+	
+		Case EVENT_WINDOWCLOSE
+			End
+		
+		Case EVENT_MENUACTION
+		
+			Select EventData ()
+				Case 1
+					FreeGadget tree
+					tree = CreateTreeView (0, 0, ClientWidth (window), ClientHeight (window) - 30, window)
+					root = TreeViewRoot (tree)
+					SetGadgetLayout tree, 1, 1, 1, 1
+					FillProcessTree (root)
+
+				Case 3
+					Notify "Process Tree..." + Chr (10) + Chr (10) + "An amazing Hi-Toro production, public domain 2003."
+					
+				Case 4
+					End
+
+			End Select
+			
+		Case EVENT_GADGETACTION
+		
+			Select EventSource ()
+
+				Case button
+				
+					FreeGadget tree
+					tree = CreateTreeView (0, 0, ClientWidth (window), ClientHeight (window) - 30, window)
+					root = TreeViewRoot (tree)
+					SetGadgetLayout tree, 1, 1, 1, 1
+					FillProcessTree (root)
+
+			End Select
+			
+	End Select
+
+Forever</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >fredborg</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Simplified and improved...<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Import maxgui.drivers
+
+Extern "win32"
+	Function CreateToolhelp32Snapshot:Int(flags:Int, th32processid:Int) 
+	Function Process32First:Int(snapshot:Int, entry:Byte Ptr)
+	Function Process32Next:Int(snapshot:Int, entry:Byte Ptr)
+	Function CloseHandle:Int(_Object:Int) 
+EndExtern
+
+Const TH32CS_SNAPPROCESS:Int = $2
+Const INVALID_HANDLE_VALUE:Int = -1
+
+Type TWinProc 
+
+	Global _list:TList = New TList
+
+	Field dwSize:Int = 296
+	Field cntUsage:Int
+	Field th32ProcessID:Int
+	Field th32DefaultHeapID:Int
+	Field th32ModuleID:Int
+	Field cntThreads:Int
+	Field th32ParentProcessID:Int
+	Field pcProClassBase:Int
+	Field dwFlags:Int
+	Field szExeFile:String
+
+	Field kids:TList = New TList
+
+	Method New()
+		_list.AddLast Self
+	EndMethod
+
+	Method Free()
+		_list.Remove Self
+	EndMethod
+
+	Method ToString:String()
+
+		Local ret:String 
+		ret =  "Name    : " + szExeFile
+		ret :+ "Usage   : " + cntUsage
+		ret :+ "Proc ID : " + th32ProcessID
+		ret :+ "Heap ID : " + th32DefaultHeapID
+		ret :+ "Mod  ID : " + th32ModuleID
+		ret :+ "Threads : " + cntThreads
+		ret :+ "Parent  : " + th32ParentProcessID
+		ret :+ "ClasBas : " + pcProClassBase
+		ret :+ "Flags   : " + dwFlags
+	
+	EndMethod
+
+	Function CreateFromBank:TWinProc( bank:TBank )
+		
+		Local p:TWinProc = New TWinProc
+		p.dwSize 				= PeekInt(bank,0)
+		p.cntUsage 				= PeekInt(bank,4)
+		p.th32ProcessID 		= PeekInt(bank,8)
+		p.th32DefaultHeapID 	= PeekInt(bank,12)
+		p.th32ModuleID 			= PeekInt(bank,16)
+		p.cntThreads 			= PeekInt(bank,20)
+		p.th32ParentProcessID	= PeekInt(bank,24)
+		p.pcProClassBase 		= PeekInt(bank,28)
+		p.dwFlags 				= PeekInt(bank,32)
+		
+		Local offset:Int = 36
+		While offset&lt;p.dwSize-1
+			If PeekByte(bank,offset)
+				p.szExeFile :+ Chr(PeekByte(bank,offset))
+			Else
+				Exit
+			EndIf
+			offset :+ 1
+		Wend
+		
+		Return p
+	
+	EndFunction
+
+	Function GetProcesses:Int()
+	
+		_list.Clear()
+
+		Local snap:Int = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+
+		Local bank:TBank = CreateBank( 296 )
+		PokeInt bank,0,296
+
+		If snap &lt;&gt; INVALID_HANDLE_VALUE
+
+			If Process32First(snap, BankBuf(bank))
+				
+				Local nextproc:Int 
+			
+				Repeat
+			
+					TWinProc.CreateFromBank( bank )
+					nextproc = Process32Next (snap, BankBuf(bank))
+							
+				Until nextproc = 0
+				
+			EndIf
+			
+			'
+			' Arrange so kids are attached etc
+			For Local p:TWinProc = EachIn TWinProc._list
+				ArrangeProcess(p)
+			Next
+			
+			CloseHandle(snap)
+				
+			Return True		
+		Else
+			Return False
+		EndIf
+		
+	End Function
+
+	Function ArrangeProcess( p:TWinProc )
+		For Local q:TWinProc = EachIn _list
+			If p &lt;&gt; q
+				If p.th32ProcessID = q.th32ParentProcessID
+					p.kids.AddLast q
+					_list.Remove q
+					ArrangeProcess(q)
+				EndIf
+			EndIf
+		Next
+	EndFunction
+	
+	Function Find:TWinProc( name:String, list:TList = Null )
+		
+		If list = Null
+			list = _list
+		EndIf
+		
+		For Local p:TWinProc = EachIn list
+			If p.szExeFile = name
+				Return p
+			EndIf
+			
+			Local ret:TWinProc = Find( name, p.kids )
+			If ret
+				Return ret
+			EndIf
+		Next
+		
+	EndFunction
+
+	'
+	' Count the number of times a process is running
+	'
+	Function Count:Int( name:String, list:TList = Null )
+		
+		Local cnt:Int
+		
+		If list = Null
+			list = _list
+		EndIf
+		
+		For Local p:TWinProc = EachIn list
+			If p.szExeFile = name
+				cnt :+ 1
+			EndIf
+			
+			cnt :+ Count( name, p.kids )
+		Next
+
+		Return cnt
+		
+	EndFunction
+	
+End Type
+
+' ---------------------------------------------------
+' DEMO A, Check how many times a process is running..
+' ---------------------------------------------------
+
+TWinProc.GetProcesses()
+
+Local file:String = "svchost.exe"
+
+'
+' Try with:
+' file = stripdir(appfile)
+'
+
+If TWinProc.Find( file )
+	Notify file+" is running "+TWinProc.Count( file )+" time(s)"
+EndIf
+
+
+' -----------------------------------------------------------------------------
+' DEMO B, Show the processes
+' -----------------------------------------------------------------------------
+
+AppTitle = "Process Tree..."
+
+Local window:TGadget = CreateWindow ("Process Tree...", 300, 200, 500, 350)
+
+Local tree:TGadget = CreateTreeView (0, 0, ClientWidth (window), ClientHeight (window) - 30, window)
+Local root:TGadget = TreeViewRoot (tree)
+SetGadgetLayout tree, 1, 1, 1, 1
+
+Local button:TGadget = CreateButton ("Refresh list", 0, ClientHeight (window) - 25, 150, 21, window)
+SetGadgetLayout button, 1, 0, 0, 1
+
+Local menu:TGadget = CreateMenu ("&amp;File", 0, WindowMenu (window))
+CreateMenu "&amp;Refresh", 1, menu
+CreateMenu "", 2, menu
+CreateMenu "&amp;About", 3, menu
+CreateMenu "E&amp;xit", 4, menu
+UpdateWindowMenu window
+
+FillProcessTree (root)
+
+Repeat
+
+	Select WaitEvent ()
+	
+		Case EVENT_WINDOWCLOSE
+			End
+		
+		Case EVENT_MENUACTION
+		
+			Select EventData ()
+				Case 1
+					FreeGadget tree
+					tree = CreateTreeView (0, 0, ClientWidth (window), ClientHeight (window) - 30, window)
+					root = TreeViewRoot (tree)
+					SetGadgetLayout tree, 1, 1, 1, 1
+					FillProcessTree (root)
+
+				Case 3
+					Notify "Process Tree..." + Chr (10) + Chr (10) + "An amazing Hi-Toro production, public domain 2003."
+					
+				Case 4
+					End
+
+			End Select
+			
+		Case EVENT_GADGETACTION
+		
+			Select EventSource ()
+
+				Case button
+				
+					FreeGadget tree
+					tree = CreateTreeView (0, 0, ClientWidth (window), ClientHeight (window) - 30, window)
+					root = TreeViewRoot (tree)
+					SetGadgetLayout tree, 1, 1, 1, 1
+					FillProcessTree (root)
+
+			End Select
+			
+	End Select
+
+Forever
+
+' -----------------------------------------------------------------------------
+' Fill treeview gadget...
+' -----------------------------------------------------------------------------
+
+Function FillProcessTree(root:TGadget)
+
+	TWinProc.GetProcesses()
+
+	For Local p:TWinProc = EachIn TWinProc._list
+		InsertProcess(p,root)
+	Next
+
+End Function
+
+Function InsertProcess(p:TWinProc,root:TGadget)
+	
+	Local node:TGadget = AddTreeViewNode( p.szExeFile, root)
+		
+	For Local q:TWinProc = EachIn p.kids	
+		InsertProcess(q,node)
+	Next
+		
+EndFunction</textarea> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Blitzplotter</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> I see you need maxgui.drivers for this, oh well. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >fredborg</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Only for displaying it as a tree view. It does not rely on the gui code when inspecting which processes are running. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Blitzplotter</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> mmm, might modify the display stuff then, thx. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> Slightly belated... just updated this to include "Import maxgui.drivers"!<br><br>Also, here's a version that just lists the processes without a GUI (child processes indented with <i>--&gt;</i>):<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+' -----------------------------------------------------------------------------
+' Process list... see which processes spawned which programs!
+' -----------------------------------------------------------------------------
+
+k32 = LoadLibraryA ("kernel32.dll")
+
+If Not k32 Then Notify "No kernel! Yikes!"; End
+
+Global CreateToolhelp32Snapshot (flags, th32processid) "Win32" = GetProcAddress (k32, "CreateToolhelp32Snapshot")
+Global Process32First (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Process32First")
+Global Process32Next (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Process32Next")
+Global Module32First (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Module32First")
+Global Module32Next (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Module32Next")
+Global Thread32First (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Thread32First")
+Global Thread32Next (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Thread32Next")
+Global Heap32First (snapshot, entry:Byte Ptr, th32heapid) "Win32" = GetProcAddress (k32, "Heap32First")
+Global Heap32Next (entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Heap32Next")
+Global Heap32ListFirst (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Heap32ListFirst")
+Global Heap32ListNext (snapshot, entry:Byte Ptr) "Win32" = GetProcAddress (k32, "Heap32ListNext")
+Global Toolhelp32ReadProcessMemory (th32processid, baseaddress, buffer:Byte Ptr, Read_bytes, _bytesread) "Win32" = GetProcAddress (k32, "Toolhelp32ReadProcessMemory")
+Global CloseHandle (_Object) "Win32" = GetProcAddress (k32, "CloseHandle")
+
+' -----------------------------------------------------------------------------
+' PROCESSENTRY32 structure hack...
+' -----------------------------------------------------------------------------
+' Hopefully won't have to do this in BlitzMax... hint hint, Mark... :)
+' -----------------------------------------------------------------------------
+
+Const SizeOf_PE32 = 296
+
+Type PE32
+
+	Field bank:TBank
+	
+'    dwSize.l
+'    cntUsage.l
+'    th32ProcessID.l
+'    th32DefaultHeapID.l
+'    th32ModuleID.l
+'    cntThreads.l
+'    th32ParentProcessID.l
+'    pcPriClassBase.l
+'    dwFlags.l
+'    szExeFile.b [#MAX_PATH]
+
+End Type
+
+Global PE32List:TList = CreateList ()
+
+' -----------------------------------------------------------------------------
+
+' -----------------------------------------------------------------------------
+' Create a new 'process' list entry...
+' -----------------------------------------------------------------------------
+
+Function CreatePE32:PE32 ()
+	p:PE32 = New PE32
+	ListAddLast PE32List, p
+	p.bank = CreateBank (SizeOf_PE32)
+	If p.bank
+		PokeInt p.bank, 0, SizeOf_PE32
+	Else
+		ListRemove PE32List, p
+		Return Null
+	EndIf
+	Return p
+End Function
+
+' -----------------------------------------------------------------------------
+' Free process list entry...
+' -----------------------------------------------------------------------------
+
+Function FreePE32 (p:PE32)
+	If p.bank
+		ListRemove PE32List, p
+	EndIf
+End Function
+
+' -----------------------------------------------------------------------------
+' Redundant info...
+' -----------------------------------------------------------------------------
+
+Function PrintProc (bank)
+	Print ""
+	Print "Name    : " + ProcessName$ (bank)
+	Print "Usage   : " + PeekInt (bank, 4)
+	Print "Proc ID : " + PeekInt (bank, 8)
+	Print "Heap ID : " + PeekInt (bank, 12)
+	Print "Mod  ID : " + PeekInt (bank, 16)
+	Print "Threads : " + PeekInt (bank, 20)
+	Print "Parent  : " + PeekInt (bank, 24)
+	Print "ClasBas : " + PeekInt (bank, 28)
+	Print "Flags   : " + PeekInt (bank, 32)
+End Function
+
+' -----------------------------------------------------------------------------
+' Eeuurrggghhhh... leech process name from bank...
+' -----------------------------------------------------------------------------
+
+Function ProcessName$ (bank:TBank)
+	For s = 36 To BankSize (bank) - 1
+		_byte = PeekByte (bank, s)
+		If _byte
+			result$ = result$ + Chr (_byte)
+		Else
+			Exit
+		EndIf
+	Next
+	Return result$
+End Function
+
+Global PROC_COUNT
+
+' -----------------------------------------------------------------------------
+' Constants required by process functions, etc...
+' -----------------------------------------------------------------------------
+
+Const TH32CS_SNAPHEAPLIST = $1
+Const TH32CS_SNAPPROCESS = $2
+Const TH32CS_SNAPTHREAD = $4
+Const TH32CS_SNAPMODULE = $8
+Const TH32CS_SNAPALL = (TH32CS_SNAPHEAPLIST | TH32CS_SNAPPROCESS | TH32CS_SNAPTHREAD | TH32CS_SNAPMODULE)
+Const TH32CS_INHERIT = $80000000
+Const INVALID_HANDLE_VALUE = -1
+Const MAX_PATH = 260
+
+' -----------------------------------------------------------------------------
+' Take snapshot of running processes...
+' -----------------------------------------------------------------------------
+
+Function CreateProcessList ()
+	PROC_COUNT = 0
+	Return CreateToolhelp32Snapshot (TH32CS_SNAPPROCESS, 0)
+End Function
+
+' -----------------------------------------------------------------------------
+' Free list of processes (created via CreateProcessList and GetProcesses)...
+' -----------------------------------------------------------------------------
+
+Function FreeProcessList (snap)
+	For p:PE32 = EachIn PE32List
+		FreePE32 (p)
+	Next
+	CloseHandle (snap)
+	PROC_COUNT = 0
+End Function
+
+Function GetProcesses (snap)
+
+	PROC_COUNT = 0
+	
+	' Check snapshot is valid...
+	
+	If snap &lt;&gt; INVALID_HANDLE_VALUE
+
+		' Hack up a PE32 (PROCESSENTRY32) structure...
+		
+		p:PE32 = CreatePE32 ()
+
+		' Find the first process, stick info into PE32 bank...
+		
+		If Process32First (snap, BankBuf (p.bank))
+	
+			' Increase global process counter...
+			
+			PROC_COUNT = PROC_COUNT + 1
+			
+			Repeat
+		
+				' Create a new PE32 structure for every following process...
+				
+				p:PE32 = CreatePE32 ()
+			
+				' Find the next process, stick into PE32 bank...
+				
+				nextproc = Process32Next (snap, BankBuf (p.bank))
+		
+				' Got one? Increase process count. If not, free the last PE32 structure...
+				
+				If nextproc	
+					PROC_COUNT = PROC_COUNT + 1
+				Else
+					FreePE32 (p)
+				EndIf
+				
+			' OK, no more processes...
+			
+			Until nextproc = 0
+			
+		Else
+		
+			' No first process found, so delete the PE32 structure it used...
+			
+			FreePE32 (p)
+			Return False
+			
+		EndIf
+				
+		Return True
+	
+	Else
+	
+		Return False
+		
+	EndIf
+	
+End Function
+
+' -----------------------------------------------------------------------------
+' Fill treeview gadget...
+' -----------------------------------------------------------------------------
+
+Function ListProcesses ()
+
+	snap = CreateProcessList ()
+
+	If GetProcesses (snap)
+	
+		For p:PE32 = EachIn PE32List
+			pid = PeekInt (p.bank, 8)
+			parent = PeekInt (p.bank, 24)
+			proc$ = ProcessName$ (p.bank)
+			CompareProcs (p)
+		Next
+	
+		FreeProcessList (snap)
+
+	Else
+		Notify "Failed to create process list!", True
+	EndIf			
+
+End Function
+
+' -----------------------------------------------------------------------------
+' Find child processes (ah, the joys of trial and error)...
+' -----------------------------------------------------------------------------
+
+Function CompareProcs (p:PE32, level:Int = 0)
+
+	For q:PE32 = EachIn PE32List
+		
+		If p &lt;&gt; q
+		
+			pid		= PeekInt (p.bank, 8)
+			qid		= PeekInt (q.bank, 8)
+			qparent = PeekInt (q.bank, 24)
+		
+			If pid = qparent
+			
+				proc$ = ProcessName (q.bank)
+				
+				Local indent$
+				
+				If level
+					For Local loop:Int = 0 Until level
+						indent$ = indent$ + "--"
+					Next
+					indent$ = indent$ + "&gt;"
+				EndIf
+				
+				Print indent$ + proc$
+				CompareProcs (q, level + 1)
+				ListRemove PE32List, q
+				
+			EndIf
+		
+		EndIf
+		
+	Next
+	
+End Function
+
+ListProcesses
+</textarea> <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

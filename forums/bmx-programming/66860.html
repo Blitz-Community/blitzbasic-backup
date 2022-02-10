@@ -1,0 +1,468 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Networking problems (bNet)</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Networking problems (bNet)</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Networking problems (bNet)</a><br><br>
+<a name="746691"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ghost Dancer</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I am trying to adapt the bNet code that Eikon used for his tutorial (http://www.eiksoft.com/multi/multi.htm). BTW, thanks for that Eikon - it has been most helpful.<br><br>I have been trying to make it a little more modular and also aimed more at turn based games. Most of it seems to be working except for 1 bug (which is also in Eikons example) which I can not work out why it's happening.<br><br>Basically, you can make the connection just fine, but if the connection is broken for any reason, it will not connect again. I have made a quick example which emulates how it works in my game:<br><br>main code:<br><pre class=code>
+Framework BRL.GLMax2D
+Import BRL.StandardIO
+Import PUB.BNet
+
+Strict
+
+AppTitle = "Multiplayer test"
+
+Include "multiplayer.bmx"
+
+Global gameSetup, gameStarted, turnData:TTurnData = New TTurnData
+
+Graphics 640, 480
+
+Repeat
+	Cls
+	
+	DrawText "Connected: " + bConn, 500, 10
+	
+	If gameStarted And bConn Then
+		DrawText "Game started", 10, 10
+		DrawText "Ping: " + myPing + "ms", 10, 30
+		
+		DrawText "Press D to Disconnect", 10, 60
+		If KeyHit(KEY_D) Then NetDisconnect
+	Else
+		Select bConType
+		Case netcon_none
+			DrawText "Press H to Host, or J to Join", 10, 10
+			
+			If KeyHit(KEY_H) Then setConnection(netcon_host)
+			If KeyHit(KEY_J) Then setConnection(netcon_client)
+			
+		Case netcon_client
+			If bConn = False ' Not connected
+				DrawText "Press C to Connect to " + ServerIP$, 10, 10
+				If KeyHit(KEY_C) Then NetConnect 
+			Else
+				DrawText "Ping: " + myPing + "ms", 10, 10
+				DrawText "Waiting for host to start...", 10, 30
+				
+				'check for game start
+				If gameSetup Then gameStarted = True
+			End If
+			
+		Case netcon_host
+			If bConn = False ' Not connected
+				DrawText "Waiting for opponent to join...", 10, 10
+			Else
+				DrawText "Ping: " + myPing + "ms", 10, 10
+				
+				DrawText "Press S to Start game", 10, 30
+				If KeyHit(KEY_S) Then
+					'send game info to client
+					WriteInt Stream, SendID
+					
+					WriteByte Stream, NET_SETUP
+					WriteByte Stream, True
+					
+					SendUDP
+					
+					gameStarted = True
+				End If
+			End If
+				
+		End Select
+	End If
+	
+	UpdateUDP
+	
+	Flip
+Until AppTerminate()
+
+End
+
+
+'------------------------------------------------------------------------------
+Function netSetup()
+'game setup info sent by host to client
+'------------------------------------------------------------------------------
+	gameSetup = ReadByte(Stream)
+End Function
+
+
+'------------------------------------------------------------------------------
+Function netReset()
+'game setup info sent by host to client
+'------------------------------------------------------------------------------
+	gameSetup = False
+	gameStarted = False
+End Function
+
+
+'------------------------------------------------------------------------------
+Function netData()
+'called by multiplayer.UpdateUDP for turn data
+'------------------------------------------------------------------------------
+	turnData.data1 = ReadByte(Stream)
+	turnData.data2 = ReadByte(Stream)
+End Function
+
+
+'------------------------------------------------------------------------------
+Function netClear()
+'clear network data
+'------------------------------------------------------------------------------
+	turnData.data1 = 0
+	turnData.data2 = 0
+End Function
+
+
+'==============================================================================
+Type TTurnData
+'turn data for network games
+'==============================================================================
+	Field data1, data2
+End Type
+</pre><br><br><br>include file:<br><pre class=code>
+Const netcon_none = 0, netcon_host = 1, netcon_client = -1
+
+Const netTimeout = 2500		'timeout time for connect/disconnect attempt
+Const gameTimeout = 5000	'timeout period when game ends if no ping is received
+
+' // Network Specific Declares
+Global bConType = netcon_none         ' Are you hosting or joining?
+Global bConn% = False               ' Are you connected?
+Global ServerIP$ = "127.0.0.1"      ' Client should set to server's IP (localhost for testing)
+Global intServerIP% = IntIP(ServerIP$) ' Int of server IP
+Global Stream:TUDPStream            ' UDP Stream
+Global myPing%, PingTime            ' Ping and Ping Timer
+Global UpdateTime                   ' Main Update Timer
+Global SendID%, RecvID%, lastRecv[32] ' Packet IDs and Duplicate checking Array
+Global ClientIP%, ClientPort:Short  ' Client IP and Port
+Global DebugMode = False            ' Toggles the display of debug messages
+Global bSentFull                    ' Full update boolean
+
+' // Networking Constants
+Const HOSTPORT = 41219              ' * IMPORTANT * This UDP port must not be blocked by a router 
+                                    ' or firewall, or CreateUDPStream will fail
+Const NET_ACK    = 1                ' ACKnowledge 
+Const NET_JOIN   = 2                ' Join Attempt
+Const NET_PING   = 3                ' Ping
+Const NET_PONG   = 4                ' Pong
+Const NET_QUIT   = 5                ' Quit
+Const NET_SETUP	 = 11                ' set up data
+Const NET_DATA	 = 12                ' game turn data
+
+Global n:NetObj, netList:TList = New TList ' Packet Object and List
+
+Function setConnection(conType)
+	'network setup
+	Select conType
+	Case netcon_host 			 			' Hosting preperations
+		InitNetwork                        ' Initialize Network
+		Stream = CreateUDPStream(HOSTPORT) ' Attempt to open port
+	Case netcon_client		    			' Client preperations
+		Stream = CreateUDPStream()         ' Attempt to open port
+	Default
+		'no connection type - kill connection
+		bConn = False
+		Stream = Null
+		If bConType = netcon_host Then CloseNetwork
+		netReset							'custom function to reset network connections
+	End Select
+	
+	bConType = conType
+	
+	If Stream &lt;&gt; Null Then
+		If Not Stream Then Notify "CreateUDPStream Failed!"; End ' Failed to open stream
+		'just show friendly error - no quit
+		'*** code here ***
+		
+		' Clear Duplicate Array
+		ClearLastRecv
+	End If
+End Function
+
+
+' NetObj Type (Makes UDP Packets reliable)
+Type NetObj
+	Field ID, SID, T, Retry   ' Packet ID, SendID, Timer, Retry
+
+	Function Create:NetObj(ID)
+		If Stream = Null Then Return
+
+		n:NetObj = New NetObj ' Create Packet
+		n.ID = ID             ' Packet ID
+		n.SID = SendID        ' Send ID
+	
+	    WriteInt Stream, n.SID
+	    WriteByte Stream, ID
+			
+		SendUDP               ' Send UDP Message
+		n.T = MilliSecs()     ' Set Timer
+			
+		Return n
+	End Function
+
+	' Resends Packets 	
+	Method Handle()
+		If Stream = Null Then Return
+	
+		Select ID
+		Case NET_JOIN ' Join Attempt
+			If MilliSecs() &gt;= T + 100 Then ' Resend every 100ms
+				WriteInt Stream, SID
+				WriteByte Stream, NET_JOIN
+				
+				SendUDP
+				
+				T = MilliSecs()
+				If Retry &lt; 20 Then    ' Retry (20 times every 100ms = 2 seconds)
+					Retry:+1
+					If DebugMode = True Then Print "*** Resent join packet to host, attempt " + Retry + " ***"
+					
+				Else
+					If DebugMode = True Then Print "*** Dropped join packet ***"
+					NetList.Remove n  ' Drop Packet
+					
+				End If						
+			End If
+		Case NET_QUIT ' Quit Attempt (Never Drops)
+			If MilliSecs() &gt;= T + 100 Then ' Resend every 100ms
+				WriteInt Stream, SID
+				WriteByte Stream, NET_QUIT
+				
+				SendUDP
+				
+				T = MilliSecs()
+				If DebugMode = True Then Print "*** Resent quit packet ***"
+					
+			End If
+		End Select
+	End Method
+End Type
+
+Function UpdateUDP()
+	If bConn = True Then ' Updates
+		If MilliSecs() &gt;= PingTime + 1000  ' Ping once every second (unreliable)
+			WriteInt Stream, SendID
+			WriteByte Stream, NET_PING
+			
+			SendUDP						
+			PingTime = MilliSecs()
+		End If
+		
+		'check for dropped connection (no ping in 5 seconds)
+		If MilliSecs() - PingTime &gt; netTimeout Then netDisconnect
+	End If
+	
+	Local bMsgIsNew
+	
+	If RecvUDPMsg(Stream) Then ' A UDP packet has been received
+		RecvID = ReadInt(Stream)
+		Local Data   = ReadByte(Stream)
+		Local IP     = UDPMsgIP(Stream)
+		Local Port   = UDPMsgPort(Stream)
+				
+		bMsgIsNew = IsMsgNew(RecvID, Data) ' Make sure packet is not a duplicate
+			
+		If bMsgIsNew = True Then
+			Select Data
+			Case NET_JOIN                 ' JOIN PACKET
+				If bConn = False And bConType = netcon_host Then
+					ClientIP = IP
+					ClientPort = Port
+					NetAck RecvID             ' Send ACK
+					bConn = True              ' Connected
+				End If
+	
+			Case NET_PING                 ' Received Ping, Send Pong
+				WriteInt Stream, SendID
+				WriteByte Stream, NET_PONG
+
+				SendUDP
+				
+			Case NET_PONG                 ' Ping / Pong - Calculate Ping
+				myPing = (MilliSecs() - pingTime) / 2
+				
+			Case NET_ACK                  ' ACK PACKET
+				RemoveNetObj ReadInt(Stream)  ' Remove Reliable Packet (ACK has been received)
+	
+			Case NET_SETUP               ' game setup
+				netSetup
+	
+			Case NET_DATA               ' end of turn
+				netData
+				            
+			Case NET_QUIT                 ' Player Quits
+			 	NetAck RecvID                 ' Send ACK
+				'bConn = False                 ' Quit (EDIT - used to be set to 2, but changed to False)
+				netDisconnect
+			
+			End Select	
+		End If
+	End If
+
+End Function
+
+' // SendUDP sends the current packet to either host or client
+Function SendUDP()
+	If bConType = netcon_host Then ' Send to Client
+		SendUDPMsg Stream, ClientIP, ClientPort
+	Else                 ' Send to Host
+		SendUDPMsg Stream, IntServerIP, HOSTPORT
+	End If
+	
+	SendID:+1	         ' Increment send counter
+End Function
+
+' // IsMsgNew determines whether the current UDP packet is old or a duplicate
+Function IsMsgNew(ID, Data = 0)
+	For Local i = 30 To 0 Step -1
+		lastRecv[i + 1] = lastRecv[i]
+	Next
+	
+	lastRecv[0] = ID
+	
+	For Local i = 1 To 31
+		If lastRecv[i] = lastRecv[0] Then ' Duplicate
+			
+			'Print "ID: " + lastRecv[0]
+			Select Data ' ACK Anyway (Reliable packets only)
+			Case NET_JOIN, NET_QUIT
+				NetAck ID
+				
+				If DebugMode = True Then Print "*** Received duplicate join packet, resending ACK ***"
+				
+			End Select
+	
+			Return False
+		End If
+	Next
+	
+	Return True
+End Function
+
+' // NetConnect attempts to connect client to host
+Function NetConnect()
+	Local timeOutTime = MilliSecs()
+	NetList.AddLast netObj.Create(NET_JOIN) ' Send Reliable Join Attempt
+	
+	Local tmpConn = 0
+	
+	ClearLastRecv ' Clear Duplicate Array
+	
+	Repeat
+		DrawText "Connecting...", 5, 5
+		'*** need better output - use a message q? ***
+		'*** code here ***
+		
+		If RecvUDPMsg(Stream) Then ' A UDP packet has been received
+			RecvID = ReadInt(Stream)
+			Local Data   = ReadByte(Stream)
+			Local IP     = UDPMsgIP(Stream)
+			Local Port   = UDPMsgPort(Stream)	
+					
+			Local bMsgIsNew = True ' ACK is always new
+								
+			If bMsgIsNew = True Then
+				Select Data
+				Case NET_ACK                  ' ACK PACKET
+					RemoveNetObj ReadInt(Stream)  ' Remove Reliable Packet (ACK has been received)
+					tmpConn = 1                   ' We have connected!
+					
+				End Select	
+			End If
+		End If
+		
+		' Handle reliable packets
+		For n:NetObj = EachIn netList
+			n.Handle
+		Next
+		
+		If MilliSecs() &gt;= timeOutTime + netTimeout Then tmpConn = 2 ' No response received in 2.5 seconds, bail
+		Flip; Cls
+	Until tmpConn &lt;&gt; 0
+	
+	For n:NetObj = EachIn netList; netList.Remove n ; Next ' Clear packets
+	
+	If tmpConn = 1 Then bConn = True Else bConn = False
+End Function
+
+' // NetDisconnect closes net connections
+Function NetDisconnect()
+	NetList.AddLast netObj.Create(NET_QUIT) ' Send Reliable Quit Attempt
+	
+	Local timeOutTime = MilliSecs()
+	Local tmpConn = 0
+	
+	SetClsColor 0, 0, 0
+	
+	Repeat
+		DrawText "Disconnecting...", 5, 5
+		
+		If RecvUDPMsg(Stream) Then ' A UDP packet has been received
+			RecvID = ReadInt(Stream)
+			Local Data   = ReadByte(Stream)
+			Local IP     = UDPMsgIP(Stream)
+			Local Port   = UDPMsgPort(Stream)	
+					
+			Local bMsgIsNew = True ' ACK is always new
+								
+			If bMsgIsNew = True Then
+				Select Data
+				Case NET_ACK                  ' ACK PACKET
+					RemoveNetObj ReadInt(Stream)  ' Remove Reliable Packet (ACK has been received)
+					tmpConn = 1                   ' We have disconnected
+				End Select	
+			End If
+		End If
+		
+		For n:NetObj = EachIn netList; n.Handle; Next ' Handle reliable packets
+		
+		If MilliSecs() &gt;= timeOutTime + netTimeout Then tmpConn = 2 ' No response received in 2.5 seconds, bail
+		Flip; Cls
+	Until tmpConn &lt;&gt; 0
+	
+	' Clear packets
+	For n:NetObj = EachIn netList
+		netList.Remove n
+	Next
+	
+	setConnection(netcon_none)
+End Function
+
+' // RemoveNetObj removes reliable UDP packets from the queue once an ACK has been received
+Function RemoveNetObj(AckID)
+	For n:NetObj = EachIn NetList
+		If n.SID = AckID Then
+			Local tmpID = n.ID
+			NetList.Remove n
+			
+			'Remove old entries
+			For n:NetObj = EachIn NetList
+				If n.ID = tmpID And n.SID &lt;= AckID Then NetList.Remove n 
+			Next
+			
+			Exit
+		End If
+	Next
+End Function
+
+' // NetAck sends ACKnowledge packet to client
+Function NetAck(RecvID)
+	WriteInt Stream, SendID 
+	WriteByte Stream, NET_ACK
+	WriteInt Stream, RecvID
+	
+	SendUDP
+End Function
+
+Function ClearLastRecv()
+	' Clear duplicate array
+	For Local i = 0 To 31 
+		lastRecv[i] = -1  
+	Next
+End Function
+</pre><br><br>Note you also need bNet which can be downloaded from the link above.<br><br>If you compile and run 2 instances of the above code (1 host &amp; 1 client), then disconnect, then try to reconnect - you will see the problem.<br><br>I'm guessing there is soemthing not being reset but after several days I have not found what is causing it. The client does seem to be sending the join request, but the host does not seem to be receiving it.<br><br>As always, any help would be appreciated. <br><br>Edit: I think I may just scrap this and try doing it in GNet instead - it looks a lot simpler. <br><br></td></tr></table><br>
+<a name="746702"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dreamora</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> That and many other bugs were fixed long ago.<br>But only for BNetEx, BNet was dropped long ago.<br><br>You can find it here:<br><a href="http://vertex.dreamfall.at/bnet/bnetex165.zip" target="_blank">http://vertex.dreamfall.at/bnet/bnetex165.zip</a> <br><br></td></tr></table><br>
+<a name="746704"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ghost Dancer</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ah, thanks :) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

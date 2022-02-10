@@ -1,0 +1,260 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Simple TCP/IP Network Library</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='TCP/IP Network Library with simple example., language=bb, category=Networking'><meta name='author' content='Matty'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=4>Networking</a>/Simple TCP/IP Network Library</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2403.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Simple TCP/IP Network Library by Matty</td><td align="right">2009 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> I wanted to make my next multiplayer game use TCP/IP rather than UDP as I wanted reliable messaging and am not making a fast paced action game.  So this is what I put together.<br><br>The code has 1 global variable (MyTCPServer) that gets set upon running InitialiseNetwork(Port,TimeoutInSeconds) and a type called "ConnectionObject" which stores the IP address of any machine which connects to the PC using this network.  <br><br>If a client leaves the network/exits the game etc the command "CloseNetwork()" must be called on the client machine to ensure the server knows not to keep trying to establish connections with the client (which can cause it to hang for a few seconds).  <br><br>the other commands in this library are:<br><br>SendMessage(MessageType,Message$,IP$,Port)<br>- Message Type is a value from 0-255 with a small number of reserved values 100-103 relating to 'connection/join/exiting'.  Message$ is basically a string that you wish to send.  IP$ is the dottedip format or webaddress you wish to send the message to - usually you would use the values stored in the connection object, and port should be left as it is (2009) unless there is a conflict.<br><br>UpdateNetwork() - call this regularly to check for messages, ideally every frame.  I have left this fairly open so that you can handle your strings received from the network as you wish.<br><br>The various "Pack"/"UnPack" commands are present to convert bytes/shorts/ints/floats to a string ready to send in the appropriate amount of space (1 byte/2bytes/4bytes/4bytes respectively).<br><br>The simple example uses a hard coded IP address - you will need to change this, and also assumes the commandline parameter (set within the blitz ide) is set to "server" for the server/host.   All the example does is update the position of a rectangle/dot on the screen with some simple smoothing applied.<br><br>Some of the functions have a return value which indicates whether they were successfully complete or not. </td></tr><tr ><td class="cell"><pre class="code">;simple example
+Graphics 800,600,0,2
+InitialiseNetwork(2009,3)
+Global screenx#,screeny#,dx#,dy#	;for little block that we will move about the screen on the client's 
+
+machine.
+
+If CommandLine$()="server" Then ;this all assumes the server code is run first.
+	;do nothing
+Else
+	While SendMessage(100,"","192.168.1.6") :Wend ;you would have to change these lines yourself normally
+EndIf 
+SetBuffer BackBuffer()
+Repeat 
+UpdateNetwork()
+If CommandLine$()="server" Then 
+screenx=400.0+300.0*(Sin(MilliSecs()/50))*(Cos(MilliSecs()/250))
+screeny=300.0+(100.0*Sin(MilliSecs()/30))+(150.0*Cos(MilliSecs()/125))
+Else
+
+screenx=screenx+dx
+screeny=screeny+dy
+
+EndIf 
+
+If MilliSecs()&gt;time And CommandLine$()="server" Then 
+	time=MilliSecs()+100
+	For Connection.ConnectionObject=Each ConnectionObject
+		SendMessage(1,PackFloat(screenx)+PackFloat(screeny),Connection\IP)
+	Next
+EndIf 
+
+
+
+Cls
+Rect screenx,screeny,4,4,1
+Flip
+Until KeyDown(1)
+
+
+CloseNetwork()
+End
+
+
+
+;Basic TCP Library below
+
+Global MyTCPServer  ;server handle for the local machine's TCP Server. Always non zero and refers to local machine
+
+Type ErrorObject
+
+Field Message$
+
+End Type 
+
+Type ConnectionObject
+
+Field IP$
+
+End Type 
+
+Function InitialiseNetwork(Port=2009,TimeoutinSeconds=10)
+
+MyTCPServer = CreateTCPServer(Port)
+If MyTCPServer = 0 Then 
+	Error.ErrorObject=New ErrorObject
+	Error\Message = "Unable to CreateTCPServer listening on port:"+Port
+	Return 1 ;error 
+EndIf 
+TCPTimeouts TimeOutInSeconds*1000,0
+Return 0	;no error
+End Function 
+Function CloseNetwork()
+For Connection.ConnectionObject=Each ConnectionObject
+	SendMessage(102,"",Connection\IP) ;Let others know we've quit.
+Next
+If MyTCPServer &lt;&gt; 0 Then 
+	CloseTCPServer MyTCPServer	
+EndIf 
+
+End Function 
+
+Function SendMessage(MessageType,Message$,IP$,Port=2009)
+
+stream=OpenTCPStream(IP$,Port)
+If stream = 0 Then 
+	Error.ErrorObject=New ErrorObject
+	Error\Message= "Unable to open TCPStream to IP:"+IP+" and on port:"+port
+	
+
+	For Connection.ConnectionObject=Each ConnectionObject
+		If Connection\IP=IP Then Delete Connection 
+	Next
+	Return 1	;Error condition
+EndIf
+	WriteString stream,PackByte(MessageType)+Message
+	CloseTCPStream stream
+	
+	Return 0	;Successful
+End Function 
+
+Function UpdateNetwork()
+;Message Types - 
+;100 - Request received by server for client to join
+;101 - Acknowledgement received by client to say that server has accepted them
+;102 - Server receives message saying client has left 
+;103 - Client(s) receive message from server letting them know other client's machine on network's IP Address.
+If MyTCPServer&lt;&gt;0 Then 
+
+	stream=AcceptTCPStream(MyTCPServer)
+	If stream&lt;&gt;0 Then 
+		streamstring$=ReadString(stream)
+		
+		If Len(streamstring)&gt;0 Then 
+		Select UnPackByte(Left(streamstring,1))
+		
+			Case 100	;Remote machine has requested to join the network
+				IsNewConnection=True	;Check if stream is from a newly connected user
+				For Connection.ConnectionObject=Each ConnectionObject
+					If Connection\IP$ = DottedIP(TCPStreamIP(stream)) Then 
+
+IsNewConnection=False:Exit 
+				Next		
+				
+				;Create a new connection object if it is a new user
+				If IsNewConnection=True Then 
+					Connection.ConnectionObject=New ConnectionObject
+					Connection\IP$=DottedIP(TCPStreamIP(stream))	
+					SendMessage(101,"",Connection\IP)	
+				EndIf 
+				;Server needs to update every other client with the new client's details.
+				For Connection.ConnectionObject=Each ConnectionObject
+					If Connection\IP$&lt;&gt;DottedIP(TCPStreamIP(stream)) Then 
+						SendMessage(103,PackInt(TCPStreamIP(stream)),Connection\IP)
+					EndIf 
+				Next				
+			Case 101  ;Local machine has received a 'yes you can join message' from the server
+				IsNewConnection=True	;Create server connection object
+				For Connection.ConnectionObject=Each ConnectionObject
+					If Connection\IP$ = DottedIP(TCPStreamIP(stream)) Then 
+
+IsNewConnection=False:Exit 
+				Next		
+				
+				;Create a new connection object.
+				If IsNewConnection=True Then 
+					Connection.ConnectionObject=New ConnectionObject
+					Connection\IP$=DottedIP(TCPStreamIP(stream))	
+				EndIf 
+			Case 102 ;Remote machine has let us know it is leaving....used to prevent any 'hangs' that 
+
+can occur if a user is not connected
+				For Connection.ConnectionObject=Each ConnectionObject
+					If Connection\IP$ = DottedIP(TCPStreamIP(stream)) Then Delete Connection
+				Next		
+			Case 103
+				IsNewConnection=True	
+				For Connection.ConnectionObject=Each ConnectionObject
+					If Connection\IP$ = DottedIP(UnPackInt(Mid(streamstring,2,4))) Then 
+
+IsNewConnection=False:Exit 
+				Next		
+				;Create a new connection object.
+				If IsNewConnection=True Then 
+					Connection.ConnectionObject=New ConnectionObject
+					Connection\IP$=DottedIP(UnPackInt(Mid(streamstring,2,4)))
+				EndIf 
+
+			
+			;User defined message types now.
+			Case 1	;this is for the simple example above, you will most likely want to remove it
+				scrx#=UnPackFloat(Mid(streamstring,2,4))		
+				scry#=UnPackFloat(Mid(streamstring,6,4))
+				dx#=(scrx-screenx)/6.0
+				dy#=(scry-screeny)/6.0
+			End Select 
+		EndIf 
+		
+		CloseTCPStream stream
+	Else
+	
+		;no packets received, so don't do anything.
+	EndIf 
+Else
+
+	Return 1	;Error condition - in this case the MyTCPServer value is zero.
+
+EndIf
+Return 0	;Successful
+End Function 
+
+
+Function PackInt$(value)
+;Pack a 4 byte integer value into a 4 byte string
+
+A=(value Shr 24) And 255
+B=(value Shr 16) And 255
+C=(value Shr 8) And 255
+D=value And 255
+Return Chr$(A)+Chr$(B)+Chr$(C)+Chr$(D)
+
+End Function 
+Function PackShort$(value)
+;Pack a 2 byte short value into a 2 byte string
+
+A=(Value Shr 8) And 255
+B=Value And 255
+Return Chr$(A)+Chr$(B)
+
+End Function 
+Function PackByte$(value)
+;Pack a 1 byte value into a 1 byte string
+
+Return Chr$(Value And 255)
+
+End Function 
+Function PackFloat$(value#)
+;Pack a 4 byte float into a 4 byte string
+
+Bank=CreateBank(4)
+PokeFloat Bank,0,value
+A=PeekByte (Bank,0)
+B=PeekByte (Bank,1)
+C=PeekByte (Bank,2)
+D=PeekByte (Bank,3)
+FreeBank Bank
+Return Chr$(A)+Chr$(B)+Chr$(C)+Chr$(D)
+
+End Function 
+Function UnPackInt(value$)
+;Unpack a 4 byte string into a 4 byte integer
+
+Return (Asc(Mid(value,1,1)) Shl 24) Or (Asc(Mid(value,2,1)) Shl 16) Or (Asc(Mid(value,3,1)) Shl 8) Or (Asc(Mid
+
+(value,4,1)) )
+
+End Function
+Function UnPackShort(value$)
+;Unpack a 2 byte string into a 2 byte short
+
+Return (Asc(Mid(Value,1,1)) Shl 8) Or (Asc(Mid(Value,2,1)) )
+
+End Function 
+Function UnPackByte(value$)
+;Unpack a 1 byte string into a 1 byte value
+Return Asc(Value)
+End Function 
+Function UnPackFloat#(value$)
+;Unpack a 4 byte string into a 4 byte float
+
+Bank=CreateBank(4)
+PokeByte Bank,0,Asc(Mid(value,1,1))
+PokeByte Bank,1,Asc(Mid(value,2,1))
+PokeByte Bank,2,Asc(Mid(value,3,1))
+PokeByte Bank,3,Asc(Mid(value,4,1))
+fvalue#=PeekFloat(bank,0)
+
+FreeBank bank 
+Return fvalue
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_33</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Thanks :) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Wings</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> one thougt<br><br>If stream&lt;&gt;0 Then <br>		streamstring$=ReadString(stream)<br><br>at 2004 i discover this is bad idea for a game :) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Matty</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> why? - if you are only writing strings to the stream it shouldn't be a problem. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

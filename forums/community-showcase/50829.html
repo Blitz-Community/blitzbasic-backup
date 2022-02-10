@@ -1,0 +1,235 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Bezier spline based animation controller</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Bezier spline based animation controller</h1><a href="forums.php" >Community Forums</a>/<a href="topics.php?forum=61" >Showcase</a>/<a href="#bottom" >Bezier spline based animation controller</a><br><br>
+<a name="566246"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jay Kyburz</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey all,<br><br>Here is a Bezier spline based animation controller I've been working on.<br><br>To use:<br>1. Create a controller<br>2. Add any number or keyframes or spline knots (They currently need to be added in time order)<br>3. Set the controllers Value property to a Varptr of the floating point value you want to move on the spline.<br>4. Call Update() on the controller every frame and pass through how much time has passed since the last update.<br><br>My example program below is not very exciting but it shows the controller working.<br><br>There are many possible optimizations that can be made but I probably won't bother making them unless I find I need more than a few hundred of them running at once in my game.<br><br>This is the first code I have shared here on the forums.  Please let me know if it sux so I can rip it down before to many people see it. :)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Strict
+
+
+'------------------------------------------------
+Type tAnimationKey
+
+	Field Value				:Float
+	Field Time				:Int
+	
+	' these optional handles are used to control the direction of the curve
+	' as it approaches and leaves the key point. 
+	' Should be reletave to the Value Field
+	Field HandleInHeight	:Float
+	Field HandleOutHeight	:Float
+
+
+End Type
+'------------------------------------------------
+
+
+'------------------------------------------------
+Type tAnimationController
+
+	Field KeyArray	:tAnimationKey[]
+	Field Time		:Int 		= 0
+	Field Value		:Float Ptr
+	Field Linear 	:Int 		= False
+	Field Looping	:Int		= True
+	
+	
+	' add an animation key to the key array
+	Method AddKey (_Time:Int=0,_Value:Float=0,_HandleInHeight:Float=0,_HandleOutHeight:Float=0)
+		
+		Local ak:tAnimationKey = New tAnimationKey
+		ak.Value = _Value
+		ak.Time = _Time
+		ak.HandleInHeight= _HandleInHeight
+		ak.HandleOutHeight= _HandleOutHeight
+
+		Local i:Int = Self.KeyArray.Length
+		Self.KeyArray = Self.KeyArray[..i+1]
+		Self.KeyArray[i] = ak
+	
+	End Method
+
+	' called every frame and updated the pointer to the animating property
+	Method Update(_delta:Int)
+		
+		Local i			:Int = 0
+		Local key		:Int = 0
+		Local curvePos	:Float
+		
+		Self.Time :+ _delta
+		
+		'Just loop now
+		If Self.Time &gt; Self.KeyArray[Self.KeyArray.Length - 1].Time Then 
+			If Self.Looping Then Time = Self.KeyArray[0].Time
+		Else
+			' destroy me now
+		End If
+		
+		' find the key pair for the current time
+		For i = 0 To Self.KeyArray.Length - 2 	
+			If (Self.Time &gt; Self.KeyArray[i].Time) And (Self.Time &lt;= Self.KeyArray[i+1].Time)
+				key = i
+			End If
+		Next 
+		
+		' find where we are betwene the two keys.	
+		curvePos = (1.0/(Self.KeyArray[key+1].Time - Self.KeyArray[key].Time)) * (Self.Time - Self.KeyArray[key].Time)  
+		
+		' find the final value
+		If Self.Linear Then		
+			Self.Value[0] = ((Self.KeyArray[key + 1].Value - Self.KeyArray[key].Value) * curvePos) + Self.KeyArray[key].Value
+		Else
+			Self.Value[0] = Self.Curve (Self.KeyArray[Key].Value, Self.KeyArray[Key].HandleOutHeight,..
+										Self.KeyArray[Key+1].Value, Self.KeyArray[Key+1].HandleInHeight,..
+										curvePos) 	
+		End If 'linear
+
+	End Method	
+	
+	' method creates a bezier curve and finds our value based on _mu
+	' direct port of c from net
+	Method Curve:Float(_P1:Float,_HandleInHeight:Float,_P4:Float,_HandleOutHeight:Float,_mu:Float)
+
+		Local mum1 	:Float
+		Local mum13	:Float
+		Local mu3	:Float
+		Local p		:Float
+		
+		Local p2	:Float
+		Local p3	:Float
+		
+		If _mu &gt; 1 Then Return _p1
+		If _mu &lt; 0 Then Return _p1
+		
+		p2 = _p1 + _HandleInHeight
+		p3 = _p4 + _HandleOutHeight
+		
+		mum1 = (1 - _mu)
+		mum13 = mum1 * mum1 * mum1
+		mu3 = _mu * _mu * _mu
+		
+		p = mum13*_p1 + 3*_mu*mum1*mum1*p2 + 3*_mu*_mu*mum1*p3 + mu3*_p4
+		
+		Return(p)
+
+	End Method
+	
+	' this method is used to visualise the curve 
+	Method Render(_TimeScale:Float=0.1, _ValueScale:Float=1, _r:Int=255, _g:Int=255, _b:Int=255, _lable:String="")	
+
+		SetColor (_r,_g,_b)
+		DrawText (_lable,KeyArray[KeyArray.length-1].Time*_TimeScale,KeyArray[KeyArray.length-1].Value*_ValueScale)
+		For Local i = 0 To KeyArray.length - 2 		
+			SetColor (_r-50,_g-50,_b-50)
+			DrawRect (KeyArray[i].Time*_TimeScale-2, KeyArray[i].Value*_ValueScale-2,5,5)
+			DrawRect (KeyArray[i+1].Time*_TimeScale-2, KeyArray[i+1].Value*_ValueScale-2,5,5) 'hack
+			If Self.Linear Then DrawLine (KeyArray[i].Time*_TimeScale, KeyArray[i].Value*_ValueScale, KeyArray[i+1].Time*_TimeScale, KeyArray[i+1].Value*_ValueScale)
+			SetColor (_r,_g,_b)
+			Local TimeAcc:Float = KeyArray[i+1].Time - KeyArray[i].Time
+			If Not Self.Linear Then
+				For Local j:Float = 0.01 To 1 Step 0.02	
+					Local ypos:Float = Curve (KeyArray[i].Value,KeyArray[i].HandleOutHeight,KeyArray[i+1].Value,KeyArray[i+1].HandleInHeight,j)
+					Local xpos:Float = KeyArray[i].Time + (TimeAcc)* j 
+					Plot(xpos*_TimeScale,ypos*_ValueScale)
+				Next 
+			EndIf
+		Next
+	
+	EndMethod
+	
+End Type
+'------------------------------------------------
+
+
+
+Type tMovingBox
+
+	Field x:Float = 0
+	Field y:Float = 200
+	
+	Method Render()
+		
+		SetColor (50,200,50)
+		DrawRect (x,y,15,15)
+	
+	End Method
+		
+End Type
+
+
+Graphics 640,480
+
+Global TimeNow			:Int
+Global DeltaTime		:Int
+Global Accumulator		:Int
+Global LastFrameTime	:Int
+Global TickRate			:Int 	= 20
+
+
+Global mb:tMovingBox = New tMovingBox
+
+
+' create an animation controller
+Global ac1:tAnimationController = New tAnimationController
+
+' add 4 keys
+ac1.AddKey  (0000,200,0,0)
+ac1.AddKey  (2100,300,0,0)
+ac1.AddKey  (3000,300,0,0)
+ac1.AddKey  (4000,200,0,0)
+
+
+' bind the animation controller to the boxes y property
+ac1.Value = Varptr mb.y
+
+' uncomment these to see the effect of the bezier handles
+' dont forget to comment the other addKey calls. 
+'ac1.AddKey  (0000,200,0,200)
+'ac1.AddKey  (2100,300,-200,0)
+'ac1.AddKey  (3000,300,0,0)
+'ac1.AddKey  (4000,200,300,0)
+
+
+
+
+
+Global ac2:tAnimationController = New tAnimationController
+
+ac2.AddKey  (0,0)
+ac2.AddKey  (4000,400)
+
+ac2.Linear = True ' ac2 is linear
+ac2.Value = Varptr mb.x 
+
+
+While Not KeyHit (KEY_ESCAPE)
+
+	TimeNow = MilliSecs()
+	DeltaTime = TimeNow - LastFrameTime
+	Accumulator :+ DeltaTime 	
+	
+	' clamp needed for start up
+	If Accumulator &gt; 5 * TickRate  Then Accumulator = 5 * TickRate
+	
+	While Accumulator &gt; TickRate
+	' this is a fixed time step method
+	
+		Accumulator :- TickRate  
+		
+		Cls
+			
+		ac1.Update(TickRate)
+		ac2.Update(TickRate)
+		
+		ac1.Render (0.1, 1, 150, 0, 150, "ac1: Y: " + String(ac1.Value[0]))
+		ac2.Render(0.1, 1, 150, 150, 0, "ac2: X: "+ String(ac2.Value[0]))
+		mb.Render()
+		
+		Flip
+			
+	Wend 	
+	
+Wend
+
+
+</textarea> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,1120 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Cartoon-style outlines</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Cartoon-style outlines</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >Cartoon-style outlines</a><br><br>
+<a name="987853"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> No inverted mesh here! I told you so - or maybe I just thought it to myself. At any rate, it can be done in real time (blazingly fast in fact, at least on my machine). The idea here is simple enough: a line is drawn against each edge where one of its two faces is facing the camera, and the other one isn't. Using a 3D line function means that detecting obstructions, and parts of the mesh in front of the line, is unnecessary. Rather than detecting which edges are suitable in real-time, the idea is to precalculate planes that define the space in which edges would be highlighted (which may take several seconds on older machines, because the function to do this at the moment is a bit awful - it's only set to do 25 frames as this bit is really quite slow) so the actual checking requires only one TFormPoint per frame (although drawing the 3D lines does also use TFormPoint) to get the camera's position in the entity's space.<br><br>There are still several obvious flaws:<br><br> - The lines don't match up perfectly at the ends. This is the fault of the 3D line function and should hopefully be easy to address.<br><br> - Some of the lines look like they're double-thickness. This is because the lines are supposed to be half-inside, half-outside the mesh. Particularly sharp edges won't conceal the other half of the line; probably the only way around this is to design the character with this in mind and not give it sharp edges.<br><br> - Lines "pop in" in funny places - again, this would best be solved by designing a character not to display edges in places you don't want outlines.<br><br> - The edge data uses absolute positions, which is obviously not compatible with render tweening or animation speeds other than 1. I think (I hope) this can be addressed by tweening between two frames of edge data according to whatever position the animation is at. This is why this demo uses SetAnimTime and suffers from terrible stuttering (the ninja's animation is very fast so it's set to 0.1 speed). <strike>Fixed this, see next post.</strike> Whoops, no I haven't.<br><br> - The lines are red (so you can see them). I will leave correcting this as an exercise for the interested reader.<br><br>In order to precalculate the edge information, a static version of each frame of the animated model needs to be made, which is what most of the code is doing. Don't examine this part too closely, because it's a real mess. It's also rather slow - this information should probably be saved to a file rather than recalculated at runtime. All this part really needs is some way of knowing animated vertex positions, so if anyone knows a better way of getting these, please suggest it.<br><br>This example was made with Psionic's ninja model. I can't find the link to download it (I'm pretty sure it's free) <b>EDIT: OTHER MODELS MAY NOT WORK!</b> Don't know why yet, it's to do with the getting-static-meshes-from-frames part, not the outline drawing. The Psionic models that come with PaceMaker (dwarf, robot, zombie) seem to work correctly.<br><br>Some of the code (Navigate_World_With_MouseAndKeys(), mainly) is taken from <a href="/posts.php?topic=51292" target="_blank">this</a> attempt to do the same thing a while back as I just modified the example until it worked this way.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Type Character
+	Field mesh
+	Field EdgeList	;Bank containing all edge data
+	Field no_frames
+	Field framesize
+End Type
+
+Const MAXVERTS=2000
+
+Type TBone
+	Field name$,id,ent
+	Field vnum,vid[MAXVERTS],vw#[MAXVERTS]
+	Field px#,py#,pz#		;Base position
+	Field sx#,sy#,sz#
+	Field q.Quat
+End Type
+
+Type TVertex
+	Field ID	;Handle
+	Field boneid[4]
+	Field weight#[4]
+	Field x#[4],y#[4],z#[4]
+End Type
+
+Const QuatToEulerAccuracy# = 0.001
+Const QuatSlerpAccuracy#   = 0.0001
+
+Type Rotation
+	Field pitch#, yaw#, roll#
+End Type
+
+Type Quat
+	Field w#, x#, y#, z#
+End Type
+
+
+Graphics3D 800, 600, 32, 6
+;Include "Includes\Draw3Dz.bb"
+
+
+Global PlaneA#,PlaneB#,PlaneC#,PlaneD#		;Normal and distance from origin of a plane
+Global skin,varray.TVertex[MAXVERTS]
+Local i
+For i=0 To MAXVERTS
+	varray[i]=New TVertex
+Next
+
+Local char.Character=LoadOutlinedCharacter("ninja.b3d")
+Local edgePtr
+Local tx#,ty#,tz#,dot0,dot1
+
+
+;EntityFX entity, 4
+EntityColor char\mesh,160,160,160
+
+
+Local Light% = CreateLight()
+RotateEntity Light, 45, 45, 45
+Local Camera% = CreateCamera()
+
+;DrawInit3D(Camera)
+;Global nat=LoadImage3D("Natives\Gauss.png")
+;Global font=LoadFont3D("Fonts\Phyton1.png")
+
+PositionEntity Camera, 4, 2, 4
+PointEntity Camera,char\mesh
+
+CameraClsColor Camera, 180,180,180
+
+Local FPScount,FPStime,FPSframes
+Local SC_FPS=60,limited=True	;Desired framerate
+Local ctime,rtime=Floor(1000.0/SC_FPS)
+
+;ColorN3D 255,0,0,1
+Color 255,0,0
+
+Local linemesh=CreateMesh(Camera),linesurf=CreateSurface(linemesh)
+EntityColor linemesh,255,0,0:EntityFX linemesh,1
+Local turning,frametick,cframe
+
+
+
+While Not KeyHit(1)
+	ctime=MilliSecs()
+	
+	Navigate_World_With_MouseAndKeys(Camera,0.5,0.1)
+	
+	If KeyHit(57) Then turning=Not turning
+	TurnEntity char\mesh, 0,0.5*turning, 0
+	
+	ClearSurface linesurf
+	
+	TFormPoint 0,0,0,Camera,char\mesh
+	tx=TFormedX():ty=TFormedY():tz=TFormedZ()
+	
+	
+	frametick=frametick+1
+	If frametick=250 Then frametick=0
+	cframe=Floor(frametick/10)
+	SetAnimTime char\mesh,cframe
+	
+	For edgePtr=cframe*char\framesize To (cframe+1)*char\framesize-56 Step 56;BankSize(char\EdgeList)-56 Step 56
+		dot0=(tx*PeekFloat(char\EdgeList,edgePtr+24)+ty*PeekFloat(char\EdgeList,edgePtr+28)+tz*PeekFloat(char\EdgeList,edgePtr+32)+PeekFloat(char\EdgeList,edgePtr+36))&gt;0
+		dot1=(tx*PeekFloat(char\EdgeList,edgePtr+40)+ty*PeekFloat(char\EdgeList,edgePtr+44)+tz*PeekFloat(char\EdgeList,edgePtr+48)+PeekFloat(char\EdgeList,edgePtr+52))&gt;0
+		
+		If dot0&lt;&gt;dot1
+			Draw3DLine Camera,linesurf,PeekFloat(char\EdgeList,edgePtr),PeekFloat(char\EdgeList,edgePtr+4),PeekFloat(char\EdgeList,edgePtr+8),PeekFloat(char\EdgeList,edgePtr+12),PeekFloat(char\EdgeList,edgePtr+16),PeekFloat(char\EdgeList,edgePtr+20),4,char\mesh
+		EndIf
+	Next
+	
+	
+	;ColorT3D 255, 0, 0, 1
+	If MilliSecs()-FPStime=&gt;1000 Then FPScount=FPSframes:FPSframes=0:FPStime=MilliSecs():Else FPSframes=FPSframes+1
+	
+;	UpdateWorld 0.1
+	RenderWorld
+;	Clear3D
+	
+	Text 0,0,"Arrow keys and mouse to fly, space to toggle rotation"
+	Text 0,30,"FPS: "+FPScount
+	Text 0,60,"TrisRendered="+TrisRendered()
+	Text 0,90,"Bank size: "+BankSize(char\EdgeList);/56
+	Text 0,120,"Frame: "+cframe
+	
+	Delay (rtime-(MilliSecs()-ctime))-(limited+1)		;Free spare CPU time
+	Flip limited
+Wend
+;DrawFree3D
+
+End
+
+
+
+Function LoadOutlinedCharacter.Character(fname$)
+	Local char.Character=New Character,f
+	char\mesh=LoadAnimMesh(fname)
+	char\EdgeList=CreateBank()
+	char\no_frames=25;AnimLength(char\mesh)		;Doing 300 all at once seem to crash it
+	
+	SetAnimTime char\mesh,0
+	For f=0 To char\no_frames-1
+		ReadB3DFrame(fname,f)
+		GetEdges(skin,char\EdgeList,BankSize(char\EdgeList))		;Only bother with single-surface characters for the time being
+		FreeEntity skin
+	Next
+	
+	char\framesize=BankSize(char\EdgeList)/char\no_frames
+	Return char
+End Function
+
+Function GetEdges(ent,EdgeList,startPtr)
+	Local t,t1,t2,i,edgePtr,v0,v1,v2,side
+	Local s=GetSurface(ent,1)
+	
+	For t=0 To CountTriangles(s)-1
+		For i=0 To 2
+			v0=TriangleVertex(s,t,i)
+			If i=2 Then v1=TriangleVertex(s,t,0):Else v1=TriangleVertex(s,t,i+1)
+			For v2=0 To CountVertices(s)-1
+				If VertexX(s,v2)=VertexX(s,v0)
+					If VertexY(s,v2)=VertexY(s,v0)
+						If VertexZ(s,v2)=VertexZ(s,v0)
+							v0=v2:Exit		;Grab the first vertex with the same coords, same one or not
+						EndIf
+					EndIf
+				EndIf
+			Next
+			For v2=0 To CountVertices(s)-1
+				If VertexX(s,v2)=VertexX(s,v1)
+					If VertexY(s,v2)=VertexY(s,v1)
+						If VertexZ(s,v2)=VertexZ(s,v1)
+							v1=v2:Exit
+						EndIf
+					EndIf
+				EndIf
+			Next
+			For edgePtr=startPtr To BankSize(EdgeList)-56 Step 56
+				If (v0=PeekInt(EdgeList,edgePtr) And v1=PeekInt(EdgeList,edgePtr+4)) Or (v1=PeekInt(EdgeList,edgePtr) And v0=PeekInt(EdgeList,edgePtr+4))
+					PokeInt EdgeList,edgePtr+12,t
+					Exit
+				EndIf
+			Next
+			
+			If edgePtr=BankSize(EdgeList)
+				ResizeBank EdgeList,edgePtr+56
+				PokeInt EdgeList,edgePtr,v0
+				PokeInt EdgeList,edgePtr+4,v1
+				PokeInt EdgeList,edgePtr+8,t
+			EndIf
+		Next
+	Next
+	
+	For edgePtr=startPtr To BankSize(EdgeList)-56 Step 56
+		side=0
+		v0=PeekInt(EdgeList,edgePtr)
+		v1=PeekInt(EdgeList,edgePtr+4)
+		t1=PeekInt(EdgeList,edgePtr+8)
+		t2=PeekInt(EdgeList,edgePtr+12)
+		PokeFloat EdgeList,edgePtr,VertexX(s,v0)
+		PokeFloat EdgeList,edgePtr+4,VertexY(s,v0)
+		PokeFloat EdgeList,edgePtr+8,VertexZ(s,v0)
+		PokeFloat EdgeList,edgePtr+12,VertexX(s,v1)
+		PokeFloat EdgeList,edgePtr+16,VertexY(s,v1)
+		PokeFloat EdgeList,edgePtr+20,VertexZ(s,v1)
+		
+		v0=TriangleVertex(s,t1,0)
+		v1=TriangleVertex(s,t1,1)
+		v2=TriangleVertex(s,t1,2)
+		CalculateTriPlane(VertexX(s,v0),VertexY(s,v0),VertexZ(s,v0),VertexX(s,v1),VertexY(s,v1),VertexZ(s,v1),VertexX(s,v2),VertexY(s,v2),VertexZ(s,v2))
+		PokeFloat EdgeList,edgePtr+24,PlaneA
+		PokeFloat EdgeList,edgePtr+28,PlaneB
+		PokeFloat EdgeList,edgePtr+32,PlaneC
+		PokeFloat EdgeList,edgePtr+36,PlaneD
+		
+		v0=TriangleVertex(s,t2,0)
+		v1=TriangleVertex(s,t2,1)
+		v2=TriangleVertex(s,t2,2)
+		CalculateTriPlane(VertexX(s,v0),VertexY(s,v0),VertexZ(s,v0),VertexX(s,v1),VertexY(s,v1),VertexZ(s,v1),VertexX(s,v2),VertexY(s,v2),VertexZ(s,v2))
+		PokeFloat EdgeList,edgePtr+40,PlaneA
+		PokeFloat EdgeList,edgePtr+44,PlaneB
+		PokeFloat EdgeList,edgePtr+48,PlaneC
+		PokeFloat EdgeList,edgePtr+52,PlaneD
+	Next
+End Function
+
+Function NextChild(ent)
+	Local siblingcnt
+	If CountChildren(ent)&gt;0
+		Return GetChild(ent,1)
+	EndIf
+	
+	Local foundunused=False
+	Local foundent = 0, parent,sibling
+	While foundunused=False And ent&lt;&gt;0
+		parent = GetParent(ent)
+		If parent&lt;&gt;0
+			If CountChildren(parent)&gt;1
+				If GetChild(parent,CountChildren(parent))&lt;&gt;ent
+					For siblingcnt = 1 To CountChildren(parent)
+						sibling = GetChild(parent,siblingcnt)
+						If sibling=ent
+							foundunused = True
+							foundent = GetChild(parent,siblingcnt+1)
+						EndIf
+					Next
+				EndIf
+			EndIf
+		EndIf
+		ent = parent
+	Wend
+	Return foundent
+End Function
+
+Function ReadB3DFrame(fname$,frame)
+	Local anim1=LoadAnimMesh(fname)
+	Local b3dfile=ReadFile(fname)
+	Local bb3d=ReadInt(b3dfile)		;Check for type error here
+	Local size=ReadInt(b3dfile)-4
+	Local version=ReadInt(b3dfile)	;Do something with this?
+	Local b3dbank=CreateBank(size)
+	ReadBytes(b3dbank,b3dfile,0,size)
+	CloseFile b3dfile
+	
+	ReadChunks(b3dbank,0,size)	;Skin is a global because this doesn't return it
+	Local s=GetSurface(skin,1),nverts=CountVertices(s)
+	Local v,n,i,vx#,vy#,vz#,b.TBone
+	
+	i=0
+	Local r.Rotation=New Rotation
+	For b.TBone=Each TBone
+		b\ent=FindChild(anim1,b\name)			;Get the correct bone handles
+		PositionEntity b\ent,b\px,b\py,b\pz
+		ScaleEntity b\ent,b\sx,b\sy,b\sz
+		QuatToEuler(r,b\q)
+		RotateEntity b\ent,r\pitch,r\roll,r\yaw
+	Next
+	Delete r
+	
+	For v=0 To nverts-1
+		For i=1 To varray[v]\boneid[0]
+			b.TBone=Object.TBone(varray[v]\boneid[i])
+			TFormPoint VertexX(s,v),VertexY(s,v),VertexZ(s,v),0,b\ent
+			varray[v]\x[i]=TFormedX()
+			varray[v]\y[i]=TFormedY()
+			varray[v]\z[i]=TFormedZ()
+		Next
+	Next
+	
+	SetAnimTime anim1,frame
+	
+	For v=0 To nverts-1
+		For n=1 To varray[v]\boneid[0]	;Number of bones attached to vertex
+			b=Object.TBone(varray[v]\boneid[n])
+			TFormPoint varray[v]\x[n],varray[v]\y[n],varray[v]\z[n],b\ent,0
+			varray[v]\x[n]=TFormedX()*varray[v]\weight[n]
+			varray[v]\y[n]=TFormedY()*varray[v]\weight[n]
+			varray[v]\z[n]=TFormedZ()*varray[v]\weight[n]
+		Next
+		vx#=varray[v]\x[1]+varray[v]\x[2]+varray[v]\x[3]+varray[v]\x[4]
+		vy#=varray[v]\y[1]+varray[v]\y[2]+varray[v]\y[3]+varray[v]\y[4]
+		vz#=varray[v]\z[1]+varray[v]\z[2]+varray[v]\z[3]+varray[v]\z[4]
+		VertexCoords s,v,vx,vy,vz
+	Next
+	
+	FreeEntity anim1:FreeBank b3dbank:Delete Each TBone
+	For v=0 To MAXVERTS
+		varray[v]\boneid[0]=0
+	Next
+End Function
+
+Function ReadChunks(b3dbank,ofptr,size,name$="")
+	Local chunksize,cpos,i,char,vflags,csets,csetsize,cstep
+	Local s,v,v0,v1,v2,vID,cs,co
+	Local x#,y#,z#,nx#,ny#,nz#,vv#,uv#
+	Local tag$,tname$,b.TBone
+	Local pos=ofptr
+	
+	While pos&lt;size+ofptr
+		tag$=Chr(PeekByte(b3dbank,pos))+Chr(PeekByte(b3dbank,pos+1))+Chr(PeekByte(b3dbank,pos+2))+Chr(PeekByte(b3dbank,pos+3))
+		chunksize=PeekInt(b3dbank,pos+4)
+		pos=pos+8	;Move it on to the start of the chunk proper
+		
+		cpos=0
+		Select tag
+			Case "TEXS"
+				While cpos&lt;chunksize
+					tname=""
+					For i=0 To chunksize-1
+						char=PeekByte(b3dbank,pos+cpos+i)
+						If char=0 Then Exit:Else tname=tname+Chr(char)
+					Next
+					cpos=cpos+Len(tname)+29	;Skip the other data...
+				Wend
+				pos=pos+chunksize
+			Case "MESH"
+				pos=ReadChunks(b3dbank,pos+4,chunksize)	;Ignoring brushes for now
+			Case "VRTS"
+				vflags=PeekInt(b3dbank,pos)
+				csets=PeekInt(b3dbank,pos+4):csetsize=PeekInt(b3dbank,pos+8)
+				skin=CreateMesh():s=CreateSurface(skin):cpos=pos+12
+				
+				cstep=4*csets*csetsize+12+(12*(vflags And 1))+(16*(vflags And 2))
+				
+				For v=0 To ((chunksize-12)/cstep)-1
+					cpos=pos+12+v*cstep
+					x#=PeekFloat(b3dbank,cpos)
+					y#=PeekFloat(b3dbank,cpos+4)
+					z#=PeekFloat(b3dbank,cpos+8)
+					cpos=cpos+12
+					AddVertex(s,x,y,z)
+					
+					If vflags And 1
+						nx#=PeekFloat(b3dbank,cpos+v*cstep)
+						ny#=PeekFloat(b3dbank,cpos+4+v*cstep)
+						nz#=PeekFloat(b3dbank,cpos+8+v*cstep)
+						cpos=cpos+12
+						VertexNormal s,v,nx,ny,nz
+					EndIf
+					If vflags And 2 Then cpos=cpos+16	;Vertex colour info goes here, add if required
+					
+					For cs=0 To csets-1
+						For co=1 To csetsize
+							If co=1 Then uv#=PeekFloat(b3dbank,cpos+i*csetsize*4)
+							If co=2 Then vv#=PeekFloat(b3dbank,cpos+i*csetsize*4)		;Ignoring extended coord options for now
+							cpos=cpos+4
+							VertexTexCoords s,v,uv,vv,1,cs
+						Next
+					Next
+				Next
+				
+				pos=pos+chunksize
+			Case "TRIS"
+				;Ignoring brushes...again
+				s=GetSurface(skin,1)	;Add potential for loading multi-skin/mesh models in this area
+				For i=0 To (chunksize-4)/12-1
+					v0=PeekInt(b3dbank,pos+4+i*12)
+					v1=PeekInt(b3dbank,pos+8+i*12)
+					v2=PeekInt(b3dbank,pos+12+i*12)
+					AddTriangle(s,v0,v1,v2)
+				Next
+				pos=pos+chunksize
+			Case "BONE"
+				b.TBone=New TBone
+				b\name=name
+				b\id=Handle(b)
+				b\vnum=chunksize/8
+				
+				For i=0 To b\vnum-1
+					vID=PeekInt(b3dbank,pos+i*8)
+					b\vid[i]=vID
+					varray[vID]\boneid[0]=varray[vID]\boneid[0]+1
+					varray[vID]\boneid[varray[vID]\boneid[0]]=b\id
+					varray[vID]\weight[varray[vID]\boneid[0]]=PeekFloat(b3dbank,pos+i*8+4)
+				Next
+				
+				b\px=PeekFloat(b3dbank,ofptr-40)
+				b\py=PeekFloat(b3dbank,ofptr-36)
+				b\pz=PeekFloat(b3dbank,ofptr-32)
+				b\sx=PeekFloat(b3dbank,ofptr-28)
+				b\sy=PeekFloat(b3dbank,ofptr-24)
+				b\sz=PeekFloat(b3dbank,ofptr-20)
+				b\q=New Quat
+				b\q\w=PeekFloat(b3dbank,ofptr-16)
+				b\q\x=PeekFloat(b3dbank,ofptr-12)
+				b\q\y=PeekFloat(b3dbank,ofptr-8)
+				b\q\z=PeekFloat(b3dbank,ofptr-4)
+				pos=pos+chunksize
+			Case "NODE"
+				tname$=""
+				For i=0 To chunksize-1
+					char=PeekByte(b3dbank,pos+cpos+i)
+					If char=0 Then Exit:Else tname=tname+Chr(char)
+				Next
+				cpos=cpos+i+1
+				pos=ReadChunks(b3dbank,pos+cpos+40,chunksize-(cpos+40),tname)
+			Default
+				pos=pos+chunksize	;Skip over chunks that don't concern us
+		End Select
+	Wend
+	
+	Return pos
+End Function
+
+Function QuatToEuler(out.Rotation, src.Quat)		; convert a Quat to a Rotation (by Wavey)
+	Local sint#, cost#, sinv#, cosv#, sinf#, cosf#
+	Local cost_temp#
+	
+	sint = (2 * src\w * src\y) - (2 * src\x * src\z)
+	cost_temp = 1.0 - (sint * sint)
+	
+	If Abs(cost_temp) &gt; QuatToEulerAccuracy
+		cost = Sqr(cost_temp)
+	Else
+		cost = 0
+	EndIf
+	
+	If Abs(cost) &gt; QuatToEulerAccuracy
+		sinv = ((2 * src\y * src\z) + (2 * src\w * src\x)) / cost
+		cosv = (1 - (2 * src\x * src\x) - (2 * src\y * src\y)) / cost
+		sinf = ((2 * src\x * src\y) + (2 * src\w * src\z)) / cost
+		cosf = (1 - (2 * src\y * src\y) - (2 * src\z * src\z)) / cost
+	Else
+		sinv = (2 * src\w * src\x) - (2 * src\y * src\z)
+		cosv = 1 - (2 * src\x * src\x) - (2 * src\z * src\z)
+		sinf = 0
+		cosf = 1
+	EndIf
+	
+	; Generate the output rotation
+	out\roll = -ATan2(sinv, cosv) ;  inverted due to change in handedness of coordinate system
+	out\pitch = ATan2(sint, cost)
+	out\yaw = ATan2(sinf, cosf)
+End Function
+
+Function Navigate_World_With_MouseAndKeys(Camera,turnSpeed#=1,moveSpeed#=1)
+	Local dY# = EntityPitch(Camera)+MouseYSpeed()/2*turnSpeed
+	If dY &gt; 89 Then dY = 89
+	If dY &lt; -89 Then dY = -89
+	
+	Local dz# = (KeyDown(200)-KeyDown(208)) * moveSpeed
+	Local dx# = (KeyDown(205)-KeyDown(203)) * moveSpeed
+	If dz &lt;&gt; 0 And dx &lt;&gt; 0 Then 
+		dx=dx * 0.707
+		dz=dz * 0.707
+	End If
+	RotateEntity Camera, dY, EntityYaw(Camera)-(MouseXSpeed()/2)*turnSpeed, 0
+	MoveEntity Camera, dx, 0, dz
+	MoveMouse GraphicsWidth()/2, GraphicsHeight()/2
+	
+	If KeyHit(4) Then 
+		CameraZoom Camera, 4.0
+	End If
+	If KeyHit(5) Then
+		CameraZoom Camera, 1.0
+	End If
+End Function
+
+Function Draw3DLine(camera,surf,x1#,y1#,z1#,x2#,y2#,z2#,thickness#=1,entity=0)
+	TFormPoint x1,y1,z1,entity,camera
+	x1=TFormedX()
+	y1=TFormedY()
+	z1=TFormedZ()
+	Local d1#=Sqr(x1*x1+y1*y1+z1*z1)/GraphicsWidth()
+	TFormPoint x2,y2,z2,entity,camera
+	x2=TFormedX()
+	y2=TFormedY()
+	z2=TFormedZ()
+	Local d2#=Sqr(x2*x2+y2*y2+z2*z2)/GraphicsWidth()
+	
+	Local theta#=ATan2(y2*(d1/d2)-y1,x2*(d1/d2)-x1)
+	Local xTForm#=Cos(theta)*thickness
+	Local yTForm#=Sin(theta)*thickness
+	
+	Local V0=AddVertex(surf,x1+yTForm*d1,y1-xTForm*d1,z1)
+	Local V1=AddVertex(surf,x1-yTForm*d1,y1+xTForm*d1,z1)
+	Local V2=AddVertex(surf,x2-yTForm*d2,y2+xTForm*d2,z2)
+	Local V3=AddVertex(surf,x2+yTForm*d2,y2-xTForm*d2,z2)
+	
+	AddTriangle(surf,V0,V1,V2)
+	AddTriangle(surf,V2,V3,V0)
+End Function
+
+Function CalculateTriPlane(V1x#, V1y#, V1z#, V2x#, V2y#, V2z#, V3x#, V3y#, V3z#)	;By SSwift
+	
+	Local Px#, Py#, Pz#
+	Local Qx#, Qy#, Qz#
+	Local Nx#, Ny#, Nz#, Nl#
+	
+	; Create two vectors from the sides of the triangle.
+	Px# = V1x#-V3x#
+	Py# = V1y#-V3y#
+	Pz# = V1z#-V3z#
+	
+	Qx# = V2x#-V3x#
+	Qy# = V2y#-V3y#
+	Qz# = V2z#-V3z#
+	
+	; Compute their cross product.
+	Nx# = (Py#*Qz#) - (Qy#*Pz#)
+	Ny# = (Pz#*Qx#) - (Qz#*Px#) 	
+	Nz# = (Px#*Qy#) - (Qx#*Py#)
+	
+	; Calculate the length of the vector.
+	Nl# = Sqr(Nx#*Nx# + Ny#*Ny# + Nz#*Nz#)
+	
+	; Calculate the plane equation for the triangle.  
+	
+		; ABC is the triangle's normal.
+	
+		; Normalize the vector so it has a length of 1.
+		; This is the normal of the triangle.
+	PlaneA# = (Nx# / Nl#);*255
+	PlaneB# = (Ny# / Nl#);*255	;Normalising the vector to 255 allows it to be stored in three bytes
+	PlaneC# = (Nz# / Nl#);*255
+	
+		; Calculate minimum distance of plane the triangle lies in, from the origin.
+		; This is the shortest distance to the surface of the plane from 0,0,0.
+	PlaneD# = -(PlaneA#*V1x# + PlaneB#*V1y# + PlaneC#*V1z#)
+	
+End Function
+</textarea><br><br>Anyway, I realise it's been four years and nobody cares any more, but there don't seem to be any other examples in this forum of any method of drawing outlines that don't involve the horrifyingly, gamebreakingly ugly inverted mesh method. So here's the beginning of one. <br><br></td></tr></table><br>
+<a name="987893"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ross C</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Do you have to use the 3d line option? Have you tested drawing 2d lines? Anyway, i can't wait to try it, thanks for sharing this :) <br><br></td></tr></table><br>
+<a name="987895"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well aside from 3D lines being about a bajillion times faster than 2D ones, if say your character has its arms crossed in front of its body, and you outline both arms with 2D lines, all the lines will be visible (ie. the outline of the arm behind will be drawn in front, which is obviously wrong). With 3D lines correcting for this, or any other circumstances when the entire length of an edge might not be visible such as curving around the side, is automatic, as obscured parts of the line are really just obscured by the geometry.<br><br>Incidentally if you have PaceMaker (or at least, Psionic's models) I'd recommend using the robot, it works better than the ninja. I think you do need to have designed the mesh with this system in mind if you want to use it for anything.<br><br>Here's a version that tweens the outlines between "keyframes":<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Type Character
+	Field mesh
+	Field EdgeList	;Bank containing all edge data
+	Field no_frames
+	Field framesize
+End Type
+
+Const MAXVERTS=2000
+
+Type TBone
+	Field name$,id,ent
+	Field vnum,vid[MAXVERTS],vw#[MAXVERTS]
+	Field px#,py#,pz#		;Base position
+	Field sx#,sy#,sz#
+	Field q.Quat
+End Type
+
+Type TVertex
+	Field ID	;Handle
+	Field boneid[4]
+	Field weight#[4]
+	Field x#[4],y#[4],z#[4]
+End Type
+
+Const QuatToEulerAccuracy# = 0.001
+Const QuatSlerpAccuracy#   = 0.0001
+
+Type Rotation
+	Field pitch#, yaw#, roll#
+End Type
+
+Type Quat
+	Field w#, x#, y#, z#
+End Type
+
+
+Graphics3D 800, 600, 32, 6
+;Include "Includes\Draw3Dz.bb"
+
+
+Global PlaneA#,PlaneB#,PlaneC#,PlaneD#		;Normal and distance from origin of a plane
+Global skin,varray.TVertex[MAXVERTS]
+Local i
+For i=0 To MAXVERTS
+	varray[i]=New TVertex
+Next
+
+Local char.Character=LoadOutlinedCharacter("ninja.b3d")
+Local edgePtr,edgePtrA,edgePtrB
+Local tx#,ty#,tz#,dot0,dot1
+
+
+;EntityFX entity, 4
+EntityColor char\mesh,160,160,160
+
+
+Local Light% = CreateLight()
+RotateEntity Light, 45, 45, 45
+Local Camera% = CreateCamera()
+
+;DrawInit3D(Camera)
+;Global nat=LoadImage3D("Natives\Gauss.png")
+;Global font=LoadFont3D("Fonts\Phyton1.png")
+
+PositionEntity Camera, 4, 2, 4
+PointEntity Camera,char\mesh
+
+CameraClsColor Camera, 180,180,180
+
+Local FPScount,FPStime,FPSframes
+Local SC_FPS=60,limited=True	;Desired framerate
+Local ctime,rtime=Floor(1000.0/SC_FPS)
+
+;ColorN3D 255,0,0,1
+Color 255,0,0
+
+Local linemesh=CreateMesh(Camera),linesurf=CreateSurface(linemesh)
+EntityColor linemesh,255,0,0:EntityFX linemesh,1
+Local turning,frametick,cframe#,frameA,frameB,fTween#
+Local pA#,pB#,pC#,pD#,x1#,y1#,z1#,x2#,y2#,z2#
+
+
+
+While Not KeyHit(1)
+	ctime=MilliSecs()
+	
+	Navigate_World_With_MouseAndKeys(Camera,0.5,0.1)
+	
+	If KeyHit(57) Then turning=Not turning
+	TurnEntity char\mesh, 0,0.5*turning, 0
+	
+	ClearSurface linesurf
+	
+	TFormPoint 0,0,0,Camera,char\mesh
+	tx=TFormedX():ty=TFormedY():tz=TFormedZ()
+	
+	
+	frametick=frametick+1
+	If frametick=250 Then frametick=0
+	cframe=frametick/10.0
+	frameA=Floor(cframe)
+	frameB=Ceil(cframe)
+	fTween=cframe-frameA	;Over-simplistic
+	SetAnimTime char\mesh,cframe
+	
+;	For edgePtr=frameA*char\framesize To (frameA+1)*char\framesize-56 Step 56
+	For edgePtr=0 To char\framesize-56 Step 56
+		
+		edgePtrA=edgePtr+frameA*char\framesize
+		edgePtrB=edgePtr+frameB*char\framesize
+		
+		pA=PeekFloat(char\EdgeList,edgePtrA+24)*(1-fTween)+PeekFloat(char\EdgeList,edgePtrB+24)*fTween
+		pB=PeekFloat(char\EdgeList,edgePtrA+28)*(1-fTween)+PeekFloat(char\EdgeList,edgePtrB+28)*fTween
+		pC=PeekFloat(char\EdgeList,edgePtrA+32)*(1-fTween)+PeekFloat(char\EdgeList,edgePtrB+32)*fTween
+		pD=PeekFloat(char\EdgeList,edgePtrA+36)*(1-fTween)+PeekFloat(char\EdgeList,edgePtrB+36)*fTween
+		
+		dot0=(tx*pA+ty*pB+tz*pC+pD)&gt;0
+		
+		pA=PeekFloat(char\EdgeList,edgePtrA+40)*(1-fTween)+PeekFloat(char\EdgeList,edgePtrB+40)*fTween
+		pB=PeekFloat(char\EdgeList,edgePtrA+44)*(1-fTween)+PeekFloat(char\EdgeList,edgePtrB+44)*fTween
+		pC=PeekFloat(char\EdgeList,edgePtrA+48)*(1-fTween)+PeekFloat(char\EdgeList,edgePtrB+48)*fTween
+		pD=PeekFloat(char\EdgeList,edgePtrA+52)*(1-fTween)+PeekFloat(char\EdgeList,edgePtrB+52)*fTween
+		
+		dot1=(tx*pA+ty*pB+tz*pC+pD)&gt;0
+		
+		If dot0&lt;&gt;dot1
+			x1=PeekFloat(char\EdgeList,edgePtrA)*(1-fTween)+PeekFloat(char\EdgeList,edgePtrB)*fTween
+			y1=PeekFloat(char\EdgeList,edgePtrA+4)*(1-fTween)+PeekFloat(char\EdgeList,edgePtrB+4)*fTween
+			z1=PeekFloat(char\EdgeList,edgePtrA+8)*(1-fTween)+PeekFloat(char\EdgeList,edgePtrB+8)*fTween
+			x2=PeekFloat(char\EdgeList,edgePtrA+12)*(1-fTween)+PeekFloat(char\EdgeList,edgePtrB+12)*fTween
+			y2=PeekFloat(char\EdgeList,edgePtrA+16)*(1-fTween)+PeekFloat(char\EdgeList,edgePtrB+16)*fTween
+			z2=PeekFloat(char\EdgeList,edgePtrA+20)*(1-fTween)+PeekFloat(char\EdgeList,edgePtrB+20)*fTween
+			
+			Draw3DLine Camera,linesurf,x1,y1,z1,x2,y2,z2,4,char\mesh
+		EndIf
+	Next
+	
+	
+	;ColorT3D 255, 0, 0, 1
+	If MilliSecs()-FPStime=&gt;1000 Then FPScount=FPSframes:FPSframes=0:FPStime=MilliSecs():Else FPSframes=FPSframes+1
+	
+;	UpdateWorld 0.1
+	RenderWorld
+;	Clear3D
+	
+	Text 0,0,"Arrow keys and mouse to fly, space to toggle rotation"
+	Text 0,30,"FPS: "+FPScount
+	Text 0,60,"TrisRendered="+TrisRendered()
+	Text 0,90,"Bank size: "+BankSize(char\EdgeList);/56
+	Text 0,120,"Frame: "+cframe
+	
+	Delay (rtime-(MilliSecs()-ctime))-(limited+1)		;Free spare CPU time
+	Flip limited
+Wend
+;DrawFree3D
+
+End
+
+
+
+Function LoadOutlinedCharacter.Character(fname$)
+	Local char.Character=New Character,f
+	char\mesh=LoadAnimMesh(fname)
+	char\EdgeList=CreateBank()
+	char\no_frames=26;AnimLength(char\mesh)		;Doing 300 all at once seem to crash it
+	
+	SetAnimTime char\mesh,0
+	For f=0 To char\no_frames-1
+		ReadB3DFrame(fname,f)
+		GetEdges(skin,char\EdgeList,BankSize(char\EdgeList))		;Only bother with single-surface characters for the time being
+		FreeEntity skin
+	Next
+	
+	char\framesize=BankSize(char\EdgeList)/char\no_frames
+	Return char
+End Function
+
+Function GetEdges(ent,EdgeList,startPtr)
+	Local t,t1,t2,i,edgePtr,v0,v1,v2,side
+	Local s=GetSurface(ent,1)
+	
+	For t=0 To CountTriangles(s)-1
+		For i=0 To 2
+			v0=TriangleVertex(s,t,i)
+			If i=2 Then v1=TriangleVertex(s,t,0):Else v1=TriangleVertex(s,t,i+1)
+			For v2=0 To CountVertices(s)-1
+				If VertexX(s,v2)=VertexX(s,v0)
+					If VertexY(s,v2)=VertexY(s,v0)
+						If VertexZ(s,v2)=VertexZ(s,v0)
+							v0=v2:Exit		;Grab the first vertex with the same coords, same one or not
+						EndIf
+					EndIf
+				EndIf
+			Next
+			For v2=0 To CountVertices(s)-1
+				If VertexX(s,v2)=VertexX(s,v1)
+					If VertexY(s,v2)=VertexY(s,v1)
+						If VertexZ(s,v2)=VertexZ(s,v1)
+							v1=v2:Exit
+						EndIf
+					EndIf
+				EndIf
+			Next
+			For edgePtr=startPtr To BankSize(EdgeList)-56 Step 56
+				If (v0=PeekInt(EdgeList,edgePtr) And v1=PeekInt(EdgeList,edgePtr+4)) Or (v1=PeekInt(EdgeList,edgePtr) And v0=PeekInt(EdgeList,edgePtr+4))
+					PokeInt EdgeList,edgePtr+12,t
+					Exit
+				EndIf
+			Next
+			
+			If edgePtr=BankSize(EdgeList)
+				ResizeBank EdgeList,edgePtr+56
+				PokeInt EdgeList,edgePtr,v0
+				PokeInt EdgeList,edgePtr+4,v1
+				PokeInt EdgeList,edgePtr+8,t
+			EndIf
+		Next
+	Next
+	
+	For edgePtr=startPtr To BankSize(EdgeList)-56 Step 56
+		side=0
+		v0=PeekInt(EdgeList,edgePtr)
+		v1=PeekInt(EdgeList,edgePtr+4)
+		t1=PeekInt(EdgeList,edgePtr+8)
+		t2=PeekInt(EdgeList,edgePtr+12)
+		PokeFloat EdgeList,edgePtr,VertexX(s,v0)
+		PokeFloat EdgeList,edgePtr+4,VertexY(s,v0)
+		PokeFloat EdgeList,edgePtr+8,VertexZ(s,v0)
+		PokeFloat EdgeList,edgePtr+12,VertexX(s,v1)
+		PokeFloat EdgeList,edgePtr+16,VertexY(s,v1)
+		PokeFloat EdgeList,edgePtr+20,VertexZ(s,v1)
+		
+		v0=TriangleVertex(s,t1,0)
+		v1=TriangleVertex(s,t1,1)
+		v2=TriangleVertex(s,t1,2)
+		CalculateTriPlane(VertexX(s,v0),VertexY(s,v0),VertexZ(s,v0),VertexX(s,v1),VertexY(s,v1),VertexZ(s,v1),VertexX(s,v2),VertexY(s,v2),VertexZ(s,v2))
+		PokeFloat EdgeList,edgePtr+24,PlaneA
+		PokeFloat EdgeList,edgePtr+28,PlaneB
+		PokeFloat EdgeList,edgePtr+32,PlaneC
+		PokeFloat EdgeList,edgePtr+36,PlaneD
+		
+		v0=TriangleVertex(s,t2,0)
+		v1=TriangleVertex(s,t2,1)
+		v2=TriangleVertex(s,t2,2)
+		CalculateTriPlane(VertexX(s,v0),VertexY(s,v0),VertexZ(s,v0),VertexX(s,v1),VertexY(s,v1),VertexZ(s,v1),VertexX(s,v2),VertexY(s,v2),VertexZ(s,v2))
+		PokeFloat EdgeList,edgePtr+40,PlaneA
+		PokeFloat EdgeList,edgePtr+44,PlaneB
+		PokeFloat EdgeList,edgePtr+48,PlaneC
+		PokeFloat EdgeList,edgePtr+52,PlaneD
+	Next
+End Function
+
+Function NextChild(ent)
+	Local siblingcnt
+	If CountChildren(ent)&gt;0
+		Return GetChild(ent,1)
+	EndIf
+	
+	Local foundunused=False
+	Local foundent = 0, parent,sibling
+	While foundunused=False And ent&lt;&gt;0
+		parent = GetParent(ent)
+		If parent&lt;&gt;0
+			If CountChildren(parent)&gt;1
+				If GetChild(parent,CountChildren(parent))&lt;&gt;ent
+					For siblingcnt = 1 To CountChildren(parent)
+						sibling = GetChild(parent,siblingcnt)
+						If sibling=ent
+							foundunused = True
+							foundent = GetChild(parent,siblingcnt+1)
+						EndIf
+					Next
+				EndIf
+			EndIf
+		EndIf
+		ent = parent
+	Wend
+	Return foundent
+End Function
+
+Function ReadB3DFrame(fname$,frame)
+	Local anim1=LoadAnimMesh(fname)
+	Local b3dfile=ReadFile(fname)
+	Local bb3d=ReadInt(b3dfile)		;Check for type error here
+	Local size=ReadInt(b3dfile)-4
+	Local version=ReadInt(b3dfile)	;Do something with this?
+	Local b3dbank=CreateBank(size)
+	ReadBytes(b3dbank,b3dfile,0,size)
+	CloseFile b3dfile
+	
+	ReadChunks(b3dbank,0,size)	;Skin is a global because this doesn't return it
+	Local s=GetSurface(skin,1),nverts=CountVertices(s)
+	Local v,n,i,vx#,vy#,vz#,b.TBone
+	
+	i=0
+	Local r.Rotation=New Rotation
+	For b.TBone=Each TBone
+		b\ent=FindChild(anim1,b\name)			;Get the correct bone handles
+		PositionEntity b\ent,b\px,b\py,b\pz
+		ScaleEntity b\ent,b\sx,b\sy,b\sz
+		QuatToEuler(r,b\q)
+		RotateEntity b\ent,r\pitch,r\roll,r\yaw
+	Next
+	Delete r
+	
+	For v=0 To nverts-1
+		For i=1 To varray[v]\boneid[0]
+			b.TBone=Object.TBone(varray[v]\boneid[i])
+			TFormPoint VertexX(s,v),VertexY(s,v),VertexZ(s,v),0,b\ent
+			varray[v]\x[i]=TFormedX()
+			varray[v]\y[i]=TFormedY()
+			varray[v]\z[i]=TFormedZ()
+		Next
+	Next
+	
+	SetAnimTime anim1,frame
+	
+	For v=0 To nverts-1
+		For n=1 To varray[v]\boneid[0]	;Number of bones attached to vertex
+			b=Object.TBone(varray[v]\boneid[n])
+			TFormPoint varray[v]\x[n],varray[v]\y[n],varray[v]\z[n],b\ent,0
+			varray[v]\x[n]=TFormedX()*varray[v]\weight[n]
+			varray[v]\y[n]=TFormedY()*varray[v]\weight[n]
+			varray[v]\z[n]=TFormedZ()*varray[v]\weight[n]
+		Next
+		vx#=varray[v]\x[1]+varray[v]\x[2]+varray[v]\x[3]+varray[v]\x[4]
+		vy#=varray[v]\y[1]+varray[v]\y[2]+varray[v]\y[3]+varray[v]\y[4]
+		vz#=varray[v]\z[1]+varray[v]\z[2]+varray[v]\z[3]+varray[v]\z[4]
+		VertexCoords s,v,vx,vy,vz
+	Next
+	
+	FreeEntity anim1:FreeBank b3dbank:Delete Each TBone
+	For v=0 To MAXVERTS
+		varray[v]\boneid[0]=0
+	Next
+End Function
+
+Function ReadChunks(b3dbank,ofptr,size,name$="")
+	Local chunksize,cpos,i,char,vflags,csets,csetsize,cstep
+	Local s,v,v0,v1,v2,vID,cs,co
+	Local x#,y#,z#,nx#,ny#,nz#,vv#,uv#
+	Local tag$,tname$,b.TBone
+	Local pos=ofptr
+	
+	While pos&lt;size+ofptr
+		tag$=Chr(PeekByte(b3dbank,pos))+Chr(PeekByte(b3dbank,pos+1))+Chr(PeekByte(b3dbank,pos+2))+Chr(PeekByte(b3dbank,pos+3))
+		chunksize=PeekInt(b3dbank,pos+4)
+		pos=pos+8	;Move it on to the start of the chunk proper
+		
+		cpos=0
+		Select tag
+			Case "TEXS"
+				While cpos&lt;chunksize
+					tname=""
+					For i=0 To chunksize-1
+						char=PeekByte(b3dbank,pos+cpos+i)
+						If char=0 Then Exit:Else tname=tname+Chr(char)
+					Next
+					cpos=cpos+Len(tname)+29	;Skip the other data...
+				Wend
+				pos=pos+chunksize
+			Case "MESH"
+				pos=ReadChunks(b3dbank,pos+4,chunksize)	;Ignoring brushes for now
+			Case "VRTS"
+				vflags=PeekInt(b3dbank,pos)
+				csets=PeekInt(b3dbank,pos+4):csetsize=PeekInt(b3dbank,pos+8)
+				skin=CreateMesh():s=CreateSurface(skin):cpos=pos+12
+				
+				cstep=4*csets*csetsize+12+(12*(vflags And 1))+(16*(vflags And 2))
+				
+				For v=0 To ((chunksize-12)/cstep)-1
+					cpos=pos+12+v*cstep
+					x#=PeekFloat(b3dbank,cpos)
+					y#=PeekFloat(b3dbank,cpos+4)
+					z#=PeekFloat(b3dbank,cpos+8)
+					cpos=cpos+12
+					AddVertex(s,x,y,z)
+					
+					If vflags And 1
+						nx#=PeekFloat(b3dbank,cpos+v*cstep)
+						ny#=PeekFloat(b3dbank,cpos+4+v*cstep)
+						nz#=PeekFloat(b3dbank,cpos+8+v*cstep)
+						cpos=cpos+12
+						VertexNormal s,v,nx,ny,nz
+					EndIf
+					If vflags And 2 Then cpos=cpos+16	;Vertex colour info goes here, add if required
+					
+					For cs=0 To csets-1
+						For co=1 To csetsize
+							If co=1 Then uv#=PeekFloat(b3dbank,cpos+i*csetsize*4)
+							If co=2 Then vv#=PeekFloat(b3dbank,cpos+i*csetsize*4)		;Ignoring extended coord options for now
+							cpos=cpos+4
+							VertexTexCoords s,v,uv,vv,1,cs
+						Next
+					Next
+				Next
+				
+				pos=pos+chunksize
+			Case "TRIS"
+				;Ignoring brushes...again
+				s=GetSurface(skin,1)	;Add potential for loading multi-skin/mesh models in this area
+				For i=0 To (chunksize-4)/12-1
+					v0=PeekInt(b3dbank,pos+4+i*12)
+					v1=PeekInt(b3dbank,pos+8+i*12)
+					v2=PeekInt(b3dbank,pos+12+i*12)
+					AddTriangle(s,v0,v1,v2)
+				Next
+				pos=pos+chunksize
+			Case "BONE"
+				b.TBone=New TBone
+				b\name=name
+				b\id=Handle(b)
+				b\vnum=chunksize/8
+				
+				For i=0 To b\vnum-1
+					vID=PeekInt(b3dbank,pos+i*8)
+					b\vid[i]=vID
+					varray[vID]\boneid[0]=varray[vID]\boneid[0]+1
+					varray[vID]\boneid[varray[vID]\boneid[0]]=b\id
+					varray[vID]\weight[varray[vID]\boneid[0]]=PeekFloat(b3dbank,pos+i*8+4)
+				Next
+				
+				b\px=PeekFloat(b3dbank,ofptr-40)
+				b\py=PeekFloat(b3dbank,ofptr-36)
+				b\pz=PeekFloat(b3dbank,ofptr-32)
+				b\sx=PeekFloat(b3dbank,ofptr-28)
+				b\sy=PeekFloat(b3dbank,ofptr-24)
+				b\sz=PeekFloat(b3dbank,ofptr-20)
+				b\q=New Quat
+				b\q\w=PeekFloat(b3dbank,ofptr-16)
+				b\q\x=PeekFloat(b3dbank,ofptr-12)
+				b\q\y=PeekFloat(b3dbank,ofptr-8)
+				b\q\z=PeekFloat(b3dbank,ofptr-4)
+				pos=pos+chunksize
+			Case "NODE"
+				tname$=""
+				For i=0 To chunksize-1
+					char=PeekByte(b3dbank,pos+cpos+i)
+					If char=0 Then Exit:Else tname=tname+Chr(char)
+				Next
+				cpos=cpos+i+1
+				pos=ReadChunks(b3dbank,pos+cpos+40,chunksize-(cpos+40),tname)
+			Default
+				pos=pos+chunksize	;Skip over chunks that don't concern us
+		End Select
+	Wend
+	
+	Return pos
+End Function
+
+Function QuatToEuler(out.Rotation, src.Quat)		; convert a Quat to a Rotation (by Wavey)
+	Local sint#, cost#, sinv#, cosv#, sinf#, cosf#
+	Local cost_temp#
+	
+	sint = (2 * src\w * src\y) - (2 * src\x * src\z)
+	cost_temp = 1.0 - (sint * sint)
+	
+	If Abs(cost_temp) &gt; QuatToEulerAccuracy
+		cost = Sqr(cost_temp)
+	Else
+		cost = 0
+	EndIf
+	
+	If Abs(cost) &gt; QuatToEulerAccuracy
+		sinv = ((2 * src\y * src\z) + (2 * src\w * src\x)) / cost
+		cosv = (1 - (2 * src\x * src\x) - (2 * src\y * src\y)) / cost
+		sinf = ((2 * src\x * src\y) + (2 * src\w * src\z)) / cost
+		cosf = (1 - (2 * src\y * src\y) - (2 * src\z * src\z)) / cost
+	Else
+		sinv = (2 * src\w * src\x) - (2 * src\y * src\z)
+		cosv = 1 - (2 * src\x * src\x) - (2 * src\z * src\z)
+		sinf = 0
+		cosf = 1
+	EndIf
+	
+	; Generate the output rotation
+	out\roll = -ATan2(sinv, cosv) ;  inverted due to change in handedness of coordinate system
+	out\pitch = ATan2(sint, cost)
+	out\yaw = ATan2(sinf, cosf)
+End Function
+
+Function Navigate_World_With_MouseAndKeys(Camera,turnSpeed#=1,moveSpeed#=1)
+	Local dY# = EntityPitch(Camera)+MouseYSpeed()/2*turnSpeed
+	If dY &gt; 89 Then dY = 89
+	If dY &lt; -89 Then dY = -89
+	
+	Local dz# = (KeyDown(200)-KeyDown(208)) * moveSpeed
+	Local dx# = (KeyDown(205)-KeyDown(203)) * moveSpeed
+	If dz &lt;&gt; 0 And dx &lt;&gt; 0 Then 
+		dx=dx * 0.707
+		dz=dz * 0.707
+	End If
+	RotateEntity Camera, dY, EntityYaw(Camera)-(MouseXSpeed()/2)*turnSpeed, 0
+	MoveEntity Camera, dx, 0, dz
+	MoveMouse GraphicsWidth()/2, GraphicsHeight()/2
+	
+	If KeyHit(4) Then 
+		CameraZoom Camera, 4.0
+	End If
+	If KeyHit(5) Then
+		CameraZoom Camera, 1.0
+	End If
+End Function
+
+Function Draw3DLine(camera,surf,x1#,y1#,z1#,x2#,y2#,z2#,thickness#=1,entity=0)
+	TFormPoint x1,y1,z1,entity,camera
+	x1=TFormedX()
+	y1=TFormedY()
+	z1=TFormedZ()
+	Local d1#=Sqr(x1*x1+y1*y1+z1*z1)/GraphicsWidth()
+	TFormPoint x2,y2,z2,entity,camera
+	x2=TFormedX()
+	y2=TFormedY()
+	z2=TFormedZ()
+	Local d2#=Sqr(x2*x2+y2*y2+z2*z2)/GraphicsWidth()
+	
+	Local theta#=ATan2(y2*(d1/d2)-y1,x2*(d1/d2)-x1)
+	Local xTForm#=Cos(theta)*thickness
+	Local yTForm#=Sin(theta)*thickness
+	
+	Local V0=AddVertex(surf,x1+yTForm*d1,y1-xTForm*d1,z1)
+	Local V1=AddVertex(surf,x1-yTForm*d1,y1+xTForm*d1,z1)
+	Local V2=AddVertex(surf,x2-yTForm*d2,y2+xTForm*d2,z2)
+	Local V3=AddVertex(surf,x2+yTForm*d2,y2-xTForm*d2,z2)
+	
+	AddTriangle(surf,V0,V1,V2)
+	AddTriangle(surf,V2,V3,V0)
+End Function
+
+Function CalculateTriPlane(V1x#, V1y#, V1z#, V2x#, V2y#, V2z#, V3x#, V3y#, V3z#)	;By SSwift
+	
+	Local Px#, Py#, Pz#
+	Local Qx#, Qy#, Qz#
+	Local Nx#, Ny#, Nz#, Nl#
+	
+	; Create two vectors from the sides of the triangle.
+	Px# = V1x#-V3x#
+	Py# = V1y#-V3y#
+	Pz# = V1z#-V3z#
+	
+	Qx# = V2x#-V3x#
+	Qy# = V2y#-V3y#
+	Qz# = V2z#-V3z#
+	
+	; Compute their cross product.
+	Nx# = (Py#*Qz#) - (Qy#*Pz#)
+	Ny# = (Pz#*Qx#) - (Qz#*Px#) 	
+	Nz# = (Px#*Qy#) - (Qx#*Py#)
+	
+	; Calculate the length of the vector.
+	Nl# = Sqr(Nx#*Nx# + Ny#*Ny# + Nz#*Nz#)
+	
+	; Calculate the plane equation for the triangle.  
+	
+		; ABC is the triangle's normal.
+	
+		; Normalize the vector so it has a length of 1.
+		; This is the normal of the triangle.
+	PlaneA# = (Nx# / Nl#);*255
+	PlaneB# = (Ny# / Nl#);*255	;Normalising the vector to 255 allows it to be stored in three bytes
+	PlaneC# = (Nz# / Nl#);*255
+	
+		; Calculate minimum distance of plane the triangle lies in, from the origin.
+		; This is the shortest distance to the surface of the plane from 0,0,0.
+	PlaneD# = -(PlaneA#*V1x# + PlaneB#*V1y# + PlaneC#*V1z#)
+	
+End Function
+</textarea><br><br>I think it's still accurate for the sequences themselves. However, it shows definite inaccuracy if skipping between sequences - not sure why this should be. Anyway, still needs a lot of tidying up. The tweening doesn't damage performance as badly as I feared (still in the high hundreds of FPS).<br><br>EDIT2: Actually testing it with a longer sequence shows there are some accuracy problems, with some meshes and not others. Not sure why...<br><br>EDIT3: OK, worked it out - the problem is with rotations. Say you have an keyframe at a  given point, and the next one rotated 180%; while the animation spins between them, simply interpolating the vertex positions has the object squish down and stretch out again. That's why simple interpolation won't work - I'll ponder more on this. Unfortunately this is probably going to mean DLLs. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

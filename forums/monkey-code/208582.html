@@ -1,0 +1,735 @@
+<!DOCTYPE html><html lang="en" ><head ><title >AnimImage: anims, rotations, squash/stretch</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >AnimImage: anims, rotations, squash/stretch</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >AnimImage: anims, rotations, squash/stretch</a><br><br>
+<a name="2088717"></a>
+
+<a name="2088718"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> <i>Edit: now on version 3, see rest of thread.</i><br><br>I whipped this up today because I was tired of writing update code over and over. It's a container for regular Image animation strips and for arrays of images, that effectively extends them with the following:<br><br>- fire and forget cycling animations. You can set these to forward, back, or pingpong, define the start and end frames, set the speed, and it'll take care of everything for you.<br><br>- You can also invoke a "PlayOnce" -- actually, "play specific number of times."<br><br>- similarly, fire and forget rotation. If you need stuff spinning on screen, or want to have things have just a little bobble to them, you can set a min and max rotation angle, and a number of degrees per second, and whether to go clockwise, counterclockwise, or pingpong.<br><br>- squash and stretch for movement. You set a vector value, and an "intensity" value, and the object will deform in the proper orientation. Right now, I have it also automatically set the object to spinning based on the vector if rotation is turned on, but I should probably make that optional.<br><br>- it works with either animstrips loaded the usual Monkey way, or with arrays of images you build yourself (say from an atlas) and pass in.<br><br>Demo is here:<br><a href="http://www.raphkoster.com/monkey/animimage/MonkeyGame.html" target="_blank">http://www.raphkoster.com/monkey/animimage/MonkeyGame.html</a><br><br>Caveats:<br><br>- barely tested, haven't actually tried most of the functionality yet<br><br>- it updates in the draw loop so you don't have to write your own update and maintain a list. This means you can mostly just swap out any DrawImage and LoadImage for DrawAnimImage and LoadAnimImage. Even stuff like WritePixels etc should work.<br><br>- I do compensate for time elapsed between OnRenders, skip frames if needed, etc, but I haven't tested it with crappy framerates.<br><br>- I would have extended Image to make this work more cleanly, but I can't cast an Image to an AnimImage (see <a href="http://www.monkey-x.com/Community/posts.php?topic=5236)" target="_blank">http://www.monkey-x.com/Community/posts.php?topic=5236)</a> and I can't clone an Image because a bunch of it is Private...<br><br>Fixes, comments, &amp; thoughts all welcome...<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+' AnimImage class
+' 
+' handles basic animation duties in a simple way.
+' squashing logic from <a href="http://www.andysaia.com/radicalpropositions/procedural-squash-and-stretch-in-as3/" target="_blank">http://www.andysaia.com/radicalpropositions/procedural-squash-and-stretch-in-as3/</a>
+		
+Import mojo
+
+Const ANIM_FORWARD:Int = 0
+Const ANIM_REVERSE:Int = 1
+Const ANIM_PINGPONG:Int = 2
+
+Const ROT_COUNTERCLOCK = 0
+Const ROT_CLOCKWISE = 1
+Const ROT_PINGPONG = 2
+
+Class AnimImage
+	Field image:Image					' the image strip
+	Field imageArray:Image[]			' alternatively, a set of individual images that are frames
+	
+	Field animDirection:Int				' whether the anim is moving forward or backward
+	Field animType:Int					' one of ANIM_FORWARD, ANIM_REVERSE, or ANIM_PINGPONG
+	Field currentFrame:Int = 0			' current frame to draw
+	Field animSpeed:Int = 100			' interval in ms between frames
+	Field isAnimating:Bool = True		' whwther anims are advanced
+	Field startFrame = 0				' frame to start anim on
+	Field endFrame = 0					' frame to end anim on
+	Field animPlayTimes = -1			' number of times to play the anim
+	
+	Field rotationDirection:Int			' whether degrees increment or decrement
+	Field rotationType:Int				' one of ROT_COUNTERCLOCK, ROT_CLOCKWISE, or ROT_PINGPONG
+	Field currentRotation:Float = 0		' current rotation to draw at
+	Field isRotating:Bool = False		' whether rotation is happening automatically
+	Field rotationSpeed:Float			' degrees to move in one second
+	Field maxRotation:Float				' upper bound for pingponging
+	Field minRotation:Float				' lower bound for pingponging
+	Field rotationTimes:Int = -1		' number of times to play the rotation
+	
+	Field directionVector:Float[2]		' movement vector for squash and stretch. Must be updated each frame from outside (physics, or whatever system you want)
+	Field squashIntensity:Float = 4		' scalar; the smaller, the more it stretches
+	Field isSquashing:Bool				' toggle for whether or not squash and stretch happens
+	Field squashX:Float					' scale factor for squash
+	Field squashY:Float					' scale factor for squash
+	
+	Field elapsed:Int = 0				' timer
+	Field lastTimestamp:Int				' timestamp
+	
+	'summary: Stops frame animations from advancing.
+	Method Stop()
+		isAnimating = False
+	End
+	
+	'summary: Starts frame animations.
+	Method Start()
+		isAnimating = True
+	End
+	
+	'summary: Forces a frame animation back to the first frame.
+	Method Reset()
+		currentFrame = 0
+	End
+	
+	'summary: Restarts an AnimImage's frame animation.
+	Method Restart()
+		currentFrame = 0
+		isAnimating = True
+	End
+	
+	'summary: Sets range of an animation within a strip
+	Method SetAnim(startframe:Int = 0, count:Int = 0)
+		startFrame = Max(0, startframe)
+		If count &lt; 0 Then count = 0
+		endFrame = startFrame + count
+		If imageArray.Length &gt; 0
+			If endFrame &gt; imageArray.Length - 1 Then endFrame = imageArray.Length - 1
+		Else
+			If endFrame &gt; image.Length - 1 Then endFrame = image.Length - 1
+		EndIf
+	End
+	
+	Method PlayOnce(times:Int = 1)
+		animPlayTimes = times
+		If animType = ANIM_PINGPONG Then animPlayTimes *= 2
+		currentFrame = startFrame
+		If animType = ANIM_REVERSE Then currentFrame = endFrame
+		Start()
+	End
+	
+	Method RotateOnce(times:Int = 1, speed = 100, min = 0, max = 360, rotType = ROT_CLOCKWISE)
+		rotationTimes = times + 1
+		
+		rotationType = rotType
+		If rotationType = ROT_PINGPONG Then rotationTimes = times * 2
+		Select rotationType
+			Case ROT_COUNTERCLOCK
+				rotationDirection = 1
+			Case ROT_PINGPONG
+				rotationDirection = 1
+			Case ROT_CLOCKWISE
+				rotationDirection = -1
+		End
+		
+		minRotation = min
+		maxRotation = max
+		rotationSpeed = speed
+
+		currentRotation = minRotation
+		If rotationType = ROT_COUNTERCLOCK Then currentRotation = maxRotation
+		
+		StartRotation(min, max)
+	End
+	
+	'summary: defines automatic rotation behavior. Use negative numbers for min if crossing below 0. Use 0 and 360 for full rotation. Rate is degrees per second.
+	Method Rotation(min, max, rate, rotType = ROT_COUNTERCLOCK)
+		minRotation = min
+		maxRotation = max
+		currentRotation = minRotation
+		rotationSpeed = rate
+		rotationType = rotType
+		Select rotType
+			Case ROT_COUNTERCLOCK
+				rotationDirection = 1
+			Case ROT_PINGPONG
+				rotationDirection = 1
+			Case ROT_CLOCKWISE
+				rotationDirection = -1
+		End
+		isRotating = True
+	End
+	
+	'summary: Stops procedural rotation.
+	Method StopRotation()
+		isRotating = False
+	End
+	
+	'summary: Starts procedural rotation.
+	Method StartRotation(min = 0, max = 360)
+		isRotating = True
+		minRotation = min
+		maxRotation = max
+	End
+	
+	'summary: Resets AnimImage's procedural rotation to zero degrees.
+	Method ResetRotation()
+		currentRotation = 0
+	End	
+	
+	'summary: turns off squash and stretch
+	Method StopSquash()
+		isSquashing = False
+	End
+	
+	'summary: activates squash and stretch
+	Method Squash(intensity:Float = 4)
+		isSquashing = True
+		If intensity &lt;&gt; 0 Then squashIntensity = intensity
+	End
+	
+	'summary: sets squash direction/velocity vector
+	Method MovementVector(x:Float, y:Float)
+		directionVector[0] = x
+		directionVector[1] = y
+	End
+	
+	'summary: sets squash direction/velocity vector
+	Method MovementVector(vec2:Float[])
+		directionVector[0] = vec2[0]
+		directionVector[1] = vec2[1]
+	End
+	
+	'summary: sets the image on an AnimImage
+	Method SetImage(img:Image)
+		ClearImageArray()
+		image = img
+		Initialize()
+	End
+	
+	'summary: sets an array of images on an AnimImage
+	Method SetImageArray(img:Image[])
+		imageArray = img
+		Initialize()
+	End
+	
+	'summary: clears an array of images on an AnimImage
+	Method ClearImageArray()
+		imageArray = imageArray.Resize(0)
+	End
+	
+	'summary: Initializes an AnimImage.
+	Method Initialize(animSpeed, animType)
+		lastTimestamp = Millisecs()
+		Self.animSpeed = animSpeed
+		Self.animType = animType
+		currentRotation = 0
+		startFrame = 0
+
+		If imageArray.Length &gt; 0
+			endFrame = imageArray.Length - 1
+		Else
+			endFrame = image.Frames() -1
+		EndIf
+		Select animType
+			Case ANIM_FORWARD
+				animDirection = 1
+			Case ANIM_PINGPONG
+				animDirection = 1
+			Case ANIM_REVERSE
+				animDirection = -1
+		End
+	End
+
+	' wrappers for the Image class
+	
+	Method Width()
+		If imageArray[0] &lt;&gt; Null Then Return imageArray[0].Width()
+		Return image.Width()
+	End
+
+	Method Height()
+		If imageArray[0] &lt;&gt; Null Then Return imageArray[0].Height()
+		Return image.Height()
+	End
+	
+	Method Loaded()
+		If imageArray[0] &lt;&gt; Null Then Return imageArray[0].Loaded()
+		Return image.Loaded()
+	End
+	
+	Method Frames()
+		If imageArray.Length &gt; 0 Then Return imageArray.Length
+		Return image.Frames()
+	End
+	
+	Method Flags()
+		If imageArray[0] &lt;&gt; Null Then Return imageArray[0].Flags()
+		Return image.Flags()
+	End
+
+	Method HandleX:Float()
+		If imageArray[0] &lt;&gt; Null Then Return imageArray[0].HandleX()
+		Return image.HandleX()
+	End
+	
+	Method HandleY:Float()
+		If imageArray[0] &lt;&gt; Null Then Return imageArray[0].HandleY()
+		Return image.HandleY()
+	End
+	
+	Method GrabImage:Image(x, y, width, height, nframes = 1, flags = DefaultFlags)
+		If imageArray[currentFrame] &lt;&gt; Null Then Return imageArray[currentFrame].image.GrabImage(x, y, width, height, nframes, flags)
+		Return image.GrabImage(x, y, width, height, nframes, flags)
+	End
+	
+	Method SetHandle(tx:Float, ty:Float)
+		For i = 0 Until imageArray.Length
+			imageArray[i].SetHandle(tx, ty)
+		Next
+		image.SetHandle(tx, ty)
+	End
+	
+	Method Discard()
+		For i = 0 Until imageArray.Length
+			imageArray[i].Discard()
+		Next	
+		image.Discard()
+	End
+	
+	Method WritePixels(pixels[], x, y, width, height, offset = 0, pitch = 0)
+		If imageArray[currentFrame] &lt;&gt; Null Then
+			imageArray[currentFrame].WritePixels(pixels, x, y, width, height, offset, pitch)
+		Else
+			image.WritePixels(pixels, x, y, width, height, offset, pitch)
+		EndIf
+	End		
+		
+	Private
+	
+	'summary: Updates frame anims, rotation, and squash and stretch
+	Method Update()
+		Local currentTimestamp = Millisecs()
+		Local gap = currentTimestamp - lastTimestamp
+		elapsed += gap
+		
+		If isRotating and rotationTimes &lt;&gt; 0 Then
+			currentRotation += rotationDirection * rotationSpeed * gap / 1000
+			
+			If currentRotation &gt; maxRotation or currentRotation &lt; minRotation
+				Select rotationType
+					Case ROT_COUNTERCLOCK
+						currentRotation = minRotation
+						rotationTimes -= 1
+					Case ROT_CLOCKWISE
+						currentRotation = maxRotation - rotationSpeed * gap / 1000
+						rotationTimes -= 1
+					Case ROT_PINGPONG
+						If rotationDirection = 1
+							rotationDirection = -1
+							currentRotation = maxRotation - rotationSpeed * gap / 1000
+							rotationTimes -= 1
+						Else
+							rotationDirection = 1
+							currentRotation = minRotation
+							rotationTimes -= 1
+						EndIf
+				End
+				
+				If rotationTimes = 0
+					rotationTimes = -1
+					StopRotation()
+				EndIf
+			EndIf
+			
+		EndIf		
+		
+		If animSpeed &gt; 0
+		While elapsed &gt; animSpeed
+			elapsed -= animSpeed
+			
+			If isAnimating and animPlayTimes &lt;&gt; 0 Then currentFrame += animDirection
+			
+			If currentFrame &lt; startFrame or currentFrame &gt; endFrame
+				Select animType
+					Case ANIM_FORWARD
+						currentFrame = startFrame
+						animPlayTimes -= 1
+					Case ANIM_REVERSE
+						currentFrame = endFrame
+						animPlayTimes -= 1
+					Case ANIM_PINGPONG
+						If animDirection = 1
+							animDirection = -1
+							currentFrame = endFrame
+							animPlayTimes -= 1
+						Else
+							animDirection = 1
+							currentFrame = startFrame
+							animPlayTimes -= 1
+						EndIf
+				End
+				
+				If animPlayTimes = 0
+					animPlayTimes = -1
+					Stop()
+				EndIf
+			EndIf
+			
+		Wend
+		EndIf
+		
+		If isSquashing
+			' take how fast the object is going
+			Local velocityX:Float = Abs(directionVector[0])
+			Local velocityY:Float = Abs(directionVector[1])
+			
+			' divide by intensity; the smaller the intensity the greater the squash effect
+			Local squash:Float = ( (velocityX + velocityY) / squashIntensity)
+			
+			' get the current matrix
+			Local curMatrix:Float[6]
+			GetMatrix(curMatrix)
+			
+			' arrive at the scale
+			squashX = 0 - (squash / 20) + curMatrix[0]
+			squashY = squash / 10 + curMatrix[3]
+			
+			' if rotating is turned on, automatically reverse it to match whatever direction we're moving
+			If isRotating
+				If directionVector[0] &lt; 0
+					rotationType = ANIM_FORWARD
+					rotationDirection = 1
+				EndIf
+				If directionVector[0] &gt; 0
+					rotationType = ANIM_REVERSE
+					rotationDirection = -1
+				EndIf
+			EndIf
+		EndIf
+
+		lastTimestamp = Millisecs()
+	End
+	
+	'summary: sets up the matrix for drawing	
+	Method PreDraw(x, y)
+		Update()
+		PushMatrix()
+		Translate(x, y)
+		Local travelDir:Float = 0
+		If isSquashing
+			' point to the right orientation for our movement
+			travelDir = ( (math.ATan2(directionVector[0], directionVector[1])) - (math.PI / 180))
+			Rotate(travelDir)
+			Scale squashX, squashY
+			' then turn back
+			Rotate(travelDir * -1)
+		EndIf
+		Rotate(currentRotation)
+	End
+	
+	'summary: clears the matrix	
+	Method PostDraw()
+		PopMatrix()
+	End
+	
+	
+	
+End
+
+'summary: Creates and loads an AnimImage. Use when loading animation strips.
+Function LoadAnimImage:AnimImage(path:String, frameCount = 1, flags = Image.DefaultFlags, animSpeed, animType = ANIM_FORWARD)
+
+	Local img:AnimImage = New AnimImage
+	img.image = LoadImage(path, frameCount, flags)
+	If img.image = Null Then DebugLog("Failed to load AnimImage " + path)
+	img.Initialize(animSpeed, animType)
+		
+	Return img
+End
+
+'summary: Creates and loads an AnimImage. Use when loading animation strips.
+Function LoadAnimImage:AnimImage(path:String, frameWidth, frameHeight, frameCount, flags = Image.DefaultFlags, animSpeed, animType = ANIM_FORWARD)
+	Local img:AnimImage = New AnimImage
+	img.image = LoadImage(path, frameWidth, frameHeight, frameCount, flags)
+	If img.image = Null Then DebugLog("Failed to load AnimImage " + path)
+	img.Initialize(animSpeed, animType)
+		
+	Return img
+End
+
+'summary: Creates an empty AnimImage.
+Function CreateAnimImage:AnimImage(image:Image, animSpeed, animType = ANIM_FORWARD)
+	Local img:AnimImage = New AnimImage
+	
+	img.image = image
+	img.Initialize(animSpeed, animType)
+	
+	Return img
+End
+
+'summary: Create an AnimImage with an array of images
+Function CreateAnimImage:AnimImage(image:Image[], animSpeed, animType = ANIM_FORWARD)
+	Local img:AnimImage = New AnimImage
+	
+	img.imageArray = image
+	img.Initialize(animSpeed, animType)
+	
+	Return img
+End
+
+'summary: Draws an animating image at the specified location.
+Function DrawAnimImage(image:AnimImage, x:Float, y:Float)
+	If image = Null Then Return
+	image.PreDraw(x, y)
+
+	' if an array of images, use that
+	If image.imageArray.Length &gt; 0 'and image.imageArray[image.currentFrame] &lt;&gt; Null
+		DrawImage(image.imageArray[image.currentFrame], 0, 0)
+	Else
+		DrawImage(image.image, 0, 0, image.currentFrame)
+	EndIf
+	
+	image.PostDraw()
+End
+
+'summary: Draws an animating image at the specified location.
+Function DrawAnimImage(image:AnimImage, x:Float, y:Float, rotation:Float, scaleX:Float, scaleY:Float, frame = 0)
+	If image = Null Then Return
+	image.PreDraw(x, y)
+	If image.imageArray.Length &gt; 0 and image.imageArray[image.currentFrame] &lt;&gt; Null
+		DrawImage(image.imageArray[image.currentFrame], 0, 0, rotation, scaleX, scaleY)
+	Else	
+		DrawImage(image.image, 0, 0, rotation, scaleX, scaleY, image.currentFrame)
+	EndIf
+	image.PostDraw()
+End
+
+'summary: Draws a portion of an AnimImage.
+Function DrawAnimImageRect(image:AnimImage, x:Float, y:Float, srcX, srcY, srcWidth, srcHeight, frame = 0)
+	If image = Null Then Return
+	image.PreDraw(x, y)
+	If image.imageArray.Length &gt; 0 and image.imageArray[image.currentFrame] &lt;&gt; Null
+		DrawImageRect(image.imageArray[image.currentFrame], 0, 0, srcX, srcY, srcWidth, srcHeight)
+	Else	
+		DrawImageRect(image.image, 0, 0, srcX, srcY, srcWidth, srcHeight, image.currentFrame)
+	EndIf
+	image.PostDraw()
+End
+
+' ----------------------------------------------------------
+' TEST CODE
+
+Function Main:Int()
+	New Game()
+	Return 0
+End
+
+Class Game Extends App
+
+	Field testImg:Image
+	Field hamster:Image
+	Field bot:Image[6]
+	
+	Field testImage:AnimImage
+	Field testImageSlow:AnimImage
+	Field testImageRev:AnimImage
+	Field testImagePing:AnimImage
+	
+	Field testImageRot:AnimImage
+	Field testImageRotPlus:AnimImage
+	Field testImageRotRev:AnimImage
+	Field testImageRotPing:AnimImage
+	
+	Field testImageOnce:AnimImage
+	Field testImageOncePing:AnimImage
+	Field testImageOnceRot:AnimImage
+	Field testImageOnceRotPing:AnimImage
+	
+	Field testBot:AnimImage
+		
+	Field ball:AnimImage
+	Field ballX:Float
+	Field ballY:Float
+	Field ballVec2:Float[2]
+	
+	Field botX:Float
+	Field botSpeed:Float
+				
+	'summary:The OnCreate Method is called when mojo has been initialized and the application has been successfully created.
+	Method OnCreate:Int()	
+		'Set how many times per second the game should update and render itself
+		SetUpdateRate(60)
+		
+		testImg = LoadImage("animspritetest.png", 8, Image.MidHandle)
+		hamster = LoadImage("hamster.png", 8, Image.MidHandle)
+		bot =[LoadImage("gridbot0.png"), LoadImage("gridbot1.png"), LoadImage("gridbot2.png"), LoadImage("gridbot3.png"), LoadImage("gridbot4.png"), LoadImage("gridbot5.png")]
+		
+		testImage = CreateAnimImage(hamster, 50, ANIM_FORWARD)
+		testImageSlow = CreateAnimImage(hamster, 200, ANIM_FORWARD)
+		testImageRev = CreateAnimImage(hamster, 50, ANIM_REVERSE)
+		testImagePing = CreateAnimImage(hamster, 50, ANIM_PINGPONG)
+		
+		testImageRot = CreateAnimImage(testImg, 0, ANIM_PINGPONG)
+		testImageRot.Stop()
+		testImageRot.Rotation(0, 360, 100, ANIM_FORWARD)
+
+		testImageRotPlus = CreateAnimImage(testImg, 100)
+		testImageRotPlus.Stop()
+		testImageRotPlus.Rotation(-45, 45, 200, ANIM_PINGPONG)
+		
+		testImageRotRev = CreateAnimImage(testImg, 100)
+		testImageRotRev.Stop()
+		testImageRotRev.Rotation(0, 360, 200, ANIM_REVERSE)
+
+		testImageRotPing = CreateAnimImage(testImg, 100)
+		testImageRotPing.Stop()
+		testImageRotPing.Rotation(0, 360, 200, ANIM_PINGPONG)
+		
+		testImageOnce = CreateAnimImage(hamster, 100)
+		testImageOnce.Stop
+		testImageOncePing = CreateAnimImage(hamster, 100, ANIM_PINGPONG)
+		testImageOncePing.Stop
+		testImageOnceRot = CreateAnimImage(testImg, 0)
+		testImageOnceRotPing = CreateAnimImage(testImg, 0)
+		testImageOnceRotPing.rotationType = ROT_PINGPONG
+				
+		ball = LoadAnimImage("ball.png", 1, Image.MidHandle, 0)
+		ball.Stop()
+		ballVec2 =[4.5, 0]
+		ballX = 33
+		ballY = 33
+		ball.isSquashing = True
+		ball.Rotation(0, 360, 200, ANIM_REVERSE)
+		ball.squashIntensity = 4
+		
+		testBot = CreateAnimImage(bot, 100, ANIM_PINGPONG)
+		
+		botX = 0
+		botSpeed = 1.5
+		Return 0
+	End
+	
+	'summary: This method is automatically called when the application's update timer ticks. 
+	Method OnUpdate:Int()
+
+		ballVec2[1] += 0.1 ' simplistic gravity
+
+		ballX = ballX + ballVec2[0]
+		ballY = ballY + ballVec2[1]
+		
+		If ballX &gt; DeviceWidth - 32
+			ballX = DeviceWidth - 32
+			ballVec2[0] = 0 - ballVec2[0]
+		EndIf
+		
+		If ballX &lt; 32
+			ballX = 32
+			ballVec2[0] = 0 - ballVec2[0]
+		EndIf
+		
+		If ballY &gt; DeviceHeight - 32
+			ballVec2[1] = 0 - ballVec2[1]
+			ballY = DeviceHeight - 32
+		EndIf
+
+		If ballY &lt; 32
+			ballVec2[1] = 0 - ballVec2[1]
+			ballY = 32
+		EndIf
+		
+		ball.directionVector = ballVec2
+		
+		If KeyHit(KEY_SPACE)
+			testImageOnce.PlayOnce(1)
+			testImageOncePing.PlayOnce(2)
+			testImageOnceRot.RotateOnce(1, 400, 0, 360, ROT_COUNTERCLOCK)
+			testImageOnceRotPing.RotateOnce(3, 400, -90, 90, ROT_PINGPONG)
+		EndIf
+		
+		botX += botSpeed
+		If botX &gt; DeviceWidth Then botX = -64
+		If Rnd(1, 1000) = 1
+			botSpeed = Rnd(0.5, 2.5)
+		EndIf
+		testBot.directionVector =[botSpeed, 0]
+		
+		Return 0
+	End
+	
+	'summary: This method is automatically called when the application should render itself, such as when the application first starts, or following an OnUpdate call. 
+	Method OnRender:Int()
+		Cls()
+		
+		' squash test
+		DrawAnimImage(ball, ballX, ballY, 0, 0.5, 0.5)
+		
+		' animation tests
+		DrawAnimImage(testImage, DeviceWidth * 0.2, DeviceHeight * 0.2)
+		DrawText("Forward", DeviceWidth * 0.2, DeviceHeight * 0.3)
+		DrawAnimImage(testImageSlow, DeviceWidth * 0.4, DeviceHeight * 0.2)
+		DrawText("Forward slow", DeviceWidth * 0.4, DeviceHeight * 0.3)
+		DrawAnimImage(testImageRev, DeviceWidth * 0.6, DeviceHeight * 0.2)
+		DrawText("Reverse", DeviceWidth * 0.6, DeviceHeight * 0.3)
+		DrawAnimImage(testImagePing, DeviceWidth * 0.8, DeviceHeight * 0.2)
+		DrawText("Pingpong", DeviceWidth * 0.8, DeviceHeight * 0.3)
+		DrawAnimImage(testImagePing, DeviceWidth * 0.8, DeviceHeight * 0.2)
+		
+		' rotation tests
+		DrawText("Rotation", DeviceWidth * 0.2, DeviceHeight * 0.5)
+		DrawAnimImage(testImageRot, DeviceWidth * 0.2, DeviceHeight * 0.4)
+		DrawText("RotationTwo", DeviceWidth * 0.4, DeviceHeight * 0.5)
+		DrawAnimImage(testImageRotPlus, DeviceWidth * 0.4, DeviceHeight * 0.4)
+		DrawText("Rot reverse", DeviceWidth * 0.6, DeviceHeight * 0.5)
+		DrawAnimImage(testImageRotRev, DeviceWidth * 0.6, DeviceHeight * 0.4)
+		DrawText("Rot pingpong", DeviceWidth * 0.8, DeviceHeight * 0.5)
+		DrawAnimImage(testImageRotPing, DeviceWidth * 0.8, DeviceHeight * 0.4)
+		
+		' play n times tests
+		DrawText("play once:" + testImageOnce.animPlayTimes, DeviceWidth * 0.2, DeviceHeight * 0.7)
+		DrawAnimImage(testImageOnce, DeviceWidth * 0.2, DeviceHeight * 0.6)
+		DrawText("Pingpong 2x:" + testImageOncePing.animPlayTimes, DeviceWidth * 0.4, DeviceHeight * 0.7)
+		DrawAnimImage(testImageOncePing, DeviceWidth * 0.4, DeviceHeight * 0.6)
+		DrawText("Rotate once:" + testImageOnceRot.rotationTimes, DeviceWidth * 0.6, DeviceHeight * 0.7)
+		DrawAnimImage(testImageOnceRot, DeviceWidth * 0.6, DeviceHeight * 0.6)
+		DrawText("Rot pingpong 3x:" + testImageOnceRotPing.rotationTimes, DeviceWidth * 0.8, DeviceHeight * 0.7)
+		DrawAnimImage(testImageOnceRotPing, DeviceWidth * 0.8, DeviceHeight * 0.6)
+		
+		DrawAnimImage(testBot, botX, DeviceHeight - 64)
+		
+		Return 0
+	End
+
+	'summary: This method is called instead of OnRender when the application should render itself, but there are still resources such as images or sounds in the process of being loaded. 
+	Method OnLoading:Int()
+		
+		Return 0
+	End
+	
+	'summary: This method is called when the application's device window size changes. 
+	Method OnResize:Int()
+		
+		Return 0
+	End
+	
+	'#REGION Code to handle susped status of the game goes here
+	
+	'summary: OnSuspend is called when your application is about to be suspended. 
+	Method OnSuspend:Int()
+	
+		Return 0
+	End
+	
+	'summary: OnResume is called when your application is made active again after having been in a suspended state. 
+	Method OnResume:Int()
+		
+		Return 0
+	End	
+	'#END REGION
+	
+	'#REGION Code to handle game closing goes here:
+	
+	'summary: This method is called when the application's 'close' button is pressed. 
+	Method OnClose:Int()
+				
+		Return Super.OnClose()
+	End
+
+	'summary:This method is called when the application's 'back' button is pressed. 
+	Method OnBack:Int()
+
+		Return Super.OnBack()
+	End
+	
+	'#END REGION
+
+End
+</textarea> <br><br></td></tr></table><br>
+<a name="2088632"></a>
+
+<a name="2088572"></a>
+
+<a name="2088631"></a>
+
+<a name="2088573"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh, the test code calls for two images -- one that's 8 frames (demo uses a spinning ball) and one that is just a 64x64 ball or something to show the squash/stretch. Sorry, forgot to comment it out. <br><br></td></tr></table><br>
+<a name="2088633"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Changes:<br><br>- Now has wrappers for all the Image methods.<br>- You can now point many AnimImages at one Image instead of loading one per AnimImage (doh)<br>- Now supports a PlayOnce method and a RotateOnce method. Both actually support multiple plays, not just play once. They don't remember previous state, though, you'll have to set that up yourself.<br><br>New demo, same place. Hit SPACE to see the PlayOnce examples. Remember to clear cache or shift-refresh to see the new version. If it doesn't have hamsters, you have the old version in your cache.<br><br>Code should be pretty self-explanatory.<br><br>I'm pondering integrating with tweening next, and also supporting automatic scaling (size pulses, etc). But it'll start to conflict with people's mouse click detection stuff, etc, or start to throw off tendrils, so... maybe not. <br><br></td></tr></table><br>
+<a name="2088630"></a>
+
+<a name="2088716"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Version 3 supports arrays of images. This makes it a lot easier to use with atlases.<br><br>As before, not everything has been tested a lot, but the core functionality seems to work. Let me know if there's issues.<br><br>The demo bot at the bottom is using an array rather than an animstrip.<br><br>Code updated in original post. Demo link remains the same. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

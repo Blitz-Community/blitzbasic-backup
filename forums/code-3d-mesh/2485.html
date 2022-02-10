@@ -1,0 +1,452 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Create bones in code</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Add mesh-deforming bones to a static mesh without using LoadAnimMesh, language=bb, category=3D Graphics - Mesh'><meta name='author' content='Yasha'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=12>3D Graphics - Mesh</a>/Create bones in code</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2485.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Create bones in code by Yasha</td><td align="right">2009 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> <b>Current status:</b> <i>Appears</i> to work correctly with Blitz3D version 1.103.<br><br>There's already a thread in the forums, but this might be the better place for this sort of thing.<br><br>Many people have in the past requested that we get the ability to dynamically modify boned meshes. Well, now you can create them from scratch. This is not a "replica" of bone animation using its own maths - this actually does use the native B3D animation system. In order to use it, <b>you will need a DLL</b> that lets you peek and poke directly to memory addresses (I used FastPointer, <a href="http://www.fastlibs.com" target="_blank">available here</a> for free, but any will do - replace "MemoryFastPeekInt/Float/Byte" and "MemoryFastPoke..." with the names of your DLL's commands. You can also use RtlMoveMemory for this). The only difference from entities loaded with LoadAnimMesh is that since not all the internal structures are being created, Blitz3D has to be "fooled" into looking for this information in banks. For the user, this means you can use the entity as normal, but it has to be freed with FreeBoneEnt, not FreeEntity, so that the banks are also freed and there is no memory leak. (EDIT: Also, if you CopyEntity one of these, don't delete the original before the copies. Bad things will happen.)<br><br>Why would you want to do this? Well, there are a few reasons. To be able to create media in code means you can load that media from a bank - which means you can read animated meshes out of big archive files now instead of either extracting them to a temporary file, or leaving them out in the cold at the mercy of your customers. The other part is that the file format is no longer limited to B3D - if for some reason you don't have a 3D modeller that saves to B3D, you can write a custom DirectX 8 importer or whatever. Or, as I like to do for all my media, design your own more streamlined file format based on knowing which features you're not going to use. Also, because it's fun to be in control!<br><br>This was designed with Blitz3D version 1.100. It will obviously not work with very old versions (prior to 1.86 probably) that don't support bone animation, and I don't know how much the internals of Blitz3D have changed between other versions - it may not work with all of them either. Be aware that prodding the internals of Blitz3D may not be entirely safe - if you're just starting a new project, it may be better to design a dynamic system into it from the ground up (this is more of an addon!).<br><br>EDIT: Original version broken by update 1.101. I think I fixed it, but since I don't fully understand what I did to fix it, please let me know what happens. At any rate the demo works now. Changes from v1.100 are clearly marked - you HAVE to comment them out if you want to use it with v1.100 or older (haven't tested with older versions). </td></tr><tr ><td class="cell"><pre class="code">Type BoneEnt		;The type for manually boned entities
+	Field entity
+	Field bones
+	Field bone_tforms,bone_tforms_orig[2]
+	Field objectlist,objectlist_orig[2]
+	Field matrix101;,matrix101_orig[2]		;I DON'T KNOW what this actually does. Added in Blitz3D v1.101, comment it out for earlier versions
+End Type
+
+
+;Basic setup
+Global appheight=768
+Global appwidth=1024
+Global appdepth=32
+
+AppTitle "";,"Are you sure you want to quit?"
+
+SC_FPS=60	;Desired framerate
+rtime=Floor(1000.0/SC_FPS)
+limited=True
+
+Graphics3D appwidth,appheight,appdepth,6
+SetBuffer BackBuffer()
+
+centrecam=CreatePivot()
+PositionEntity centrecam,0,15,0
+camera=CreateCamera(centrecam)
+PositionEntity camera,0,20,-50,1
+
+;Setup lighting
+sun=CreateLight()
+PositionEntity sun,-100,400,0
+PointEntity sun,centrecam
+
+;Setup a simple scene
+ground=CreateMesh()
+parquet=CreateSurface(ground)
+v1=AddVertex(parquet,-125,0,150):v2=AddVertex(parquet,125,0,150):v3=AddVertex(parquet,125,0,-100)
+AddTriangle(parquet,v1,v2,v3):v2=AddVertex(parquet,-125,0,-100):AddTriangle(parquet,v1,v3,v2)
+EntityColor ground,0,0,255
+block=CreateCube():ScaleMesh block,20,5,20:EntityColor block,255,0,0
+
+
+;Our entity
+box=CreateCube()
+PositionEntity box,-10,15,0
+ScaleMesh box,7,7,7
+bone=CreatePivot(box):marker=CreateSphere(8,bone)
+
+ID=AddBone(box,bone)
+surface=GetSurface(box,1)
+SetVertexBone(surface,0,ID)		;Add the top half of the cube to a bone
+SetVertexBone(surface,1,ID)
+SetVertexBone(surface,4,ID)
+SetVertexBone(surface,5,ID)
+SetVertexBone(surface,8,ID)
+SetVertexBone(surface,9,ID)
+SetVertexBone(surface,12,ID)
+SetVertexBone(surface,13,ID)
+SetVertexBone(surface,16,ID)
+SetVertexBone(surface,17,ID)
+SetVertexBone(surface,18,ID)
+SetVertexBone(surface,19,ID)
+
+
+
+While Not KeyDown(1)
+	ctime=MilliSecs()	;For the delay later, nothing to do with bones
+	
+	;Camera movement
+	MoveEntity camera,0,KeyDown(200)-KeyDown(208),KeyDown(30)-KeyDown(44)
+	TurnEntity centrecam,0,KeyDown(203)-KeyDown(205),0
+	PointEntity camera,centrecam
+	
+	PositionEntity bone,5*Cos(MilliSecs()/10),2.5+5*Sin(MilliSecs()/10),0	;Move the bone around so we can see it
+	
+	;System from here down
+	RenderWorld
+	
+	If MilliSecs()-render_time=&gt;1000 Then fps=frames:frames=0:render_time=MilliSecs():Else frames=frames+1
+	Text 0,30,"FPS: "+fps
+	
+	Text 0,90,MemoryFastPeekFloat(bone+$D4)
+	
+	n=rtime-(MilliSecs()-ctime)		;Free spare CPU time - nothing to do with bones, just good practice
+	Delay n-(limited+1)
+	Flip limited
+Wend
+
+FreeBoneEnt(box)	;Using this command instead of FreeEntity is essential to prevent memory leaks
+
+End
+
+
+Function AddBone(entity,bone)		;Add an entity to a mesh as a bone. Must be not be scaled or rotated, but do position it first
+	ent.BoneEnt=GetBoneEnt(entity)
+		
+	If ent=Null
+		AddAnimSeq(entity,0)		;Give the entity an animator structure where the necessary info will be stored
+		ent=New BoneEnt
+		
+		ent\entity=entity
+		ent\objectlist=CreateBank(4)
+		PokeInt ent\objectlist,0,entity
+		ent\bone_tforms=CreateBank(48)
+		PokeFloat ent\bone_tforms,0,1:PokeFloat ent\bone_tforms,16,1:PokeFloat ent\bone_tforms,32,1
+		
+		ent\objectlist_orig[0]=MemoryFastPeekInt(MemoryFastPeekInt(entity+$284)+36)
+		ent\objectlist_orig[1]=MemoryFastPeekInt(MemoryFastPeekInt(entity+$284)+40)
+		ent\objectlist_orig[2]=MemoryFastPeekInt(MemoryFastPeekInt(entity+$284)+44)
+		
+		ent\bone_tforms_orig[0]=MemoryFastPeekInt(MemoryFastPeekInt(entity+$284)+96)
+		ent\bone_tforms_orig[1]=MemoryFastPeekInt(MemoryFastPeekInt(entity+$284)+100)
+		ent\bone_tforms_orig[2]=MemoryFastPeekInt(MemoryFastPeekInt(entity+$284)+104)
+		
+		MemoryFastPokeInt(entity+$240,1)
+		
+		;Blitz3D v1101+ ONLY from here...
+		ent\matrix101=CreateBank(84)
+		PokeFloat ent\matrix101, 0,1.0		;Seems to function without these, but since I don't know what they do...
+		PokeFloat ent\matrix101,16,1.0
+		PokeFloat ent\matrix101,32,1.0
+		PokeFloat ent\matrix101,48,1.0
+		PokeFloat ent\matrix101,64,1.0
+		PokeFloat ent\matrix101,80,1.0
+		;...to here. Comment out this entire section in earlier versions
+	EndIf
+	
+	ent\bones=ent\bones+1
+	
+	ResizeBank(ent\objectlist,BankSize(ent\objectlist)+4)
+	MemoryFastPokeInt(MemoryFastPeekInt(entity+$23C)+36,MemoryFastPeekInt(ent\objectlist+4))
+	MemoryFastPokeInt(MemoryFastPeekInt(entity+$23C)+40,MemoryFastPeekInt(ent\objectlist+4)+BankSize(ent\objectlist))
+	MemoryFastPokeInt(MemoryFastPeekInt(entity+$23C)+44,MemoryFastPeekInt(ent\objectlist+4)+BankSize(ent\objectlist))
+	
+	ResizeBank(ent\bone_tforms,BankSize(ent\bone_tforms)+48)
+	MemoryFastPokeInt(MemoryFastPeekInt(entity+$284)+96,MemoryFastPeekInt(ent\bone_tforms+4))
+	MemoryFastPokeInt(MemoryFastPeekInt(entity+$284)+100,MemoryFastPeekInt(ent\bone_tforms+4)+BankSize(ent\bone_tforms))
+	MemoryFastPokeInt(MemoryFastPeekInt(entity+$284)+104,MemoryFastPeekInt(ent\bone_tforms+4)+BankSize(ent\bone_tforms))
+	
+	PokeInt ent\objectlist,4*ent\bones,bone
+	
+	PokeFloat ent\bone_tforms,48*ent\bones,1:PokeFloat ent\bone_tforms,48*ent\bones+16,1:PokeFloat ent\bone_tforms,48*ent\bones+32,1
+	PokeFloat ent\bone_tforms,48*ent\bones+36,EntityX(bone,0)
+	PokeFloat ent\bone_tforms,48*ent\bones+40,EntityY(bone,0)
+	PokeFloat ent\bone_tforms,48*ent\bones+44,EntityZ(bone,0)
+	
+	;Blitz3D v1101+ ONLY from here...
+	ResizeBank(ent\matrix101,BankSize(ent\matrix101)+84)
+	MemoryFastPokeInt(entity+$2A4,MemoryFastPeekInt(ent\matrix101+4))
+	MemoryFastPokeInt(entity+$2A8,MemoryFastPeekInt(ent\matrix101+4)+BankSize(ent\matrix101))
+	MemoryFastPokeInt(entity+$2AC,MemoryFastPeekInt(ent\matrix101+4)+BankSize(ent\matrix101))
+	
+	PokeFloat ent\matrix101,84*ent\bones+ 0,1.0		;Seems to function without these, but since I don't know what they do...
+	PokeFloat ent\matrix101,84*ent\bones+16,1.0
+	PokeFloat ent\matrix101,84*ent\bones+32,1.0
+	PokeFloat ent\matrix101,84*ent\bones+48,1.0
+	PokeFloat ent\matrix101,84*ent\bones+64,1.0
+	PokeFloat ent\matrix101,84*ent\bones+80,1.0
+	;...to here. Comment out this entire section in earlier versions
+	
+	Return ent\bones
+End Function
+
+Function GetBone(entity,boneID)				;Get a bone's entity handle from its simple ID
+	be.BoneEnt=GetBoneEnt(entity)
+	Return PeekInt(be\objectlist,4*boneID)
+End Function
+
+Function SetVertexBone(surface,vertex,boneID,bonenum=0,weight#=1.0)		;Attach a bone to a vertex, by bone ID
+	vertexptr=MemoryFastPeekInt(surface+28)
+	MemoryFastPokeByte(vertexptr+vertex*64+44+bonenum,boneID)
+	If bonenum&lt;3 Then MemoryFastPokeByte(vertexptr+vertex*64+44+bonenum+1,255)
+	MemoryFastPokeFloat(vertexptr+vertex*64+48+bonenum*4,weight)
+End Function
+
+Function GetVertexBone(surface,vertex,bonenum=0)	;Returns a boneID for a vertex (not an entity handle)
+	vertexptr=MemoryFastPeekInt(surface+28)
+	Return MemoryFastPeekByte(vertexptr+vertex*64+44+bonenum)
+End Function
+
+Function ClearVertexBones(surface,vertex)	;This function is really just to make things clearer
+	SetVertexBone(surface,vertex,255)		;Blitz treats a boneID of 255 as "stop looking". Don't need to actually zero the rest
+End Function
+
+Function GetBoneEnt.BoneEnt(entity)			;Gets a BoneEnt definition from an entity handle
+	For be.BoneEnt=Each BoneEnt
+		If be\entity=entity Then Return be
+	Next
+	Return Null
+End Function
+
+Function FreeBoneEnt(entity)				;Free a manually boned entity and its banks - you MUST use this to avoid memory leaks
+	ent.BoneEnt=GetBoneEnt(entity)
+	If ent=Null Then Return			;Or you could set it to free the non-boned entity anyway, and use this command on all entities - safer
+	
+	MemoryFastPokeInt(MemoryFastPeekInt(entity+$284)+36,ent\objectlist_orig[0])		;Restore the original lists so they can be freed properly
+	MemoryFastPokeInt(MemoryFastPeekInt(entity+$284)+40,ent\objectlist_orig[1])
+	MemoryFastPokeInt(MemoryFastPeekInt(entity+$284)+44,ent\objectlist_orig[2])
+	
+	MemoryFastPokeInt(MemoryFastPeekInt(entity+$284)+96,ent\bone_tforms_orig[0])
+	MemoryFastPokeInt(MemoryFastPeekInt(entity+$284)+100,ent\bone_tforms_orig[1])
+	MemoryFastPokeInt(MemoryFastPeekInt(entity+$284)+104,ent\bone_tforms_orig[2])
+	
+	;Blitz3D v1101+ ONLY from here...
+	MemoryFastPokeInt(entity+$2A4,0)
+	MemoryFastPokeInt(entity+$2A8,0)
+	MemoryFastPokeInt(entity+$2AC,0)
+	FreeBank ent\matrix101
+	;...to here. Comment out this entire section in earlier versions
+	
+	FreeBank ent\objectlist
+	FreeBank ent\bone_tforms
+	FreeEntity entity
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Beaker</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Great stuff. Well done! Thanks for making this work. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RifRaf</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> I think I can use this. Many thanks ! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Turns out this does not work with Blitz3D version 1.101. Will fix this ASAP. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >puki</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> :(<br><br>Still, if you can't fix it - we just remove the update and everything is back to normal.<br><br>Hurrah!<br><br>:) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Alright, fixed - I <i>think</i>. Since I don't understand the most recent update, I also am not 100% sure I understand the fix, but at least the demo works. Please let me know how you get on!<br><br>Also, I guess nobody tried using this for a project yet because there was also a typo that would have made it unusable. Fixed that too - please re-download it even if you're using Blitz3D v1.100.<br><br>Finally, all this talk of CopyEntity (reason for update v1.101) made me realise - because CopyEntity doesn't create new surface info, it won't work perfectly with this hack. You should be able to copy a dynamically created boned entity, but don't free the original - just hide it or something. Remember that the info is stored in banks which Blitz is "tricked" into looking at - getting rid of these will therefore break copied entities. I will create a fix for this in due course - hopefully in the meantime the suggested option of keeping the original mesh around, but hidden, will be enough.<br><br>Massive thanks to Mark for the quick response. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> it's missing a <br>ent\entity = entity in the AddBone function, else, it never find current bones in the BoneEnt list.<br><br>Else, it's a great job ! thanks for release. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Huh. That's what I get for not testing it with more than one bone...!<br><br>Thanks for pointing that out. I do feel silly. Has been updated now. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Tom</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>EDIT:<br><br>3x4 *inverse* bone matrices are found at:<br>entpeek=PeekMemInt(mesh+644) <br>firstMatrixPointer=PeekMemInt(entpeek+96)<br>lastMatrixPointer=PeekMemInt(entpeek+100)<br><br>xVec 1,0,0<br>yVec 0,1,0<br>zVec 0,0,1<br>tXYZ 0,0,0<br><br>12 floats, 48 bytes per matrix<br><br>These are the bones 'rest transforms' or 'pose' transforms.<br><br>Good work!<br>Tom <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> there is still an error for empty surface<br>+&gt; Runtimeerror ocures if we try to renderworld mesh with surfaces that does not contain any vertices.<br>( I know such a surface does not mean nothing, whatever, it should not produce error )<br><br>Edit :<br>there is also a strange behavior<br>when I tune vertices, it seems they have to be setted locally to the bones they are affected ...<br><br>and there is something strange happening...<br><br>have a look on this code ( hit F1 to switch wireframe ! )<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Graphics3D 800,600,0,2
+SetBuffer BackBuffer()
+
+piv=	CreatePivot		()
+pit=	CreatePivot		(piv)
+		PositionEntity	(piv,0,0,0)
+cam=	CreateCamera	(pit)
+		MoveEntity		(cam,0,0,-10)
+		TurnEntity		(pit,45,0,0)
+		TurnEntity		(piv,0,45,0)
+		
+		
+mesh=	CreateMesh		()
+surf=	CreateSurface	(mesh)
+
+Parent=	mesh
+
+	For n = 0 To 4
+		; create a new bone ( always attached to the previously created bone )
+		Bone=	CreatePivot	(Parent)
+				; move it "1" along Y
+				PositionEntity	(Bone,0,n,0,1)
+				; gen Bone index
+		BoneId=	AddBone		(mesh,Bone)
+		Parent=	Bone
+		
+		; for all vertices, y=0
+		v0	=	AddVertex	(surf,-1,0,-1)
+				AddVertex	(surf,+1,0,-1)
+				AddVertex	(surf,+1,0,+1)
+				AddVertex	(surf,-1,0,+1)
+				
+		; set the bone weights
+			For i = 0 To 3
+				
+				SetVertexBone ( surf, v0+i,BoneId,0,1)
+				SetVertexBone ( surf, v0+i,255   ,1)
+				
+			Next
+		
+		; build triangle ( if unless 2 "lines" created )
+		If n&gt;0
+			
+			AddTriangle(surf,v0+0,v0+1,v0-3) : AddTriangle(surf,v0+0,v0-3,v0-4)
+			AddTriangle(surf,v0+1,v0+2,v0-2) : AddTriangle(surf,v0+1,v0-2,v0-3)
+			AddTriangle(surf,v0+2,v0+3,v0-1) : AddTriangle(surf,v0+2,v0-1,v0-2)
+			AddTriangle(surf,v0+3,v0+0,v0-4) : AddTriangle(surf,v0+3,v0-4,v0-1)
+			
+		EndIf
+	Next
+	
+	
+box=	CreateCube		()
+		; the cube is now from 0 to 2 along Y
+		PositionMesh	(box,0,1,0)
+		; and now it is from 0 to 1.
+		ScaleMesh		(box,1,.5,1)
+		PositionEntity	(box,2,0,0)
+		
+
+Repeat
+	msx=MouseXSpeed()
+	msy=MouseYSpeed()
+	If KeyHit(59) wire=1-wire:WireFrame wire
+	If MouseDown(1)
+		TurnEntity piv,0,-msx,0
+		TurnEntity pit,+msy,0,0
+	EndIf
+	RenderWorld
+	Flip
+Until KeyHit(1)
+End
+</textarea><br><br>Notice :<br>I have modified the original code , commenting the line where bone is automatically parented to the entity...<br>+&gt; As I need the bone to keep parented to an other !<br><br>here is my version :<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Const B3D_VERSION#=1.099
+
+Type BoneEnt		;The type for manually boned entities
+	Field entity
+	Field bones
+	Field bone_tforms,bone_tforms_orig[2]
+	Field objectlist,objectlist_orig[2]
+	Field matrix101;,matrix101_orig[2]		;I DON'T KNOW what this actually does. Added in Blitz3D v1.101, comment it out for earlier versions
+End Type
+
+Function AddBone%(entity,bone)		;Add an entity to a mesh as a bone. Must be not be scaled or rotated, but do position it first
+	Local ent.BoneEnt=GetBoneEnt(entity)
+;	EntityParent bone,entity
+	
+	If ent=Null
+		AddAnimSeq(entity,0)		;Give the entity an animator structure where the necessary info will be stored
+		ent=New BoneEnt
+		
+		ent\entity = entity
+		ent\objectlist=CreateBank(4)
+		PokeInt ent\objectlist,0,entity
+		ent\bone_tforms=CreateBank(48)
+		PokeFloat ent\bone_tforms,0,1:PokeFloat ent\bone_tforms,16,1:PokeFloat ent\bone_tforms,32,1
+		
+		Local Orig%=Mem_PeekInt(entity+$284)
+		ent\objectlist_orig[0]=Mem_PeekInt(Orig+36)
+		ent\objectlist_orig[1]=Mem_PeekInt(Orig+40)
+		ent\objectlist_orig[2]=Mem_PeekInt(Orig+44)
+		
+		ent\bone_tforms_orig[0]=Mem_PeekInt(Orig+96)
+		ent\bone_tforms_orig[1]=Mem_PeekInt(Orig+100)
+		ent\bone_tforms_orig[2]=Mem_PeekInt(Orig+104)
+		
+		Mem_PokeInt(entity+$240,1)
+		
+		;Blitz3D v1101+ ONLY from here...
+		If B3D_VERSION&gt;1.100
+			ent\matrix101=CreateBank(84)
+			PokeFloat ent\matrix101, 0,1.0		;Seems to function without these, but since I don't know what they do...
+			PokeFloat ent\matrix101,16,1.0
+			PokeFloat ent\matrix101,32,1.0
+			PokeFloat ent\matrix101,48,1.0
+			PokeFloat ent\matrix101,64,1.0
+			PokeFloat ent\matrix101,80,1.0
+		EndIf
+		;...to here. Comment out this entire section in earlier versions
+		ent\bones=0
+	EndIf
+	
+	ent\bones=ent\bones+1
+	
+	ResizeBank(ent\objectlist,BankSize(ent\objectlist)+4)
+	Mem_PokeInt(Mem_PeekInt(entity+$23C)+36,Mem_PeekInt(ent\objectlist+4))
+	Mem_PokeInt(Mem_PeekInt(entity+$23C)+40,Mem_PeekInt(ent\objectlist+4)+BankSize(ent\objectlist))
+	Mem_PokeInt(Mem_PeekInt(entity+$23C)+44,Mem_PeekInt(ent\objectlist+4)+BankSize(ent\objectlist))
+	
+	ResizeBank(ent\bone_tforms,BankSize(ent\bone_tforms)+48)
+	Mem_PokeInt(Mem_PeekInt(entity+$284)+96,Mem_PeekInt(ent\bone_tforms+4))
+	Mem_PokeInt(Mem_PeekInt(entity+$284)+100,Mem_PeekInt(ent\bone_tforms+4)+BankSize(ent\bone_tforms))
+	Mem_PokeInt(Mem_PeekInt(entity+$284)+104,Mem_PeekInt(ent\bone_tforms+4)+BankSize(ent\bone_tforms))
+	
+	PokeInt ent\objectlist,4*ent\bones,bone
+	; 00 04 08 ; Vector X
+	; 12 16 20 ; Vector Y
+	; 24 28 32 ; Vector Z
+	; 36 40 44 ; Pos X,Y,Z
+	TFormVector 1,0,0,bone,0
+	PokeFloat ent\bone_tforms,48*ent\bones+00,TFormedX()
+	PokeFloat ent\bone_tforms,48*ent\bones+04,TFormedY()
+	PokeFloat ent\bone_tforms,48*ent\bones+08,TFormedZ()
+	TFormVector 0,1,0,bone,0
+	PokeFloat ent\bone_tforms,48*ent\bones+12,TFormedX()
+	PokeFloat ent\bone_tforms,48*ent\bones+16,TFormedY()
+	PokeFloat ent\bone_tforms,48*ent\bones+20,TFormedZ()
+	TFormVector 0,0,1,bone,0
+	PokeFloat ent\bone_tforms,48*ent\bones+24,TFormedX()
+	PokeFloat ent\bone_tforms,48*ent\bones+28,TFormedY()
+	PokeFloat ent\bone_tforms,48*ent\bones+32,TFormedZ()
+	
+	PokeFloat ent\bone_tforms,48*ent\bones+36,EntityX(bone,0)
+	PokeFloat ent\bone_tforms,48*ent\bones+40,EntityY(bone,0)
+	PokeFloat ent\bone_tforms,48*ent\bones+44,EntityZ(bone,0)
+	
+	
+	;Blitz3D v1101+ ONLY from here...
+	If B3D_VERSION&gt;1.100
+		ResizeBank(ent\matrix101,BankSize(ent\matrix101)+84)
+		Mem_PokeInt(entity+$2A4,Mem_PeekInt(ent\matrix101+4))
+		Mem_PokeInt(entity+$2A8,Mem_PeekInt(ent\matrix101+4)+BankSize(ent\matrix101))
+		Mem_PokeInt(entity+$2AC,Mem_PeekInt(ent\matrix101+4)+BankSize(ent\matrix101))
+		
+		PokeFloat ent\matrix101,84*ent\bones+ 0,1.0		;Seems to function without these, but since I don't know what they do...
+		PokeFloat ent\matrix101,84*ent\bones+16,1.0
+		PokeFloat ent\matrix101,84*ent\bones+32,1.0
+		PokeFloat ent\matrix101,84*ent\bones+48,1.0
+		PokeFloat ent\matrix101,84*ent\bones+64,1.0
+		PokeFloat ent\matrix101,84*ent\bones+80,1.0
+	EndIf
+	;...to here. Comment out this entire section in earlier versions
+	
+	Return ent\bones
+End Function
+
+Function GetBone(entity,boneID)				;Get a bone's entity handle from its simple ID
+	Local be.BoneEnt=GetBoneEnt(entity)
+	Return PeekInt(be\objectlist,4*boneID)
+End Function
+
+Function SetVertexBone(surface,vertex,boneID,bonenum=0,weight#=1.0,reset%=True)		;Attach a bone to a vertex, by bone ID
+	Local vertexptr=Mem_PeekInt(surface+28)
+	Mem_PokeByte(vertexptr+vertex*64+44+bonenum,boneID)
+	If reset Or weight=1
+		If bonenum&lt;3 Then Mem_PokeByte(vertexptr+vertex*64+44+bonenum+1,255)
+	EndIf
+	Mem_PokeFloat(vertexptr+vertex*64+48+bonenum*4,weight)
+End Function
+
+Function GetVertexBone(surface,vertex,bonenum=0)	;Returns a boneID for a vertex (not an entity handle)
+	Local vertexptr=Mem_PeekInt(surface+28)
+	Return Mem_PeekByte(vertexptr+vertex*64+44+bonenum)
+End Function
+
+Function GetVertexWeight#(surface,vertex,bonenum=0)	;Returns the weight the boneID affect
+	Local vertexptr=Mem_PeekInt(surface+28)
+	Return Mem_PeekFloat(vertexptr+vertex*64+48+bonenum*4)
+End Function
+
+Function ClearVertexBones(surface,vertex)	;This function is really just to make things clearer
+	SetVertexBone(surface,vertex,255)		;Blitz treats a boneID of 255 as "stop looking". Don't need to actually zero the rest
+End Function
+
+Function GetBoneEnt.BoneEnt(entity)			;Gets a BoneEnt definition from an entity handle
+	Local be.BoneEnt
+	For be=Each BoneEnt
+		If be\entity=entity Then Return be
+	Next
+	Return Null
+End Function
+
+Function FreeBoneEnt(entity)				;Free a manually boned entity and its banks - you MUST use this to avoid memory leaks
+	Local ent.BoneEnt=GetBoneEnt(entity)
+	If ent=Null Then Return			;Or you could set it to free the non-boned entity anyway, and use this command on all entities - safer
+	
+	Mem_PokeInt(Mem_PeekInt(entity+$284)+36,ent\objectlist_orig[0])		;Restore the original lists so they can be freed properly
+	Mem_PokeInt(Mem_PeekInt(entity+$284)+40,ent\objectlist_orig[1])
+	Mem_PokeInt(Mem_PeekInt(entity+$284)+44,ent\objectlist_orig[2])
+	
+	Mem_PokeInt(Mem_PeekInt(entity+$284)+96,ent\bone_tforms_orig[0])
+	Mem_PokeInt(Mem_PeekInt(entity+$284)+100,ent\bone_tforms_orig[1])
+	Mem_PokeInt(Mem_PeekInt(entity+$284)+104,ent\bone_tforms_orig[2])
+	
+	;Blitz3D v1101+ ONLY from here...
+	If B3D_VERSION&gt;1.100
+		Mem_PokeInt(entity+$2A4,0)
+		Mem_PokeInt(entity+$2A8,0)
+		Mem_PokeInt(entity+$2AC,0)
+		FreeBank ent\matrix101
+	EndIf
+	;...to here. Comment out this entire section in earlier versions
+	
+	FreeBank ent\objectlist
+	FreeBank ent\bone_tforms
+	FreeEntity entity
+End Function
+</textarea> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Removed the line parenting the new bone to the entity - you're right, that prevents it from doing anything useful.<br><br>As for the RenderWorld error - Blitz3D renders boned and unboned meshes by different means. I think the method used for boned meshes must make certain assumptions about the model's integrity (since the only "official" way to get bones onto a mesh is via LoadAnimMesh which can presumably fix problems like surfaces with no vertices) and that there's not much we can do about it from this side (a boned mesh created by LoadAnimMesh will also crash on RenderWorld if given empty surfaces).<br><br>I, uh... have no idea what Tom's post means or what your example is demonstrating, sorry. Feeling slow today. Your addition to AddBone() with the TFormVector commands - is this to allow bones to have a rest orientation other than 0,0,0? <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> the tform method is here to store the "real" structue of matrix vectors to global coordinates.<br>But maybe I'm wrong doing this <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

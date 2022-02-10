@@ -1,0 +1,448 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Sprite Surface Thingy</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Sprite Surface Thingy</h1><a href="forums.php" >Archives Forums</a>/<a href="topics.php?forum=120" >Blitz3D SDK Programming</a>/<a href="#bottom" >Sprite Surface Thingy</a><br><br>
+<a name="789934"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ninjarat</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, I found this sprite surface while browsing the code archives, and ported it from B3D to BMax/B3DSDK.  Along with a few optimizations.  Thought I'd share it.  :)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Import Blitz3D.Blitz3DSDK
+Import BRL.Retro
+
+Rem
+
+Ported to BlitzMax / Blitz3D SDK and optimised for BlitzMax by ninjarat
+RCD Software (TM)
+
+Main code by Syntax Error
+
+Modified by Barliesque
+ - Re-wrote CopyImage3D() to create an independant copy of a sprite
+ - Modified texture application technique in various functions to allow
+      sprite copies to use different frames of the same animated texture
+ - Fixed an error in ImageToSprite(), so that parent parameter defaults correctly
+
+
+Thanks go to:
+-------------
+SkidRacer        - Pixel-Perfect sprites (pixies.bb)
+Rob Cummings     - Information on using a 2nd sprite camera (now defunct)
+FredBorg         - HandleImage3D() and CopyImage3D()
+EricZann         - Idea for ModifyText3D
+Ghislain Schoofs - Suggestion for optional 'Parent' flag to give more flexibility
+BlitzSupport     - MaskImage3D - modified LoadMaskedTexture
+Bot Builder      - MidHandle3D - modified Mid3DHandle from code archives
+
+End Rem
+
+
+Global spritepivot,spritecamera
+
+
+' Create a complete sprite display with camera/pivot
+Function Init3DSpriteSurface(pivotdist#=1.0)
+	bbSetBuffer bbBackBuffer()
+	spritecamera=bbCreateCamera()
+	spritepivot=CreateSpritePivot(spritecamera,pivotdist)
+End Function
+
+' Create a single 'sprite pivot' and scale to screen resolution
+Function CreateSpritePivot(parentcam=0,dist#=1.0)
+
+	Local gw=bbGraphicsWidth()
+	Local gh=bbGraphicsHeight()
+	spritepivot=bbCreatePivot(parentcam)
+	Local aspect#=Float(gh)/Float(gw)
+	Local scale#=2.0/gw
+	bbPositionEntity spritepivot,-1,aspect,dist
+	bbScaleEntity spritepivot,scale,scale,scale
+	bbNameEntity spritepivot,"SpriteControl Pivot"
+	Return spritepivot
+
+End Function
+
+' Use this command to zoom the main camera and sprite pivot
+' NOTE: Only positive values if 1 and greater can be used
+Function CameraZoom3D(cam,z#)
+
+	If z&lt;1.0 z=1.0
+	If bbEntityClass(cam)="Camera" bbCameraZoom cam,z
+	Local numchilds=bbCountChildren(cam)
+	If numchilds&gt;0
+		For c=1 To numchilds
+			Local child=bbGetChild(cam,c)
+			If bbEntityName(child)="SpriteControl Pivot"
+				bbPositionEntity child,bbEntityX(child),bbEntityY(child),z+0.001
+				Exit
+			EndIf
+		Next
+	EndIf
+
+End Function
+
+' Create a blank quad sprite
+Function CreateImage3D(w=1,h=1,par=0,u2#=1.0,v2#=1.0)
+
+	If par=0 par=spritepivot
+	Local sprite=bbCreateMesh(par)
+	Local s=bbCreateSurface(sprite)
+	bbAddVertex s,0,0,0 ,0,0
+	bbAddVertex s,2,0,0 , u2,0
+	bbAddVertex s,0,-2,0 ,0,v2
+	bbAddVertex s,2,-2,0 , u2,v2
+	bbAddTriangle s,0,1,2
+	bbAddTriangle s,3,2,1
+	bbScaleEntity sprite,Float(w)/2,Float(h)/2,1
+	bbEntityFX sprite,1+16+32
+	bbEntityOrder sprite,-100
+	bbPositionEntity sprite,-10000,-10000,0
+	Return sprite
+
+End Function
+
+' Load an image into a texture and attach it to a quad sprite
+Function LoadImage3D(file$,texflags=4,par=0)
+
+	If par=0 par=spritepivot
+	Local tmpimage=bbLoadImage(file$)
+	sprite=ImageToSprite(tmpimage,texflags)
+	bbFreeImage tmpimg
+	Return sprite
+
+End Function
+
+' Load and create a quad sprite with animation frames
+Function LoadAnimImage3D(file$,framesX=1,framesY=1,texflags=4,par=0)
+
+	If par=0 par=spritepivot
+	If frames&lt;2 Then frames=2
+	Local tmpimage=bbLoadImage(file)
+	Local iw=bbImageWidth(tmpimage)
+	Local ih=bbImageHeight(tmpimage)
+	Local tw=2 Shl (Len(Int(Bin(iw-1)))-1)
+	Local th=2 Shl (Len(Int(Bin(ih-1)))-1)
+	bbFreeImage tmpimg
+	sprite=ImageToSprite(tmpimage,texflags,framesX,framesY)
+	Local ename$="W"+Float(tw)/(Float(iw)/Float(framesX))
+	ename:+"H"+Float(th)/(Float(ih)/Float(framesY))
+	ename:+"X"+String(framesX)
+	ename:+"Y"+String(framesY)+"E"
+	bbNameEntity sprite,ename
+	Return sprite
+
+End Function
+
+' Grab an area of the current drawing buffer into a quad sprite
+Function GrabImage3D(x,y,iw,ih,par=0)
+
+	If par=0 par=spritepivot
+	Local tmpimage=bbCreateImage(iw,ih)
+	bbGrabImage tmpimage,x,y
+	sprite=ImageToSprite(tmpimage)
+	bbFreeImage tmpimage
+	Return sprite
+
+End Function
+
+' Duplicate an existing quad sprite
+Function CopyImage3D(sprite,Alpha#=1.0,Blend=1)
+
+	Local i,x,y
+	Local vx#,vy#,vz#,u#,v#
+	Local Surf = bbGetSurface(sprite,1)
+   Local par = bbGetParent(sprite)
+	Local NewSprite = bbCreateMesh(par)
+	Local NewSurf = bbCreateSurface(NewSprite)
+
+	i=0
+   For y=0 To -2 Step -2
+      For x=0 To 2 Step 2
+			u  = bbVertexU(Surf,i)
+			v  = bbVertexV(Surf,i)
+			bbAddVertex NewSurf, x,y,0, u,v
+	   Next
+	Next
+	bbAddTriangle NewSurf,0,1,2
+	bbAddTriangle NewSurf,3,2,1
+
+	bbPositionEntity NewSprite, bbEntityX(sprite),bbEntityY(sprite),bbEntityZ(sprite)
+	ResizeImage3D NewSprite, ImageWidth3D(sprite),ImageHeight3D(sprite)
+	
+	bbEntityFX    NewSprite, 17
+	bbEntityOrder NewSprite, -100
+	bbEntityBlend NewSprite, Blend
+	bbEntityAlpha NewSprite, Alpha
+	bbNameEntity  NewSprite, bbEntityName(sprite)
+	bbEntityTexture NewSprite, GetSpriteTexture(sprite)
+	Return NewSprite
+
+End Function
+
+' Create a quad sprite from a string of text
+Function Text3D(xpos,ypos,txt$,flags=5,par=0)
+
+	If par=0 par=spritepivot
+	If t$="" Then t$="?"
+	Local gbuffer=bbGraphicsBuffer()
+	Local tmpimage=bbCreateImage(bbStringWidth(txt$),bbFontHeight())
+	bbSetBuffer bbImageBuffer(tmpimage)
+	bbCls ;	bbText 0,0,txt$ ;	bbSetBuffer gbuffer
+	textsprite=ImageToSprite(tmpimage,flags)
+	bbFreeImage tmpimage
+	DrawImage3D textsprite,xpos,ypos
+	Return textsprite
+
+End Function
+
+' Modify existing text in quad sprite
+Function ModifyText3D(sprite,xpos,ypos,t$,flags=5)
+
+	If t$="" Then t$="?"
+	Local par=bbGetParent(sprite)
+	FreeImage3D sprite
+	Local newstextsprite=Text3D(xpos,ypos,t$,flags,par)
+	Return newsprite
+	
+End Function
+
+' Position quad sprite at 2D screen coordinates
+Function DrawImage3D(sprite,x,y,frame=-99999,z#=0)
+
+	bbPositionEntity sprite,x+0.5,-y+0.5,z
+	If frame&lt;&gt;-99999
+		Local en$=bbEntityName(sprite)
+		Local fw#=Float(Mid$(en$,Instr(en$,"W")+1,Instr(en$,"H")-Instr(en$,"W")))
+		Local fh#=Float(Mid$(en$,Instr(en$,"H")+1,Instr(en$,"X")-Instr(en$,"H")))
+		Local framesH=Int(Mid$(en$,Instr(en$,"X")+1,Instr(en$,"Y")-Instr(en$,"X")))
+		Local framesV=Int(Mid$(en$,Instr(en$,"Y")+1,Instr(en$,"E")-Instr(en$,"Y")))
+		Local numframes=framesH*framesV
+		If frame&gt;numframes frame=(frame Mod numframes)
+		If frame&lt;1 frame=numframes-(Abs(frame) Mod numframes)
+		frame=frame-1
+
+		Local frameX = frame Mod framesH
+		Local frameY = Int(frame/framesH)
+
+		Local u1#=Float(frameX)/Float(framesH)
+		Local v1#=Float(frameY)/Float(framesV)
+	   Local u2#=u1 + (1.0/FramesH)
+	   Local v2#=v1 + (1.0/FramesV)
+
+		Local s=bbGetSurface(sprite,1)
+		bbVertexTexCoords s,0,u1,v1	
+		bbVertexTexCoords s,1,u2,v1	
+		bbVertexTexCoords s,2,u1,v2	
+		bbVertexTexCoords s,3,u2,v2	
+	EndIf
+		
+End Function
+
+' Scale a quad sprite to equivalent 2d pixel width/height values
+Function ResizeImage3D(sprite,w,h)
+
+	bbScaleEntity sprite,Float(w)/2,Float(h)/2,1
+
+End Function
+
+' Flip the quad sprite horizontally or vertically
+Function FlipImage3D(sprite,flipX=1,flipY=0)
+
+	Local s=bbGetSurface(sprite,1)
+	Local vx#,vy#,vz#
+	If flipX
+		vx#=bbVertexX(s,1) ; vy#=bbVertexY(s,1) ; vz#=bbVertexZ(s,1)
+		bbVertexCoords s,1,bbVertexX(s,0),bbVertexY(s,0),bbVertexZ(s,0)
+		bbVertexCoords s,0,vx,vy,vz
+		vx#=bbVertexX(s,3) ; vy#=bbVertexY(s,3) ; vz#=bbVertexZ(s,3)
+		bbVertexCoords s,3,bbVertexX(s,2),bbVertexY(s,2),bbVertexZ(s,2)
+		bbVertexCoords s,2,vx,vy,vz
+	EndIf
+	If flipY
+		vx#=bbVertexX(s,2) ; vy#=bbVertexY(s,2) ; vz#=bbVertexZ(s,2)
+		bbVertexCoords s,2,bbVertexX(s,0),bbVertexY(s,0),bbVertexZ(s,0)
+		bbVertexCoords s,0,vx,vy,vz
+		vx#=bbVertexX(s,3) ; vy#=bbVertexY(s,3) ; vz#=bbVertexZ(s,3)
+		bbVertexCoords s,3,bbVertexX(s,1),bbVertexY(s,1),bbVertexZ(s,1)
+		bbVertexCoords s,1,vx,vy,vz
+	EndIf
+
+End Function
+
+' Rotate a quad sprite by ang# angle
+'       0 = normal
+'      90 = clockwise by 90 degrees
+'     180 = upside down
+'     270 = anti-clockwise by 90 degrees
+Function RotateImage3D(sprite,angle#)
+
+	bbRotateEntity sprite,0,0,-angle
+
+End Function
+
+' Set the handle/axis of a quad sprite (courtesy of FredBorg)
+'   handleX -&gt;   -1 is left   0 is centre   1 is right
+'   handleY -&gt;   -1 is top    0 is centre   1 is bottom
+Function HandleImage3D(sprite,handleX#,handleY#)
+
+	MidHandle3D sprite
+	Local s=bbGetSurface(sprite,1)
+	bbVertexCoords s,0,bbVertexX(s,0)-handleX,bbVertexY(s,0)+handleY,bbVertexZ(s,0)
+	bbVertexCoords s,1,bbVertexX(s,1)-handleX,bbVertexY(s,1)+handleY,bbVertexZ(s,1)
+	bbVertexCoords s,2,bbVertexX(s,2)-handleX,bbVertexY(s,2)+handleY,bbVertexZ(s,2)
+	bbVertexCoords s,3,bbVertexX(s,3)-handleX,bbVertexY(s,3)+handleY,bbVertexZ(s,3)
+
+End Function
+
+' Move the quad sprites handle/axis to the center (courtesy of bot builder)
+Function MidHandle3D(sprite)
+
+	Local ux#=-100000 , uy#=-100000 , uz#=-100000
+	Local lx#=100000 , ly#=100000 , lz#=100000
+	Local s=bbGetSurface(sprite,1)
+	For v=0 To 3
+		vx#=bbVertexX#(s,v) ; vy#=bbVertexY#(s,v) ; vz#=bbVertexZ#(s,v)
+		If vx#&lt;lx# Then lx#=vx#
+		If vx#&gt;ux# Then ux#=vx#
+		If vy#&lt;ly# Then ly#=vy#
+		If vy#&gt;uy# Then uy#=vy#
+		If vz#&lt;lz# Then lz#=vz#
+		If vz#&gt;uz# Then uz#=vz#
+	Next
+	ax#=(ux#+lx#)/2 ; ay#=(uy#+ly#)/2 ; az#=(uz#+lz#)/2
+	bbPositionMesh sprite,-ax#,-ay#,-az#
+
+End Function
+
+' Return the X handle/axis position (-1 = Left  0 = Centre  +1 = Right)
+Function ImageXHandle3D#(sprite)
+
+	Return -bbVertexX(bbGetSurface(sprite,1),1)+1
+
+End Function
+
+' Return the Y handle/axis position (-1= Top  0 = Centre  +1 = Bottom)
+Function ImageYHandle3D#(sprite)
+
+	Return bbVertexY(bbGetSurface(sprite,1),0)-1
+
+End Function
+
+' Return width of a quad sprite in screen pixel dimensions
+Function ImageWidth3D(sprite)
+
+	Local x#=bbGetMatElement(sprite,0,0)
+	Local y#=bbGetMatElement(sprite,0,1)
+	Local z#=bbGetMatElement(sprite,0,2)
+	Return Sqr(x*x+y*y+z*z) * bbGraphicsWidth()
+
+End Function
+
+' Return height of a quad sprite in screen pixel dimensions
+Function ImageHeight3D(sprite)
+
+	Local x#=bbGetMatElement(sprite,1,0)
+	Local y#=bbGetMatElement(sprite,1,1)
+	Local z#=bbGetMatElement(sprite,1,2)
+	Return Sqr(x*x+y*y+z*z) * bbGraphicsWidth()
+
+End Function
+
+' Apply a color mask to the sprites texture (thanks to BlitzSupport)
+Function MaskImage3D(sprite,r,g,b,numframes=1)
+	Local temp=bbCreateTexture(1,1,flags)
+	bbWritePixel 0,0,((r Shl 16)+(g Shl 8)+b) &amp; $00FFFFFF,bbTextureBuffer(temp)
+	Local trgb=bbReadPixel(0,0,bbTextureBuffer(temp))
+	r=trgb Shr 16 &amp; $ff ; g=trgb Shr 8 &amp; $ff ; b=trgb &amp; $ff
+	bbFreeTexture temp
+	Local gb=bbGraphicsBuffer()
+	Local tex=GetSpriteTexture(sprite)
+	For frm=1 To numframes
+		bbSetBuffer bbTextureBuffer(tex,frm-1)
+		bbLockBuffer bbGraphicsBuffer()
+		For x=0 To bbTextureWidth(tex)-1
+			For y=0 To bbTextureHeight(tex)- 1
+				Local rgb=bbReadPixelFast(x,y) &amp; $00FFFFFF
+				If rgb=((r Shl 16)+(g Shl 8)+b)
+					bbWritePixelFast x,y,$00000000
+				Else
+					bbWritePixelFast x,y,rgb | $FF000000
+				EndIf
+			Next
+		Next
+		bbUnlockBuffer bbGraphicsBuffer()
+	Next
+	bbSetBuffer gb
+End Function
+
+' Return TRUE if two sprite images are overlapping
+Function ImagesOverlap3D(sprite1,sprite2,ovl1=0,ovl2=0)
+
+	Local iw1=ImageWidth3D(sprite1) , ih1=ImageHeight3D(sprite1)
+	Local iw2=ImageWidth3D(sprite2) , ih2=ImageHeight3D(sprite2)
+	Local fX=1,fY=1 , s=bbGetSurface(sprite1,1)
+	If bbVertexX(s,0)&gt;bbVertexX(s,1) fX=-1
+	If bbVertexY(s,0)&lt;bbVertexY(s,2) fY=3
+	Local ix1#=Abs(bbEntityX(sprite1))-((ImageXHandle3D(sprite1)+fX)/2)*iw1+0.5
+	Local iy1#=Abs(bbEntityY(sprite1))-((ImageYHandle3D(sprite1)+fY)/2)*ih1+0.5
+	fX=1 ; fY=1 ;	s=bbGetSurface(sprite2,1)
+	If bbVertexX(s,0)&gt;bbVertexX(s,1) fX=-1
+	If bbVertexY(s,0)&lt;bbVertexY(s,2) fY=3
+	Local ix2#=Abs(bbEntityX(sprite2))-((ImageXHandle3D(sprite2)+fX)/2)*iw2+0.5
+	Local iy2#=Abs(bbEntityY(sprite2))-((ImageYHandle3D(sprite2)+fY)/2)*ih2+0.5
+	Return bbRectsOverlap(ix1+ovl1,iy1+ovl1,iw1-ovl1,ih1-ovl1 , ix2+ovl2,iy2+ovl2,iw2-ovl2,ih2-ovl2)
+	
+End Function
+
+' Convert an existing 2D image to quad sprite
+Function ImageToSprite(img,texflags=5,numframesX=1,numframesY=1,par=0)
+
+	If par=0 Then par=spritepivot
+	Local iw=bbImageWidth(img)
+	Local ih=bbImageHeight(img)
+	Local tw=2 Shl (Bin(iw-1).Replace("0"," ").Trim().length-1)
+	Local th=2 Shl (Bin(iw-1).Replace("0"," ").Trim().length-1)
+	Local tex=bbCreateTexture(tw,th,texflags)
+	Local ib=bbImageBuffer(img) ; bbLockBuffer ib
+	Local tb=bbTextureBuffer(tex) ; bbLockBuffer tb
+	Local x,y
+	For x=0 To iw-1
+		For y=0 To ih-1
+			rgbc=bbReadPixelFast(x,y,ib) &amp; $00ffffff
+			If rgbc=((r Shl 16)+(g Shl 8)+b)
+				bbWritePixelFast x,y,($00000000),tb
+			Else
+				bbWritePixelFast x,y,(rgbc | $ff000000),tb
+			EndIf
+		Next
+	Next
+	bbUnlockBuffer ib ; bbUnlockBuffer tb
+	
+	Local sprite=CreateImage3D(iw,ih,par,1.0/Float(numframesX),1.0/Float(numframesY))
+	bbEntityTexture sprite,tex
+	bbEntityFX sprite,16+1
+	bbEntityOrder sprite,-100
+	bbScaleEntity sprite,Float(iw/numframesX)/2.0,Float(ih/numframesY)/2.0,1.0
+	Return sprite
+	
+End Function
+
+' Flush out an existing quad sprite and it's texture
+Function FreeImage3D(sprite)
+
+	Local brush=bbGetEntityBrush(sprite)
+	Local tex=bbGetBrushTexture(brush)
+	If brush&lt;&gt;0 bbFreeBrush brush
+	If tex&lt;&gt;0 bbFreeTexture tex
+	If sprite&lt;&gt;0 bbFreeEntity sprite
+
+End Function
+
+' Return the texture handle of a quad sprite
+Function GetSpriteTexture(sprite)
+
+	Local brush=bbGetEntityBrush(sprite)
+	Local tex=bbGetBrushTexture(brush)
+	bbFreeBrush brush
+	Return tex
+
+End Function</textarea><br><br>EDIT: Little fix added, anyone's already tried it use this instead.  Parent default was -1 when in B3DSDK should be 0. <br><br></td></tr></table><br>
+<a name="790136"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Robert Cummings</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've really lost my touch. I'm even credited in the thanks for that thing :) Been away too long. <br><br></td></tr></table><br>
+<a name="790149"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ninjarat</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> he he.  Of course, I post all the time, but no one really cares.  You notice that it's the people who post the least who also seem to be the best posters?<br><br>Anyway, I'm working on making my own version.  It's OOP and ditches the Image crap, so it's much faster.  Of course, I'll set it up to convert from image to texture, and by that I mean a 100,200 would be converted in to a 256,256, with the rest of the texture transparent, and the handle functions ignoring the extra space. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

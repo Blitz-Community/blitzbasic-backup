@@ -1,0 +1,733 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Blitz Lexical Analyser</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Blitz functions to split a Blitz source file into tokens, language=bb, category=Miscellaneous'><meta name='author' content='Steve Hill'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=9>Miscellaneous</a>/Blitz Lexical Analyser</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="782.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Blitz Lexical Analyser by Steve Hill</td><td align="right">2003 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This code splits a Blitz source file into tokens.<br><br>Each token represents items like operators, keywords, comments, end of line, functions etc.<br><br>Useful if you want to write a pre-processor or other tool that manipulates Blitz code files.<br><br>Contains an example for just printing the tokens in a file. </td></tr><tr ><td class="cell"><pre class="code">;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; Lexer.bb
+;
+; Tokenises Blitz Basic code
+;
+; Steve Hill, 2003
+;
+; OpenState(fileName$) - creates a new TState
+; CloseState()         - destroys and closes the current state
+; GetToken(state)      - read the next token
+;
+; The current token is available in state\tok$
+;
+; Versions
+; 0.1			Initial version		27 Aug 2003
+; 0.2			Added &gt;&lt; =&gt; =&lt;		29 Aug 2003
+;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; CONSTANTS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; Constants for various character types
+;
+Const  SPACE        = 32
+Const  TAB			= 9
+Const  CR			= 13
+Const  LF           = 10
+
+Global WHITE_SPACE$ = Chr$(SPACE) + Chr$(TAB) + Chr$(CR)
+Const  ALPHA$       = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+Const  DIGITS$      = "0123456789"
+Const  HEXDIGITS$   = "0123456789abcdefABCDEF"
+Const  BINDIGITS$   = "01"
+Const  DELIM$		= "^*+-~&lt;&gt;/\#%.$()[],=\:"
+Global QUOTE$		= Chr$(34)
+Global ALPHANUM$	= ALPHA$ + DIGITS$
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; TYPES
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; TState
+;
+; Keeps track of the current file, look-ahead character and token.
+; Can be used as a stack for include files.
+;
+Type TState
+	Field file
+	Field ch$
+	Field tok$
+	Field tokType
+	Field lineNum
+	; Field charNum
+End Type
+
+Const TOK_WORD			= 0
+Const TOK_OPERATOR		= 1
+Const TOK_COMMENT		= 2
+Const TOK_DEC_NUMBER	= 3
+Const TOK_HEX_NUMBER	= 4
+Const TOK_BIN_NUMBER	= 5
+Const TOK_STRING		= 6
+Const TOK_EOL			= 7
+Const TOK_EOF			= 8
+Const TOK_UNKNOWN		= 9
+
+; TDescriptor
+;
+; Describes a function: name, return type and parameter type list.
+; Assigned unique id for each functions ... its "pointer"
+;
+Type TDescriptor
+	Field name$
+	Field typ$
+	Field params$
+	Field id
+End Type
+
+; Error
+;
+; Something has gone wrong bail out.
+;
+Function Error(e$, state.TState)
+	Print e$
+	If state\file &lt;&gt; 0
+		Print "Error on line " + Str$(state\lineNum)
+	EndIf
+	Print "Press a key"
+	WaitKey
+	End
+End Function
+
+; OpenState
+;
+; Open the file initialise the fields
+;
+Function OpenState(name$)
+	Print "Parsing " + name$
+	state.TState = New TState
+	state\file = ReadFile(name$)
+	If state\file = 0 Then
+		Error("File " + name$ + "not found", state)
+	EndIf
+	state\lineNum = 1
+	state\ch$ = ""
+	state\tok$ = ""
+	
+	GetToken(state)
+End Function
+
+; CloseState
+;
+; Close current file, pop state
+;
+Function CloseState()
+	For state.TState = Each TState
+		CloseFile(state\file)
+	Next
+	
+	Delete Each TState
+End Function
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LEXICAL FUNCTIONS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; GetChar
+;
+; Read a character from the current file into the state
+;
+Function GetChar(state.TState)
+	If state\ch$ = Chr$(LF)
+		state\lineNum = state\LineNum + 1
+	EndIf
+
+	If Eof(state\file) Then
+		state\ch$ = ""
+		Return
+	EndIf
+	
+	state\ch$ = Chr$(ReadByte(state\file))	
+End Function
+
+; SkipSpace
+;
+; Skip white space
+;
+Function SkipSpace(state.TState)
+	While Instr(WHITE_SPACE$, state\ch$) &lt;&gt; 0
+		GetChar(state)
+		If state\ch$ = "" Return
+	Wend
+End Function
+
+; GetFollowing
+;
+; Generic token reader, reads while characters are
+; those in pat.  Places token in state.
+;
+Function GetFollowing(state.TState, pat$)
+	tok$ = state\ch$
+	GetChar(state)
+	While Instr(pat$, state\ch$) &lt;&gt; 0
+		If state\ch$ = "" Exit
+		tok$ = tok$ + state\ch$
+		GetChar(state)
+	Wend
+	state\tok$ = tok$
+End Function
+
+; GetDecNumber
+;
+; eg. 1 or 1.2
+;
+Function GetDecNumber$(state.TState)
+	GetFollowing(state, DIGITS$ + ".")
+	state\tokType = TOK_DEC_NUMBER
+End Function
+
+; GetBinNumber
+;
+; eg. %1100
+;
+Function GetBinNumber$(state.TState)
+	GetFollowing(state, BINDIGITS$)
+	state\tokType = TOK_BIN_NUMBER
+End Function
+
+; GetHexNumber
+;
+; eg. $abC1
+;
+Function GetHexNumber$(state.TState)
+	GetFollowing(state, HEXDIGITS$)
+	If state\tok$ = "$"
+		state\tokType = TOK_OPERATOR
+	Else
+		state\tokType = TOK_HEX_NUMBER
+	EndIf
+End Function
+
+; GetEOL
+;
+; Get end of line
+Function GetEOL(state.TState)
+	state\tok$ = state\ch$
+	GetChar(state)
+	state\tokType = TOK_EOL
+End Function
+
+; GetWord
+;
+; eg. myVar_2 or WaitKey
+;
+Function GetWord(state.TState)
+	GetFollowing(state, ALPHANUM$ + "_")
+	If state\tok$ = "Or" Or state\tok$ = "And" Or state\tok$ = "Xor" Then
+		state\tokType = TOK_OPERATOR
+	Else
+		state\tokType = TOK_WORD
+	EndIf
+End Function
+
+; GetOperator
+;
+; eg. , . \ + - = &gt; &lt; &lt;&gt; etc.
+;
+Function GetOperator(state.TState)
+	t$ = state\ch$
+	GetChar(state)
+
+	r$ = t$
+	
+	Select t$
+	Case "&gt;"
+		t$ = state\ch$
+		Select t$ 
+		Case "="
+			r$ = "&gt;="
+			GetChar(state)
+		Case "&lt;"
+			r$ = "&gt;&lt;"
+			GetChar(state)
+		Default
+			r$ = "&gt;"
+		End Select
+	Case "&lt;"
+		t$ = state\ch$
+		Select t$
+		Case "="
+			r$ = "&lt;="
+			GetChar(state)
+		Case "&gt;"
+			r$ = "&lt;&gt;"
+			GetChar(state)
+		Default
+			r$ = "&lt;"
+		End Select
+	Case "="
+		t$ = state\ch$
+		Select t$
+		Case "&gt;"
+			r$ = "=&gt;"
+			GetChar(state)
+		Case "&lt;"
+			r$ = "=&lt;"
+			GetChar(state)
+		Default
+			r$ = "="
+		End Select
+	End Select
+		
+	state\tok$ = r$
+	state\tokType = TOK_OPERATOR
+End Function
+
+; GetComment
+;
+; eg. ; a comment
+;
+Function GetComment(state.TState)
+	tok$ = state\ch$
+	GetChar(state)
+	While state\ch$ &lt;&gt; Chr$(LF)
+		If state\ch$ = "" Exit
+		If state\ch$ &lt;&gt; Chr$(CR)
+			tok$ = tok$ + state\ch$
+		EndIf
+		GetChar(state)
+	Wend
+	state\tok$ = tok$
+	state\tokType = TOK_COMMENT
+End Function
+
+; GetString
+;
+; eg. "a string"
+;
+Function GetString(state.TState)
+	tok$ = ""
+	GetChar(state)
+	While state\ch$ &lt;&gt; QUOTE$ And state\ch$ &lt;&gt; ""
+		tok$ = tok$ + state\ch$
+		GetChar(state)
+	Wend
+
+	If state\ch$ &lt;&gt; ""
+		state\tok$ = QUOTE$ + tok$ + QUOTE$
+		GetChar(state)
+	EndIf
+	
+	state\tokType = TOK_STRING
+End Function
+
+; GetToken
+;
+; Use first character to determine type of token and then
+; read appropriate token using the corresponding Get function
+;
+Function GetToken(state.TState)
+	SkipSpace(state)
+
+	ch$ = state\ch$
+	
+	If ch$ = "" Then
+		state\tok$ = ""
+		state\tokType = TOK_EOF
+		Return
+	EndIf
+	
+	If Instr(DIGITS$, ch$) &lt;&gt; 0 Then
+		GetDecNumber$(state)
+	ElseIf Instr(ALPHA$, ch$) &lt;&gt; 0 Then
+		GetWord(state)
+	ElseIf ch$ = ";" Then
+		GetComment(state)
+	ElseIf ch$ = QUOTE$ Then
+		GetString(state)
+	ElseIf ch$ = "%" Then
+		GetBinNumber(state)
+	ElseIf ch$ = "$" Then
+		GetHexNumber(state)
+	ElseIf Instr(DELIM$, ch$) &lt;&gt; 0 Then
+		GetOperator(state)
+	ElseIf ch$ = Chr$(LF)
+		GetEOL(state)
+	Else
+		Error("Unrecognised character " + ch$ + "(" + Asc(ch$) + ") in file", state)
+	EndIf
+
+	; DebugLog Str$(state\lineNum) + ": " + state\tok$
+	
+End Function
+
+; Example usage
+;
+;
+;
+;inFile$  = Input$("Input file: ")
+;
+;OpenState(inFile$)
+;state.TState = Last TState
+;While state\tok$ &lt;&gt; ""
+;	If state\tokType &lt;&gt; TOK_EOL Then
+;		Print state\tok$
+;	EndIf
+;	GetToken(state)
+;Wend
+;CloseState()
+;
+;Print "Press a key"
+;WaitKey
+;
+;End</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_33</td><td align="right"><font class=tiny>2007</font></td></tr></table></td></tr><tr ><td class="posttext"> My practicle adaptation of previous code.<br><br>func_tokenizer.bb :<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">; Author: Steve Hill
+; Date: 2003-08-27 13:41:23
+; Title: Blitz Lexical Analyser
+; Description: Blitz functions to split a Blitz source file into tokens
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; OpenState(file$,mode) - creates a new TState
+; GetToken(state)       - read the next token
+; CloseState()          - destroys and closes the current state
+;
+; The current token is available in state\tok$
+;
+; Versions
+; 0.1	Initial version                                   27 Aug 2003
+; 0.2	Added &gt;&lt; =&gt; =&lt;	                                  29 Aug 2003
+; 0.3   Added "mode" select                               16 Apr 2007 by _33
+;       REPLACED "tok" by "token" (this is not Tokamak)   16 Apr 2007 by _33
+; 0.4   Removed PRINTs and ENDs which made this unusable  16 Apr 2007 by _33
+;       Added some error management "ok flag"             16 Apr 2007 by _33
+;
+; FUTURE RELEASE: -Add function to return FLOAT, INT, and STRING
+;                 -More cleanup, optimize, expand on concept
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Const  SPACE        = 32
+Const  TAB			= 9
+Const  CR			= 13
+Const  LF           = 10
+
+Global WHITE_SPACE$   = Chr$(SPACE) + Chr$(TAB) + Chr$(CR)
+Const  ALPHA$         = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+Const  DIGITS$        = "0123456789"
+Const  HEXDIGITS$     = "0123456789abcdefABCDEF"
+Const  BINDIGITS$     = "01"
+Const  DELIM$		  = "^*+-~&lt;&gt;/\#%.$()[],=\:?!"
+Global QUOTE$         = Chr$(34)
+Global ALPHANUM$      = ALPHA$ + DIGITS$
+
+; TState
+;
+; Keeps track of the current file, look-ahead character and token.
+; Can be used as a stack for include files.
+;
+Type TState
+	Field file
+	Field mode
+	Field ch$
+	Field token$
+	Field tokenType
+	Field lineNum
+	; Field charNum
+	Field content$     ;v0.3
+	Field content_len% ;v0.3
+    Field ch_pos       ;v0.3
+End Type
+
+
+Const TOKEN_WORD		= 0
+Const TOKEN_OPERATOR	= 1
+Const TOKEN_COMMENT		= 2
+Const TOKEN_DEC_NUMBER	= 3
+Const TOKEN_HEX_NUMBER	= 4
+Const TOKEN_BIN_NUMBER	= 5
+Const TOKEN_STRING		= 6
+Const TOKEN_EOL			= 7
+Const TOKEN_EOF			= 8
+Const TOKEN_UNKNOWN		= 9
+
+; TDescriptor
+;
+; Describes a function: name, return type and parameter type list.
+; Assigned unique id for each functions ... its "pointer"
+;
+Type TDescriptor
+	Field name$
+	Field typ$
+	Field params$
+	Field id
+End Type
+
+; OpenState
+;
+; Open the file initialise the fields
+; 1 = file, 2 = inline tokenize
+Function OpenState(fi$,mode)
+   state.TState = New TState
+   state\mode = mode
+   state\ch_pos = 0
+   If state\mode = 1 Then
+      state\file = ReadFile(fi$)
+      If state\file = 0 Then
+         Return 0
+      EndIf
+   ElseIf state\mode = 2
+      state\content$ = fi$
+   EndIf
+   state\lineNum = 1
+   state\ch$ = ""
+   state\token$ = ""
+   Return GetToken(state)
+End Function
+
+; CloseState
+;
+; Close current file, pop state
+;
+Function CloseState()
+   For state.TState = Each TState
+      If state\mode = 1 Then CloseFile(state\file)
+   Next
+   Delete Each TState
+End Function
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LEXICAL FUNCTIONS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; GetChar
+;
+; Read a character from the current file into the state
+;
+Function GetChar(state.TState)
+   If state\ch$ = Chr$(LF) Then state\lineNum = state\LineNum + 1 : state\ch_pos = 0
+
+   If state\mode = 1 Then
+      If Eof(state\file) Then state\ch$ = "" : Return
+      state\ch$ = Chr$(ReadByte(state\file))	
+   Else
+      state\ch_pos = state\ch_pos + 1
+      state\ch$ = Mid$(state\content$,state\ch_pos,1)
+   EndIf
+;morel
+End Function
+
+; SkipSpace
+;
+; Skip white space
+;
+Function SkipSpace(state.TState)
+	While Instr(WHITE_SPACE$, state\ch$) &lt;&gt; 0
+		GetChar(state)
+		If state\ch$ = "" Return
+	Wend
+End Function
+
+; GetFollowing
+;
+; Generic token reader, reads while characters are
+; those in pat.  Places token in state.
+;
+Function GetFollowing(state.TState, pat$)
+	token$ = state\ch$
+	GetChar(state)
+	While Instr(pat$, state\ch$) &lt;&gt; 0
+		If state\ch$ = "" Exit
+		token$ = token$ + state\ch$
+		GetChar(state)
+	Wend
+	state\token$ = token$
+End Function
+
+; GetDecNumber
+;
+; eg. 1 or 1.2
+Function GetDecNumber$(state.TState)
+	GetFollowing(state, DIGITS$ + ".")
+	state\tokenType = TOKEN_DEC_NUMBER
+End Function
+
+; GetBinNumber
+;
+; eg. %1100
+Function GetBinNumber$(state.TState)
+	GetFollowing(state, BINDIGITS$)
+	state\tokenType = TOKEN_BIN_NUMBER
+End Function
+
+; GetHexNumber
+;
+; eg. $abC1
+Function GetHexNumber$(state.TState)
+	GetFollowing(state, HEXDIGITS$)
+	If state\token$ = "$"
+		state\tokenType = TOKEN_OPERATOR
+	Else
+		state\tokenType = TOKEN_HEX_NUMBER
+	EndIf
+End Function
+
+; GetEOL
+;
+; Get end of line
+Function GetEOL(state.TState)
+	state\token$ = state\ch$
+	GetChar(state)
+	state\tokenType = TOKEN_EOL
+End Function
+
+; GetWord
+;
+; eg. myVar_2 or WaitKey
+Function GetWord(state.TState)
+	GetFollowing(state, ALPHANUM$ + "_")
+	If state\token$ = "Or" Or state\token$ = "And" Or state\token$ = "Xor" Then
+		state\tokenType = TOKEN_OPERATOR
+	Else
+		state\tokenType = TOKEN_WORD
+	EndIf
+End Function
+
+Function GetOperator(state.TState)
+	t$ = state\ch$
+	GetChar(state)
+
+	r$ = t$
+	
+	Select t$
+	Case "&gt;"
+		t$ = state\ch$
+		Select t$ 
+		Case "="
+			r$ = "&gt;="
+			GetChar(state)
+		Case "&lt;"
+			r$ = "&gt;&lt;"
+			GetChar(state)
+		Default
+			r$ = "&gt;"
+		End Select
+	Case "&lt;"
+		t$ = state\ch$
+		Select t$
+		Case "="
+			r$ = "&lt;="
+			GetChar(state)
+		Case "&gt;"
+			r$ = "&lt;&gt;"
+			GetChar(state)
+		Default
+			r$ = "&lt;"
+		End Select
+	Case "="
+		t$ = state\ch$
+		Select t$
+		Case "&gt;"
+			r$ = "=&gt;"
+			GetChar(state)
+		Case "&lt;"
+			r$ = "=&lt;"
+			GetChar(state)
+		Default
+			r$ = "="
+		End Select
+	End Select
+		
+	state\token$ = r$
+	state\tokenType = TOKEN_OPERATOR
+End Function
+
+Function GetComment(state.TState)
+   token$ = state\ch$
+   GetChar(state)
+   While state\ch$ &lt;&gt; Chr$(LF)
+      If state\ch$ = "" Exit
+      If state\ch$ &lt;&gt; Chr$(CR)
+         token$ = token$ + state\ch$
+      EndIf
+      GetChar(state)
+   Wend
+   state\token$ = token$
+   state\tokenType = TOKEN_COMMENT
+End Function
+
+Function GetString(state.TState)
+   state\token$ = ""
+   GetChar(state)
+   While state\ch$ &lt;&gt; QUOTE$ And state\ch$ &lt;&gt; ""
+      state\token$ = state\token$ + state\ch$
+      GetChar(state)
+   Wend
+   If state\ch$ &lt;&gt; ""
+      GetChar(state)
+   EndIf
+   state\tokenType = TOKEN_STRING
+End Function
+
+Function GetUnrecognized(state.TState)
+   state\token$ = state\ch$
+   state\tokenType = TOKEN_UNKNOWN
+   GetChar(state)
+End Function
+
+
+; GetToken
+;
+; Use first character to determine type of token and then
+; read appropriate token using the corresponding Get function
+Function GetToken%(state.TState)
+   SkipSpace(state)
+   ch$ = state\ch$
+   If ch$ = "" Then
+      state\token$ = ""
+      state\tokenType = TOKEN_EOF
+      Return 1
+   EndIf
+   If Instr(DIGITS$, ch$) &lt;&gt; 0 Then
+      GetDecNumber$(state)
+   ElseIf Instr(ALPHA$, ch$) &lt;&gt; 0 Then
+      GetWord(state)
+   ElseIf ch$ = ";" Then
+      GetComment(state)
+   ElseIf ch$ = QUOTE$ Then
+      GetString(state)
+   ElseIf ch$ = "%" Then
+      GetBinNumber(state)
+   ElseIf ch$ = "$" Then
+      GetHexNumber(state)
+   ElseIf Instr(DELIM$, ch$) &lt;&gt; 0 Then
+      GetOperator(state)
+   ElseIf ch$ = Chr$(LF)
+      GetEOL(state)
+   Else
+      GetUnrecognized(state)
+   EndIf
+   Return 1
+End Function</textarea><br><br>TEST:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Graphics 1024,768,32,2
+Include "func_tokenizer.bb"
+
+mode = Input$("type 1 to read from file, 2 to enter your own test: ")
+inFile$  = Input$("Input file: ")
+While inFile$ &lt;&gt;""
+   Print ""
+   Print "Parsing " + inFile$
+
+   ok = OpenState(inFile$, mode)
+   state.TState = Last TState
+    While ok
+      Color 0,255,0
+      Select state\tokenType
+      Case TOKEN_WORD       Write "W" : Color 0,255,255 : Write state\token$
+      Case TOKEN_OPERATOR   Write "O" : Color 0,255,255 : Write state\token$
+      Case TOKEN_COMMENT    Write "C" : Color 0,255,255 : Write state\token$
+      Case TOKEN_DEC_NUMBER Write "D" : Color 0,255,255 : Write state\token$
+      Case TOKEN_HEX_NUMBER Write "H" : Color 0,255,255 : Write state\token$
+      Case TOKEN_BIN_NUMBER Write "B" : Color 0,255,255 : Write state\token$
+      Case TOKEN_STRING     Write "S" : Color 255,255,255 : Write state\token$
+      Case TOKEN_EOL        Color 255,255,0 : Write "EOL" : Print ""
+      Case TOKEN_EOF        Color 255,0,255 : Write "EOF" : Print "" : ok = 0
+      Case TOKEN_UNKNOWN    Color 255,0,0 : Write "U"
+      End Select
+      If ok Then ok = GetToken(state)
+      If KeyHit(1) Then ok = 0
+   Wend
+   CloseState()
+   Color 255,255,255
+   inFile$  = Input$("Input file: ")
+Wend
+End
+</textarea> <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

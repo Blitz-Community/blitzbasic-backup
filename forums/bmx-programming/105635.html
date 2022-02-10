@@ -1,0 +1,268 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Regions / RAII / deterministic deallocation</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Regions / RAII / deterministic deallocation</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Regions / RAII / deterministic deallocation</a><br><br>
+<a name="1289717"></a>
+
+<a name="1289718"></a>
+
+<a name="1289719"></a>
+
+<a name="1289726"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Eons ago, <a href="/posts.php?topic=105049#1277551" target="_blank">in the bounties thread</a>, one of the issues that came up was that not everyone is entirely happy with BlitzMax's GC, or the characteristics of GC in general.<br><br>Now, the solution is obviously <i>not</i> to manually manage memory, because that's a fool's game. The solution is to provide tighter options for object management. Here is one possible solution that implements <i>region-based memory management</i>:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+' Region-based memory management
+' Exception-safe memory pools providing deterministic finalization/RAII for objects
+
+SuperStrict
+NoDebug
+
+Function Region(key:Object = Null)
+	EnterRegion(key)
+	Local ex:Byte Ptr = _bbExEnter(bbExEnter())
+	If ex
+		bbExThrow(CleanupRegionCatch(ex))
+	EndIf
+End Function
+
+Function EndRegion()
+	If RStack
+		bbExLeave()
+		CleanupRegionNormal()
+	Else
+		EndRegionError()
+	EndIf
+End Function
+
+Function CurrentRegion:Object()
+	Return RStack.key
+End Function
+
+Function PlaceInRegion(o:Object, region:Object = Null)
+	Local ls:RegionList = New RegionList
+	ls.obj = o
+	Local stk:RegionStack = RStack
+	While region And stk And region &lt;&gt; stk.key
+		stk = stk.prev
+	Wend
+	If stk = Null Then RuntimeError "attempted to place '" + o.ToString() + "' into nonexistent region '" + region.ToString() + "'"
+	ls.nx = stk.list ; stk.list = ls
+End Function
+
+Function RemoveFromRegion(o:Object, region:Object = Null)
+	If region Then RemoveFromKnownRegion(o, region) Else RemoveFromUnknownRegion(o)
+End Function
+
+Type TRegional Abstract { Regional }
+	Method New()
+		PlaceInRegion(Self)
+	End Method
+End Type
+
+
+Private
+
+Extern "C"
+	Function bbExEnter:Byte Ptr()
+	Function _bbExEnter:Byte Ptr(x:Byte Ptr)
+	Function bbExThrow(x:Byte Ptr)
+	Function bbExLeave()
+End Extern
+
+Type RegionStack Final
+	Field prev:RegionStack, list:RegionList
+	Field key:Object
+End Type
+Type RegionList Final
+	Field obj:Object, nx:RegionList
+End Type
+Global RStack:RegionStack
+
+Function EnterRegion(key:Object)
+	Local top:RegionStack = New RegionStack
+	top.prev = RStack
+	If key Then top.key = key Else top.key = New Byte[1]  'any unique identity
+	RStack = top
+End Function
+
+Function CleanupRegionCatch:Byte Ptr(ex:Byte Ptr)
+	CleanupRegionNormal()
+	Return ex  'rethrow the exception
+End Function
+
+Global NullVTable:Byte Ptr[] = InitNullVTable()  'on program start
+
+Function CleanupRegionNormal()
+	Local pop:RegionStack = RStack
+	RStack = pop.prev  'do first in case a destructor throws
+	Local ls:RegionList = pop.list
+	While ls
+		Local obj:Object = ls.obj, ob:Byte Ptr Ptr = Byte Ptr Ptr Ptr(Varptr obj)[0]
+		If obj
+			Local vtbl:Byte Ptr Ptr = Byte Ptr Ptr Ptr(ob)[0]
+			Local finalize(o:Object) = vtbl[5]  'get Delete out of the vtable
+			finalize(obj)
+			ob[0] = Byte Ptr(NullVTable)  'replace the vtable with a dead-object one, changing the object's runtime class to dead
+		EndIf
+		Local pv:RegionList = ls
+		ls = ls.nx ; pv.nx = Null
+	Wend
+End Function
+
+Type DeadObject  'use this empty type as a template for the class to replace for dead objects
+End Type
+
+Function InitNullVTable:Byte Ptr[]()
+	Const NVT_MAX:Int = 1024  'probably enough methods
+	Local nvt:Byte Ptr[NVT_MAX], deadObj:DeadObject = New DeadObject
+	Local do:Byte Ptr = Byte Ptr Ptr(Varptr deadObj)[0]
+	Local dead:Byte Ptr Ptr = Byte Ptr Ptr Ptr(do)[0]  'lol
+	
+	nvt[0] = dead[0]  'super
+	nvt[1] = dead[1]  '"free"
+	nvt[2] = dead[2]  'debug scope
+	nvt[3] = dead[3]  'instance size
+	nvt[4] = dead[4]  'ctor (does nothing)
+	nvt[5] = dead[5]  'dtor (does nothing)
+	For Local f:Int = 6 Until NVT_MAX
+		nvt[f] = RaiseDeadObjectException  'all methods are now runtime errors
+	Next
+	Return nvt
+End Function
+
+Function RaiseDeadObjectException(o:Object)
+	RuntimeError "attempted to access the destroyed region-allocated object 0x" + Hex(Int(Byte Ptr(o)))
+End Function
+
+Function EndRegionError()
+	RuntimeError "EndRegion without matching Region"
+End Function
+
+Function RemoveFromKnownRegion(o:Object, key:Object)
+	Local stk:RegionStack = RStack
+	While stk And stk.key &lt;&gt; key
+		stk = stk.prev
+	Wend
+	If stk = Null Then RuntimeError "attempted to remove '" + o.ToString() + "' from nonexistent region '" + key.ToString() + "'"
+	RemoveObject(o, stk)
+End Function
+
+Function RemoveFromUnknownRegion(o:Object)
+	Local stk:RegionStack = RStack
+	While stk
+		If RemoveObject(o, stk) Then Return
+		stk = stk.prev
+	Wend
+End Function
+
+Function RemoveObject:Int(o:Object, stk:RegionStack)
+	Local ls:RegionList = stk.list
+	While ls
+		If ls.obj = o Then ls.obj = Null ; Return True
+		ls = ls.nx
+	Wend
+	Return False
+End Function
+
+Public
+
+</textarea><br><br>This is designed for BRL's BlitzMax. Although (unlike some of my extensions) it doesn't involve any hand-crafted assembly, it does rely on the code generation being very predictable - so don't necessarily expect this to work out-of-the-box with NG (I'll leave that to Brucey and Ron), and don't change the code above without an understanding of what the effects on the generated assembly would be. Do not under any circumstances remove the NoDebug declaration. Not really recommended for threaded mode (there's a global, non-thread-safe private stack in the background), although it will work if you're careful or keep it on the main thread.<br><br><b>What does it do?</b> It provides two new "keywords", Region and EndRegion, which demarcate a block within which objects are allocated into a pool. At the end of this bock of code, the objects in the pool are destroyed and rendered unusable.<br><br><b>Why is this an improvement?</b> The objects are destroyed <i>at</i> the end of the region block. Not sometime afterwards, when (or if) the GC feels like it. <i>At</i> the end. The region block is also exception-aware, so you can't skip object destruction by trying to jump out from the middle of the block - exceptions are caught at the end, objects destroyed, and then the exception is allowed to propagate (conveniently it also does this without messing up your view of the error in Debug mode, unlike an explicit Try block). So this is supposed to provide reliable as well as deterministic destruction, much like RAII from C++.<br><br>After the block is closed with EndRegion, any objects allocated into that pool will have been destroyed. Although their memory hasn't actually been freed, attempting to call (non-Final - sorry, can't work magic) methods will result in a runtime error slapping your wrist for touching a "dead" object - all methods are disabled, and the object will <i>not</i> be double-freed when the GC gets round to reclaiming the underlying memory block.<br><br>Be careful not to interleave Region/EndRegion with "real" BlitzMax scope keywords like For/Next, or especially Try/Catch - because they're only functions masquerading as keywords, the compiler won't prevent this, but your code <i>will</i> break.<br><br><br>Some helpers are provided:<br><br>- TRegional is an abstract base class that automatically puts instances in the current region on New(). Extend this class so you don't have to bother with PlaceInRegion.<br>- `Region` itself can optionally take an object parameter as a key, with which to identify the region later (if none is provided, a new one will be generated). You can get the identity key of the current deepest region - the one objects will be allocated into by default - with CurrentRegion.<br>- PlaceInRegion puts an object in a region so that it will be destroyed when the region ends. If no key is provided, it puts the object in the current (top / most deeply nested) region. Do not place an object into any region(s) more than once!<br>- RemoveFromRegion removes an object from a region and disables destruction. If no key is provided, it will seek down the region stack until it finds the object. This function is likely to be very slow.<br><br><br>Some examples:<br><br>(shared example type)<br><pre class=code>Import "regions.bmx"
+SuperStrict
+
+Type A Extends TRegional
+	Global ct:Int = 0
+	Field i:Int
+	Method New()
+		i = ct ; ct :+ 1
+	End Method
+	Method Delete()
+		Print "deleting A instance " + i
+	End Method
+	Method Hello()
+		Print "Hello from " + i
+	End Method
+End Type</pre><br><br>Simple deallocation on end of scope:<br><pre class=code>Print "before region..."
+Region
+	Local b:A = New A, c:A = New A, d:A = New A
+EndRegion
+Print "...after region"</pre><br><br>Safely deallocating all objects even when the region is exited by an exception:<br><pre class=code>Print "before region..."
+Try
+	Region
+		Local b:A = New A, c:A = New A, d:A = New A
+		b.Hello() ; c.Hello()
+		Throw "oops"
+		d.Hello()  'never printed
+	EndRegion
+Catch o:Object
+	Print "caught " + o.ToString()
+End Try
+Print "...after region"</pre><br><br>Actually we didn't want to destroy d after all:<br><pre class=code>Print "before region..."
+Region
+	Local b:A = New A, c:A = New A, d:A = New A
+	RemoveFromRegion(d)
+EndRegion
+Print "...after region"</pre><br><br>Trying to use an object after it's been destroyed is a hard error:<br><pre class=code>Local e:A
+Print "before region..."
+Region
+	Local b:A = New A, c:A = New A, d:A = New A
+	e = New A
+	b.Hello() ; c.Hello()
+EndRegion
+Print "...after region"
+e.Hello()  'unhandled runtime error will popup here</pre><br><br>Enjoy! Please report any bugs! <br><br></td></tr></table><br>
+<a name="1289750"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Matty</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sounds like a nice new feature.<br><br>I like garbage collection but i dont like androids implementation of it and i had to code my game in a very unusual manner to trick it into never running during 3d scenes otherwise you get pauses every 10s or so. <br><br></td></tr></table><br>
+<a name="1289785"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Endive</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Very interesting, Yasha.  <br><br>I usually use preallocated pools.  It may be a fool's game but it's predictable to the Nth degree. <br><br></td></tr></table><br>
+<a name="1289798"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Interesting, but a question:<br><br>if you know that an object A will be *surely* destroyed (after EndRegion marker), what's the real difference than do A=NULL and wait the GC does its works?<br>I've read your post (fast deallocation, error checking, etc), but in *real* circumstances is this worth? <br><br></td></tr></table><br>
+<a name="1289808"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> I usually use preallocated pools. <br></div><br><br>What does this have to do with GC'ing? Do you really reset the parameters of existing objects (reusing them "completely") ? How do you tackle dynamic amounts of various children  - are they existing in pools too?<br>This sounds as if it makes things really complex (eg an array of strings - eg coming from dynamically assigned text files).<br><br><br><br>@degac<br>with BMax GC you do not exactly know when the memory is freed / the object is "GCed".<br>Like Yasha described, his code exactly bins the object at the call of "EndRegion".<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1289819"></a>
+
+<a name="1289821"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> f you know that an object A will be *surely* destroyed (after EndRegion marker), what's the real difference than do A=NULL and wait the GC does its works?<br>I've read your post (fast deallocation, error checking, etc), but in *real* circumstances is this worth? <br></div><br><br>Well if you remove Region/EndRegion (and Extends TRegional) from the first example, run it and see: the finalization messages never get printed <i>at all</i>. The GC didn't feel there was any pressure, so it didn't actually run.<br><br>If the finalizer had been intended to release something scarce like a GPU object, your program is now waiting on the BlitzMax GC - which knows nothing about that - to decide based on memory availability whether to run a cleanup, which is a poor heuristic because memory is dirt cheap, and also completely unrelated to availability of the non-memory-resource.<br><br>The above strategy actually doesn't have a whole lot to do with memory (although it will result in memory release happening <i>slightly</i> faster, for various reasons) - it's about running the Delete method and tidying up the internals of an object. A real region system actually provides a different kind of memory allocator, but that's a task for another day and another backend. (Besides, for handling memory itself, GC remains the best strategy overall - alternatively, this will also still work even if you temporarily stop the actual collector from running with GCSuspend.) <br><br></td></tr></table><br>
+<a name="1289832"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Henri</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> F.A.Q.<br><br>Q: "Can't I just use GCCollect ?"<br><br>-Henri <br><br></td></tr></table><br>
+<a name="1289833"></a>
+
+<a name="1289834"></a>
+
+<a name="1289835"></a>
+
+<a name="1289836"></a>
+
+<a name="1289837"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Not if you're like me and completely forget that GCCollect is an available command! In that situation, the above code might be useful!<br><br>Yeah so you can pretty much replicate regions with this:<br><br><pre class=code>Try
+    '...do some stuff
+    GCCollect()
+Catch o:Object
+    GCCollect()
+    Throw o
+End Try</pre><br><br>Still, what I've got above.... IDK, it looks pretty at least? There's got to be <i>something</i> in the fact that it actually completely separates finalization from lifetime, which this little block of code doesn't do. It also still runs when the GC is turned off (although since you can apparently set the GC to mode 2, not sure why you would ever need to do that). Maybe because it doesn't impose a collection on the entire program? <br><br></td></tr></table><br>
+<a name="1289863"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote">  If the finalizer had been intended to release something scarce like a GPU object, your program is now waiting on the BlitzMax GC <br></div><br>Well, you know that you should *never* rely on the finalizer being called on shutdown of your app ;-) <br><br></td></tr></table><br>
+<a name="1289947"></a>
+
+<a name="1289948"></a>
+
+<a name="1289950"></a>
+
+<a name="1289951"></a>
+
+<a name="1289953"></a>
+
+<a name="1289955"></a>
+
+<a name="1289956"></a>
+
+<a name="1289957"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Endive</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> What does this have to do with GC'ing? <br></div><br>It avoids the issue entirely.<br><div class="quote"> Do you really reset the parameters of existing objects (reusing them "completely") ? How do you tackle dynamic amounts of various children - are they existing in pools too?<br>This sounds as if it makes things really complex <br></div><br><br>Preallocated pools or dynamically doubling stacks.  It only gets complicated if you want it to be generic and even then you could probably figure out a way to do it using reflection (notice I said "you could," and not "I could.")<br><br>More and more, I like the ancient property list approach.  Talk about magazine code!<br><br><pre class=code>
+' pseudocode
+type foo
+field x#[1000]
+field y#[1000]
+field vx#[1000]
+field vy#[1000]
+field drawfunc:funcpointer[1000]
+field updatefunc:funcpointer[1000]
+end type
+</pre><br><br>And then a stack full of those, or I should say synchronized stacks for each variable or a single item of each per object and then a stack full of those.<br><br>Is this a flexible approach?  Maybe because it uses composition.  Is it simple?  Hell no, but you encapsulate the complexity inside a simple interface and it's just fine.<br><br>Does it eliminate microhitches and other trouble with the GC?  Yes, not that I think the GC in Blitzmax is particularly bad-- I just like to avoid GCs entirely if I can.  That's really a luddite viewpoint but property lists have come back around in the fullness of time over what, the last 30 years?  So maybe this too, and it has its advantages.<br><br>And yes, I reset all the parameters of existing objects, typically deep-copying one over the other.  You aren't going to do that a billion times per frame but I don't have a billion things dying per frame either.  If that happens, you can flag the items that died and then do a sort of some kind, amortized out over a number of frames to minimize the framerate impact.<br><br>Am I recommending this as an approach?  I don't feel qualified to recommend much of anything.  This is just the way I will sometimes do it.<br><br>Just to make it clear, this is basically avoiding the problem entirely because I don't have the memory management chops to do anything better but I think avoiding the problem is entirely legitimate. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

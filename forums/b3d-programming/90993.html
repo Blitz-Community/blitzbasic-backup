@@ -1,0 +1,318 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Image based collision detection and response</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Image based collision detection and response</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >Image based collision detection and response</a><br><br>
+<a name="1035608"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> *** UPDATED *** NEW VERSION OF CODE<br>CHANGES: improved performance, improved stability but still can crash if to much energy is put into a particle, much improved smoothness but some particles still tend to jump a little, and lastly incorporated multiple particles.<br><br>CHANGES THAT STILL NEED TO BE MADE: particle to particle collision. and eventually constraint based structures for player vehicles etc.<br><br>dunno if anybody has already posted something like this.... but here it is if anybody is interested. free to use for whatever. <br><pre class=code>
+;Image based collision detection and response by dmc
+Global width=1024,height=768
+Graphics width,height,32,2
+SetBuffer BackBuffer()
+
+Global world=CreateImage(width,height)
+Global fps#,fpst#,fpsc# ;FPS variables
+Global sim_delta#=.12	;sim delta time
+Global worldbank=CreateBank(width * height)
+
+Type p						;type to define a particle
+	Field xpos#[2] 			;0=prior position, 1=last calculated position, 2=next position. 
+	Field ypos#[2]			;0=prior position, 1=last calculated position, 2=next position.
+	Field xaccel#			;acceleration for particle x vector
+	Field yaccel#			;acceleration for particle y vector
+	Field size				;size of particle (radius in pixels)
+	Field vx#				;vector x
+	Field vy#				;vector y
+	Field tan_vx#			;ground scan tangent for x vector
+	Field tan_vy#			;ground scan tangent for y vector
+	Field nor_vx#			;ground scan normal for x vector
+	Field nor_vy#			;ground scan normal for y vector
+	Field player			;identifier for particle image
+	Field scansize			;how large the area scanned is for collision vector calculation
+	Field roll_damp#		;dampening for rolling on surface
+	Field bounce_damp#		;dampening for bounce
+	Field collided			;true if particle is collided
+	Field c[361]			;array to hold pixel locations for scan of the particle				
+End Type
+
+Global p.p
+For count=1 To 300 ; how many marticles to spawn
+	p.p=New p
+	p\xpos[0] = Rnd(50,950)		;x position prior
+	p\xpos[1] = p\xpos[0] 		;x position current
+	p\ypos[0] = 75				;y position prior
+	p\ypos[1] = p\ypos[0] 		;y position current
+	p\size = 15					;MUST ALWAYS BE AN ODD NUMBER! (1,3,5 TO DIMENSION SIZE OF ARRAY C) 
+	p\yaccel= 9.806				;gravity accelerations 	(this is the only player input for a particle)
+	p\xaccel= 0					;any other acceleration (this is the only player input for a particle)
+	p\scansize=2				;how large of an area to scan outside the particles size in pixels. zero is a valid number.
+	p\roll_damp=.99				;dampening for rolling on surface
+	p\bounce_damp=Rnd(.35,.75)	;dampening for bounce
+	makeball(p.p,200,Rnd(0,128),Rnd(0,64))
+	makecollision(p.p)
+Next
+
+Function drawworld()
+	SetBuffer FrontBuffer()
+	Color 0,0,255
+	Rect 0,0,width,height,1
+	Color 0,0,0
+	Rect 20,20,width-40,height-40,1
+	Color 0,255,0
+	Text 250,5,"DRAW SOME ROLLING HILLS ON THE GROUND WITH THE MOUSE THEN PRESS SPACE"
+	MoveMouse 0,500
+	Color 0,0,255
+	While Not KeyHit(57)
+	Oval MouseX(),MouseY(),50,50,1
+	Wend
+	CopyRect 0,0,width,height,0,0,FrontBuffer(),ImageBuffer(world)
+	SetBuffer BackBuffer()
+	Color 255,255,255
+End Function
+
+
+Function makeworldbank(imgtmp,w,h) ;scan bitmap to bank
+	SetBuffer ImageBuffer(imgtmp)
+	LockBuffer
+	For x=0 To w - 1
+		For y=0 To h - 1
+			temprgb=ReadPixelFast(x, y,ImageBuffer(imgtmp))
+			If temprgb=-16777216 Then
+				PokeByte worldbank, offset, 0
+			Else
+				PokeByte worldbank, offset, 255
+			End If
+			offset=offset+1
+		Next
+	Next
+	UnlockBuffer
+	SetBuffer BackBuffer()
+End Function
+
+Function makeball(obj.p,red,green,blue) ; simple ball to represetn particle
+	obj\player=CreateImage(obj\size,obj\size)
+	SetBuffer ImageBuffer(obj\player)
+	Color red, green, blue
+	Oval 0,0,obj\size,obj\size,1
+	SetBuffer BackBuffer()
+	Color 255,255,255
+End Function
+
+Function makecollision(obj.p) ; make collision envelope based on size and scansize
+	inner=1
+        outer=2
+        blank=0
+        tempcount=0
+	imgtmp=CreateImage(obj\size+(obj\scansize*2),obj\size+(obj\scansize*2))
+	SetBuffer ImageBuffer(imgtmp)
+	Color 0, 255, 0
+	Oval 0,0,obj\size+(obj\scansize*2),obj\size+(obj\scansize*2),1
+	Color 255,0,0
+	Oval obj\scansize,obj\scansize,obj\size,obj\size,1
+	LockBuffer
+	For x= 0 To obj\size+(obj\scansize*2)-1
+		For y= 0 To obj\size+(obj\scansize*2)-1
+			temprgb=ReadPixelFast(x, y)
+			If temprgb=-16777216 Then obj\c[tempcount]=blank 
+			If temprgb=-65536 Then obj\c[tempcount]=inner
+			If temprgb=-16711936 Then obj\c[tempcount]=outer
+			tempcount=tempcount+1
+		Next
+	Next
+	UnlockBuffer
+	SetBuffer BackBuffer()
+	Color 255,255,255
+End Function
+
+Function uncollide_detect(obj.p) ;final collide check. back out particle by small increments
+	inner=1
+        outer=2
+        blank=0
+        tempcount=0 
+	fromx=obj\xpos[2]-((obj\size-1) /2)-obj\scansize
+	tox=obj\xpos[2]+(obj\size-1)-((obj\size-1) /2)+obj\scansize
+	fromy=obj\ypos[2]-((obj\size-1) /2)-obj\scansize
+	toy=obj\ypos[2]+(obj\size-1)-((obj\size-1) /2)+obj\scansize
+	obj\collided = False
+	For x=fromx To tox
+		For y=fromy To toy
+		If obj\c[tempcount] = inner Then
+			temprgb=PeekByte (worldbank,(x*height)+y) 
+			If temprgb = 255 Then obj\collided=True
+		End If
+		tempcount=tempcount+1
+		Next
+	Next
+End Function
+
+Function groundscan(obj.p) ;scans world pixels and generates normal and tangent vectors
+	obj\collided=False
+	Local inner=1,outer=2,blank=0,tempcount=0
+	fromx=obj\xpos[2]-((obj\size-1) /2)-obj\scansize
+	tox=obj\xpos[2]+(obj\size-1)-((obj\size-1) /2)+obj\scansize
+	fromy=obj\ypos[2]-((obj\size-1) /2)-obj\scansize
+	toy=obj\ypos[2]+(obj\size-1)-((obj\size-1) /2)+obj\scansize
+	For x= fromx To tox
+		For y= fromy To toy 
+			If obj\c[tempcount] = inner Or obj\c[tempcount] =outer Then
+				temprgb=PeekByte (worldbank,(x*height)+y) 
+				tempx=Int(obj\xpos[2])
+				tempy=Int(obj\ypos[2])
+				If temprgb=0 Then 
+					;scan returns blank
+					tan_y1=tan_y1 + x - tempx;tangent
+					tan_x1=tan_x1 - y + tempy;tangent
+				
+					nor_y1=nor_y1 + y - tempy;normal
+					nor_x1=nor_x1 + x - tempx;normal
+				Else
+					;scan returns filled
+					If obj\c[tempcount] = inner And temprgb =255 Then obj\collided=True
+					tan_y2=tan_y2 + x - tempx;tangent
+					tan_x2=tan_x2 - y + tempy;tangent
+		
+					nor_y2=nor_y2 + y - tempy;normal
+					nor_x2=nor_x2 + x - tempx;normal
+				End If
+			End If
+			tempcount=tempcount+1
+		Next
+	Next
+	
+	If obj\collided=True Then
+		obj\tan_vx=tan_x1-tan_x2								; sets tangent vector for ground
+		obj\tan_vy=tan_y1-tan_y2								; sets tangent vector for ground
+		mag#=Sqr(obj\tan_vx * obj\tan_vx + obj\tan_vy * obj\tan_vy)	; sets tangent magnitutde for ground
+		obj\tan_vx = obj\tan_vx / mag							; normalize tangent vector for ground
+		obj\tan_vy = obj\tan_vy / mag							; normalize tangent vector for ground
+	
+		obj\nor_vx=nor_x1-nor_x2								; sets normal vector for ground
+		obj\nor_vy=nor_y1-nor_y2								; sets normal vector for ground
+		mag#=Sqr(obj\nor_vx * obj\nor_vx + obj\nor_vy * obj\nor_vy)	; sets normal magnitude for ground
+		obj\nor_vx = obj\nor_vx / mag							; normalize normal vector for ground
+		obj\nor_vy = obj\nor_vy / mag							; normalize normal vector for ground
+	End If
+End Function
+
+Function do_collide(obj.p,xaccel#,yaccel#,image)
+;**** begin collision response ************
+	inner=1
+        outer=2
+        blank=0
+	groundscan(obj.p) ;ground scan, normal/tangent stuff
+	If obj\collided Then
+		obj\vx=obj\xpos[2]-obj\xpos[1] ; sets vector for particle
+		obj\vy=obj\ypos[2]-obj\ypos[1] ; sets vector for particle
+		
+		dotprod#=obj\vx * obj\tan_vx + obj\vy * obj\tan_vy ; collision dot product between ground and particle
+	
+		proj_x# = dotprod * obj\tan_vx ; project tangent particle vector component onto ground vector
+		proj_y# = dotprod * obj\tan_vy ; project tangent particle vector component onto ground vector
+
+		tan_bounce_vx# = obj\xpos[2] + (proj_x * obj\roll_damp); calculate bounce tangent x component
+		tan_bounce_vy# = obj\ypos[2] + (proj_y * obj\roll_damp); calculate bounce tangent y component
+		nor_bounce_vx# = ((obj\xpos[2] - proj_x) - obj\xpos[1]) * obj\bounce_damp ; calculate bounce normal x component
+		nor_bounce_vy# = ((obj\ypos[2] - proj_y) - obj\ypos[1]) * obj\bounce_damp ; calculate bounce normal y component
+	
+		bounce_output_vx# = (obj\xpos[2] - nor_bounce_vx) - (obj\xpos[2] - tan_bounce_vx) ; calculate bounce result vector
+		bounce_output_vy# = (obj\ypos[2] - nor_bounce_vy) - (obj\ypos[2] - tan_bounce_vy) ; calculate bounce result vector
+
+		obj\xpos[2] = bounce_output_vx - (obj\xpos[1] - obj\xpos[0]) + ((obj\xaccel*0) + tempxaccel) * (sim_delta * sim_delta);move particle after bounce
+		obj\ypos[2] = bounce_output_vy - (obj\ypos[1] - obj\ypos[0]) + ((obj\yaccel*0) + tempyaccel) * (sim_delta * sim_delta);move particle after bounce
+		
+		groundscan(obj.p) ;recheck for new collision after move
+		While obj\collided
+			uncollide_detect(obj.p)
+			obj\xpos[2]=obj\xpos[2]+(obj\nor_vx/4);slowly back out particle
+			obj\ypos[2]=obj\ypos[2]+(obj\nor_vy/4);slowly back out particle
+		Wend
+	End If ;end collision repsonse
+
+	;update position array to final position
+	obj\xpos[0]=obj\xpos[1]
+	obj\xpos[1]=obj\xpos[2]
+	obj\ypos[0]=obj\ypos[1]
+	obj\ypos[1]=obj\ypos[2]
+End Function
+
+;******* main sim loop ********************************
+Function do_sim(obj.p,xaccel#,yaccel#)
+	obj\xpos[2] = obj\xpos[1] + (obj\xpos[1] - obj\xpos[0]) + (obj\xaccel + xaccel) * (sim_delta * sim_delta) ;calculate new x position for particle
+	obj\ypos[2] = obj\ypos[1] + (obj\ypos[1] - obj\ypos[0]) + (obj\yaccel + yaccel) * (sim_delta * sim_delta) ;calculate new y position for particle
+End Function
+
+;************* fps function ******************
+Global new_time=MilliSecs(), old_time=MilliSecs()
+Function get_fps(new_time)
+	fpst = fpst + (new_time - old_time) * 0.001
+	fpsc=fpsc+1
+	If fpst &gt; 1 Then 
+		fpst=0
+		fps=fpsc
+		fpsc=0
+	End If
+	old_time = new_time
+End Function 
+
+
+;********* main loop ************************
+
+get_fps(MilliSecs())
+drawworld()
+makeworldbank(world,width,height)
+
+While Not KeyHit(1) ;escape to exit
+	timestart=MilliSecs()
+	get_fps(MilliSecs())
+	
+	tempxaccel=0
+	tempyaccel=0
+	If KeyDown(203) Then tempxaccel=-10 ;arrow keys to control all particles
+	If KeyDown(205) Then tempxaccel=10 
+	If KeyDown(200) Then tempyaccel=-15
+	If KeyDown(208) Then tempyaccel=15 
+		
+	For p.p = Each p
+		do_sim(p.p,tempxaccel,tempyaccel)
+		do_collide(p.p,tempxaccel,tempyaccel,world)
+	Next
+	
+	Cls
+	DrawImage world,0,0
+	
+	For p.p =Each p
+		DrawImage p\player,p\xpos[2]-(p\size / 2),p\ypos[2]-(p\size / 2)
+	Next
+	timeend=MilliSecs()
+	
+	tempcount=tempcount+1
+	calctime#=calctime+Abs(timestart-timeend)*.001
+	If tempcount=550 Then 
+		avgtime#=calctime
+		tempcount=0
+		calctime=0
+	End If
+	
+	Text 40,40,"FPS: " + fps
+	Text 40,60,"Arrow keys for control"
+	Text 40,80,"Milliseconds Elapsed Per Frame: " + avgtime
+	Flip 1
+Wend
+
+End</pre> <br><br></td></tr></table><br>
+<a name="1035751"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for sharing. <br><br></td></tr></table><br>
+<a name="1037506"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Adam Novagen</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yeah, this is cool. I'll warn you of something though; Blitz's arrays aren't the fastest things in the world. I'm not complaining, just stating a fact. You're probably aware that 16(and two thirds, technically)ms is the longest time a single frame can take for your program to run at 60FPS. Well, writing to each element of, say, a 320x240 array can take well over 20ms on average. <br><br></td></tr></table><br>
+<a name="1037507"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> 'Been a while since you last posted, Adam :) <br><br></td></tr></table><br>
+<a name="1037519"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Adam Novagen</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> 'Been a while since you last posted, Adam :) <br></div><br><br>Yes it has, and thanks for the greet; I'm amazed anyone remembers me around here. XD As long as I stay clear of the off-topic forums and stick to coding, there don't seem to be too many tards and trolls about right now, so I may stick around for a while again. :D <br><br></td></tr></table><br>
+<a name="1037824"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> yeah this code i posted is proof of concept. i continue to work on it and have made some big improvements in stability and speed.<br><br>best run so far (on my machine) is 1500 particles at 60fps.<br><br>next step is to get the particles to collide with each other. thats going to take a while. <br><br></td></tr></table><br>
+<a name="1038299"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> updated july 23rd with new code. see orignal post description. <br><br></td></tr></table><br>
+<a name="1038341"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Serpent</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> MAV - Blitz Array out of bounds.<br><br>Screenshot (from debug mode):<br><a href="http://a.imagehost.org/view/0879/Untitled_27" target="_blank"><img src="http://a.imagehost.org/t/0879/Untitled_27.jpg"></a><br><br>EDIT:  after changing the size of the p.c array to 10000 I had no problems :P<br>however, setting the size to 1000 wasn't enough. <br><br></td></tr></table><br>
+<a name="1038515"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> thanks for the pic serpent. bummer it doesnt do it on my end. i think it might be declaring tempcount as local and assigned to zero. i think ill just delete the local declaration and hopefully it fixes the issue.<br><br>edit added: i just updated the code. see if it still bombs on ya serpent if ya happen to see this post. <br><br></td></tr></table><br>
+<a name="1038528"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Serpent</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Problem's now fixed.  Everything seems to be working nicely. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

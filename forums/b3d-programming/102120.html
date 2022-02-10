@@ -1,0 +1,681 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Faster alignment of billboards</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Faster alignment of billboards</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >Faster alignment of billboards</a><br><br>
+<a name="1217294"></a>
+
+<a name="1217296"></a>
+
+<a name="1217297"></a>
+
+<a name="1217299"></a>
+
+<a name="1217301"></a>
+
+<a name="1217303"></a>
+
+<a name="1217307"></a>
+
+<a name="1217308"></a>
+
+<a name="1217309"></a>
+
+<a name="1298597"></a>
+
+<a name="1298599"></a>
+
+<a name="1298600"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> EDIT 03/06/2016 --- Optimised version at the bottom of the thread.<br><br><br>Hello.<br>I had an idea for a method of aligning billboards with the camera plane that should be slightly faster than the usual approach of orienting a pivot and using TFormVector.<br>This should help making single-surface particle systems faster.<br><br>If you can try it out, please share the difference in performance of the two methods. Use the A,W,S,D keys to strafe the camera, the mouse to look and the space key to toggle the methods used for aligning the billboards.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">;Example of a fast alignment of billboards with the camera plane.
+;------------------------------------------------------
+
+;The amount of single-surface quadricular billboards on the scene.
+
+Const BILLBOARD_AMOUNT% = 5000
+
+;How many times to repeat the alignment of the billboards (only used to better show the performance).
+
+Const STRESS_TEST% = 3 ;Default value is 1.
+
+Const LARGE_NUMBER% = 10000000
+Const FX_FORCEALPHA%	= 32
+Const FX_FULLBRIGHT%	= 1
+Const FX_VERTEXCOLOUR%	= 2
+Const BILLBOARD_ROTATION_SPEED# = 1.0
+
+
+Type TBillboard
+
+	Field posX#, posY#, posZ#
+	Field roll#
+	Field scaleX#
+	Field scaleY#
+	
+	Field r#, g#, b#, alpha#
+	
+	Field surf%
+	Field vID%[3]
+
+End Type
+
+
+AppTitle( "Fast Vector-Based Billboard Alignment Test" )
+Graphics3D( 800, 600, 0, 2 )
+SetBuffer BackBuffer()
+
+Local camera	=	CreateCamera()
+					MoveEntity( camera, 0, 5, 0 )
+
+;Single surface elements needed:
+
+;- A mesh.
+
+Local billboardMesh		=	CreateMesh()
+							MeshCullBox( billboardMesh, -LARGE_NUMBER, -LARGE_NUMBER, -LARGE_NUMBER, 2 * LARGE_NUMBER, 2 * LARGE_NUMBER, 2 * LARGE_NUMBER ) 
+							EntityFX( billboardMesh, FX_FULLBRIGHT + FX_VERTEXCOLOUR + FX_FORCEALPHA )
+
+;- A surface to hold the billboards (there can be more than one).
+
+Local billboardSurface	=	CreateSurface( billboardMesh )
+
+;- A simple pivot without modifications.
+
+Local billboardPivot	=	CreatePivot()
+
+
+;Populate the scene with billboards.
+
+If BILLBOARD_AMOUNT * 4 &gt; 65534 Then RuntimeError "Too many vertices on a single surface."
+ 
+Const MIN_RADIUS# = 30
+Const MAX_RADIUS# = 200
+Local angle
+
+For n = 1 To BILLBOARD_AMOUNT
+
+	;Create random billboards around the scene.
+	;The billboards are added to the surface specified by the programmer.
+	
+	angle = Rand( 0, 359 )
+	
+	addBillboard( billboardSurface, Cos( angle ) * Rand( MIN_RADIUS, MAX_RADIUS ), Rand( -5, 15 ), Sin( angle ) * Rand( MIN_RADIUS, MAX_RADIUS ), Rand( 0, 359 ), Rnd( 0.25, 2.0 ), Rnd( 0.25, 2.0 ) )
+
+Next
+
+
+MoveMouse( 400, 300 )
+HidePointer()
+
+Local fastMethod = 1
+Local fpsTimer = CreateTimer( 30 )
+Local deltaCount = 0
+Local lastDelta
+Local delta
+
+While Not ( KeyHit( 1 ) Or ( KeyDown( 56 ) + KeyDown( 62 ) ) )
+	
+	WaitTimer( fpsTimer )
+
+	navigation( camera )	
+	
+	If KeyHit( 57 ) Then 
+	
+		delta = lastdelta
+		fastMethod = 1 - fastMethod 
+	
+	EndIf 
+	
+	;During the update cycle, align all the billboards with the camera.
+	
+	;The alignment of the billboards with the camera plane is only needed once per frame.
+	;This is done more than once here to better show the difference in performance.
+	
+	lastDelta = MilliSecs()
+	
+	For redundancy = 1 To STRESS_TEST
+				
+		If fastMethod Then
+			alignBillboards( camera, billboardPivot )
+		Else
+			alignBillboards_tform( camera, billboardPivot )
+		EndIf
+	
+	Next
+	
+	lastDelta = MilliSecs() - lastDelta
+	
+	If Not deltaCount Mod 15 Then delta = lastDelta
+	deltaCount = deltaCount + 1
+		
+	UpdateWorld()
+	RenderWorld()
+	
+	
+	;The smaller the delta time, the faster the method is.
+	
+	If fastMethod Then 
+		Text( 10, 10, "Vector alignment: " + delta + " ms" )
+	Else
+		Text( 10, 10, "TForm alignment: " + delta + " ms" )
+	EndIf 
+	
+	Flip
+
+Wend 
+
+End
+
+
+Function navigation( camera )
+
+	MoveEntity( camera, KeyDown( 32 ) - KeyDown( 30 ), 0, KeyDown( 17 ) - KeyDown( 31 ) )
+
+	Local mY = MouseYSpeed()
+	If Abs( mY + EntityPitch( camera, True ) ) &gt; 88.9 Then mY = 0
+
+	TurnEntity( camera, mY, -MouseXSpeed(), 0 )
+	RotateEntity( camera, EntityPitch( camera, True ), EntityYaw( camera, True ), 0, True )
+	
+	MoveMouse( 400, 300 )
+
+End Function
+
+
+Function addBillboard.TBillboard( surface, x#, y#, z#, roll#, scaleX# = 1.0, scaleY# = 1.0 )
+
+	b.TBillboard	= New TBillboard
+	
+	b\surf	= surface
+	
+	b\posX = x
+	b\posY = y
+	b\posZ = z
+	b\roll = roll
+	b\scaleX = scaleX
+	b\scaleY = scaleY
+	
+	b\r = Rand( 0, 255 ) ; 0 ~ 255.
+	b\g = Rand( 0, 255 ) ; 0 ~ 255. 
+	b\b = Rand( 0, 255 ) ; 0 ~ 255.
+	b\alpha = Rand( 20, 100 ) / 100.0 ; 0.0 ~ 1.0
+	
+	b\vID[0] = AddVertex( surface, -1,  1, 0 ) ;Top left.
+	b\vID[1] = AddVertex( surface,  1,  1, 0 ) ;Top right.
+	b\vID[2] = AddVertex( surface,  1, -1, 0 ) ;Bottom right.
+	b\vID[3] = AddVertex( surface, -1, -1, 0 ) ;Bottom left.
+	
+	AddTriangle( surface, b\vID[0], b\vID[1], b\vID[2] )
+	AddTriangle( surface, b\vID[2], b\vID[3], b\vID[0] )
+	
+	Return b
+
+End Function
+
+
+Function alignBillboards( camera, pivot )
+	
+	;Retrieve the (normalized) 'up' and 'right' vectors of the camera in world space.
+	;This is only needed once instead of per billboard as it is usual with "tform" method.
+	
+	RotateEntity( pivot, EntityPitch( camera, True ), EntityYaw( camera, True ), 0, True )
+	
+	Local camRightX#, camRightY#, camRightZ#
+	TFormNormal( 1, 0, 0, pivot, 0 )
+	camRightX = TFormedX()
+	camRightY = TFormedY()
+	camRightZ = TFormedZ()
+		
+	Local camUpX#, camUpY#, camUpZ#
+	TFormNormal( 0, 1, 0, pivot, 0 )
+	camUpX = TFormedX()
+	camUpY = TFormedY()
+	camUpZ = TFormedZ()
+		
+	Local bCos#, bSin#
+	Local bRightX#, bRightY#, bRightZ#
+	Local bUpX#, bUpY#, bUpZ#
+	
+	;Update the billboard objects.
+	
+	For b.TBillboard = Each TBillboard
+	
+		;1) Update the properties of the billboard.
+				
+		b\roll = b\roll + BILLBOARD_ROTATION_SPEED
+		
+		;b\life, 
+		;b\scale, 
+		;b\alpha etc.
+		
+		;----------------------------------------------------------------------------------------------
+				
+		;2) Update the geometry of the billboard based on the properties and the camera.
+			
+		;Right.
+		
+		bCos = Cos( b\roll ) * b\scaleX
+		bSin = Sin( b\roll ) * b\scaleX
+			
+		bRightX = ( camRightX * bCos ) + ( camUpX * bSin )
+		bRightY = ( camRightY * bCos ) + ( camUpY * bSin )
+		bRightZ = ( camRightZ * bCos ) + ( camUpZ * bSin )
+		
+		;Up.
+		
+		bCos = Cos( b\roll + 90.0 ) * b\scaleY
+		bSin = Sin( b\roll + 90.0 ) * b\scaleY
+		
+		bUpX = ( camRightX * bCos ) + ( camUpX * bSin )
+		bUpY = ( camRightY * bCos ) + ( camUpY * bSin )
+		bUpZ = ( camRightZ * bCos ) + ( camUpZ * bSin )
+			
+		;Position and rotation.
+		
+		VertexCoords( b\surf, b\vID[0], b\posX - bRightX + bUpX, b\posY - bRightY + bUpY, b\posZ - bRightZ + bUpZ ) ;Top left.
+		VertexCoords( b\surf, b\vID[1], b\posX + bRightX + bUpX, b\posY + bRightY + bUpY, b\posZ + bRightZ + bUpZ ) ;Top right.
+		VertexCoords( b\surf, b\vID[2], b\posX + bRightX - bUpX, b\posY + bRightY - bUpY, b\posZ + bRightZ - bUpZ ) ;Bottom right.
+		VertexCoords( b\surf, b\vID[3], b\posX - bRightX - bUpX, b\posY - bRightY - bUpY, b\posZ - bRightZ - bUpZ ) ;Bottom left.
+		
+		;Colour.
+		
+		VertexColor( b\surf, b\vID[0], b\r, b\g, b\b, b\alpha )
+		VertexColor( b\surf, b\vID[1], b\r, b\g, b\b, b\alpha )
+		VertexColor( b\surf, b\vID[2], b\r, b\g, b\b, b\alpha )
+		VertexColor( b\surf, b\vID[3], b\r, b\g, b\b, b\alpha )
+		
+		;Texture.
+		
+		;VertexTexCoords( ... )
+		;VertexTexCoords( ... )
+		;VertexTexCoords( ... )
+		;VertexTexCoords( ... )
+		
+		;Etc.
+		
+	Next
+
+End Function
+
+
+;This function uses the common TFormVector method to align the billboards to the camera plane in the most economical way possible.
+
+Function alignBillboards_tform( camera, pivot )
+		
+	Local camPitch#	= EntityPitch( camera, True )
+	Local camYaw#	= EntityYaw( camera, True )
+	
+	Local bRightX#, bRightY#, bRightZ#
+	Local bUpX#, bUpY#, bUpZ#
+	
+	For b.TBillboard = Each TBillboard
+	
+		b\roll = b\roll + BILLBOARD_ROTATION_SPEED
+	
+		RotateEntity( pivot, camPitch, camYaw, b\roll, True )
+	
+		TFormVector( b\scaleX, 0, 0, pivot, 0 )
+		bRightX = TFormedX()
+		bRightY = TFormedY()
+		bRightZ = TFormedZ()
+		
+		TFormVector( 0, b\scaleY, 0, pivot, 0 )
+		bUpX = TFormedX()
+		bUpY = TFormedY()
+		bUpZ = TFormedZ()
+	
+		;- - - - -	
+		
+		VertexCoords( b\surf, b\vID[0], b\posX - bRightX + bUpX, b\posY - bRightY + bUpY, b\posZ - bRightZ + bUpZ )
+		VertexCoords( b\surf, b\vID[1], b\posX + bRightX + bUpX, b\posY + bRightY + bUpY, b\posZ + bRightZ + bUpZ )
+		VertexCoords( b\surf, b\vID[2], b\posX + bRightX - bUpX, b\posY + bRightY - bUpY, b\posZ + bRightZ - bUpZ )
+		VertexCoords( b\surf, b\vID[3], b\posX - bRightX - bUpX, b\posY - bRightY - bUpY, b\posZ - bRightZ - bUpZ )
+		
+		VertexColor( b\surf, b\vID[0], b\r, b\g, b\b, b\alpha )
+		VertexColor( b\surf, b\vID[1], b\r, b\g, b\b, b\alpha )
+		VertexColor( b\surf, b\vID[2], b\r, b\g, b\b, b\alpha )
+		VertexColor( b\surf, b\vID[3], b\r, b\g, b\b, b\alpha )
+		
+	Next
+
+End Function</textarea> <br><br></td></tr></table><br>
+<a name="1217298"></a>
+
+<a name="1217310"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> If your billboards <i>do not</i> need to have individual rotation values - that is, they are all straight up - the method can be further optimized to this:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">;The following alignment function does not make use of individual 'roll' values per billboard.
+
+Function alignBillboards( camera, pivot )
+	
+	RotateEntity( pivot, EntityPitch( camera, True ), EntityYaw( camera, True ), 0, True )
+	
+	Local camRightX#, camRightY#, camRightZ#
+	TFormNormal( 1, 0, 0, pivot, 0 )
+	camRightX = TFormedX()
+	camRightY = TFormedY()
+	camRightZ = TFormedZ()
+		
+	Local camUpX#, camUpY#, camUpZ#
+	TFormNormal( 0, 1, 0, pivot, 0 )
+	camUpX = TFormedX()
+	camUpY = TFormedY()
+	camUpZ = TFormedZ()
+	
+	Local bRightX#, bRightY#, bRightZ#
+	Local bUpX#, bUpY#, bUpZ#
+	
+	For b.TBillboard = Each TBillboard
+			
+		;Right.
+					
+		bRightX = camRightX * b\scaleX
+		bRightY = camRightY * b\scaleX 
+		bRightZ = camRightZ * b\scaleX 		
+		
+		;Up.
+		
+		bUpX = camUpX * b\scaleY
+		bUpY = camUpY * b\scaleY
+		bUpZ = camUpZ * b\scaleY
+			
+		;Position and rotation.
+		
+		VertexCoords( b\surf, b\vID[0], b\posX - bRightX + bUpX, b\posY - bRightY + bUpY, b\posZ - bRightZ + bUpZ ) ;Top left.
+		VertexCoords( b\surf, b\vID[1], b\posX + bRightX + bUpX, b\posY + bRightY + bUpY, b\posZ + bRightZ + bUpZ ) ;Top right.
+		VertexCoords( b\surf, b\vID[2], b\posX + bRightX - bUpX, b\posY + bRightY - bUpY, b\posZ + bRightZ - bUpZ ) ;Bottom right.
+		VertexCoords( b\surf, b\vID[3], b\posX - bRightX - bUpX, b\posY - bRightY - bUpY, b\posZ - bRightZ - bUpZ ) ;Bottom left.
+		
+		;Colour.
+		
+		VertexColor( b\surf, b\vID[0], b\r, b\g, b\b, b\alpha )
+		VertexColor( b\surf, b\vID[1], b\r, b\g, b\b, b\alpha )
+		VertexColor( b\surf, b\vID[2], b\r, b\g, b\b, b\alpha )
+		VertexColor( b\surf, b\vID[3], b\r, b\g, b\b, b\alpha )
+
+	Next
+
+End Function</textarea> <br><br></td></tr></table><br>
+<a name="1217375"></a>
+
+<a name="1217379"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Rick Nasher</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh wow! thanks Kryzon, I just feel an asteroid belt coming up. Wonderful stuff. Hope it converts to Ploppy's DX9 successfully.<br><br>Eh, forgive me my utter cluelessness, but just how would one go about adding a texture(say a png) to these boards?'<br>I see it probsbly needs to be done from here:<br><br>;Texture.<br>	<br>;VertexTexCoords( ... )<br>;VertexTexCoords( ... )<br>;VertexTexCoords( ... )<br>;VertexTexCoords( ... )<br><br>Obviously the usual entitytexture function doesn't apply here, any suggestions? <br><br></td></tr></table><br>
+<a name="1217508"></a>
+
+<a name="1217509"></a>
+
+<a name="1217510"></a>
+
+<a name="1217511"></a>
+
+<a name="1217512"></a>
+
+<a name="1217513"></a>
+
+<a name="1217514"></a>
+
+<a name="1217515"></a>
+
+<a name="1217516"></a>
+
+<a name="1217561"></a>
+
+<a name="1217562"></a>
+
+<a name="1217872"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hello.<br>It should work with any engine that allows mesh manipulations and something similar to the TFormNormal function, like "vector transformations" or "coordinate-context conversions."<br><br>Regarding texturing. <br>Each surface can only have a single diffuse texture. You can blend other textures on top of this one since surfaces have texture layers (their brushes do, to be exact), but you can't have different 'individual' textures on a mesh without using additional surfaces.<br>The idea of storing all of your geometry in a single complex surface - something that is faster to render than several simpler surfaces - involves merging all of your different texture elements into a single texture element usually called the "texture atlas" or "texture sheet," such as the following:<br><br><a href="http://s2.postimg.org/8nsqq2kq1/snkeffects2wu4.png" target="_blank"><img src="http://s2.postimg.org/c7eofvnfp/snkeffects2wu4.jpg"></a><br><br>The more different elements on the atlas, the more different objects you can represent with a single surface.<br>You can assign your billboard surface a texture atlas like the above by using PaintSurface(), supplying a brush with such a texture. <br>You should only use EntityTexture() if you're certain that the mesh you're texturing only has one surface, otherwise the other surfaces of the mesh would also have their textures changed.<br><br>The actual part of the atlas that is displayed by each billboard is defined by the UV coordinates of the four vertices that constitute the billboard: You can specify UV coordinates for each vertex of a billboard so that they capture the exact rectangular region of the atlas that you want the billboard to display.<br>Since UV values are always relative (0.0 ~ 1.0), you would calculate them like so: <br>U = ( pixel_x / atlas_width )<br>V = ( pixel_y / atlas_height )<br>;With pixel_x or pixel_y being the pixel coordinates on the atlas that each vertex is placed, and atlas_width and atlas_height being the total dimensions of the atlas texture.<br><br>Furthermore, your billboards can represent static elements, such as rocks or trees, or they can also represent animated elements such as characters or special effects. <br>In the game "Ragnarok Online," the environment is a polygonal mesh and <a href="http://s29.postimg.org/940atxs6v/ragnarok_online_51.jpg" target="_blank">the characters are billboards</a>.<br>If one or more billboards represent animated elements, you would need to change the UVs of the vertices of these billboards so that they can display different frames of the atlas. To do this, you would need to include those VertexTexCoords() calls in the update loop. Preferably, you would only use these calls on billboards that are actually animated, since these calls are expensive, especially if they're done on a billboard that is not animated.<br><br>With this in mind, in the original example on post #1 I have put some calls to VertexColor() that don't need to be in that update loop. Since no billboard is changing in colour (they start with a colour and remain with it), those vertex colour calls are redundant and are just wasting performance. <br>The appropriate way to use them in this case would be to move them to the billboard creation routine, since the colours of the vertices only need to be set once.<br>If I wanted the colours of billboards to change with time, however, the VertexColor() calls would be needed inside the update loop. <br><br></td></tr></table><br>
+<a name="1217549"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Rick Nasher</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Wow, many thanks for the explanation. Didn't even know about the PaintSurface() command, or these techniques for that matter. Very interesting stuff, bit more low level, but also more (to) control of course.<br><br>Don't know where else I would have learned about this though(didn't see any examples uptill now), so again many thanks. <br><br></td></tr></table><br>
+<a name="1217565"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm glad. <br>If you want to make a robust single-surface billboard\particle system, make a thread about it some day and I'll help. <br><br></td></tr></table><br>
+<a name="1217574"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Rick Nasher</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cool. :-) <br><br></td></tr></table><br>
+<a name="1298598"></a>
+
+<a name="1298601"></a>
+
+<a name="1298602"></a>
+
+<a name="1298603"></a>
+
+<a name="1298605"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> I realised that you can trim the second use of Sin and Cos, which are computationally expensive, if you understand how affine transformations work. <br>You only need to calculate Sin and Cos once.<br><br>Anyway, this is a more optimised version that does this:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">;Example of a fast alignment of billboards with the camera plane.
+;
+;Optimised 03/06/2016
+;------------------------------------------------------
+
+;The amount of single-surface quadricular billboards in the scene.
+
+Const BILLBOARD_AMOUNT% = 5000
+
+Const LARGE_NUMBER% = 10000000 ;Used for setting the cullbox of the single-surface mesh.
+
+Const FX_FORCEALPHA%	= 32 ;EntityFX flags used with the billboards to enable per-vertex colour and alpha.
+Const FX_FULLBRIGHT%	= 1
+Const FX_VERTEXCOLOUR%	= 2
+
+Const BILLBOARD_ROTATION_SPEED# = 2.0 ;Speed with which all billboards are rotated.
+
+
+;Type for a billboard object (a camera-aligned quadricular mesh).
+;Holds some properties so billboards can be different from one another, like size and rotation.
+
+Type TBillboard
+
+	Field posX#, posY#, posZ#
+	Field roll#
+	Field scaleX#
+	Field scaleY#
+	
+	Field r#, g#, b#, alpha#
+	
+	Field surf%
+	Field vID%[3]
+
+End Type
+
+
+AppTitle( "Fast Billboard Alignment Example" )
+Graphics3D( 800, 600, 0, 2 )
+
+Local camera	= CreateCamera()
+MoveEntity( camera, 0, 5, 0 )
+
+;Single surface elements needed:
+;-------------------------------------------------------------------------
+
+;- A mesh. Setting the cullbox to a very large size so it's never culled by the camera (i.e it's always visible).
+
+Local billboardMesh	= CreateMesh()
+MeshCullBox( billboardMesh, -LARGE_NUMBER, -LARGE_NUMBER, -LARGE_NUMBER, 2 * LARGE_NUMBER, 2 * LARGE_NUMBER, 2 * LARGE_NUMBER ) 
+EntityFX( billboardMesh, FX_FULLBRIGHT + FX_VERTEXCOLOUR + FX_FORCEALPHA )
+
+;- A surface to hold the billboards (there can be more than one).
+
+Local billboardSurface	= CreateSurface( billboardMesh )
+
+;- A simple pivot without modifications. This pivot is used to align the billboards.
+
+Local billboardPivot	= CreatePivot()
+
+;-------------------------------------------------------------------------
+
+
+;Populate the scene with billboards.
+
+If BILLBOARD_AMOUNT * 4 &gt; 65534 Then RuntimeError "Too many vertices on a single surface."
+ 
+Const MIN_RADIUS# = 30
+Const MAX_RADIUS# = 200
+Local angle
+
+For n = 1 To BILLBOARD_AMOUNT
+
+	;Create random billboards around the scene.
+	;The billboards are added to the surface specified by the programmer.
+	
+	angle = Rand( 0, 359 )
+	
+	addBillboard( billboardSurface, Cos( angle ) * Rand( MIN_RADIUS, MAX_RADIUS ), Rand( -5, 15 ), Sin( angle ) * Rand( MIN_RADIUS, MAX_RADIUS ), Rand( 0, 359 ), Rnd( 0.25, 2.0 ), Rnd( 0.25, 2.0 ) )
+
+Next
+
+MoveMouse( 400, 300 )
+HidePointer()
+
+Local fastMethod = 1
+Local fpsTimer = CreateTimer( 30 )
+Local deltaCount = 0
+Local lastDelta
+Local delta
+
+While Not ( KeyHit( 1 ) Or ( KeyDown( 56 ) + KeyDown( 62 ) ) )
+	
+	WaitTimer( fpsTimer )
+
+	navigation( camera )	
+	
+	;During the update cycle, align all the billboards with the camera.
+	
+	alignBillboards( camera, billboardPivot )
+		
+	UpdateWorld()
+	RenderWorld()
+	
+	Flip()
+
+Wend 
+
+End
+
+
+Function navigation( camera )
+
+	MoveEntity( camera, KeyDown( 32 ) - KeyDown( 30 ), 0, KeyDown( 17 ) - KeyDown( 31 ) )
+
+	Local mY = MouseYSpeed()
+	If Abs( mY + EntityPitch( camera, True ) ) &gt; 88.9 Then mY = 0
+
+	TurnEntity( camera, mY, -MouseXSpeed(), 0 )
+	RotateEntity( camera, EntityPitch( camera, True ), EntityYaw( camera, True ), 0, True ) ;Doesn't let the camera tilt with time.
+	
+	MoveMouse( 400, 300 )
+	
+	MouseXSpeed() ;Avoids the camera rotating right? I think my mouse is broken.
+
+End Function
+
+
+Function addBillboard.TBillboard( surface, x#, y#, z#, roll#, scaleX# = 1.0, scaleY# = 1.0 )
+
+	b.TBillboard	= New TBillboard
+	
+	b\surf	= surface
+	
+	b\posX = x
+	b\posY = y
+	b\posZ = z
+	b\roll = roll
+	b\scaleX = scaleX
+	b\scaleY = scaleY
+	
+	b\r = Rand( 0, 255 ) ; 0 ~ 255.
+	b\g = Rand( 0, 255 ) ; 0 ~ 255. 
+	b\b = Rand( 0, 255 ) ; 0 ~ 255.
+	b\alpha = Rand( 20, 100 ) / 100.0 ; 0.0 ~ 1.0
+	
+	b\vID[0] = AddVertex( surface, -1,  1, 0 ) ;Top left.
+	b\vID[1] = AddVertex( surface,  1,  1, 0 ) ;Top right.
+	b\vID[2] = AddVertex( surface,  1, -1, 0 ) ;Bottom right.
+	b\vID[3] = AddVertex( surface, -1, -1, 0 ) ;Bottom left.
+	
+	AddTriangle( surface, b\vID[0], b\vID[1], b\vID[2] )
+	AddTriangle( surface, b\vID[2], b\vID[3], b\vID[0] )
+	
+	Return b
+
+End Function
+
+
+Function alignBillboards( camera, pivot )
+	
+	;Retrieve the (normalised) 'up' and 'right' vectors of the camera in world space.
+	;This is only needed once per frame instead of per billboard as it is usually done.
+	
+	RotateEntity( pivot, EntityPitch( camera, True ), EntityYaw( camera, True ), 0, True )
+	
+	Local camRightX#, camRightY#, camRightZ#
+	TFormNormal( 1, 0, 0, pivot, 0 )
+	camRightX = TFormedX()
+	camRightY = TFormedY()
+	camRightZ = TFormedZ()
+		
+	Local camUpX#, camUpY#, camUpZ#
+	TFormNormal( 0, 1, 0, pivot, 0 )
+	camUpX = TFormedX()
+	camUpY = TFormedY()
+	camUpZ = TFormedZ()
+		
+	Local bCos#, bSin#
+	Local bRightX#, bRightY#, bRightZ#
+	Local bUpX#, bUpY#, bUpZ#
+	
+	;Update the billboard objects.
+	
+	For b.TBillboard = Each TBillboard
+	
+		;1) Update the properties of the billboard.
+				
+		b\roll = b\roll + BILLBOARD_ROTATION_SPEED
+		
+		;b\life, 
+		;b\scale, 
+		;b\alpha etc.
+		
+		;----------------------------------------------------------------------------------------------
+				
+		;2) Update the geometry of the billboard based on the properties and the camera.
+
+		;Get the cosine and sine for rotating the "up" and "right" vectors of the billboard.
+			
+		bCos = Cos( b\roll )
+		bSin = Sin( b\roll )	
+			
+		;Right vector.
+					
+		bRightX = ( ( camRightX * bCos ) - ( camUpX * bSin ) ) * b\scaleX
+		bRightY = ( ( camRightY * bCos ) - ( camUpY * bSin ) ) * b\scaleX
+		bRightZ = ( ( camRightZ * bCos ) - ( camUpZ * bSin ) ) * b\scaleX
+		
+		;Up vector.
+		
+		bUpX = ( ( camRightX * bSin ) + ( camUpX * bCos ) ) * b\scaleY
+		bUpY = ( ( camRightY * bSin ) + ( camUpY * bCos ) ) * b\scaleY
+		bUpZ = ( ( camRightZ * bSin ) + ( camUpZ * bCos ) ) * b\scaleY
+			
+		;Position and rotation.
+		;The vertices of the billboard quad are placed based on the sum (or subtraction) of the rotated right and up vectors.
+		
+		VertexCoords( b\surf, b\vID[0], b\posX - bRightX + bUpX, b\posY - bRightY + bUpY, b\posZ - bRightZ + bUpZ ) ;Top left.
+		VertexCoords( b\surf, b\vID[1], b\posX + bRightX + bUpX, b\posY + bRightY + bUpY, b\posZ + bRightZ + bUpZ ) ;Top right.
+		VertexCoords( b\surf, b\vID[2], b\posX + bRightX - bUpX, b\posY + bRightY - bUpY, b\posZ + bRightZ - bUpZ ) ;Bottom right.
+		VertexCoords( b\surf, b\vID[3], b\posX - bRightX - bUpX, b\posY - bRightY - bUpY, b\posZ - bRightZ - bUpZ ) ;Bottom left.			
+		
+		;Colour.
+		
+		VertexColor( b\surf, b\vID[0], b\r, b\g, b\b, b\alpha )
+		VertexColor( b\surf, b\vID[1], b\r, b\g, b\b, b\alpha )
+		VertexColor( b\surf, b\vID[2], b\r, b\g, b\b, b\alpha )
+		VertexColor( b\surf, b\vID[3], b\r, b\g, b\b, b\alpha )
+		
+		;Texture.
+		
+		;VertexTexCoords( ... )
+		;VertexTexCoords( ... )
+		;VertexTexCoords( ... )
+		;VertexTexCoords( ... )
+		
+		;Etc.
+		
+	Next
+
+End Function</textarea> <br><br></td></tr></table><br>
+<a name="1298884"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Rick Nasher</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Very impressive. Didn't realise it would work this weel with soooo many bilboards at once. Thanks, very useful stuff. <br><br></td></tr></table><br>
+<a name="1298886"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Flanker</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> I agree, impressive, this could be a nice addition to any single surface particule library written in Blitz3D. Thanks for the input. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

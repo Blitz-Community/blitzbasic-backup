@@ -1,0 +1,89 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Pushing BMax objects onto the Lua stack</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Pushing BMax objects onto the Lua stack</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=112" >BlitzMax Tutorials</a>/<a href="#bottom" >Pushing BMax objects onto the Lua stack</a><br><br>
+<a name="994861"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >N</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> <i>No, this isn't the tutorial I'm working on. This doesn't explain how to use Lua, it's just explaining how to push objects onto the Lua stack.</i><br><br>This tends to come up more than any other question when it comes to Lua. How do you push objects onto the stack? There's a bunch of different ways. I can recall several people getting by via pushing integer handles onto the stack, but there are some downsides to that.  For one, you have to release the object references yourself. Secondly, you have to constantly convert between the integer handle and the object. On the other hand, however, most people 'get' handles, so it's an easy route to work with. I'm going to be talking about the other route, the one where you actually push objects onto the stack in some sense, without having to map them to a handle.<br><br>So, objects in BlitzMax are somewhat special due to the use of a garbage collector. So, pushing an object onto the stack is simple - you push a pointer (in this first example, <a href="http://www.lua.org/manual/5.1/manual.html#2.2" target="_blank">light userdata</a>, as opposed to userdata) to the object. However, the object has to be retained before pushing it onto the stack and released when removing it from the stack. In other words, we need to be able to not only retain the object when we push it, but also release it when the pointer to the object (the userdata) is finalized in Lua. Consequently, a pointer, or light userdata isn't enough to manage a BlitzMax object in Lua.<br><br>The most important aspect here is the finalization, of course. There is only one data type in Lua that allows finalization: <a href="http://www.lua.org/manual/5.1/manual.html#2.10.1" target="_blank">userdata</a>. So, we need to wrap the object in this particular data type. Fortunately, this is easy, given that userdata is just a pointer to a block of memory.  Take the following C code as an example:<br><br><pre class=code>void lua_pushbmaxobject( lua_State *L, BBObject *object )
+{
+	// Retain the object
+	BBRETAIN(object);
+	// Push a userdata with a block of memory the size of a pointer to an object
+	BBObject ** store = lua_newuserdata( L, sizeof(BBObject *) );
+	// Store the object in the block of memory
+	*store = object;
+}</pre><br><br>This doesn't yet account for finalization - it simply retains the object, pushes a userdata onto the stack, and stores a pointer to the object in the memory associated with the userdata. The first part of handling objects is complete, and you can technically run an application with this. However, it should be noted that in this situation, every object you push is a memory leak. Finalization still has to be handled.<br><br>To introduce finalizer methods, the best way I can think to do it is to draw a comparison to BlitzMax. In BlitzMax, your finalizer method is Delete, as in this example:<br><br><pre class=code>Type Something
+	Method Delete()
+		' … Finalizer …
+	End Method
+End Type</pre><br><br>Every object has a finalizer method, although it may be the default or inherited from a supertype. Regardless, given that we know what a finalizer method is, it's easy to understand then that you could draw up a similar example of a storage unit for objects, as we want to have in Lua, in BlitzMax like this:<br><br><pre class=code>Type Container
+	Field _obj:Object
+
+	Method Init:Something(obj:Object)
+		' Retain a reference to an object
+		_obj = obj
+	End Method
+
+	Method Stored:Object()
+		Return _obj
+	End Method
+
+	Method Delete()
+		' Release a reference
+		' This is not necessary, and is likely to be slower, but helps
+		' to illustrate the release of a reference
+		_obj = Null
+	End Method
+End Type</pre><br><br>In the above, a reference to the object is retained an object of type Container is initialized, and when the Container object is deleted, it's released (not in the sense of freeing memory, but rather informing the object that one less thing is referencing it). So, to do this in Lua, we need to make use of <a href="http://www.lua.org/manual/5.1/manual.html#2.8" target="_blank">metatables</a>. Metatables allow some features that languages like BlitzMax do not, particularly operator overloading (more than I care to list specifically). Of particular interest though is the <i>__gc</i> metamethod.<br><br>Metamethods are fields in a metatable that have functions, or in some cases tables (but we won't be concerned with that), assigned to them. There is nothing special about them, they're just given that name because they happen to be used in a metatable, rather than something else. In the case of <i>__gc</i>, the function would look something like this were it written in Lua:<br><br><pre class=code>metatable = {}
+
+function metatable.__gc (data)
+	-- do something with the data
+end
+
+someUserData = getSomeUserData() -- assume this is a host app's function
+
+setmetatable(someUserData, metatable)
+someUserData = nil
+
+-- when someUserData is collected, the above __gc function will
+-- be called with someUserData as its argument</pre><br><br>Now, we have no way of releasing a reference to a BlitzMax object in Lua (we do, actually, but ignore that thought, because going through Lua is much more difficult). So, we'll retreat to the previous example in C of pushing a BlitzMax object. I should note that I use C in these cases because it's simply easier than writing equivalent code in BlitzMax.<br><br>So, assuming you know how to create tables using the Lua C API already (if you do not know, please read the reference manual), we can make a few adjustments to the <i>lua_pushbmaxobject</i> function above, and introduce a new function:<br><br><pre class=code>// function __gc(udata)
+static int metamethod_release_bbobject( lua_State* L )
+{
+	// get the container off the stack
+	BBObject **store = lua_touserdata( L, 1 );
+	// release the reference to the object
+	BBRELEASE(*store);
+	// set the value being stored to nil
+	*store = NULL;
+	// return no objects (0) - without this, you will have stack corruption in Lua
+	return 0;
+}
+
+void lua_pushbmaxobject( lua_State *L, BBObject *object )
+{
+	// Retain the object
+	BBRETAIN(object);
+	// Push a userdata with a block of memory the size of a pointer to an object
+	BBObject ** store = lua_newuserdata( L, sizeof(BBObject *) );
+	// Store the object in the block of memory
+	*store = object;
+
+	// create the metatable
+	lua_createtable( L, 0, 1 );
+	// push the __gc key string
+	lua_pushstring( L, "__gc" );
+	// push the __gc metamethod
+	lua_pushcclosure( L, metamethod_release_bbobject, 0 );
+	// set the __gc field in the metatable (-3 is the stack index of the table)
+	lua_settable( L, -3 );
+
+	// finally, set table as the metatable of the userdata (-2 is the index of the userdata)
+	lua_setmetatable( L, -2 );
+}</pre><br><br>First off, we introduce the new finalizer method. It's fairly simple, four lines and it's done. Simply get the userdata containing a pointer to the object off the stack, release the reference to the stored object, set the stored value to nil, and return zero. I really want to stress the importance of returning zero in this case, because I've personally screwed up and forgotten it. Without it, you will have problems, and chances are Lua will end up with a lot of garbage on the stack. This seems to be more pronounced in Windows, which is probably a testament to all the tons of issues with Windows, but that aside, don't forget to return zero.<br><br>Secondly, we give the userdata a metatable in the revised <i>lua_pushbmaxobject</i>. There is nothing special about this aside from <i>lua_setmetatable</i>, which probably doesn't get much attention in tutorials. <i>lua_setmetatable</i> is essentially the same as <i>lua_settable</i>, but there's no key to be concerned with. It pops a table off the stack and sets that as the metatable of the value pointed to at the index (-2 in this case). Simple, and if you need to know more about that, read the various links to the manual I've littered throughout this.<br><br>Now, you might be wondering how to get a BlitzMax object off the stack, and the answer is fairly simple. Much like in the finalizer method above, you simply grab the userdata off the stack and get the object out of that. Doing this in BlitzMax is not entirely trivial, so it helps to have a function written for it in C:<br><br><pre class=code>BBObject *lua_tobmaxobject( lua_State *L, int index )
+{
+	BBObject **store = lua_touserdata( L, index );
+	return *store;
+}</pre><br><br>Finally, you end up with the API in BlitzMax:<br><br><pre class=code>Extern "C"
+	Function lua_tobmaxobject:Object(l:Byte Ptr, index:Int)
+	Function lua_pushbmaxobject(l:Byte Ptr, objct:Object)
+End Extern</pre><br><br>There are a few notes to be made about the above (in its entirety, not just the above block):<br>• First off, this can be much more memory-intensive than if you were to cache the container userdata and reuse it every time you push that object onto the stack. LuGI does this, and its source code is freely available on github if you decide to look for examples. As far as I know, LuGI is the only set of modules for BlitzMax that will do this.<br>• Secondly, there are no checks being made in any of the above examples to see if the object is in fact a userdata, if the position on the stack exists, etc. Sometimes they're unnecessary, as you're just working with other Lua functions that already do this and you only need to check the return values. Whether you consider it necessary or not is up to your judgment, and if you write flawless code all the time, maybe it's always unnecessary.<br>• Thirdly, this does not magically give you access to fields and methods in Lua - that is more complex and in-depth than I'm willing to talk about publicly (due to my ability to look stupid, more than anything else). There are a variety of ways, most of them end up being fairly similar to each-other, but all of them will involve some manner of glue code. That's about it for now.<br><br>If any of the above seems poorly written, that's because it is.  If you're on Google Wave, you can contribute to revisions in the BlitzMax &amp; Lua wave (search for <i>with:public tag:blitzmax tag:lua</i>).  If you think I've said something stupid, point it out, 'cause otherwise I'm just going to do it over and over again. <br><br></td></tr></table><br>
+<a name="995024"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Htbaa</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Very enlightening! Good explanation on using BlitzMax objects inside Lua without losing the risk of them getting collected to early.<br><br>This is way neater than converting an object to a handle and later releasing it yourself. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

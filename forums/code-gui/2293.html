@@ -1,0 +1,1249 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Multi-Column List Box</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Multi-Column List Box with sort (Windows only), language=bmx, category=BlitzPlus Gui'><meta name='author' content='Ghost Dancer'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=10>BlitzPlus Gui</a>/Multi-Column List Box</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2293.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Multi-Column List Box by Ghost Dancer</td><td align="right">2008 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Multi-Column List Box with sort (Windows only). I've modified Ziltches code to make it OO structured and also added my own sort functionality (clicking column heading will alternate between ascending and decending sort). Currently no support for multiple selected items but hassle me and I'm sure I'll do it. </td></tr><tr ><td class="cell"><pre class="code">'******************************************************************************
+'Multi-column list box with sort V1.2
+'Original code: Ziltch 29 August 2006.
+'Modified by Ghost Dancer 06 August 2008
+'You can use this code if you credit Ziltch &amp; Ghost Dancer
+'
+'V1.2 update
+'	- Added sortEnable &amp; sortDisable methods.
+'	- Fixed sorting bug.
+'	- Added update method which can be called on EVENT_WINDOWSIZE to reset first column width.
+'	- Renamed some methods.
+'
+'V1.1 updates
+'	- Fixed to work in Max 1.30.
+'	- TListView now extends TProxyGadget.
+'	- Is now unicode compliant.
+'	- Remembers the selected item after a sort.
+'******************************************************************************
+
+'******************************************************************************
+'example usage
+'******************************************************************************
+Strict
+
+Import MaxGUI.Drivers
+
+'set up
+Local window:TGadget = CreateWindow("Multi-Column List Example", 100, 100, 320, 250, Null, WINDOW_RESIZABLE|WINDOW_TITLEBAR|WINDOW_CLIENTCOORDS)
+Local listView:TListView = TListView.Create(2, 2, 310, 150, window, "Name")
+SetGadgetLayout listView, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_CENTERED
+
+'add 2nd &amp; 3rd columns
+listView.addListViewColumn("Sex", 80)
+listView.addListViewColumn("Age", 80)
+
+'add some data
+listView.addListViewItem(["Simon", "Male", "34"])
+listView.addListViewItem(["Jane", "Female", "29"])
+listView.addListViewItem(["Peter", "Male", "38"])
+listView.addListViewItem(["Sally", "Female", "44"])
+
+'2nd list
+Local listView2:TListView = TListView.Create(2, 160, 310, 80, window, "one")
+SetGadgetLayout listView2, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED
+
+listView2.addListViewColumn("two", 80)
+listView2.addListViewColumn("three", 80)
+
+'add some data
+listView2.addListViewItem(["xtest 1-1", "xtest 1-2", "xtest 1-3"])
+listView2.addListViewItem(["test 2-1", "test 2-2", "test 2-3"])
+
+Local Gadget:TGadget
+
+'Main Loop
+Repeat
+	WaitEvent()
+	Gadget = TGadget(EventSource())
+	
+	Select EventID()
+		Case EVENT_WINDOWSIZE
+			TListView.update
+		Case EVENT_WINDOWCLOSE
+			Select gadget
+			Case window
+				Exit
+			End Select
+	End Select
+Forever
+
+'print selected data
+Print "Selected Item: " + listView.getSelectedItem() + ", aged " + listView.getSelectedItem(2)
+
+End
+
+
+'==============================================================================
+Type TListView Extends TProxyGadget
+'==============================================================================
+	Const LBS_MULTICOLUMN = 512
+	
+	'globals are used for sorting
+	Global oldListProc							'used for column heading selections
+	Global gadgetList:TList = CreateList()		'global list of type instances
+	
+	Field curColumn								'number of columns in list
+	Field columnHeading:TColumnHeading[1]		'array of column data
+	
+	Field listBox:TGadget						'the gadget
+	Field listboxHwnd							'listbox's HWND handle
+	Field sortColumns = True					'enable/disable sorting
+	
+	
+	'------------------------------------------------------------------------------
+	Function create:TListView(x, y, w, h, parent:TGadget, heading$ = "", width = 100)
+	'heading &amp; width are for first column
+	'------------------------------------------------------------------------------
+		Local newListView:TListView = New TListView 
+		
+		newListView.listBox = CreateListBox(x, y, w, h, parent)
+		newListView.SetProxy newListView.listBox
+		
+		Local TempCanvas:TGadget = CreateCanvas(0, 0, 0, 0, parent)
+		
+		newListView.listboxHwnd = QueryGadget(newListView.listBox, QUERY_HWND)
+		
+		oldListProc = SetWindowLongW(newListView.listboxHwnd, GWL_WNDPROC, Int(Byte Ptr NewListProc))
+		
+		newListView.setHeading(0, heading$, width)
+		
+		'store the gadget in global list...
+		gadgetList.AddLast newListView
+		
+		'and also return it for standard OO usage
+		Return newListView
+	End Function
+	
+	
+	'------------------------------------------------------------------------------
+	Method setHeading(column, heading$, width, action = LVM_SETCOLUMNW)
+	'------------------------------------------------------------------------------
+		Local col:LVCOLUMNW = New LVCOLUMNW
+		
+		columnHeading[column] = New TColumnHeading
+		columnHeading[column].width = width
+		
+		If columnHeading[Column].width = 0 Then
+			Col.mask = LVCF_TEXT| LVCF_FMT 
+		Else
+			Col.mask = LVCF_TEXT| LVCF_FMT | LVCF_WIDTH
+			col.cx   = columnHeading[Column].width
+		End If
+		
+		col.pszText = heading$.ToWString()
+		
+		Local ListBoxstyle = GetWindowLongW(ListboxHwnd , GWL_STYLE)
+		
+		If (ListBoxstyle &amp;  LVS_NOCOLUMNHEADER ) Then
+			ListBoxstyle  = ListBoxstyle  ~LVS_NOCOLUMNHEADER 
+			If ListBoxstyle &amp; LVS_EDITLABELS=0 Then ListBoxstyle  = ListBoxstyle  | LVS_EDITLABELS
+			SetWindowLongW(ListboxHwnd , GWL_STYLE,  ListBoxstyle )  'change the style so that we have headings
+		End If
+		
+		SendMessageW(ListboxHwnd, action, Column, Int(Byte Ptr Col))
+		
+		columnWidth
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method addListViewColumn(heading$, width)
+	'------------------------------------------------------------------------------
+		curColumn:+ 1
+		
+		columnHeading = columnHeading[..curColumn+1]
+		
+		setHeading curColumn, heading, width, LVM_INSERTCOLUMNW
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method addListViewItem(text$[])
+	'add full row from array
+	'------------------------------------------------------------------------------
+		Local curRow = CountGadgetItems(listBox)
+		
+		'add first column &amp; reset width
+		AddGadgetItem(listBox, text$[0])
+		columnWidth
+		
+		For Local column = 1 To text$.Length - 1
+			Local ListboxHwnd = QueryGadget(listBox, QUERY_HWND)
+			Local ColItem:LVITEMW  = New LVITEMW
+			
+			ColItem.mask = LVIF_TEXT
+			ColItem.iSubItem = column
+			ColItem.iItem = curRow
+			ColItem.pszText = Text$[column].ToWString()
+			ColItem.cchTextMax =  Text$[column].Length + 1
+			SendMessageW( ListboxHwnd, LVM_SETITEMW ,0, Int(Byte Ptr ColItem))
+			ColItem = Null
+		Next
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method getListViewItem:String(Row, Column)
+	'------------------------------------------------------------------------------
+		If ListboxHwnd Then
+			Local Ans$
+			Local TextStorage:Short[1024]
+			Local ColItem:LVITEMW  = New LVITEMW
+			
+			ColItem.mask = LVIF_TEXT
+			ColItem.iSubItem = Column
+			ColItem.iItem = Row
+			ColItem.pszText = TextStorage
+			ColItem.cchTextMax =  1024 
+			SendMessageW( ListboxHwnd,LVM_GETITEMW,0,Int(Byte Ptr ColItem))
+			
+			If ColItem.pszText Then
+				Ans$=String.FromWString(ColItem.pszText)
+				ColItem=Null
+			End If
+			
+			Return Trim(Ans$)
+		End If
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method setListViewItem(Text:String, Row, Column = 0)
+	'set text in a specific row, column
+	'------------------------------------------------------------------------------
+		If Column = 0 Then listBox.items[Row].Text = text
+		
+		If ListboxHwnd Then
+			Local ColItem:LVITEMW  = New LVITEMW
+			ColItem.mask = LVIF_TEXT
+			ColItem.iSubItem = Column
+			ColItem.iItem = Row
+			ColItem.pszText = Text.ToWString()
+			ColItem.cchTextMax =  Len(Text) 
+			
+			Return SendMessageW( ListboxHwnd,LVM_SETITEMW,0,Int(Byte Ptr ColItem))
+		End If
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method columnWidth(Column = 0)
+	'------------------------------------------------------------------------------
+		Local col:LVCOLUMNW = New LVCOLUMNW
+		
+		Col.mask = LVCF_WIDTH
+		col.cx   = columnHeading[Column].width
+		SendMessageW(ListboxHwnd,LVM_SETCOLUMNW,Column,Int(Byte Ptr Col))
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method listBoxetMultiSelect()
+	'------------------------------------------------------------------------------
+		Local ListBoxstyle = GetWindowLongW(ListboxHwnd , GWL_STYLE)
+		
+		If  (ListBoxstyle &amp; LVS_SINGLESEL) = LVS_SINGLESEL Then
+			Return SetWindowLongW(ListboxHwnd , GWL_STYLE,  ListBoxstyle  ~ LVS_SINGLESEL )  'change the style 		
+		End If
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method getSelectedItem$(col = 0)
+	'------------------------------------------------------------------------------
+		If SelectedGadgetItem(listBox) &gt;= 0 Then
+			Return getListViewItem(SelectedGadgetItem(listBox), col)
+		End If
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method sort(sortColumn)
+	'------------------------------------------------------------------------------
+		If sortColumns Then
+			Local itemCount = CountGadgetItems(listBox)
+			
+			If itemCount Then
+				Local c, r, sortCount
+				Local selectedItem, selectedItemNew = -1
+				Local newList:TList = CreateList()
+				Local rowCount = CountGadgetItems(listBox)	'total number of rows/items in list
+				
+				'store sorted rows in temp list
+				Repeat
+					Local rowNum = 0, rowText$
+					If columnHeading[sortColumn].sortDir = 1 Then rowText$ = "zzzzzz"
+					
+					'find next row in sequence
+					For r = 0 To CountGadgetItems(listBox) - 1
+						If getListViewItem(r, sortColumn).ToLower() &lt;= rowText$ = columnHeading[sortColumn].sortDir Then
+							rowText$ = getListViewItem(r, sortColumn).ToLower()
+							rowNum = r
+						End If
+					Next
+					
+					'update selected index
+					If selectedItemNew = -1 Then
+						 selectedItem = SelectedGadgetItem(listBox)
+						If selectedItem = rowNum Then selectedItemNew = sortCount
+					End If
+					
+					'create an temp array to store row data
+					Local listRow$[curColumn+1]
+					
+					'copy this row to new list
+					For c = 0 To curColumn
+						listRow$[c] = getListViewItem(rowNum, c)
+					Next
+					
+					newList.AddLast listRow$
+					
+					'remove row from original list &amp; update counter
+					listBox.RemoveItem rowNum
+					sortCount:+ 1
+				Until sortCount = rowCount
+				
+				'copy sorted data to new list
+				For Local row$[] = EachIn newList
+					addListViewItem(row$)
+				Next
+				
+				'change sort direction for this column
+				If columnHeading[sortColumn].sortDir = 1 Then
+					columnHeading[sortColumn].sortDir = 0
+				Else
+					columnHeading[sortColumn].sortDir = 1
+				End If
+				
+				'reselect item
+				If selectedItemNew &gt;= 0 Then SelectGadgetItem listBox, selectedItemNew
+			End If
+		End If
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method sortEnable()
+	'------------------------------------------------------------------------------
+		sortColumns = True
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method sortDisable()
+	'------------------------------------------------------------------------------
+		sortColumns = False
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Function update()
+	'call on EVENT_WINDOWSIZE to reset width of first column
+	'------------------------------------------------------------------------------
+		For Local newListView:TListView = EachIn gadgetList
+			newListView.columnWidth
+		Next
+	End Function
+	
+	
+	'------------------------------------------------------------------------------
+	Function NewListProc:Int(hWnd:Int, Msg:Int, wParam:Int, lParam) "win32"
+	'------------------------------------------------------------------------------
+		Const HDN_ITEMCLICKW = -322
+		
+		If Msg = WM_NOTIFY Then
+			Local NotifyMess:HD_NOTIFY = New HD_NOTIFY
+			Local Tstr$
+			
+			MemCopy( NotifyMess, Byte Ptr lParam, SizeOf(HD_NOTIFY) )
+			
+			If NotifyMess.code = HDN_ITEMCLICKW Then
+				'find gadget that was clicked &amp; sort it
+				For Local newListView:TListView = EachIn gadgetList
+					If newListView.listboxHwnd = hWnd Then newListView.sort NotifyMess.iitem
+				Next
+			End If
+		End If
+		
+		If oldListProc &lt;&gt;0 Then Return CallWindowProcW(Byte Ptr oldListProc, hWnd, Msg, wParam, lParam)
+	End Function
+
+End Type
+
+
+'==============================================================================
+Type TColumnHeading
+'used by TListView
+'==============================================================================
+	Field width
+	Field sortDir = 1
+EndType
+
+
+'==============================================================================
+Type HD_NOTIFY 
+'used by TListView
+'==============================================================================
+	Field hwndFrom
+	Field idFrom
+	Field code
+	Field iItem
+	Field iButton
+	Field pitem
+EndType</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SebHoll</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Nice work! A few comments:<br><br>1) You might like <b>TListView</b> to extend <b>TProxyGadget</b>, setting the listview as the proxy gadget using the <b>SetProxy()</b> method in <b>TListView.Create()</b>. That way you can use the standard MaxGUI commands with it.<br><br>2) You may want to made it unicode compliant, by using the wide-char window messages (such as LVM_SETCOLUMNW instead of LVM_SETCOLUMNA, or SetWindowLongW instead of SetWindowLongA) and by using .ToWString() / $w when accessing the Windows API.<br><br>3) You'll need to add <b>Import MaxGUI.Drivers</b> to the top of the code, just under <b>Strict</b>, if you want it to compile in BlitzMax v1.30. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ked</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> This would be crazy sexy if it was extended from TProxyGadget. I'd use it all of the time! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jesse</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> it doesn't work properly with Bmax 1.30, it freezes. It works good with 1.28 though. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ghost Dancer</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for the info seb. I've updated it to include all your suggestions.  Not sure why, but I had to add a canvas (line 95) or it crashed when the window was moved! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SebHoll</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Cool, but I think you've missed a few of the Unicode commands. Also, some of the type instances are already declared in <b>Pub.Win32</b> (imported by <b>MaxGUI.Drivers</b>) so I've gone over it once myself. After having made the changes, I commented out the canvas line and it seems to work fine this end (I'm on Vista though):<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">'******************************************************************************
+'Multi-column list box with sort
+'Original code: Ziltch 29 August 2006.
+'Modified by Ghost Dancer July 2008
+'You can use this code if you credit Ziltch &amp; Ghost Dancer
+'******************************************************************************
+
+'******************************************************************************
+'example usage
+'******************************************************************************
+Strict
+
+Import MaxGUI.Drivers
+
+'set up
+Local window:TGadget = CreateWindow("Multi-Column List Example",100,100,320,280,Null,WINDOW_TITLEBAR|WINDOW_CLIENTCOORDS)
+Local listView:TListView = TListView.Create(2, 2, 300, 150, window, "Name")
+
+'add 2nd &amp; 3rd columns
+listView.addListViewColumn("Sex", 80)
+listView.addListViewColumn("Age", 80)
+
+'add some data
+listView.addListViewItem(["Simon", "Male", "34"])
+listView.addListViewItem(["Jane", "Female", "29"])
+listView.addListViewItem(["Peter", "Male", "38"])
+listView.addListViewItem(["Sally", "Female", "44"])
+
+'2nd list
+Local listView2:TListView = TListView.Create(2, 160, 300, 80, window, "one")
+
+listView2.addListViewColumn("two", 80)
+listView2.addListViewColumn("three", 80)
+
+'add some data
+listView2.addListViewItem(["xtest 1-1", "xtest 1-2", "xtest 1-3"])
+listView2.addListViewItem(["test 2-1", "test 2-2", "test 2-3"])
+
+
+Local Gadget:TGadget
+
+'Main Loop
+Repeat
+	WaitEvent()
+	Gadget = TGadget(EventSource())
+	
+	Select EventID()
+		Case EVENT_WINDOWCLOSE
+			Select gadget
+			Case window
+				Exit
+			End Select
+	End Select
+Forever
+
+'print selected data
+Print "Selected Item: " + listView.getSelectedItem() + ", aged " + listView.getSelectedItem(2)
+
+End
+
+
+'==============================================================================
+Type TListView Extends TProxyGadget
+'==============================================================================
+	Const LBS_MULTICOLUMN = 512
+	
+	'globals are used for sorting
+	Global oldListProc							'used for column heading selections
+	Global gadgetList:TList = CreateList()		'global list of type instances
+	
+	Field curColumn								'number of columns in list
+	Field columnHeading:TColumnHeading[1]		'array of column data
+	
+	Field listBox:TGadget						'the gadget
+	Field listboxHwnd							'listbox's HWND handle
+	
+	'------------------------------------------------------------------------------
+	Function Create:TListView(x, y, w, h, parent:TGadget, heading$ = "", width = 100)
+	'heading &amp; width are for first column
+	'------------------------------------------------------------------------------
+		Local listView:TListView = New TListView 
+		
+		listView.listBox = CreateListBox(x, y, w, h, parent)
+		listView.SetProxy listView.listBox
+		
+		listView.listboxHwnd = QueryGadget(listView.listBox, QUERY_HWND)
+		
+		oldListProc = SetWindowLongW(listView.listboxHwnd, GWL_WNDPROC, Int(Byte Ptr NewListProc))
+		
+		listView.ListBoxHeading(0, heading$, width)
+		
+		'store the gadget in global list...
+		gadgetList.AddLast listView
+		
+		'and also return it for standard OO usage
+		Return listView
+	End Function
+	
+	
+	'------------------------------------------------------------------------------
+	Method ListBoxHeading(column, heading$, width, action = LVM_SETCOLUMNW)
+	'------------------------------------------------------------------------------
+		Local col:LVCOLUMNW = New LVCOLUMNW
+		
+		columnHeading[column] = New TColumnHeading
+		columnHeading[column].width = width
+		
+		If columnHeading[Column].width = 0 Then
+			Col.mask = LVCF_TEXT| LVCF_FMT 
+		Else
+			Col.mask = LVCF_TEXT| LVCF_FMT | LVCF_WIDTH
+			col.cx   = columnHeading[Column].width
+		End If
+		
+		col.pszText = heading$.ToWString()
+		
+		Local ListBoxstyle = GetWindowLongW(ListboxHwnd , GWL_STYLE)
+		
+		If (ListBoxstyle &amp;  LVS_NOCOLUMNHEADER ) Then
+			ListBoxstyle  = ListBoxstyle  ~LVS_NOCOLUMNHEADER 
+			If ListBoxstyle &amp; LVS_EDITLABELS=0 Then ListBoxstyle  = ListBoxstyle  | LVS_EDITLABELS
+			SetWindowLongW(ListboxHwnd , GWL_STYLE,  ListBoxstyle )  'change the style so that we have headings
+		End If
+		
+		SendMessageW(ListboxHwnd, action, Column, Int(Byte Ptr Col))
+		
+		ListBoxColumnWidth(0)
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method addListViewColumn(heading$, width)
+	'------------------------------------------------------------------------------
+		curColumn:+ 1
+		
+		columnHeading = columnHeading[..curColumn+1]
+		
+		ListBoxHeading curColumn, heading, width, LVM_INSERTCOLUMNW
+		
+		RedrawGadget listBox
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method addListViewItem(text$[])
+	'------------------------------------------------------------------------------
+		Local curRow = CountGadgetItems(listBox)
+		
+		'add first column &amp; reset width
+		AddGadgetItem(listBox, text$[0])
+		ListBoxColumnWidth(0)
+		
+		For Local column = 1 To text$.Length - 1
+			Local ListboxHwnd = QueryGadget(listBox, QUERY_HWND)
+			Local ColItem:LVITEMW  = New LVITEMW
+			
+			ColItem.mask = LVIF_TEXT
+			ColItem.iSubItem = column
+			ColItem.iItem = curRow
+			ColItem.pszText = Text$[column].ToWString()
+			ColItem.cchTextMax =  Text$[column].Length + 1
+			SendMessageW( ListboxHwnd, LVM_SETITEMW ,0, Int(Byte Ptr ColItem))
+			ColItem = Null
+		Next
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method GetListBoxItem:String(Row, Column)
+	'------------------------------------------------------------------------------
+		If ListboxHwnd Then
+			Local Ans$
+			Local TextStorage:Short[1024]
+			Local ColItem:LVITEMW  = New LVITEMW
+			
+			ColItem.mask = LVIF_TEXT
+			ColItem.iSubItem = Column
+			ColItem.iItem = Row
+			ColItem.pszText = TextStorage
+			ColItem.cchTextMax =  1024 
+			SendMessageW( ListboxHwnd,LVM_GETITEMW,0,Int(Byte Ptr ColItem))
+			
+			If ColItem.pszText Then
+				Ans$=String.FromWString(ColItem.pszText)
+				ColItem=Null
+			End If
+			
+			Return Trim(Ans$)
+		End If
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method SetListBoxItem(Text:String, Row, Column = 0)
+	'------------------------------------------------------------------------------
+		If Column = 0 Then listBox.items[Row].Text = text
+		
+		If ListboxHwnd Then
+			Local ColItem:LVITEMW  = New LVITEMW
+			ColItem.mask = LVIF_TEXT
+			ColItem.iSubItem = Column
+			ColItem.iItem = Row
+			ColItem.pszText = Text.ToWString()
+			ColItem.cchTextMax =  Len(Text) 
+			
+			Return SendMessageW( ListboxHwnd,LVM_SETITEMW,0,Int(Byte Ptr ColItem))
+		End If
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method ListBoxColumnWidth(Column)
+	'------------------------------------------------------------------------------
+		Local col:LVCOLUMNW = New LVCOLUMNW
+		
+		Col.mask = LVCF_WIDTH
+		col.cx   = columnHeading[Column].width
+		SendMessageW(ListboxHwnd,LVM_SETCOLUMNW,Column,Int(Byte Ptr Col))
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method listBoxetMultiSelect()
+	'------------------------------------------------------------------------------
+		Local ListBoxstyle = GetWindowLongW(ListboxHwnd , GWL_STYLE)
+		
+		If  (ListBoxstyle &amp; LVS_SINGLESEL) = LVS_SINGLESEL Then
+			Return SetWindowLongW(ListboxHwnd , GWL_STYLE,  ListBoxstyle  ~ LVS_SINGLESEL )  'change the style 		
+		End If
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method getSelectedItem$(col = 0)
+	'------------------------------------------------------------------------------
+		If SelectedGadgetItem(listBox) &gt;= 0 Then
+			Return GetListBoxItem(SelectedGadgetItem(listBox), col)
+		End If
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Method sort(sortColumn)
+	'------------------------------------------------------------------------------
+		Local itemCount = CountGadgetItems(listBox)
+		
+		If itemCount Then
+			Local c, r, sortCount
+			Local selectedItem = SelectedGadgetItem(listBox), selectedItemNew = -1
+			Local newList:TList = CreateList()
+			Local rowCount = CountGadgetItems(listBox)	'total number of rows/items in list
+			
+			'store sorted rows in temp list
+			Repeat
+				Local rowNum = 0, rowText$
+				If columnHeading[sortColumn].sortDir = 1 Then rowText$ = "zzzzzz"
+				
+				'find next row in sequence
+				For r = 0 To CountGadgetItems(listBox) - 1
+					If GetListBoxItem(r, sortColumn).ToLower() &lt;= rowText$ = columnHeading[sortColumn].sortDir Then
+						rowText$ = GetListBoxItem(r, sortColumn).ToLower()
+						rowNum = r
+					End If
+				Next
+				
+				'update selected index
+				If selectedItem = rowNum And selectedItemNew = -1 Then selectedItemNew = sortCount
+				
+				'create an temp array to store row data
+				Local listRow$[curColumn+1]
+				
+				'copy this row to new list
+				For c = 0 To curColumn
+					listRow$[c] = GetListBoxItem(rowNum, c)
+				Next
+				
+				newList.AddLast listRow$
+				
+				'remove row from original list &amp; update counter
+				listBox.RemoveItem rowNum
+				sortCount:+ 1
+			Until sortCount = rowCount
+			
+			'copy sorted data to new list
+			For Local row$[] = EachIn newList
+				addListViewItem(row$)
+			Next
+			
+			'change sort direction for this column
+			If columnHeading[sortColumn].sortDir = 1 Then
+				columnHeading[sortColumn].sortDir = 0
+			Else
+				columnHeading[sortColumn].sortDir = 1
+			End If
+			
+			'reselect item
+			If selectedItemNew &gt;= 0 Then SelectGadgetItem listBox, selectedItemNew
+		End If
+	End Method
+	
+	
+	'------------------------------------------------------------------------------
+	Function NewListProc:Int(hWnd:Int, Msg:Int, wParam:Int, lParam) "win32"
+	'------------------------------------------------------------------------------
+		Const HDN_ITEMCLICKW = -322
+		
+		If Msg = WM_NOTIFY Then
+			Local NotifyMess:HD_NOTIFY = New HD_NOTIFY
+			Local Tstr$
+			
+			MemCopy( NotifyMess, Byte Ptr lParam, SizeOf(HD_NOTIFY) )
+			
+			If NotifyMess.code = HDN_ITEMCLICKW Then
+				'find gadget that was clicked &amp; sort it
+				For Local listBox:TListView = EachIn gadgetList
+					If listBox.listboxHwnd = hWnd Then listBox.sort NotifyMess.iitem
+				Next
+			End If
+		End If
+		
+		If oldListProc &lt;&gt;0 Then Return CallWindowProcW(Byte Ptr oldListProc, hWnd, Msg, wParam, lParam)
+	End Function
+
+End Type
+
+
+'==============================================================================
+Type TColumnHeading
+'used by TListView
+'==============================================================================
+	Field width
+	Field sortDir = 1
+EndType
+
+'==============================================================================
+Type HD_NOTIFY 
+'used by TListView
+'==============================================================================
+	Field hwndFrom
+	Field idFrom
+	Field code
+	Field iItem
+	Field iButton
+	Field pitem
+EndType
+</textarea><br><br>Hope it helps! ;-) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Wow! What I just need for a little office application at work! Works perfectly (the first one, the one posted by SebHoll 'locks' the window - it becomes black -  and I can't do nothing else on it).<br>Many thanks!<br><br>PS: I don't know why I need to use a CanvasGadget, but I've modified it to use a smaller canvas (1,1,1,1) and it works. I dont' know if the size counts or not, but I think a smaller canvas occupies less memory at least. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ked</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> I think it would be best to not reuse the CreateListBox() function. I feel like that could be causing some problems. I have no proof of that statement though. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jsp</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> (the first one, the one posted by SebHoll 'locks' the window - it becomes black - and I can't do nothing else on it).<br> <br></div><br>Here the same, also WinXP pro SP2 like degac<br><br><div class="quote"> PS: I don't know why I need to use a CanvasGadget, but I've modified it to use a smaller canvas (1,1,1,1) and it works. I dont' know if the size counts or not, but I think a smaller canvas occupies less memory at least. <br> <br></div><br>Looks like size doesn't matter, works here also with:<br>Local TempCanvas:TGadget = CreateCanvas(0, 0, 0, 0, parent) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ghost Dancer</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for all your help and suggestions guys. I've updated my code to include Sebs version with the canvas added back in (size 0).<br><br>There are still a few tweeks needed on it (remembering seelction, column width) which I will have another crack at later. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ghost Dancer</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> I think it would be best to not reuse the CreateListBox() function. <br></div><br><br>Not quite sure what you mean there Ked?  Thats needed to create the gadget! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ked</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> I'm not sure either. Forget about it. :) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ghost Dancer</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Code updated to V1.2:<br><br>- Added sortEnable &amp; sortDisable methods.<br>- Fixed sorting bug.<br>- Added update method which can be called on EVENT_WINDOWSIZE to reset first column width.<br>- Renamed some methods. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >danielos</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Good work!<br>Is it possible to get all selected entries when multiselect is turned on ? <br><br>Cheers,<br>Daniel <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xlsior</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Currently no support for multiple selected items but hassle me and I'm sure I'll do it.  <br></div><br><br>&lt;hassle&gt;Multi-select would be a very welcome addition to this control. &lt;/hassle&gt;<br><br><br>Also, Is there any way to keep the left-most from resizing back to a narrow format entirely while resizing the window?  It looks a bit odd to have the contents jump around for seemingly no reason. (It even gets narrow when you make the window <i>larger</i>, then pops back to its original size once you stop resizing the window) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Regular K</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> <textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">	'------------------------------------------------------------------------------
+	Method getSelectedItems:TList(col:Int = 0)
+	'------------------------------------------------------------------------------
+		Local list:TList = CreateList()
+		Local sel:Int[] = SelectedGadgetItems(listBox)
+	
+		For Local i:Int = 0 To CountGadgetItems(listBox) - 1
+			For Local j:Int = 0 To Len(sel) - 1
+				If sel[j] = i
+					ListAddLast(list, GetListBoxItem(i, col))
+				EndIf
+			Next
+		Next
+		
+		Return list
+	End Method
+	</textarea><br><br>multi-select method <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Here's a version that uses a proxygadget and allows you to create more than one multicolumn listbox:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Strict
+
+Import maxgui.drivers
+Import maxgui.proxygadgets
+Import brl.pngloader
+Import maxgui.drivers
+
+Private
+
+Extern "win32" 
+   Function SendMessage:Int(hWnd:Int,MSG:Int,wParam:Int,lParam:Int) = "SendMessageA@16" 
+   Function SetWindowLong:Int(hWnd:Int,nIndex:Int,lNewLong:Int) = "SetWindowLongA@12" 
+   Function GetWindowLong:Int(hWnd:Int, nIndex:Int) = "GetWindowLongA@8" 
+   Function CallWindowProc:Int(lpPrevWndFunc, hWnd, uMsg, wParam, lParam) = "CallWindowProcA@20" 
+End Extern 
+
+
+Const LBS_NOTIFY:Int            = $1 
+Const LBS_SORT:Int              = $2 
+Const LBS_NOREDRAW:Int          = $4 
+Const LBS_MULTIPLESEL:Int       = $8 
+Const LBS_OWNERDRAWFIXED:Int    = $10 
+Const LBS_OWNERDRAWVARIABLE:Int = $20 
+Const LBS_HASSTRINGS:Int        = $40 
+Const LBS_USETABSTOPS:Int       = $70 
+Const LBS_NOINTEGRALHEIGHT:Int  = $100 
+Const LBS_MULTICOLUMN:Int       = $200 
+Const LBS_WANTKEYBOARDINPUT:Int = $400 
+Const LBS_EXTENDEDSEL:Int       = $800 
+Const LBS_DISABLENOSCROLL:Int   = $100 
+Const LBS_NODATA:Int            = $2000 
+Const LBS_NOSEL:Int             = $4000 
+Const LBS_STANDARD:Int          = $a00003 
+
+Const LVM_FIRST:Int = $1000 
+Const LVM_GETITEMA:Int          = (LVM_FIRST+5) 
+Const LVM_SETITEMA:Int          = (LVM_FIRST+6) 
+Const LVM_INSERTITEMA:Int       = (LVM_FIRST+7) 
+Const LVM_DELETEITEM:Int        = (LVM_FIRST+8) 
+Const LVM_DELETEALLITEMS:Int    = (LVM_FIRST+9) 
+Const LVM_GETCALLBACKMASK:Int   = (LVM_FIRST+10) 
+Const LVM_SETCALLBACKMASK:Int   = (LVM_FIRST+11) 
+Const LVM_GETCOLUMNA:Int        = (LVM_FIRST+25) 
+Const LVM_SETCOLUMNA:Int        = (LVM_FIRST+26) 
+Const LVM_INSERTCOLUMNA:Int     = (LVM_FIRST+27) 
+Const LVM_DELETECOLUMN:Int      = (LVM_FIRST+28) 
+Const LVM_GETCOLUMNWIDTH:Int    = (LVM_FIRST+29) 
+Const LVM_SETCOLUMNWIDTH:Int    = (LVM_FIRST+30) 
+Const LVM_GETTEXTCOLOR:Int      = (LVM_FIRST+35) 
+Const LVM_SETTEXTCOLOR:Int      = (LVM_FIRST+36) 
+Const LVM_GETTEXTBKCOLOR:Int    = (LVM_FIRST+37) 
+Const LVM_SETTEXTBKCOLOR:Int    = (LVM_FIRST+38) 
+Const LVM_SORTITEMS:Int         = (LVM_FIRST+48) 
+Const LVM_SETLISTBOXEXSTYLE:Int = (LVM_FIRST+54) 
+Const LVM_GETITEMW:Int          = (LVM_FIRST+75) 
+Const LVM_SETITEMW:Int          = (LVM_FIRST+76) 
+Const LVM_INSERTITEMW:Int       = (LVM_FIRST+77) 
+Const LVM_GETCOLUMNW:Int        = (LVM_FIRST+95) 
+Const LVM_SETCOLUMNW:Int        = (LVM_FIRST+96) 
+Const LVM_INSERTCOLUMNW:Int     = (LVM_FIRST+97) 
+
+Const LVS_EX_GRIDLINES:Int        = $1 
+Const LVS_EX_SUBITEMIMAGES:Int    = $2 
+Const LVS_EX_CHECKBOXES:Int       = $4 
+Const LVS_EX_TRACKSELECT:Int      = $8 
+Const LVS_EX_HEADERDRAGDROP:Int   = $10 
+Const LVS_EX_FULLROWSELECT:Int    = $20 
+Const LVS_EX_ONECLICKACTIVATE:Int = $40 
+Const LVS_EX_TWOCLICKACTIVATE:Int = $80 
+Const LVS_EX_FLATSB:Int           = $100 
+Const LVS_EX_REGIONAL:Int         = $200 
+Const LVS_EX_INFOTIP:Int          = $400 
+Const LVS_EX_UNDERLINEHOT:Int     = $800 
+Const LVS_EX_UNDERLINECOLD:Int    = $1000 
+Const LVS_EX_MULTIWORKAREAS:Int   = $2000 
+Const LVS_EX_LABELTIP:Int         = $4000 
+Const LVS_EX_BORDERSELECT:Int     = $8000 
+Const LVS_EX_DOUBLEBUFFER:Int     = $10000 
+Const LVS_EX_HIDELABELS:Int       = $20000 
+Const LVS_EX_SINGLEROW:Int        = $40000 
+Const LVS_EX_SNAPTOGRID:Int       = $80000 
+Const LVS_EX_SIMPLESELECT:Int     = $100000 
+
+Const LVCF_FMT:Int     = $1 
+Const LVCF_WIDTH:Int   = $2 
+Const LVCF_TEXT:Int    = $4 
+Const LVCF_SUBITEM:Int = $8 
+Const LVCF_IMAGE:Int   = $10 
+Const LVCF_ORDER:Int   = $20 
+
+Const LVIF_TEXT:Int        = $1 
+Const LVIF_IMAGE:Int       = $2 
+Const LVIF_PARAM:Int       = $4 
+Const LVIF_STATE:Int       = $8 
+Const LVIF_INDENT:Int      = $10 
+Const LVIF_GROUPID:Int     = $100 
+Const LVIF_COLUMNS:Int     = $200 
+Const LVIF_NORECOMPUTE:Int = $800  
+Const LVIF_DI_SETITEM:Int  = $1000 
+
+Const LVS_ALIGNTOP:Int        = $0 
+Const LVS_ICON:Int            = $0 
+Const LVS_REPORT:Int          = $1 
+Const LVS_SMALLICON:Int       = $2 
+Const LVS_LIST:Int            = $3 
+Const LVS_TYPEMASK:Int        = $3 
+Const LVS_SINGLESEL:Int       = $4 
+Const LVS_SHOWSELALWAYS:Int   = $8 
+Const LVS_SORTASCENDING:Int   = $10 
+Const LVS_SORTDESCENDING:Int  = $20 
+Const LVS_SHAREIMAGELISTS:Int = $40 
+Const LVS_NOLABELWRAP:Int     = $80 
+Const LVS_AUTOARRANGE:Int     = $100 
+Const LVS_EDITLABELS:Int      = $200 
+Const LVS_OWNERDRAWFIXED:Int  = $400 
+Const LVS_ALIGNLEFT:Int       = $800 
+Const LVS_ALIGNMASK:Int       = $C00 
+Const LVS_NOSCROLL:Int        = $2000 
+Const LVS_NOCOLUMNHEADER:Int  = $4000 
+Const LVS_NOSORTHEADER:Int    = $8000 
+Const LVS_TYPESTYLEMASK:Int   = $FC00 
+
+Const GWL_STYLE:Int = -$10 
+Const HDN_ITEMCLICK:Int = -302 
+Const GWL_WNDPROC:Int = -4 
+Const WM_NOTIFY = 78 
+Const HDN_ITEMCLICKW = -322 
+
+Type  LVCOLUMN  
+   Field mask:Int 
+   Field fmt:Int 
+   Field cx:Int 
+   Field pszText:Byte Ptr 
+   Field cchTextMax:Int 
+   Field iSubItem:Int 
+EndType 
+
+Type LVITEM 
+   Field mask:Int 
+   Field iItem:Int 
+   Field iSubItem:Int 
+   Field iState:Int 
+   Field stateMask:Int 
+   Field pszText:Byte Ptr 
+   Field cchTextMax:Int 
+   Field iImage:Int 
+   Field lParam:Byte Ptr 
+   Field iIndent:Int 
+   Field iGroupId:Int 
+   Field cColumns:Int 
+   Field puColumns:Int 
+EndType 
+
+Type HD_NOTIFY 
+'Field hdr:Byte Ptr ' NMHDR 
+   Field hwndFrom 
+   Field idFrom 
+   Field code 
+   Field iItem 
+   Field iButton 
+   Field pitem 
+EndType 
+
+Type LVWSORT 
+  Field hWndListView:Int  ' Fensterhandle des ListView-Controls 
+  Field SortKey:Int       ' Spalte, die sortiert werden soll 
+  Field SortType:Int ' Typ der zu sortierenden Daten 
+  Field SortOrder:Int ' Sortierrichtung 
+End Type 
+
+Const lvwAscending:Int = 0     ' Aufsteigende Sortierung 
+Const lvwDescending:Int = 1  ' Absteigende Sortierung 
+
+Const stString:Int = 1     ' Stringsortierung 
+Const stDate:Int = 2       ' Datensortierung 
+Const stNumeric:Int = 3     ' Zahlensortierung 
+
+Const LVM_FINDITEM:Int = (LVM_FIRST + 13) 
+Const LVFI_PARAM:Int = $1 
+
+Type POINTAPI ' ben&amp;#65533;tigt f&amp;#65533;r LV_FINDINFO 
+  Field x:Int 
+  Field y:Int 
+End Type 
+
+Type LV_FINDINFO 
+  Field flags:Int 
+  Field psz:String 
+  Field lParam:Int 
+  Field pt:POINTAPI 
+  Field vkDirection:Long 
+End Type 
+
+Const LVM_GETITEMTEXT:Int = (LVM_FIRST + 45) 
+
+Public
+
+Function AddListBoxColumn(ListBox:TGadget, ColumnNr:Int, Width:Int) 
+   Local ListBoxHwnd:Int = QueryGadget(ListBox,QUERY_HWND) 
+   Local Column:LVColumn = New LVColumn 
+   Column.mask = LVCF_WIDTH 
+   Column.cx = Width 
+   SendMessageA(ListBoxHwnd,LVM_INSERTCOLUMNA,ColumnNr,Int(Byte Ptr Column)) 
+End Function 
+
+Function SetListBoxHeading(ListBox:TGadget,ColumnNr:Int,HeadingText:String,Style:Int=0) 
+   Local ListBoxHwnd:Int = QueryGadget(ListBox,QUERY_HWND) 
+   Local Column:LVColumn = New LVColumn 
+   Column.mask = LVCF_TEXT | LVCF_FMT 
+   Column.fmt = Style 
+   Column.pszText = HeadingText.ToCString() 
+   Local ListBoxStyle:Int = GetWindowLongA(ListBoxHwnd,GWL_STYLE) 
+   If (ListBoxStyle &amp; LVS_NOCOLUMNHEADER ) Then 
+      ListBoxStyle = ListBoxStyle ~ LVS_NOCOLUMNHEADER 
+      SetWindowLongA(ListBoxHwnd,GWL_STYLE,ListBoxStyle) 
+   EndIf 
+   SendMessageA(ListBoxHwnd,LVM_SETCOLUMNA,ColumnNr,Int(Byte Ptr Column)) 
+End Function 
+
+Function SetListBoxColumnWidth(ListBox:TGadget,ColumnNr:Int,Width:Int) 
+   Local ListBoxHwnd:Int = QueryGadget(ListBox,QUERY_HWND) 
+   Local Column:LVColumn = New LVColumn 
+   Column.mask = LVCF_WIDTH 
+   Column.cx = Width 
+   SendMessageA(ListBoxHwnd,LVM_SETCOLUMNA,ColumnNr,Int(Byte Ptr Column)) 
+End Function 
+
+Function ModifyListBoxItem(ListBox:TGadget,RowNr:Int,ColumnNr:Int,Text:String) 
+   Local ListBoxHwnd:Int = QueryGadget(ListBox,QUERY_HWND) 
+   Local Item:LVItem = New LVItem 
+   Item.mask = LVIF_TEXT 
+   Item.iSubItem = ColumnNr 
+   Item.iItem = RowNr 
+   Item.pszText = Text.ToCString() 
+   Item.cchTextMax = Text.Length+1 
+   SendMessageA(ListBoxHwnd,LVM_SETITEMA,0,Int(Byte Ptr Item)) 
+End Function 
+
+Function GetListBoxItemText:String(ListBox:TGadget,RowNr:Int,ColumnNr:Int) 
+   Local ListBoxHwnd:Int = QueryGadget(ListBox,QUERY_HWND) 
+   Local ReturnText:String 
+   Local TextBank:TBank = CreateBank(1024) 
+   Local Item:LVItem = New LVItem 
+   Item.mask = LVIF_Text 
+   Item.iSubItem = ColumnNr 
+   Item.iItem = RowNr 
+   Item.pszText = BankBuf(TextBank) 
+   Item.cchTextMax = 255 
+   SendMessageA(ListBoxHwnd,LVM_GETITEMA,0,Int(Byte Ptr Item)) 
+   If Item.pszText &lt;&gt; Null Then 
+      ReturnText = ReturnText.FromCString(Item.pszText) 
+   EndIf 
+   Return ReturnText 
+End Function 
+
+Function SetListBoxExtendedStyle(ListBox:TGadget,Style:Int) 
+   Local ListBoxHwnd:Int = QueryGadget(ListBox,QUERY_HWND) 
+   SendMessageA(ListBoxHwnd,LVM_SETLISTBOXEXSTYLE,Style,Style) 
+End Function 
+
+Function SetListBoxMultiSelect(ListBox:TGadget, Enable:Byte = True) 
+   Local ListBoxHwnd:Int = QueryGadget(ListBox,QUERY_HWND) 
+   Local ListBoxStyle:Int = GetWindowLongA(ListboxHwnd,GWL_STYLE) 
+   If Sgn(ListBoxStyle &amp; LVS_SINGLESEL) = Enable Then 
+      ListBoxStyle = ListBoxStyle ~ LVS_SINGLESEL 
+   EndIf 
+   SetWindowLongA(ListBoxHwnd,GWL_STYLE,ListBoxStyle) 
+End Function 
+
+Function SortListView:Int(ListBox:TGadget, SortKey:Int, SortType:Int = stString, SortOrder:Int = lvwAscending) 
+' ----------------------------------------------------- 
+' &amp;#65533;ffentlich aufzurufende Prozedur SortListView, die 
+' f&amp;#65533;r die individuelle Sortierung einer ListView-Spalte 
+' sorgt. 
+' ----------------------------------------------------- 
+' hWndListView: Fensterhandle des ListView-Steuerelements 
+' SortKey:      Spalte (nullbasiert), die sortiert werden 
+'               soll (= Spaltennummer - 1). 
+' SortType:     stString, um Strings zu sortieren (Standardwert) 
+'               stDate, um Datumsangaben zu sortieren 
+'               stNumeric, um Zahlen zu sortieren 
+' SortOrder:    lvwAscending f&amp;#65533;r aufsteigende Sortierung (Std.) 
+'               lvwDescending f&amp;#65533;r absteigende Sortierung 
+' ----------------------------------------------------- 
+  ' &amp;#65533;bergebene Informationen in einer LVWSORT- 
+  ' Struktur zusammenfassen: 
+     Local udtLVWSORT:LVWSORT = New LVWSORT 
+    udtLVWSORT.hWndListView = QueryGadget(ListBox, QUERY_HWND) 
+    udtLVWSORT.SortKey = SortKey 
+    udtLVWSORT.SortOrder = SortOrder 
+    udtLVWSORT.SortType = SortType 
+
+  ' Eigene Sortierfunktionalit&amp;#65533;t in der Funktion 
+  ' CompareFunc verwenden: Die Informationen der 
+  ' LVWSORT-Struktur wird mithilfe eines Zeigers 
+  ' auf die Variable udtLVWSORT beigegeben: 
+  SendMessage QueryGadget(ListBox, QUERY_HWND), LVM_SORTITEMS, Int(Byte Ptr(udtLVWSORT)), Int(Byte Ptr(CompareFunc)) 
+End Function 
+
+Function CompareFunc:Int(lParam1:Int, lParam2:Int, lParamSort:Int) 
+' ----------------------------------------------------- 
+' Vergleichsfunktion CompareFunc 
+' ----------------------------------------------------- 
+' Verglichen werden jeweils zwei Elemente der zu 
+' sortierenden Spalte des ListView-Steuerelements, 
+' die &amp;#65533;ber lParam1 und lParam2 angegeben werden. 
+' Hierbei wird &amp;#65533;ber den R&amp;#65533;ckgabewert der Funktion 
+' bestimmt, welches der beiden Elemente als gr&amp;#65533;&amp;#65533;er 
+' gelten soll (hier f&amp;#65533;r Aufw&amp;#65533;rtssortierung): 
+' * Element 1 &lt; Element 2: R&amp;#65533;ckgabewert &lt; 0 
+' * Element 1 = Element 2: R&amp;#65533;ckgabewert = 0 
+' * Element 1 &gt; Element 2: R&amp;#65533;ckgabewert &gt; 0 
+' ----------------------------------------------------- 
+
+Local ListViewSort:LVWSORT = New LVWSORT 
+Local sEntry1:String 
+Local sEntry2:String 
+Local vCompare1:VARIANT 
+Local vCompare2:VARIANT 
+  ' In lParamSort von SortListView als Long-Pointer 
+  ' &amp;#65533;bergebene LVWSORT-Struktur abholen, um auf deren 
+  ' Werte zugreifen zu k&amp;#65533;nnen: 
+  MemCopy(Byte Ptr(ListViewSort), Byte Ptr(lParamSort), SizeOf(ListViewSort)) 
+
+  ' Die Werte der zu vergleichenden Elemente werden 
+  ' mithilfe der privaten Funktion LvwGetText aus 
+  ' den Angaben lParam1 und lParam2 ermittelt: 
+
+  sEntry1 = LvwGetText(ListViewSort, lParam1) 
+  sEntry2 = LvwGetText(ListViewSort, lParam2) 
+  DebugLog sEntry1 + " " + sEntry2 
+
+  ' Sind die Elemente gleich, kann die Funktion 
+  ' sofort mit dem aktuellen R&amp;#65533;ckgabewert 0 
+  ' verlassen werden: 
+  If sEntry1 = sEntry2 Then 
+      Return 
+  End If 
+  ' F&amp;#65533;r die Sortierung wird unterschieden zwischen 
+  ' Daten, Zahlen und allgemeinen Strings. Hierf&amp;#65533;r 
+  ' steht jeweils eine separate, private Vergleichs- 
+  ' funktion zur Verf&amp;#65533;gung. 
+
+
+    Select ListViewSort.SortType 
+    Case stDate    ' Spalteninhalte sind Datumswerte 
+      'CompareFunc = CompareDates(sEntry1, sEntry2, ListViewSort.SortOrder) 
+    Case stNumeric ' Spalteninhalte sind Zahlen 
+      'CompareFunc = CompareNumbers(sEntry1, sEntry2, ListViewSort.SortOrder) 
+    Case stString  ' Spalteninhalte sind Strings 
+      Local CompareFunc:Int = CompareStrings(sEntry1, sEntry2, ListViewSort.SortOrder) 
+  End Select 
+
+End Function 
+
+Function LvwGetText:String(ListViewSort:LVWSORT, lParam:Int) 
+' ----------------------------------------------------- 
+' Ermittelt aus dem Fensterhandle des ListView- 
+' Steuerelements, der in ListViewSort.SortKey 
+' angegebenen (nullbasierten) Spalte im ListView 
+' und der an CompareFunc &amp;#65533;bergebenen Werte lParam1/2 
+' die davon repr&amp;#65533;sentierten Zelleninhalte. 
+' ----------------------------------------------------- 
+
+Local udtFindInfo:LV_FINDINFO = New LV_FINDINFO 
+Local udtLVItem:LVITEM = New LVITEM 
+Local lngIndex:Int 
+'Local baBuffer:Byte[512] 
+Local TextBank:TBank = CreateBank(1024) 
+Local lngLength:Int 
+Local ReturnText:String 
+
+  ' Den Index der Zelle aus lParam ermitteln: 
+  udtFindInfo.flags = LVFI_PARAM 
+  udtFindInfo.lParam = lParam 
+  
+  lngIndex = SendMessage(ListViewSort.hWndListView, LVM_FINDITEM, - 1, Int(Byte Ptr(udtFindInfo))) 
+  ' Auf Basis des gefundenen Index den Text der Zelle 
+  ' in ein Byte-Array &amp;#65533;bertragen: 
+
+    udtLVItem.mask = LVIF_TEXT 
+    udtLVItem.iSubItem = ListViewSort.SortKey 
+    udtLVItem.pszText = BankBuf(TextBank) 
+   'Int(VarPtr(baBuffer[0] )) 
+    udtLVItem.cchTextMax = 255 
+
+  'lngLength = SendMessage(ListViewSort.hWndListView, LVM_GETITEMTEXT, lngIndex, Int(Byte Ptr(udtLVItem))) 
+  ' Byte-Array in passender L&amp;#65533;nge als String- 
+  ' R&amp;#65533;ckgabewert kopieren: 
+  If lngLength &gt; 0 Then 
+   ReturnText = ReturnText.FromCString(udtLVItem.pszText) 
+   DebugLog lngLength + " " + ReturnText 
+   Return ReturnText 
+    'LvwGetText = Left:String(StrConv(baBuffer, vbUnicode), lngLength) 
+  End If 
+
+End Function 
+
+
+Function CompareStrings:Int(sEntry1:String, sEntry2:String, SortOrder:Int) 
+' ----------------------------------------------------- 
+' Gibt zurück, ob das erste der beiden unterschiedlichen 
+' Elemente nach Maßgabe des Parameters SortOrder größer 
+' (1 bei aufsteigender Sortierung) oder kleiner (-1 bei 
+' aufsteigender Sortierung) als das zweite Element ist. 
+' Gleiche Elemente wurden bereits in CompareFunc ausge- 
+' schlossen; für sie wäre sonst 0 zurückzugeben. 
+' ----------------------------------------------------- 
+  ' Rückgabewert je nach erwünschter Sortierung: 
+  If SortOrder = lvwAscending Then 
+    ' Aufsteigende Sortierung zweier unterschiedlicher Strings 
+    If sEntry1 &lt; sEntry2 Then 
+      Return - 1 
+    Else 
+      Return 1 
+    End If 
+  Else ' Absteigende Sortierung 
+    If sEntry1 &gt; sEntry2 Then 
+      Return - 1 
+    Else 
+      Return 1 
+    End If 
+  End If 
+End Function 
+
+Type TMultiColumnListBox Extends TProxyGadget
+	
+	Global list:TList=New TList
+	
+	Field link:TLink
+	Field oldListProc:Int
+	Field listbox:TGadget
+	
+	Method New()
+		link=list.addlast(Self)
+	EndMethod
+	
+	Method CleanUp()
+		If link
+			link.remove()
+			link=Null
+		EndIf
+		Super.CleanUp()
+	EndMethod
+	
+	Function NewListProc:Int(hWnd:Int, Msg:Int, wParam:Int, lParam:Int) "win32" 
+	   If MSG = WM_NOTIFY Then 
+	      Local NotifyMess:HD_NOTIFY = New HD_NOTIFY 
+	
+	      MemCopy(Byte Ptr(NotifyMess), Byte Ptr(lParam), SizeOf(HD_NOTIFY)) 
+	      'DebugLog "hwndFrom  " + NotifyMess.hwndFrom 
+	      'DebugLog "idFrom  " + NotifyMess.idFrom 
+	      'DebugLog "code " + NotifyMess.code 
+	      'DebugLog "iItem " + NotifyMess.iitem 
+	      'DebugLog "iButton  " + NotifyMess.iButton 
+	      'DebugLog "pitem  " + NotifyMess.pitem 
+	
+	      If NotifyMess.code = HDN_ITEMCLICKW Then 
+	         Local event:TEvent = New TEvent 
+	         event.id = HDN_ITEMCLICKW 
+	         event.source = ActiveGadget() 
+	         event.data = NotifyMess.iitem 
+	            PostEvent(event) 
+	         'DebugLog(NotifyMess.iitem) 
+	         EndIf 
+	   EndIf 
+	
+		Local multicolumnlistbox:TMultiColumnListBox
+		For multicolumnlistbox=EachIn TMultiColumnListBox.list
+			If QueryGadget(multicolumnlistbox.ListBox, QUERY_HWND)=hWnd
+				If multicolumnlistbox.oldListProc &lt;&gt; 0 Then 
+			      '	DebugLog "MSG: " + MSG 
+			      '	DebugLog "hWnd: " + hwnd 
+			      '	DebugLog "wParam: " + wParam 
+			     	'	DebugLog "lParam: " + lParam 
+			      Return CallWindowProc(multicolumnlistbox.oldListProc, hWnd, MSG, wParam, Int(Byte Ptr(lParam))) 
+			   EndIf 
+			EndIf
+		Next
+		End
+	EndFunction 
+
+	Function Create:TMultiColumnListBox(x:Int,y:Int,width:Int,height:Int,group:TGadget,flags:Int=0)
+		Local multicolumnlistbox:TMultiColumnListBox=New TMultiColumnListBox	
+		multicolumnlistbox.listbox=CreateListBox(x,y,width,height,group)
+		multicolumnlistbox.SetProxy(multicolumnlistbox.listbox)
+		multicolumnlistbox.oldListProc=SetWindowLongA(QueryGadget(multicolumnlistbox.ListBox, QUERY_HWND), GWL_WNDPROC, Int(Byte Ptr(NewListProc)))
+		Return multicolumnlistbox		
+	EndFunction
+	
+EndType
+
+Function CreateMultiColumnListBox:TGadget(x:Int,y:Int,width:Int,height:Int,group:TGadget,flags:Int=0)
+	Return TMultiColumnListBox.Create(x,y,width,height,group,flags)
+EndFunction</textarea> <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,648 @@
+<!DOCTYPE html><html lang="en" ><head ><title >CodeArea gadget</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Code editor with undo and formatting, language=bmx, category=BlitzPlus Gui'><meta name='author' content='JoshK'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=10>BlitzPlus Gui</a>/CodeArea gadget</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2569.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >CodeArea gadget by JoshK</td><td align="right">2009 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This is not 100% working, but it's pretty good. </td></tr><tr ><td class="cell"><pre class="code">SuperStrict
+
+Import maxgui.maxgui
+Import "TextAreaUndo.bmx"
+Import "Lexer.bmx"
+
+Type TCodeArea Extends TProxyGadget
+	
+	Field textarea:TGadget
+	Field undocontext:TUndoContext
+	Field undostate:TUndoState
+	Field lexer:TLexer=New TLexer
+	
+	Method CleanUp()
+		RemoveHook(EmitEventHook,EventHook,Self)
+		undocontext.Free()
+		Super.CleanUp()
+	EndMethod
+	
+	Method ClearUndos()
+		undocontext.Flush()
+	EndMethod
+	
+	Method ReplaceText:Int(pos:Int,length:Int,text$,units:Int)
+		Local result:Int
+		Local l:Int
+		Local p:Int
+		Local line1:Int
+		Local line2:Int
+		result=proxy.ReplaceText(pos,length,text,units)
+		l=text.length
+		p=pos
+		line1=TextAreaLine(textarea,p)
+		line2=TextAreaLine(textarea,p+l)
+		lexer.FormatText(textarea,line1,1+line2-line1)
+		ClearUndos()
+		Return result
+	End Method
+	
+	Method AddText:Int(text$)
+		Local result:Int
+		Local l:Int
+		Local p:Int
+		Local line1:Int
+		Local line2:Int
+		l=text.length
+		p=TextAreaText(textarea).length
+		result=proxy.AddText(text)
+		line1=TextAreaLine(textarea,p)
+		line2=TextAreaLine(textarea,p+l)
+		lexer.FormatText(textarea,line1,1+line2-line1)
+		ClearUndos()
+		Return result
+	End Method
+	
+	Function Create:TCodeArea(x:Int,y:Int,width:Int,height:Int,group:TGadget,style:Int=0)
+		Local codearea:TCodeArea
+		codearea=New TCodearea
+		codearea.textarea=CreateTextArea(x,y,width,height,group)		
+		codearea.undocontext=TUndoContext.Create(codearea.textarea)
+		SetGadgetFilter(codearea.textarea,Filter,codearea)
+		codearea.setproxy(codearea.textarea)
+		AddHook(EmitEventHook,EventHook,codearea)
+		Return codearea
+	EndFunction
+	
+	Method Undo()
+		Local start:Int
+		Local stop:Int
+		Local line1:Int
+		Local line2:Int
+		
+		If undostate
+			start=undostate.undopos
+			stop=start+undostate.undolen
+		EndIf
+		undocontext.Undo()
+		line1=Min(TextAreaLine(textarea,start),TextAreaCursor(textarea,TEXTAREA_LINES))
+		line2=Max(TextAreaLine(textarea,stop),TextAreaCursor(textarea,TEXTAREA_LINES)+TextAreaSelLen(textarea,TEXTAREA_LINES))
+		lexer.FormatText(textarea,line1,1+line2-line1)
+	EndMethod
+
+	Method Redo()
+		Local start:Int
+		Local stop:Int
+		Local line1:Int
+		Local line2:Int
+		
+		If undostate
+			start=undostate.undopos
+			stop=start+undostate.undolen
+		EndIf		
+		undocontext.Redo()
+		line1=Min(TextAreaLine(textarea,start),TextAreaCursor(textarea,TEXTAREA_LINES))
+		line2=Max(TextAreaLine(textarea,stop),TextAreaCursor(textarea,TEXTAREA_LINES)+TextAreaSelLen(textarea,TEXTAREA_LINES))
+		lexer.FormatText(textarea,line1,1+line2-line1)		
+	EndMethod
+	
+	'Handles undo states
+	Function EventHook:Object(id:Int,data:Object,context:Object)
+		Local codearea:TCodeArea=TCodeArea(context)
+		Local event:TEvent=TEvent(data)
+		Select event.id
+			Case EVENT_GADGETSELECT
+				If codearea.undocontext.Current
+					If Not codearea.undocontext.disabled
+						If codearea.undocontext.Current.text=TextAreaText(codearea.textarea)
+							codearea.undocontext.Current.selpos=TextAreaCursor(codearea.textarea)
+							codearea.undocontext.Current.sellen=TextAreaSelLen(codearea.textarea)
+							codearea.undocontext.Current.removetext=TextAreaText(codearea.textarea,codearea.undocontext.Current.selpos,codearea.undocontext.Current.sellen)
+						EndIf
+					EndIf
+				EndIf			
+			Case EVENT_GADGETACTION
+				If Not codearea.undocontext.disabled
+					Local change:Int
+					Local start:Int
+					Local stop:Int
+					Local line1:Int
+					Local line2:Int
+					Local n:Int
+					Local s:String
+					change=event.data
+					start=TextAreaCursor(codearea.textarea)-1
+					If change&lt;0 start=start+change
+					stop=start+Abs(change)
+					line1=TextAreaLine(codearea.textarea,start)
+					line2=TextAreaLine(codearea.textarea,stop)
+					codearea.lexer.FormatText codearea.textarea,line1,1+line2-line1
+					If codearea.undocontext.Current
+						If codearea.undocontext.Current.text=TextAreaText(codearea.textarea) Return Null
+					EndIf
+					If Not codearea.undocontext.disabled
+						codearea.undostate=codearea.undocontext.createundostate()
+					EndIf
+				EndIf
+		EndSelect
+		Return data
+	EndFunction
+	
+	'Handles block indent
+	Function Filter:Int(event:TEvent,context:Object)
+		Local codearea:TCodeArea=TCodeArea(context)
+		Local line1:Int
+		Local line2:Int
+		Local n:Int,s:String
+		
+		Select event.id
+		Case EVENT_KEYDOWN
+		Case EVENT_KEYCHAR
+			If event.data=KEY_TAB
+				If TextAreaSelLen(codearea.textarea)
+					'Don't lock the textarea gadget, it will cause errors.
+					line1=TextAreaCursor(codearea.textarea,TEXTAREA_LINES)
+					line2=line1+TextAreaSelLen(codearea.textarea,TEXTAREA_LINES)
+					If event.mods=MODIFIER_SHIFT
+						For n=line1 To line2-1
+							s$=TextAreaText(codearea.textarea,n,1,TEXTAREA_LINES)
+							If s.length&gt;1
+								If Left(s,1).Trim()=""
+									SetTextAreaText codearea.textarea,"",TextAreaChar(codearea.textarea,n),1
+								EndIf
+							EndIf
+						Next
+					Else
+						For n=line1 To line2-1
+							SetTextAreaText codearea.textarea,"	",n,0,TEXTAREA_LINES
+						Next
+					EndIf
+					Local char1:Int
+					Local char2:Int
+					char1=TextAreaChar(codearea.textarea,line1)
+					char2=TextAreaChar(codearea.textarea,line2)
+
+					Local do:Int=0
+
+					If Right(TextAreaText(codearea.textarea,char1,char2-char1,TEXTAREA_CHARS),1)="~n"
+						char2:-1
+					EndIf
+					SelectTextAreaText(codearea.textarea,char1,char2-char1,TEXTAREA_CHARS)
+					
+					codearea.undostate=codearea.undocontext.CreateUndoState()
+					codearea.undostate.undopos=TextAreaChar(codearea.textarea,line1)
+					
+					Return 0
+				EndIf
+			EndIf
+		EndSelect
+		Return 1
+	EndFunction
+	
+EndType</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Lexer.bmx:<br><pre class=code>SuperStrict
+
+Import maxgui.drivers
+
+Type TLexer
+	
+	Field BACKGROUNDCOLOR_R:Int=224
+	Field BACKGROUNDCOLOR_G:Int=224
+	Field BACKGROUNDCOLOR_B:Int=224
+	Field FORMATCOLOR_PLAIN_R:Int=0
+	Field FORMATCOLOR_PLAIN_G:Int=0
+	Field FORMATCOLOR_PLAIN_B:Int=0
+	Field FORMATSTYLE_PLAIN:Int=0
+	Field FORMATCOLOR_STRING_R:Int=0
+	Field FORMATCOLOR_STRING_G:Int=128
+	Field FORMATCOLOR_STRING_B:Int=0
+	Field FORMATSTYLE_STRING:Int=TEXTFORMAT_ITALIC
+	Field FORMATCOLOR_COMMENT_R:Int=128
+	Field FORMATCOLOR_COMMENT_G:Int=0
+	Field FORMATCOLOR_COMMENT_B:Int=128
+	Field FORMATSTYLE_COMMENT:Int=0
+	Field FORMATCOLOR_COMMAND_R:Int=0
+	Field FORMATCOLOR_COMMAND_G:Int=0
+	Field FORMATCOLOR_COMMAND_B:Int=255
+	Field FORMATSTYLE_COMMAND:Int=TEXTFORMAT_BOLD
+	
+	Field keywords:String[]
+	Field lkeywords:String[]
+	
+	Method AddKeyword(word:String)
+		Local count:Int
+		count=keywords.length
+		keywords=keywords[..count+1]
+		lkeywords=lkeywords[..count+1]
+		keywords[count]=word
+		lkeywords[count]=word.tolower()
+	EndMethod
+	
+	Method FormatText(gadget:TGadget,position:Int=0,length:Int=TEXTAREA_ALL)
+		Local index:Int
+		Local commentline:Int
+		
+		LockTextArea gadget
+		If length=TEXTAREA_ALL length=TextAreaLen(gadget,TEXTAREA_LINES)-1-position
+		For index=position To position+length
+			Rem
+			'Check for Rem
+			s$=Lower(TextAreaText(gadget,index,1,TEXTAREA_LINES))
+			s=Trim(s)
+			If Not commentline
+				If Left(s,3)="rem"
+					c$=Mid(s,4,1)
+					commentline=True
+					If lb&gt;=48 And lb&lt;=57 commentline=False
+					If lb&gt;=65 And lb&lt;=90 commentline=False
+					If lb&gt;=97 And lb&lt;=122 commentline=False
+				EndIf
+			EndIf
+			If commentline
+				If Left(s,6)="endrem"
+					c$=Mid(s,4,1)
+					commentline=False
+					If lb&gt;=48 And lb&lt;=57 commentline=True
+					If lb&gt;=65 And lb&lt;=90 commentline=True
+					If lb&gt;=97 And lb&lt;=122 commentline=True
+					FormatTextAreaText(gadget,128,0,128,0,index,1,TEXTAREA_LINES)
+					Continue
+				EndIf
+			EndIf
+			EndRem
+			If commentline
+				FormatTextAreaText(gadget,128,0,128,0,index,1,TEXTAREA_LINES)
+			Else
+				FormatLine gadget,index
+			EndIf
+		Next
+		UnlockTextArea gadget
+	EndMethod
+	
+	Method FormatLine(gadget:TGadget,position:Int)
+		Local s:String
+		Local startpos:Int
+		Local pos:Int
+		Local ss:String
+		Local pos2:Int
+		Local stringoffset:Int
+		Local firstpart:String
+		Local lastpart:String
+		Local space:String
+		Local n:Int
+		
+		FormatTextAreaText(gadget,FORMATCOLOR_PLAIN_R,FORMATCOLOR_PLAIN_G,FORMATCOLOR_PLAIN_B,FORMATSTYLE_PLAIN,position,1,TEXTAREA_LINES)
+		s$=Lower(TextAreaText(gadget,position,1,TEXTAREA_LINES))
+		startpos=TextAreaChar(gadget,position)
+		
+		'Remove Comments
+		pos=Instr(s,"'")
+		If pos
+			FormatTextAreaText(gadget,FORMATCOLOR_COMMENT_R,FORMATCOLOR_COMMENT_G,FORMATCOLOR_COMMENT_B,FORMATSTYLE_COMMENT,startpos+pos-1,s.length-pos)
+			s=Left(s,pos)
+		EndIf
+		
+		'Strings
+		ss$=s
+		pos=Instr(ss,Chr(34))
+		stringoffset=0
+		While pos
+			pos2=Instr(ss,Chr(34),pos+1)
+			If pos2
+				FormatTextAreaText(gadget,FORMATCOLOR_STRING_R,FORMATCOLOR_STRING_G,FORMATCOLOR_STRING_B,FORMATSTYLE_STRING,startpos+pos+stringoffset-1,pos2-pos+1)
+				firstpart$=Left(s,pos+stringoffset-1)
+				lastpart$=Right(s,s.length-pos2-stringoffset)
+				s$=firstpart
+				space$=""
+				For n=1 To ss.length-firstpart.length-lastpart.length-2
+					space$:+"?"
+				Next
+				s=s+Chr(34)+space+Chr(34)+lastpart
+			Else
+				Exit
+			EndIf
+			ss=Right(ss,ss.length-pos2)
+			pos=Instr(ss,Chr(34))
+			stringoffset:+pos2
+		Wend
+		
+		'Format Keywords
+		Local text:String
+		Local ltext:String
+		Local leftokay:Int
+		Local rightokay:Int
+		Local lc:String
+		Local lb:Int
+		Local rc:String
+		Local rb:Int
+		Local r:Int,g:Int,b:Int
+		Local length:Int
+		
+		For n=0 To keywords.length-1
+			text=keywords[n]
+			ltext=lkeywords[n]
+			
+			pos=Instr(s,ltext)
+			While pos
+				'Is word isolated?
+				If pos&gt;0
+					lc$=Mid(s,pos-1,1)
+					lb=Asc(lc)
+					leftokay=True
+					If lb&gt;=48 And lb&lt;=57 leftokay=False
+					If lb&gt;=65 And lb&lt;=90 leftokay=False
+					If lb&gt;=97 And lb&lt;=122 leftokay=False
+				Else
+					leftokay=True
+				EndIf
+				'Check the right side
+				If leftokay
+					If pos+text.length-1&lt;=s.length
+						rc$=Mid(s,pos+text.length,1)
+						rb=Asc(rc)
+						rightokay=True
+						If rb&gt;=48 And rb&lt;=57 rightokay=False
+						If rb&gt;=65 And rb&lt;=90 rightokay=False
+						If rb&gt;=97 And rb&lt;=122 rightokay=False
+					Else
+						rightokay=True
+					EndIf
+					If rightokay
+						SetTextAreaText gadget,text,startpos+pos-1,text.length
+						r=FORMATCOLOR_COMMAND_R
+						g=FORMATCOLOR_COMMAND_G
+						b=FORMATCOLOR_COMMAND_B
+						position=startpos+pos-1
+						length=text.length
+						FormatTextAreaText(gadget,r,g,b,FORMATSTYLE_COMMAND,position,length)
+					EndIf
+				EndIf
+				pos=Instr(s,ltext,pos+text.length)
+			Wend
+		Next
+		
+	EndMethod 
+	
+EndType</pre> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> TextAreaUndo.bmx:<br><pre class=code>SuperStrict
+
+Import maxgui.drivers
+
+Type TUndoContext
+	
+	Field link:TLink
+	Field gadget:TGadget
+	Field undostates:TList=New TList
+	Field Current:TUndoState
+	Field change:Int
+	Field disabled:Int
+
+	Method CreateUndoState:TUndostate(force:Int=0)
+		If Current Current.clearafter
+		Local undostate:TUndoState=New TUndoState
+		undostate.context=Self
+		undostate.link=undostates.addlast(undostate)
+		undostate.selpos=TextAreaCursor(gadget)
+		undostate.sellen=TextAreaSelLen(gadget)
+		undostate.update()
+		undostate.force=force
+		Current=undostate
+		Return undostate
+	EndMethod
+	
+	Method CanUndo:TUndoState(undostate:TUndoState=Null)
+		If undostate=Null undostate=Current
+		If undostate
+			If undostate.link.prevlink()
+				Local prevundostate:TUndoState=TUndoState(undostate.link.prevlink().value())
+				If prevundostate.force=-1
+					Return TUndoState(prevundostate.link.prevlink().value())
+				Else
+					Return prevundostate
+				EndIf
+			EndIf
+		EndIf
+		Return Null
+	EndMethod
+	
+	Method CanRedo:TUndoState(undostate:TUndoState=Null)
+		If undostate=Null undostate=Current
+		If undostate
+			If undostate.link.nextlink()
+				Local nextundostate:TUndoState=TUndoState(undostate.link.nextlink().value())
+				If nextundostate.force=1
+					Return TUndoState(nextundostate.link.nextlink().value())
+				Else
+					Return nextundostate
+				EndIf
+			EndIf
+		EndIf
+		Return Null
+	EndMethod
+
+	Method Undo:Int()
+		If Current
+			If canundo()
+				Current.undo
+				Current=canundo()
+				Return True
+			EndIf
+		EndIf
+		Return False
+	EndMethod
+
+	Method Redo:Int()
+		Local undostate:TUndoState=CanRedo()
+		If undostate
+			undostate.redo
+			Current=undostate
+			Return True
+		EndIf
+		Return False
+	EndMethod
+
+	Method Flush()
+		For Local undostate:TUndoState=EachIn undostates
+			undostate.kill
+		Next
+		undostates.clear
+		Current=Null
+		createundostate
+	EndMethod
+	
+	Method Free()
+		flush
+		undostates=Null
+		gadget=Null
+		RemoveLink link
+		link=Null
+	EndMethod
+	
+	Function Create:TUndoContext(gadget:TGadget)
+		Local undocontext:TUndoContext=New TUndoContext
+		undocontext.gadget=gadget
+		undocontext.createundostate
+		Return undocontext		
+	EndFunction
+	
+EndType
+
+Type TUndostate
+	Field link:TLink
+	Field context:TUndoContext
+	Field text$
+	Field undotext$
+	Field redotext$
+	Field selpos:Int
+	Field sellen:Int
+	Field undolen:Int
+	Field undopos:Int
+	Field change:Int
+	Field force:Int
+	
+	Field removetext$
+	Field removeposition:Int
+	
+	Field addtext$
+	Field addposition:Int
+
+	Method Update()
+		text$=TextAreaText(context.gadget)
+		selpos=TextAreaCursor(context.gadget)
+		sellen=TextAreaSelLen(context.gadget)
+		
+		removetext=TextAreaText(context.gadget,selpos,sellen)
+		
+		Local lastundostate:TUndoState=context.canundo(Self)
+		If lastundostate
+			change=text.length-lastundostate.text.length
+			change=change+lastundostate.sellen
+		Else
+			change=text.length
+		EndIf
+				
+		If change&lt;0
+			undopos=selpos
+			undolen=-change
+			If lastundostate
+				undotext=Mid(lastundostate.text,undopos+1,-change)
+			EndIf
+		Else
+			undopos=selpos-change
+			undolen=change
+			If lastundostate
+				undotext=Mid(text,undopos+1,change)
+			EndIf
+		EndIf
+
+	EndMethod
+	
+	Method Undo()
+		Local start:Int=TextAreaCursor(context.gadget)
+		Local prevundostate:TUndoState=context.canundo(Self)
+		Local nextundostate:TUndoState=context.canredo(Self)
+		'LockTextArea context.gadget
+		If change&gt;0
+			SetTextAreaText context.gadget,"",undopos,undolen
+		Else
+			SetTextAreaText context.gadget,undotext,undopos,0
+		EndIf
+		'UnlockTextArea context.gadget
+		prevundostate:TUndoState=context.canundo(Self)
+		If prevundostate		
+			SetTextAreaText context.gadget,prevundostate.removetext,prevundostate.selpos,0
+			SelectTextAreaText context.gadget,prevundostate.selpos,prevundostate.sellen
+		Else
+			SelectTextAreaText context.gadget,0,0
+		EndIf
+		
+		Local stop:Int=TextAreaCursor(context.gadget)
+		Local size:Int=Abs(start-stop)+TextAreaSelLen(context.gadget)
+		context.disabled=True
+		EmitEvent CreateEvent(EVENT_GADGETACTION,context.gadget,size)
+		context.disabled=False
+	EndMethod
+		
+	Method Redo()
+		Local start:Int=TextAreaCursor(context.gadget)
+		Local prevundostate:TUndoState=context.canundo(Self)
+		Local nextundostate:TUndoState=context.canredo(Self)
+		Local l:Int
+		LockTextArea context.gadget
+		If change&lt;0
+			SetTextAreaText context.gadget,"",undopos,undolen
+		Else
+			If prevundostate l=prevundostate.sellen
+			SetTextAreaText context.gadget,undotext,undopos,l
+		EndIf
+		UnlockTextArea context.gadget
+		SelectTextAreaText context.gadget,selpos,sellen
+		Local stop:Int=TextAreaCursor(context.gadget)
+		Local size:Int=start-stop
+		context.disabled=True
+		EmitEvent CreateEvent(EVENT_GADGETACTION,context.gadget,size)
+		context.disabled=False
+	EndMethod
+	
+	Method ClearAfter()
+		Local sublink:TLink
+		Local nextsublink:TLink
+		sublink=link.nextlink()
+		While sublink
+			nextsublink=sublink.nextlink()
+			TUndoState(sublink.value()).kill
+			sublink=nextsublink			
+		Wend
+	EndMethod
+	
+	Method Kill()
+		If link.prevlink()
+			context.Current=TUndostate(link.prevlink().value())
+		Else
+			context.Current=Null
+		EndIf
+		RemoveLink link
+		link=Null
+	EndMethod
+
+EndType</pre> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Example:<br><pre class=code>SuperStrict
+
+Import "CodeArea.bmx"
+
+Local window:TGadget
+Local menu:TGadget
+Local codearea:TCodeArea
+
+'Create window
+window=CreateWindow("My Window",130,20,800,600,,15|WINDOW_ACCEPTFILES)
+menu=CreateMenu("Edit",0,WindowMenu(window))
+CreateMenu("Undo",0,menu,KEY_Z,MODIFIER_COMMAND)
+CreateMenu("Redo",0,menu,KEY_Z,MODIFIER_COMMAND|MODIFIER_OPTION)
+UpdateWindowMenu(window)
+
+'Create CodeArea gadget
+codearea=TCodeArea.Create(0,0,ClientWidth(window),ClientHeight(window),window)
+SetGadgetLayout codearea,1,1,1,1
+SetGadgetFont(codearea,LoadGuiFont("Courier",9))
+ActivateGadget codearea
+
+'Add keywords
+codearea.lexer.AddKeyWord("If")
+codearea.lexer.AddKeyWord("EndIf")
+codearea.lexer.AddKeyWord("Next")
+codearea.lexer.AddKeyWord("Next")
+codearea.lexer.AddKeyWord("For")
+codearea.lexer.AddKeyWord("To")
+codearea.lexer.AddKeyWord("Local")
+codearea.lexer.AddKeyWord("Global")
+codearea.lexer.AddKeyWord("KeyHit")
+
+'Add some text
+AddTextAreaText codearea,"if keyhit(KEY_ESCAPE)~n"
+AddTextAreaText codearea,"	~n"
+AddTextAreaText codearea,"endif~n"
+
+
+'Main loop
+While WaitEvent()
+	Print CurrentEvent.ToString()+" "+EventSourceHandle()
+	Select EventID()
+	Case EVENT_MENUACTION
+		Select GadgetText(TGadget(EventSource()))
+		Case "Undo" codearea.Undo()
+		Case "Redo" codearea.Redo()
+		EndSelect
+	Case EVENT_WINDOWCLOSE
+		End
+	Case EVENT_APPTERMINATE
+		End
+	End Select
+Wend</pre> <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

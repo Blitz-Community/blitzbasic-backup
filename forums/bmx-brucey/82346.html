@@ -1,0 +1,106 @@
+<!DOCTYPE html><html lang="en" ><head ><title >wxCheckListBox leaks</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >wxCheckListBox leaks</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=124" >Brucey's Modules</a>/<a href="#bottom" >wxCheckListBox leaks</a><br><br>
+<a name="928198"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DavidDC</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I seem to have uncovered a leak in wxCheckListBox (running in XP). I'd really appreciate it if others could run this code to confirm.<br><br>I'm getting a steady 20K leak in task manager - with the GCMemAlloced() printout looking fine.<br><br>Worse, if I comment out Clear() and uncomment the DeleteItem() code the leak remains, and the app auto-exits to desktop with nary a complaint after 250 iterations! Most unsettling...<br><br>All help much appreciated! Perhaps there's something wrong with my code?<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+Framework wx.wxApp
+Import wx.wxFrame
+Import wx.wxCheckListBox
+Import wx.wxTimer
+Import BRL.StandardIO
+
+Type MyApp Extends wxApp
+
+	Field Window:TWindow
+		
+	Method OnInit:Int()
+		Window = TWindow(New TWindow.Create( Null, , "Test CheckListbox leaks" ,,,150,150))
+		Window.Centre()
+		Window.Show(True)
+		Return True
+	End Method
+
+End Type
+
+New MyApp.run()
+
+Type TWindow Extends wxFrame
+
+	Field Timer:TTimer
+	
+	Method OnClose(_event:wxCloseEvent)
+		If Timer
+			Timer.Stop()
+			Print "Timer stopped"
+		EndIf		
+		_event.Skip()
+	End Method
+
+	Method OnInit()
+		Timer = New TTimer.CreatewxTimer(Self)
+		Timer.Start(1)
+		Connect(GetId(),wxEVT_CLOSE_WINDOW, _OnClose)
+	End Method
+
+	Function _OnClose(_event:wxEvent)
+		TWindow(_event.parent).OnClose(wxCloseEvent(_event))
+	End Function
+ 
+EndType
+
+Type TTimer Extends wxTimer
+	
+	Field List:wxCheckListBox
+	Field Window:wxFrame
+	
+	Method CreatewxTimer:TTimer(_window:wxFrame)
+		Window = _window
+		Super.Create()
+		Return Self
+	End Method
+	
+	Method Notify()
+	
+		Global loop_counter:Int = 0
+							
+		' Populate the listbox
+		Local s_items:String[] = ["one","two","three","four","five"]
+	
+		List = New wxCheckListBox.Create(Window,wxID_ANY,Null,0,0,100,100)
+	
+		'	Populate list
+		For Local item:Int = 0 Until s_items.length
+			List.Append(s_items[item],"user data_"+item)
+		Next
+					
+		List.Clear()
+	
+	'	This also leaks - but worse - throws us back to desktop with no error	after 250 iterations
+	'	For Local item:Int = 0 Until List.GetCount() List.DeleteItem(item) Next
+				
+		Print "iteration " +loop_counter +" " +GCMemAlloced()
+		loop_counter :+ 1
+
+		List.Destroy()
+		List = Null
+		
+	End Method
+	
+End Type
+</textarea> <br><br></td></tr></table><br>
+<a name="928206"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pete Rigz</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> hmm seems to happen here too, on Vista. Looking at the description for destroy it says that they're added to a list to be removed at idle time after all events are processed but it seems they not for some reason. I wonder if this is for anything that extends wxwindow or some something specific to do with the listboxes?<br><br>Mine didn't crash though after doing what you said.<br><br>Incidentally your example wouldn't run before importing brl.standardio for the print command. <br><br></td></tr></table><br>
+<a name="928211"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DavidDC</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for checking Pete. I've added that extra Import.<br><br>If I comment out the .Append line the leak vanishes - so the actual listbox control is being destroyed I think, just not its contents. User data doesn't seem involved as Appending with a NULL second arg still leaks.<br><br>Edit:<br><br>I can add that simply creating/populating and destroying a CheckListBox in a closed loop doesn't leak when I attempt this in C++ as follows:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+for(int loop = 0; loop &lt; 10000; loop ++){
+   CreateGUIControls();
+   FillCheckListBox();
+   Show(true);
+   ClearCheckListBox();
+   DestroyCheckListBox();
+   printf("%d",loop);
+}</textarea><br><br>Which suggests to me there's not any issue with wxWidgets not having space/time to call its low level cleanup code. <br><br></td></tr></table><br>
+<a name="931181"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DavidDC</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just a follow-up on this. <br><br>My current workaround has been to write my own CheckListBox simply by extending wxListCtrl and manually setting an empty box image/ticked box image for each row via the imagelist functionality.<br><br>You then use wxListItem.GetImage to test the check state of any given row - so you don't even need to add any extra data structures. <br><br>The result is leak free and nigh indistinguishable from the real control. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

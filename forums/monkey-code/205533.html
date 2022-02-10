@@ -1,0 +1,405 @@
+<!DOCTYPE html><html lang="en" ><head ><title >BSP Tree Dungeon Generator for Roguelikes</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >BSP Tree Dungeon Generator for Roguelikes</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >BSP Tree Dungeon Generator for Roguelikes</a><br><br>
+<a name="2061968"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Gerry Quinn</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I got interested in the topic and ended up creating one.<br><br>You can run the code as an app.  Press N for a new dungeon.  There are various parameters and consts that you can tweak.<br><br>Making the BSP tree itself is pretty easy - the hardest part is making nice paths to join the zones.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+
+' Simple BSP Tree dungeon generation
+' Press N for new dungeons
+
+
+Import mojo
+
+
+Function Main:Int()
+   New BSPApp()
+   Return 0
+End
+
+
+Class BSPApp Extends App
+
+	Field generator:BSPGenerator
+	
+	Field seedVal:Int
+	
+
+	Method OnCreate:Int()
+		Seed = seedVal
+		generator = New BSPGenerator( 200, 150, 7, 6 )
+		SetUpdateRate( 10 )
+		Return 0
+	End
+	
+	
+	Method OnUpdate:Int()
+		If KeyHit( KEY_N )
+			seedVal += 1
+			Seed = seedVal
+			generator = New BSPGenerator( 200, 150, 7, 6 )
+		End
+		Return 0
+	End
+	
+	
+	Method OnRender:Int()
+	    generator.Draw()
+		Return 0
+	End
+
+End
+
+
+Class BSPGenerator
+
+	' A few parameters that can be tweaked, or changed to fields if desired
+	Const NOSPLIT_PERCENT:Int = 20			' a rect that can split sometimes doesn't, for a big room
+	Const NOSPLIT_MINDEPTH:Int = 2			' minimum depth of non-splitting rooms
+	Const EDGEAVOID_FACTOR:Float = 0.1		' try not to have paths join at edges of areas
+	Const FAVOURBEND_FACTOR:Float = 1.0		' favour bendy path even if straight is possible
+       
+    
+	Field dungeon:Int[][]
+	
+	Field root:BSPRect
+
+	Field rects:List&lt; BSPRect &gt;
+    
+
+    Method New( dungeonWidth:Int, dungeonHeight:Int, bspDepth:Int, minSize:Int )
+		root = New BSPRect()
+		root.rect.Set( 0, 0, dungeonWidth, dungeonHeight )
+		rects = New List&lt; BSPRect &gt;
+		MakeTree( root, bspDepth, minSize )
+		MakeRooms()
+		CalculateOpenZones( bspDepth )
+		MakeDungeon()
+		JoinZones( bspDepth )
+    End
+
+	
+	' Generate a BSP tree with desired characteristics
+    Method MakeTree:Void( rect:BSPRect, depthToGo:Int, minSize:Int )
+		If depthToGo &gt; 0
+			If rect.depth &gt;= NOSPLIT_MINDEPTH 
+				If Rnd( 100 ) &lt; NOSPLIT_PERCENT
+					Return
+				End
+			End
+			rect.Split( minSize )               
+			For local child:BSPRect = Eachin rect.children
+				rects.AddLast( child )
+				MakeTree( child, depthToGo - 1, minSize )
+			Next
+		End
+    End      
+    
+    
+    ' Make a room in each bottom-level BSPRect
+    Method MakeRooms:Void()
+		For local bspRect:BSPRect = Eachin rects
+			If bspRect.children.Length() = 0
+				Local w:Int = bspRect.rect.w - 2
+				Local h:Int = bspRect.rect.h - 2
+				w = Int( w * Rnd( 0.5, 0.75 ) + 0.5 )
+				h = Int( h * Rnd( 0.5, 0.75 ) + 0.5 )
+				Local x:Int = 1 + Int( Rnd( bspRect.rect.w - 2 - w ) )
+				Local y:Int = 1 + Int( Rnd( bspRect.rect.h - 2 - h ) )
+				bspRect.openArea.Set( bspRect.rect.x + x, bspRect.rect.y + y, w, h )
+			End
+		Next
+    End
+    
+    
+    ' For mid-level rects, calculate the smallest rectangle containing all rooms
+    Method CalculateOpenZones:Void( maxDepth:Int )
+		For Local depth:Int = maxDepth Until 0 Step -1
+			Local changes:Bool
+			For local bspRect:BSPRect = Eachin rects
+				If bspRect.children.Length() &gt; 0
+					If bspRect.depth = depth
+						bspRect.openArea.Set( bspRect.children[ 0 ].openArea )
+						bspRect.openArea.Union( bspRect.children[ 1 ].openArea )
+					End
+				End
+			Next
+		Next
+    End
+    
+    
+    ' Make a dungeon where walls are -1 and floor is zero
+    Method MakeDungeon:Void()
+		dungeon = New Int[ root.rect.w ][]
+		
+		' Put safety wall at edge (shouldn't be needed)
+		For Local x:Int = 0 Until root.rect.w
+			dungeon[ x ] = New Int[ root.rect.h ]
+			For Local y:Int = 0 Until root.rect.h
+				dungeon[ x ][ y ] = -2						
+			Next
+		Next
+		
+		' Rest of dungeon is filled with ordinary wall
+		For Local x:Int = 1 Until root.rect.w - 1
+			For Local y:Int = 1 Until root.rect.h - 1
+				dungeon[ x ][ y ] = -1						
+			Next
+		Next
+		
+		' Rects without children are the rooms 
+		For local bspRect:BSPRect = Eachin rects
+			If bspRect.children.Length() = 0
+				For Local x:Int = bspRect.openArea.x Until bspRect.openArea.x + bspRect.openArea.w
+					For Local y:Int = bspRect.openArea.y Until bspRect.openArea.y + bspRect.openArea.h
+						dungeon[ x ][ y ] = 0
+					Next
+				Next
+			End
+		Next
+    End
+    
+    
+    ' Make a path from a point to a non-wall cell in an area 
+    ' Point must be outside it and in line with it to north, south, east or west
+    Method MakePathToArea:Void( xStart:Int, yStart:Int, area:Rect )
+		Local dx:Int
+		Local dy:Int
+		If xStart &gt;= area.x And xStart &lt; area.x + area.w
+			dy = Sgn( area.y - yStart )
+		Else
+			dx = Sgn( area.x - xStart )
+		End
+		Local x:Int = xStart
+		Local y:Int = yStart
+		Repeat
+			dungeon[ x ][ y ] = 0
+			x += dx
+			y += dy
+		Until dungeon[ x ][ y ] &lt;&gt; -1
+    End
+    
+    
+    ' Join all zones with their siblings (needs dungeon map)
+    ' This is the hardest part if you want to make nice paths!
+    Method JoinZones:Void( maxDepth:Int )
+		For Local depth:Int = maxDepth Until 0 Step -1
+			For local bspRect:BSPRect = Eachin rects
+			
+				' We must work from bottom to top or paths will be blocked by other paths
+				If bspRect.depth &lt;&gt; depth
+					Continue
+				End
+				
+				' Find a pair to be joined
+				Local firstBorn:Bool = bspRect = bspRect.parent.children[ 0 ]
+				If Not firstBorn
+					Continue
+				End				
+				Local sib:BSPRect = bspRect.parent.children[ 1 ]
+
+				' We will copy and rotate/mirror the regions to minimise repetitive calculations
+				Local topRect:Rect = New Rect()
+				Local botRect:Rect = New Rect()
+				topRect.Set( bspRect.openArea )
+				botRect.Set( sib.openArea )
+				Local rotate:Bool = sib.rect.x &gt; bspRect.rect.x
+				If rotate
+					topRect.Rotate()
+					botRect.Rotate()
+				End
+				
+				' We can make a straight or bent path if the appropriate value is positive
+				Local overlapZone:Int = Min( topRect.x + topRect.w, botRect.x + botRect.w ) -
+						Max( topRect.x, botRect.x )
+				Local bendZone:Int = Abs( topRect.x - botRect.x )
+				Local bendMode:Bool = botRect.x &gt; topRect.x
+				Local joinStraight:Bool
+				If overlapZone &gt; 0
+					If bendZone &lt; 2 Or Rnd( overlapZone + bendZone * FAVOURBEND_FACTOR ) &lt;= overlapZone
+						joinStraight = True
+					End
+				End
+
+				' Make a rect for the start point, so we can carry out the reverse transformation on it
+				Local startPoint:Rect = New Rect()
+				startPoint.Set( 0, 0, 1, 1 )
+				Local R1:Float = EDGEAVOID_FACTOR
+				Local R2:Float = 1 - 2.0 * EDGEAVOID_FACTOR
+				If joinStraight
+					startPoint.x = Max( topRect.x, botRect.x ) + Int( overlapZone * Rnd( R1, R2 ) )
+					startPoint.y = botRect.y - 1
+				Else
+					If bendMode
+						startPoint.x = topRect.x + Int( bendZone * Rnd( R1, R2 ) )
+						startPoint.y = botRect.y + Int( botRect.h * Rnd( R1, R2 ) )
+					Else
+						startPoint.x = botRect.x + Int( bendZone * Rnd( R1, R2 ) )
+						startPoint.y = topRect.y + Int( topRect.h * Rnd( R1, R2 ) )
+					End
+				End
+				Local val:Int = startPoint.x
+				If rotate
+					startPoint.Rotate()
+					startPoint.Rotate()
+					startPoint.Rotate()
+				End
+				
+				' Make two halves of the path
+				MakePathToArea( startPoint.x, startPoint.y, bspRect.openArea )
+				MakePathToArea( startPoint.x, startPoint.y, sib.openArea )				
+								
+			Next
+		Next
+	End
+          
+          
+    Method Draw:Void()
+        Cls( 0, 0, 0 )       
+        Local mag:Int = Min( 640 / root.rect.w, 400 / root.rect.h )
+        
+        ' Draw the dungeon
+        Local w:Int = dungeon.Length()
+        Local h:Int = dungeon[ 0 ].Length()
+        For Local x:Int = 0 Until w
+			For Local y:Int = 0 Until h
+				Local val:Int = dungeon[ x ][ y ]
+				If val = 0
+					SetColor( 224, 224, 192 )
+				Elseif val = 1
+					SetColor( 160, 255, 160 )
+				Else
+					SetColor( 64, 0, 64 )
+				End
+				DrawRect( x * mag, y * mag, mag, mag )
+			Next
+		Next
+		
+		' Overlay the BSP tree
+		SetAlpha( 0.3 )
+        For Local bspRect:BSPRect = Eachin rects
+			If bspRect.children.Length() = 0
+				Local rect:Rect = bspRect.rect
+				SetColor( 0, 255, 255 )
+				DrawRect( mag * ( rect.x + 1 ), mag * ( rect.y + 1 ), 
+						mag * ( rect.w - 2 ), mag * ( rect.h - 2 ) ) 
+			End
+        Next
+		SetAlpha( 1.0 )
+    End      
+          
+          
+End
+
+
+Class BSPRect
+
+	Field rect:Rect
+	Field openArea:Rect
+    Field children:BSPRect[]
+    Field parent:BSPRect
+    Field depth:Int
+
+
+	Method New()
+		rect = New Rect()
+		openArea = New Rect()
+	End
+	
+    
+	' Create two child BSPRects, so long as we are big enough
+	Method Split:Void( minSize:Int )              
+		Local splitSize:Int = Max( rect.w, rect.h )
+		If splitSize &gt;= minSize
+			children = [ New BSPRect(), New BSPRect() ]
+			local split:Int = Int( Rnd( splitSize * 0.33, splitSize * 0.67 ) + 0.5 )
+			For Local child:BSPRect = Eachin children
+				child.rect.Set( rect )
+				child.parent = Self
+				child.depth = depth + 1
+			Next
+			If rect.w &gt; rect.h
+				children[ 0 ].rect.w = split
+				children[ 1 ].rect.w -= split
+				children[ 1 ].rect.x += split
+			Else
+				children[ 0 ].rect.h = split
+				children[ 1 ].rect.h -= split
+				children[ 1 ].rect.y += split
+			End 
+		End
+	End
+	
+End
+
+
+' A rectangle
+Class Rect
+
+	Field x:Int
+	Field y:Int
+	Field w:Int
+	Field h:Int
+	
+	
+	Method Set:Void( xPos:Int, yPos:Int, width:Int, height:Int )
+		x = xPos
+		y = yPos
+		w = width
+		h = height
+	End
+	
+	
+	Method Set:Void( other:Rect )
+		x = other.x
+		y = other.y
+		w = other.w
+		h = other.h
+	End
+	
+	
+	' Make this rect equal to the smallest rect containing both rects
+	Method Union:Void( other:Rect )
+		x = Min( x, other.x )
+		y = Min( y, other.y )
+		Local right:Int = Max( x + w, other.x + other.w )
+		Local bottom:Int = Max( y + h, other.y + other.h )
+		w = right - x
+		h = bottom - y
+	End
+	
+	
+	' Rotate 90 degrees around origin (clockwise if y points down and x right)
+	Method Rotate:Void()
+		Local tmp:Int = x
+		x = - y - h
+		y = tmp
+		tmp = w
+		w = h
+		h = tmp
+	End
+
+End
+
+</textarea> <br><br></td></tr></table><br>
+<a name="2061966"></a>
+
+<a name="2061982"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >impixi</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice. <br><br></td></tr></table><br>
+<a name="2061999"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Gerry Quinn</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just to note, the parameters in the example give a very large dungeon with oodles of small rooms.  For a dungeon that would be more realistic in a game, change the parameters in OnUpdate to to something like:<br><br>generator = New BSPGenerator( 80, 60, 6, 20 )<br><br>You could also mess with the NOSPLIT and FAVOURBEND factors.<br><br>There are also non-parametised things you could vary in BSPGenerator.MakeRooms and BSPRect.Split.<br><br>The code doesn't do any sanity-checking but I think it should be pretty robust if you don't do anything too crazy.  It should be obvious that NOSPLIT_PERCENT should be less that 100 and EDGEAVOID should be a small positive fraction.  FAVOURBEND can be anything from 0..1000: 1.0 is a neutral value.  minSize will have some lower limit I think, probably 2-3 - but who wants microscopic rooms anyway?  If you want tangled corridors, make small rooms into corridors or mini-mazes in MakeDungeon. <br><br></td></tr></table><br>
+<a name="2061998"></a>
+
+<a name="2061997"></a>
+
+<a name="2061996"></a>
+
+<a name="2061995"></a>
+
+<a name="2061994"></a>
+
+<a name="2061993"></a>
+
+<a name="2062000"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Why0Why</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is really nice.  I appreciate you posting! <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

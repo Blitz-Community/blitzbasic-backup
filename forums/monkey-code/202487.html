@@ -1,0 +1,1285 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Save your game with reflection</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Save your game with reflection</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >Save your game with reflection</a><br><br>
+<a name="2024553"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >slenkar</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> here is the module:<br>it takes care of cyclical references (objects that reference themselves)<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict 
+Import keef.config
+Import reflection
+Import saveableclass
+Global serial_objects:IntMap&lt;Object&gt;
+Global unique_int:Int
+
+Function reset_ids:Void(obj:Object)
+
+Local clas:=GetClass( obj )
+
+Local elemty:=clas.ElementType
+If elemty
+If	clas.ArrayLength(obj)&gt;0
+	For Local i:=0 Until clas.ArrayLength( obj )
+		reset_ids(clas.GetElement(obj,i))
+	Next
+Endif
+Endif
+
+If clas.Name.StartsWith( "monkey.list" )
+	Local toarr:=clas.GetMethod( "ToArray",[] )
+	Local arrty:=toarr.ReturnType
+	Local arr:=toarr.Invoke( obj,[] )
+	Local len:=arrty.ArrayLength( arr )
+	For Local i:=0 Until len
+	reset_ids(arrty.GetElement( arr,i))
+	Next
+Endif
+
+If clas.Name.StartsWith("monkey.map")
+Local objenumer:=clas.GetMethod( "ObjectEnumerator",[] )
+If objenumer&lt;&gt;Null
+Local hasnext:=objenumer.ReturnType.GetMethod( "HasNext",[] )
+Local nextobj:=objenumer.ReturnType.GetMethod( "NextObject",[] )
+Local getkey:=nextobj.ReturnType.GetMethod( "Key",[] )
+Local getval:=nextobj.ReturnType.GetMethod( "Value",[] )
+Local enumer:=objenumer.Invoke( obj,[] ),n:=0
+If getkey&lt;&gt;Null
+If getval&lt;&gt;Null
+	While UnboxBool( hasnext.Invoke( enumer,[] ) )
+			Local node:=nextobj.Invoke( enumer,[] )
+		If node&lt;&gt;Null
+			Local key:=getkey.Invoke( node,[] )
+			Local val:=getval.Invoke( node,[] )
+			reset_ids(val)
+		Endif
+	Wend
+Endif
+Endif
+Endif
+Endif
+
+If clas.ExtendsClass(GetClass(New saveable))
+
+Local s:saveable=saveable(obj)
+If s.unid&lt;&gt;0
+s.unid=0
+For Local thisfield:=Eachin clas.GetFields(True)
+reset_ids(thisfield.GetValue(obj))
+Next
+Else
+Return
+Endif
+Endif
+
+End Function
+
+Function object_to_node:ConfigNode(obj:Object,classnode:ConfigNode)
+Local sa:saveable=New saveable
+Local clas:=GetClass( obj )
+If classnode=Null
+classnode=New ConfigNode("Object")
+Endif
+If clas=BoolClass()
+	Local t:=String(Int( UnboxBool( obj ) )).ToLower()
+	If t&lt;&gt;"0"
+	classnode.SetAttribute("value",t)
+	classnode.SetAttribute("type","Bool")
+	Return classnode
+	Endif
+Endif
+
+If clas=IntClass()
+	Local t:=String( UnboxInt( obj ) ).ToLower()
+	If t&lt;&gt;"0"
+	classnode.SetAttribute("value",t)
+	classnode.SetAttribute("type","Int")
+	Return classnode
+	Endif
+Endif
+If clas=FloatClass()
+	Local t:=String( UnboxFloat( obj ) ).ToLower()
+	If t&lt;&gt;"0.0"
+	classnode.SetAttribute("value",t)
+	classnode.SetAttribute("type","Float")
+	Return classnode
+	Endif
+Endif
+If clas=StringClass()
+	Local t:=String(UnboxString(obj))
+	If t&lt;&gt;""
+	classnode.SetAttribute("value",t)
+	classnode.SetAttribute("type","String")
+	Return classnode
+	Endif
+Endif
+Local elemty:=clas.ElementType
+If elemty
+If	clas.ArrayLength(obj)&gt;0
+	classnode.SetAttribute("type",clas.Name)
+	classnode.SetAttribute("length",clas.ArrayLength( obj ))
+	For Local i:=0 Until clas.ArrayLength( obj )
+		
+		Local a_node:=object_to_node(clas.GetElement( obj,i ),Null)
+		If a_node&lt;&gt;Null
+			classnode.AddChild(a_node)
+			a_node.name="AE"
+			a_node.SetAttribute("AP",String(i))
+		Endif
+	Next
+	Return classnode
+Endif
+Endif
+
+If clas.Name.StartsWith("monkey.list")
+classnode.SetAttribute("type",clas.Name)
+add_list_to_node(obj,classnode)
+Return classnode
+Endif
+If clas.Name.StartsWith("monkey.map")
+Local objenumer:=clas.GetMethod( "ObjectEnumerator",[] )
+If objenumer&lt;&gt;Null
+Local hasnext:=objenumer.ReturnType.GetMethod( "HasNext",[] )
+Local nextobj:=objenumer.ReturnType.GetMethod( "NextObject",[] )
+Local getkey:=nextobj.ReturnType.GetMethod( "Key",[] )
+Local getval:=nextobj.ReturnType.GetMethod( "Value",[] )
+Local enumer:=objenumer.Invoke( obj,[] ),n:=0
+If getkey&lt;&gt;Null
+If getval&lt;&gt;Null
+classnode.SetAttribute("type",clas.Name)
+	While UnboxBool( hasnext.Invoke( enumer,[] ) )
+			Local node:=nextobj.Invoke( enumer,[] )
+			If node&lt;&gt;Null
+			Local key:=getkey.Invoke( node,[] )
+			Local val:=getval.Invoke( node,[] )
+			Local a_node:=object_to_node(key,Null)
+			If a_node&lt;&gt;Null
+			classnode.AddChild(a_node)
+			Local thisnode:=object_to_node(val,Null)
+			If thisnode&lt;&gt;Null
+			a_node.AddChild(thisnode)
+			Endif
+			Endif
+			Endif
+			Wend
+Endif
+Endif
+Endif
+Return classnode
+Endif
+
+If clas.ExtendsClass(GetClass(sa))
+Local s:saveable=saveable(obj)
+If s.unid=0
+
+classnode.SetAttribute("type",clas.Name)
+unique_int+=1
+s.unid=unique_int
+serial_objects.Set(s.unid,s)
+Local fieldnode:ConfigNode
+
+While clas&lt;&gt;Null
+	For Local thisfield:=Eachin clas.GetFields(False)
+	Local a_node:ConfigNode=object_to_node(thisfield.GetValue(obj),Null)
+	
+	If a_node&lt;&gt;Null
+	a_node.name="Fi"
+	a_node.SetAttribute("fn",thisfield.Name)
+	classnode.AddChild(a_node)
+	Endif
+	Next
+clas=clas.SuperClass
+Wend
+
+
+Return classnode
+Else
+Local s:saveable=saveable(obj)
+classnode.SetAttribute("uid",s.unid)
+Return classnode
+Endif
+Else
+Endif
+
+Return Null
+End Function
+
+Function add_list_to_node:Void(obj:Object,this_node:ConfigNode)
+
+Local clas:=GetClass(obj)
+If clas&lt;&gt;Null
+	Local toarr:=clas.GetMethod( "ToArray",[] )
+	Local arrty:=toarr.ReturnType
+	Local arr:=toarr.Invoke( obj,[] )
+	Local len:=arrty.ArrayLength( arr )
+	For Local i:=0 Until len
+	Local objnode:=New ConfigNode("LE")
+	objnode=object_to_node(arrty.GetElement( arr,i ),objnode)
+	If objnode&lt;&gt;Null
+		this_node.AddChild(objnode)
+	Endif
+	Next
+Endif
+
+End Function
+
+Function node_to_object:Object(node:ConfigNode,nam:String)
+Local uid:String=node.GetAttribute("uid")
+If uid&lt;&gt;""
+If serial_objects.Get(Int(uid))=Null
+Error "its null"
+Endif
+Return serial_objects.Get(Int(uid))
+Endif
+Select node.GetAttribute("type")
+Case "Bool"
+Return BoxBool(Bool(Int(node.GetAttribute("value"))))
+Case "Int"
+Return BoxInt(Int(node.GetAttribute("value")))
+Case "String"
+Return BoxString(node.GetAttribute("value"))
+Case "Float"
+Return BoxFloat( Float(node.GetAttribute("value")) )
+Default
+If node.GetAttribute("type").Find("monkey.boxes.ArrayObject")=0
+Local clas:=GetClass(node.GetAttribute("type"))
+If clas&lt;&gt;Null
+Local obj:=clas.NewArray(Int(node.GetAttribute("length")) )
+If node.GetChildren()&lt;&gt;Null
+For Local c:=Eachin node.GetChildren()
+Local pos:Int=Int(c.GetAttribute("AP"))
+clas.SetElement( obj,pos, node_to_object(c,nam))
+Next
+Endif
+Return obj
+Endif
+Endif
+
+Local clas:=GetClass(node.GetAttribute("type"))
+Local obj:Object=clas.NewInstance()
+If node.GetAttribute("type").Find("monkey.list")=0		
+		Local elemty:=clas.GetMethod( "ToArray",[] ).ReturnType.ElementType
+		Local add:=clas.GetMethod( "AddLast",[elemty] )
+If node.GetChildren()&lt;&gt;Null
+	For Local c:=Eachin node.GetChildren()
+			add.Invoke( obj,[node_to_object(c,nam)] )
+	Next
+Endif
+
+Endif
+
+If node.GetAttribute("type").Find("monkey.map")=0
+	Local objenumer:=clas.GetMethod( "ObjectEnumerator",[] )
+				Local nextobj:=objenumer.ReturnType.GetMethod( "NextObject",[] )
+				Local getkey:=nextobj.ReturnType.GetMethod( "Key",[] )
+				Local getval:=nextobj.ReturnType.GetMethod( "Value",[] )
+				Local set:=clas.GetMethod( "Set",[getkey.ReturnType,getval.ReturnType] )
+				
+				
+					For Local c:=Eachin node.GetChildren()
+					Local key:=node_to_object(c,nam)
+					For Local objnode:=Eachin c.GetChildren()
+					Local val:=node_to_object(objnode,nam)
+					set.Invoke( obj,[key,val] )
+					Next
+					Next
+Endif
+Local sa:saveable=New saveable
+
+If clas.ExtendsClass(GetClass(sa))
+For Local c:=Eachin node.GetChildren()
+If c.GetAttribute("fn")="unid"
+Local f:=c.GetAttribute("value")
+Local i:Int=Int(f)
+serial_objects.Set(i,obj)
+Endif
+Next
+
+
+For Local thisfield:=Eachin clas.GetFields(True)
+Select thisfield.Type.Name
+Case "monkey.boxes.BoolObject"
+thisfield.SetValue(obj,BoxBool(Bool(0)))
+Case "monkey.boxes.IntObject"
+thisfield.SetValue(obj,BoxInt(0))
+Case "monkey.boxes.StringObject"
+thisfield.SetValue(obj,BoxString(""))
+Case "monkey.boxes.FloatObject"
+thisfield.SetValue(obj,BoxFloat(Float(0.0)))
+End Select
+Next
+
+
+For Local c:=Eachin node.GetChildren()
+Local f:=clas.GetField(c.GetAttribute("fn"))
+nam=f.Name
+Local val:=node_to_object(c,nam)
+If val&lt;&gt;Null
+f.SetValue(obj,val)
+Endif
+Next
+Endif
+
+Return obj
+End Select
+Return Null
+End Function
+</textarea><br><br>here is the config module<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+#rem
+[March 11 2011]
+ - added support for xml standard single and double quotes. Single quote must end with single and double with double
+ - added support for comments &lt;!-- comment --&gt;
+ - added destructor .Free() to clean up xml data (needs to be called manually)
+ - tweaked parser to remove some unnecessary steps
+#end
+	Const IsString:Int=1
+	Const IsBool:Int=2
+	Const IsInt:Int=3
+	Const IsFloat:Int=4
+	Const IsArray:Int=5
+	Const IsObject:Int=6
+	Const IsList:Int=7
+
+
+Class ConfigError
+    Field message:String
+    Field context:String
+    Field line:Int
+    Field column:Int
+    Field data:String
+    
+    Method New(message:String,context:String="",data:String="",line:Int=0,column:Int=0)
+        Self.message = message
+        Self.context = context
+        Self.data = data
+        Self.line = line
+        Self.column = column
+    End
+    
+    Method ToString:String()
+        Local error := ""
+        If context.Length() &gt; 0
+            error += "Error In '"+context+"': "+message
+        Else
+            error += "Error: "+message
+        Endif
+        If line &gt; 0
+            error += " (line:"+line+")"
+            If column &gt; 0 error += " (column: "+column+")"
+        Endif
+        If data.Length() &gt; 0 error += "~nData: "+data
+        Return error
+    End
+End
+
+Class ConfigNode
+	Field name:String
+	Field value:String
+	Field parent:ConfigNode
+	Field attributes:List&lt;ConfigAttribute&gt;
+	Field children:List&lt;ConfigNode&gt;
+	Field line:Int
+	Field column:Int
+	Field scriptOffset:Int
+
+	Method New(name:String)
+		Self.name = name
+	End
+
+	Method Free:Void()
+		' --- free resources ---
+		name = ""
+		value = ""
+		parent = Null
+		line = 0
+		column = 0
+		scriptOffset = 0
+		
+		'free attributes
+		If attributes
+			For Local attribute := Eachin attributes
+				attribute.Free()
+			Next
+			attributes.Clear()
+		Endif
+		
+		'free children
+		If children
+			For Local node := Eachin children
+				node.Free()
+			Next
+			children.Clear()
+		Endif
+	End
+	
+	Method ToString:String()
+		' --- create debuggable print output ---
+		Local build := " &lt;"+name
+		If attributes
+			For Local attribute := Eachin attributes
+				build += " "+attribute.name+"=~q"+attribute.value+"~q"
+			Next
+		Endif
+		
+		build += "&gt;"
+		If Self.GetChildren()
+		For Local pnode:ConfigNode=Eachin Self.GetChildren()
+	build+=(pnode.ToString())
+	Next
+	Endif
+	
+		build += "&lt;/"+name+"&gt;"
+		Return build
+	End
+
+	Method FindValue:String(path:String,defaultValue:String="")
+		Local configNode := FindNodeByPath(path)
+		If configNode Return configNode.GetValue()
+	End
+
+	Method FindNodeByPath:ConfigNode(path:String)
+		' --- returns first node with given path ---
+		'return self if no path is given
+		If path.Length() = 0 Return Self
+		
+		'skip if no children
+		If children = Null Return Null
+
+		'split the path into bits
+		Local pathParts := path.ToLower().Split("/")
+		Local nodeFound := False
+		Local pointerNode:ConfigNode = Self
+
+		'scan the path
+		For Local pathIndex := 0 Until pathParts.Length()
+			'validate all bits of the path
+			If pathParts[pathIndex].Length() = 0 Return Null
+
+			'check children of this pointer
+			nodeFound = False
+			If pointerNode.children
+				For Local childNode := Eachin pointerNode.children
+					If childNode.name = pathParts[pathIndex]
+						pointerNode = childNode
+						nodeFound = True
+						Exit
+					Endif
+				Next
+			Endif
+
+			'check for node not found
+			If nodeFound = False Return Null
+		Next
+
+		'return
+		Return pointerNode
+	End
+	
+	Method FindNodesByPath:List&lt;ConfigNode&gt;(path:String)
+		' --- this will find a path within the children ---
+		Local pointerNodes:List&lt;ConfigNode&gt;
+		
+		'return self if no path is given
+		If path.Length() = 0
+			pointerNodes = New List&lt;ConfigNode&gt;
+			pointerNodes.AddLast(Self)
+			Return pointerNodes
+		Endif
+		
+		'skip if no children
+		If children = Null Return Null
+
+		'split the path into bits
+		Local pathParts := path.ToLower().Split("/")
+		pointerNodes = New List&lt;ConfigNode&gt;
+		Local newPointerNodes := New List&lt;ConfigNode&gt;
+
+		'add self as root
+		pointerNodes.AddLast(Self)
+
+		'scan the path
+		For Local pathIndex := 0 Until pathParts.Length()
+			'validate all bits of the path
+			If pathParts[pathIndex].Length() = 0 Return Null
+
+			'scan children of each pointer
+			For Local pointerNode := Eachin pointerNodes
+				'check children of this pointer
+				If pointerNode.children
+					For Local childNode := Eachin pointerNode.children
+						If childNode.name = pathParts[pathIndex] newPointerNodes.AddLast(childNode)
+					Next
+				Endif
+			Next
+			pointerNodes.Clear()
+
+			'add new pointers to scan
+			For Local pointerNode := Eachin newPointerNodes
+				pointerNodes.AddLast(pointerNode)
+			Next
+			newPointerNodes.Clear()
+		Next
+
+		'return
+		If pointerNodes.IsEmpty() Return Null
+		Return pointerNodes
+	End
+	
+	Method FindNodesByName:List&lt;ConfigNode&gt;(name:String)
+		' --- find all nodes of a given type ---
+		If children = Null Or children.IsEmpty() Return Null
+		
+		Local returnNodes := New List&lt;ConfigNode&gt;
+		Local stackNodes := New List&lt;ConfigNode&gt;
+		Local stackNode:ConfigNode
+		
+		stackNodes.AddLast(Self)
+		
+		While stackNodes.IsEmpty() = False
+			stackNode = stackNodes.RemoveLast()
+			For Local scanNode := Eachin stackNode.children
+				If scanNode.name = name returnNodes.AddLast(scanNode)
+				If scanNode.children And scanNode.children.IsEmpty() = False stackNodes.AddLast(scanNode)
+			Next
+		Wend
+		
+		If returnNodes.IsEmpty() Return Null
+		Return returnNodes
+	End
+
+	Method AddChild(childNode:ConfigNode)
+		' --- add child to this node ---
+		'set the parent of the child being added
+		childNode.parent = Self
+
+		'create the children list
+		If children = Null children = New List&lt;ConfigNode&gt;
+
+		'add the child
+		children.AddLast(childNode)
+	End
+
+	Method GetAttribute:String(name:String,defaultValue:String="")
+		' --- get an attribute value ---
+		Local attribute := GetConfigAttribute(name)
+		If attribute = Null Return defaultValue
+		Return attribute.value
+	End
+	
+	Method GetAttributes:List&lt;ConfigAttribute&gt;()
+		' --- return all of thr attributes ---
+		Return attributes
+	End
+
+	Method GetValue:String()
+		Return value
+	End
+
+	Method GetName:String()
+		Return name
+	End
+
+	Method GetChildren:List&lt;ConfigNode&gt;()
+		Return children
+	End
+
+	Method GetConfigAttribute:ConfigAttribute(name:String)
+		' --- find a property ---
+		'make sure there are attributes
+		If attributes = Null Return Null
+
+		'fix casing of attribute
+		name = name.ToLower()
+
+		'search for matching attribute
+		For Local attribute := Eachin attributes
+			If name = attribute.name Return attribute
+		Next
+
+		Return Null
+	End
+
+	Method SetAttribute(name:String,value:String)
+		' --- add a new property to this node ---
+		'create properties list for first time
+		If attributes = Null attributes = New List&lt;ConfigAttribute&gt;
+
+		'find existing property
+		Local attribute := GetConfigAttribute(name)
+
+		'add / update attribute
+		If attribute
+			'update (overwrite)
+			attribute.SetValue(value)
+		Else
+			'add
+			attributes.AddLast(New ConfigAttribute(name,value))
+		Endif
+	End
+
+	Method Remove()
+		If parent parent.children.Remove(Self)
+	End
+End
+
+Class ConfigAttribute
+	Field name:String
+	Field value:String
+	Field segments:String[]
+	
+	Method New(name:String,value:String)
+		' --- setup new attribute ---
+		SetName(name.ToLower())
+		SetValue(value)
+		
+	End
+	
+	Method Free:Void()
+		' --- free resources ---
+		name = ""
+		value = ""
+		segments = []
+	End
+	
+	Private
+	Method UpdateValue()
+		Local length = segments.Length()
+		
+		If length = 0
+			value = ""
+			Return
+		Endif
+		
+		If length = 1
+			value = segments[0]
+			Return
+		Endif
+		
+		Local build := ""
+		value = ""
+		For Local index := 0 Until length
+			value += segments[index]
+		Next
+	End
+	Public
+	
+	Method IsSegmented:Bool()
+		Return segments.Length() &gt; 1
+	End
+	
+	Method SetName(name:String)
+		Self.name = name
+	End
+	
+	Method GetSegments:String[]()
+		Return segments
+	End
+	
+	Method GetName:String()
+		Return name
+	End
+	
+	Method SetValue(value:String)
+		segments = [value]
+		UpdateValue()
+	End
+		
+	Method AddSegment(segment:String)
+		Local index := segments.Length()
+		segments = segments.Resize(index+1)
+		segments[index] = segment
+		UpdateValue()
+	End
+	
+Field datatype:Int
+
+End
+
+Class Config Extends ConfigNode
+	Field path:String
+	Field script:String
+	Field error:ConfigError
+	
+	Private	
+	Method Parse:Bool(scriptRaw:String)
+		' --- parse the string and fill the data objects ---
+		'setup root item
+		name = "root"
+		
+		'fix the raw script
+		script = scriptRaw.Replace("~r~n","~n")
+		
+		'setup the stack
+		Local stack := New List&lt;ConfigNode&gt;
+		stack.AddLast(Self)
+		
+		'setup some parsing values (quite a few)
+		Local stackTag:ConfigNode
+
+		Local scriptLength = script.Length()
+		Local scriptIndex := 0
+		
+		Local findTagQuote := -1
+		Local findTagStart := -1
+		Local findTagStartSize := 0
+		Local findTagTemp := -1
+		Local findTagEnd := -1
+		Local findTagEndSize := 0
+		Local findTag:ConfigNode
+		Local findAttribute:ConfigAttribute
+		Local findQuoteCharacter:Int
+		Local findTagLine := 0
+		Local findTagColumn := 0
+		Local findName := ""
+		Local findOperator := ""
+		Local findSegment := ""
+		Local findWhitespace := ""
+		Local findLine := 1
+		Local findLineStart := 0
+		Local findHasPair := False
+		Local findHasClose := False
+		Local findHasFirst := False
+		Local findHasStart := False
+		Local findHasName := False
+		Local findHasNameEnd := False
+		Local findHasEquals := False
+		Local findHasValue := False
+		Local findHasComment := False
+		Local findHasQuotes := False
+		Local findHasEnd := False
+		Local findHasSegment := False
+		Local findHasSegmentEnd := False
+		Local findHasOperator := False
+		
+		'parse the script
+		While scriptIndex &lt; scriptLength-1
+			'parse looking for a complete bracket! (also skip comments)
+			For Local findIndex := scriptIndex Until scriptLength
+				'test for new line
+				If script[findIndex] = 10
+					findLine += 1
+					findLineStart = findIndex + 1
+				Endif
+				
+				'not in comment
+				If findHasStart = False
+					'check to see if in comment
+					If findHasComment = False
+						'looking for &lt;
+						If script[findIndex] = 60
+							'bracket starting
+							'check if comment
+							If findIndex &lt; scriptLength-4 And script[findIndex..findIndex+4] = "&lt;!--"
+								'comment
+								findHasComment = True
+								findIndex += 3
+							Else
+								'process looking for start
+								If findIndex &lt; scriptLength-1 And script[findIndex+1] = 47
+									findHasClose = True
+									findTagStartSize = 2
+								Else
+									findTagStartSize = 1
+								Endif
+								findHasStart = True
+								findTagStart = findIndex
+								findTagLine = findLine
+								findTagColumn = (findIndex-findLineStart)+1
+							Endif
+						Else
+							findWhitespace += String.FromChar(script[findIndex])
+						Endif
+					Else
+						'in comment look for end of comment
+						If script[findIndex] = 45 And findIndex + 3 &lt; scriptLength And script[findIndex..findIndex+3] = "--&gt;"
+							findHasComment = False
+							findIndex += 2
+						Endif
+					Endif
+				Else
+					'looking for &gt;
+					If findHasQuotes = False
+						'not in quotes
+						If script[findIndex] = 34
+							'quote (double)
+							findHasQuotes = True
+							findQuoteCharacter = 34
+						Else If script[findIndex] = 39
+							'quote (single)
+							findHasQuotes = True
+							findQuoteCharacter = 39
+						Else If script[findIndex] = 60
+							'illegal open bracket
+							Return SetError("unexpected opening bracket",findLine,(findIndex-findLineStart)+1)
+						Else If script[findIndex] = 62
+							'bracket ending
+							If findIndex &gt; 0 And script[findIndex-1] = 47
+								findTagEndSize = 2
+								findHasClose = True
+								findTagEnd = findIndex - 1
+							Else
+								findHasPair = True
+								findTagEndSize = 1
+								findTagEnd = findIndex
+							Endif
+							findHasEnd = True
+							Exit
+						Endif
+					Else
+						'in quotes, can we get out please?
+						If script[findIndex] = findQuoteCharacter findHasQuotes = False
+					Endif
+				Endif
+			Next
+			
+			'check for errors
+			If findHasQuotes Return SetError("expecting ending quote",findLine,scriptLength-findLineStart)
+			If findHasStart And findHasEnd = False Return SetError("expecting ending bracket",findLine,scriptLength-findLineStart)
+
+			'perform further parse on tag if found
+			If findHasEnd = False
+				'there are no more tags to retrieve from the string
+				'check to see if any items waiting on the stack (other than root)
+				If stack.Count() &gt; 1 Return SetError("unexpected end of file",findLine,scriptLength-findLineStart)
+				
+				'dont add white space to root
+				'Self.value += script[scriptIndex..scriptLength]
+
+				Exit
+			Else
+				'reset
+				findName = ""
+				findOperator = ""
+				findSegment = ""
+				findHasEnd = False
+				findHasName = False
+				findHasNameEnd = False
+				findHasEquals = False
+				findHasValue = False
+				findHasQuotes = False
+				findHasSegment = False
+				findHasSegmentEnd = False
+				findHasOperator = False
+
+				'add the white space
+				stackTag = stack.Last()
+				stackTag.value += findWhitespace'script[scriptIndex..findTagStart]
+
+				'move the script index
+				scriptIndex = findTagEnd+findTagEndSize
+
+				'we now have an opening node so parse the node data!
+				findTag = New ConfigNode()
+				findTag.line = findTagLine
+				findTag.column = findTagColumn
+
+				For Local findIndex := findTagStart+findTagStartSize Until findTagEnd
+					If findHasName = False
+						'scanning for name
+						If script[findIndex] = 32
+							'space
+							If findName findHasNameEnd = True
+							
+						Else If script[findIndex] = 10
+							'new line
+							If findName findHasNameEnd = True
+							findLine += 1
+							findLineStart = findIndex + 1
+							
+						Else If script[findIndex] = 61
+							'=
+							If findName
+								findIndex -= 1
+								findHasNameEnd = True
+							Else
+								Return SetError("expecting tag or attribute name",findLine,(findIndex-findLineStart)+1)
+							Endif
+							
+						Else If script[findIndex] = 95 Or (script[findIndex] &gt;= 48 And script[findIndex] &lt;= 57) Or (script[findIndex] &gt;= 65 And script[findIndex] &lt;= 90) Or (script[findIndex] &gt;= 97 And script[findIndex] &lt;= 122)
+							'_ a b c d e f g h i j k l m n o p q r s t u v w x y z 0 1 2 3 4 5 6 7 8 9
+							findName += String.FromChar(script[findIndex])
+							
+						Else
+							'illegal character
+							Return SetError("illegal character asc='"+script[findIndex]+"' chr='"+script[findIndex..findIndex+1]+"'",findLine,(findIndex-findLineStart)+1)
+							
+						Endif
+					Else
+						'check for what to scan for next
+						If findHasEquals = False
+							'searching for equals so can start the value!
+							If script[findIndex] = 32
+								'space
+								
+							Else If script[findIndex] = 10
+								'new line
+								findLine += 1
+								findLineStart = findIndex + 1
+								
+							Else If script[findIndex] = 61
+								'=
+								findHasEquals = True
+								
+							Else If script[findIndex] = 95 Or (script[findIndex] &gt;= 48 And script[findIndex] &lt;= 57) Or (script[findIndex] &gt;= 65 And script[findIndex] &lt;= 90) Or (script[findIndex] &gt;= 97 And script[findIndex] &lt;= 122)
+								'_ a b c d e f g h i j k l m n o p q r s t u v w x y z 0 1 2 3 4 5 6 7 8 9
+								'alpha numerics
+								findHasEnd = True
+								findIndex -= 1
+								
+							Else
+								'illegal character
+								Return SetError("illegal character asc='"+script[findIndex]+"' chr='"+script[findIndex..findIndex+1]+"'",findLine,(findIndex-findLineStart)+1)
+								
+							Endif
+						Else
+							'scan through the value until an end is found!
+							If findHasQuotes = False
+								'look to see if there is a waiting segment to continue processing
+								If findHasSegment = False
+									'value hasn't completed a segment yet
+									If script[findIndex] = 32
+										'space
+										If findSegment
+											findHasSegment = True
+											findHasSegmentEnd = True
+										Endif
+										
+									Else If script[findIndex] = 10
+										'new line
+										If findSegment
+											findHasSegment = True
+											findHasSegmentEnd = True
+										Endif
+										
+										findLine += 1
+										findLineStart = findIndex + 1
+										
+									Else If script[findIndex] = 34 Or script[findIndex] = 39
+										'"
+										'looking for start quote
+										If findSegment
+											'unexepcted quote
+											Return SetError("unexpected opening quote",findLine,(findIndex-findLineStart)+1)
+										Else
+											'start quotes
+											findHasQuotes = True
+											findHasValue = True
+											findQuoteCharacter = script[findIndex]
+										Endif
+										
+									Else If script[findIndex] = 45
+										'-
+										'looking for negative value or operator
+										If findSegment
+											'operator
+											findHasSegment = True
+											findHasSegmentEnd = True
+											findHasOperator = True
+											findOperator = String.FromChar(script[findIndex])
+										Else
+											'negative value
+											findSegment += String.FromChar(script[findIndex])
+											findHasValue = True
+										Endif
+										
+									Else If script[findIndex] = 42 Or script[findIndex] = 43 Or script[findIndex] = 47
+										'+
+										'looking for (other non -) operators
+										If findHasValue = False
+											'unexpected oeprator
+											Return SetError("unexpected operator asc='"+script[findIndex]+"' chr='"+script[findIndex..findIndex+1]+"'",findLine,(findIndex-findLineStart)+1)
+										Else
+											'end of value
+											findHasSegmentEnd = True
+											findHasOperator = True
+											findOperator = String.FromChar(script[findIndex])
+										Endif
+										
+									Else If script[findIndex] = 36 Or script[findIndex] = 46 Or script[findIndex] = 95 Or (script[findIndex] &gt;= 48 And script[findIndex] &lt;= 57) Or (script[findIndex] &gt;= 65 And script[findIndex] &lt;= 90) Or (script[findIndex] &gt;= 97 And script[findIndex] &lt;= 122)
+										'$ . _ a b c d e f g h i j k l m n o p q r s t u v w x y z 0 1 2 3 4 5 6 7 8 9
+										'looking for unquoted attribute value
+										findSegment += String.FromChar(script[findIndex])
+										findHasValue = True
+										
+									Else
+										'ilegal character
+										Return SetError("illegal character asc='"+script[findIndex]+"' chr='"+script[findIndex..findIndex+1]+"'",findLine,(findIndex-findLineStart)+1)
+									Endif
+									
+								Else
+									'value already has segment so need to look for end or operator
+									If script[findIndex] = 32
+										'space
+										
+									Else If script[findIndex] = 10
+										'new line
+										findLine += 1
+										findLineStart = findIndex + 1
+										
+									Else If script[findIndex] = 95 Or (script[findIndex] &gt;= 48 And script[findIndex] &lt;= 57) Or (script[findIndex] &gt;= 65 And script[findIndex] &lt;= 90) Or (script[findIndex] &gt;= 97 And script[findIndex] &lt;= 122)
+										'_ a b c d e f g h i j k l m n o p q r s t u v w x y z 0 1 2 3 4 5 6 7 8 9
+										'looking for new attribute so must rescan this character
+										findHasSegment = False
+										findIndex -= 1
+										findHasEnd = True
+										
+									Else If script[findIndex] = 42 Or script[findIndex] = 43 Or script[findIndex] = 45 Or script[findIndex] = 47
+										'+ -
+										'looking for operators
+										findHasSegment = False
+										findHasOperator = True
+										findOperator = String.FromChar(script[findIndex])
+										
+									Else
+										Return SetError("illegal character asc='"+script[findIndex]+"' chr='"+script[findIndex..findIndex+1]+"'",findLine,(findIndex-findLineStart)+1)
+									Endif
+								Endif
+							Else
+								'quotes mode (anything goes) (possibly need to do escape quote character at some point)
+								If script[findIndex] = 10
+									'new line
+									findLine += 1
+									findLineStart = findIndex + 1
+									
+								Else If script[findIndex] = findQuoteCharacter
+									'looking for end of quotes
+									findHasSegment = True
+									findHasSegmentEnd = True
+									findHasQuotes = False
+									findQuoteCharacter = 0
+								Else
+									'any character add to value
+									findSegment += String.FromChar(script[findIndex])
+									
+								Endif
+							Endif
+						Endif
+					Endif
+
+					'look for forced end (eol)
+					If findIndex = findTagEnd-1
+						findHasEnd = True
+						
+						If findHasQuotes
+							'unclosed "
+							Return SetError("exepcting closing quote",findLine,(findIndex-findLineStart)+1)
+						Else
+							If findHasName = False
+								If findName findHasNameEnd = True
+							Else
+								If findHasEquals = True
+									If findHasValue = False And findSegment = ""
+										'nothing after =
+										Return SetError("expecting attribute value",findLine,(findIndex-findLineStart)+1)
+									Else
+										If findHasOperator
+											'nothing after operator
+											Return SetError("unexcpected end of attribute",findLine,(findIndex-findLineStart)+1)
+										Else
+											If findSegment &lt;&gt; "" findHasSegmentEnd = True
+										Endif
+									Endif
+								Endif
+							Endif
+						Endif
+					Endif
+					
+					'look at setting up tag name
+					If findHasNameEnd
+						'tag name						
+						If findHasFirst = False
+							findHasFirst = True
+							findTag.name = findName.ToLower()
+						Else
+							findHasStart = True
+						Endif
+						
+						'say that name is found
+						findHasName = True
+						
+						'reset
+						findHasNameEnd = False
+					Endif
+					
+					If findHasName
+						'look at adding segment to value
+						If findHasSegmentEnd = True
+							'look for appending existing attribute
+							findAttribute = findTag.GetConfigAttribute(findName)
+							If findAttribute = Null
+								findTag.SetAttribute(findName,findSegment)
+							Else
+								findAttribute.AddSegment(findSegment)
+							Endif
+							
+							'reset
+							findHasSegmentEnd = False
+							findSegment = ""
+						Endif
+						
+						'look for adding operator to value
+						If findHasOperator = True
+							'look for appending existing attribute
+							findAttribute = findTag.GetConfigAttribute(findName)
+							If findAttribute = Null
+								findTag.SetAttribute(findName,findOperator)
+							Else
+								findAttribute.AddSegment(findOperator)
+							Endif
+							
+							'reset
+							findHasOperator = False
+							findOperator = ""
+						Endif
+					Endif
+					
+					If findHasEnd
+						'reset
+						findName = ""
+						findOperator = ""
+						findSegment = ""
+						findHasEnd = False
+						findHasName = False
+						findHasNameEnd = False
+						findHasEquals = False
+						findHasValue = False
+						findHasQuotes = False
+						findHasSegment = False
+						findHasSegmentEnd = False
+						findHasOperator = False
+					Endif
+				Next
+
+				'node is complete - what next
+				If findHasClose
+					If findHasPair
+						'close the node from the stack
+						stackTag = stack.RemoveLast()
+						If stackTag &lt;&gt; Null
+							If stackTag.name = findTag.name
+								'close the node and add to parent
+								stackTag.parent.AddChild(stackTag)
+							Else
+								'mis matched node
+								Return SetError("open tag name '"+stackTag.name+"' doesn't match closing tag name '"+findTag.name+"'",findTag.line,findTag.column)
+							Endif
+						Else
+							'error - closing unopened node
+							Return SetError("unexpected closing tag '"+findTag.name+"'",findTag.line,findTag.column)
+						Endif
+					Else
+						'close the node by itself and add to parent!
+						findTag.parent = stack.Last()
+						findTag.parent.AddChild(findTag)
+					Endif
+				Else
+					'add the node to the stack!
+					'set parent first
+					findTag.parent = stack.Last()
+					stack.AddLast(findTag)
+				Endif
+
+				'reset flags/values
+				findHasStart = False
+				findHasClose = False
+				findHasPair = False
+				findHasFirst = False
+				findWhitespace = ""
+			Endif
+		Wend
+		
+		'return parse ok
+		Return True
+	End
+	
+	Method SetError:Bool(message:String,line:Int=0,column:Int=0,data:String="")
+		' --- error in parse ---
+		error = New ConfigError(message,path,data,line,column)
+		Print error
+		If attributes attributes.Clear()
+		If children children.Clear()
+		Return False
+	End
+	Public
+	
+	Method Free:Void()
+		' --- free resources ---
+		'call chain
+		Super.Free()
+		
+		'free own resources
+		path = ""
+		script = ""
+		error = Null
+	End
+	
+	Method HasError:Bool()
+		Return error &lt;&gt; Null
+	End
+End
+
+Function LoadConfig:Config(script:String)
+	Local config := New Config
+	config.path = ""
+		
+	'parse the script
+	config.Parse(script)
+	Return config	
+End
+</textarea><br><br>you'll have to do some things to get it to work<br>1.make sure you have your reflection filter set correctly (or dont use one at all)<br>2.make all your classes that you wish to save extend saveable<br><pre class=code>
+Class saveable
+Field unid:Int
+End Class
+</pre><br><br>you can only save one object, so you put all your game stuff in the fields of that one object<br><br>here is how to save 'my_world'<br><pre class=code>
+unique_int=0
+If my_world.unid&lt;&gt;0
+reset_ids(my_world)
+Endif
+serial_objects=New IntMap&lt;Object&gt;
+local save_node:=object_to_node(my_world,Null)
+SaveState (save_node.ToString())
+</pre><br><br>and here is how to load:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Local the_state:String=LoadState()
+local load_node:=Config.LoadConfig(the_state)
+serial_objects=New IntMap&lt;Object&gt;
+For Local n:ConfigNode=Eachin load_node.GetChildren()
+my_world:world=world(node_to_object(n,""))
+Next</textarea><br><br><br>Sets and Stacks are not implemented yet <br><br></td></tr></table><br>
+<a name="2024552"></a>
+
+<a name="2024551"></a>
+
+<a name="2029788"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yahfree</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey I'm trying this out.. My project uses angel font, and when I import these files into the main project I run this error in the angelfont source:<br><br><pre class=code>
+	Function Use:AngelFont(name:String)
+		For Local af := Eachin _list
+			If af.name = name
+				current = af
+				Return af
+			End
+		Next
+		Return Null
+	End
+	
+</pre><br>It says that af does not have the field name. af is a stringmap of AngelFonts. Any ideas? The error goes away when these files are not imported<br><br>Thanks! <br><br></td></tr></table><br>
+<a name="2029789"></a>
+
+<a name="2029790"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >slenkar</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> if af is a StringMap it doesnt have a name <br><br></td></tr></table><br>
+<a name="2029807"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Beaker</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> af is an AngelFont object. <br><br></td></tr></table><br>
+<a name="2029818"></a>
+
+<a name="2029819"></a>
+
+<a name="2029820"></a>
+
+<a name="2029821"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >slenkar</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> hmm ah dunno. the only thing I can suggest, is that you do:<br><pre class=code>
+For Local af:AngelFont= Eachin _list
+</pre><br><br>instead of :<br><pre class=code>
+For Local af := Eachin _list
+</pre><br><br>its a crappy suggestion and it probably wont change anything but its the only thing I can think of.<br><br><br>make sure that the object associated with _list has a field called name<br><br><br><br>Thinking a bit more it could be a bug with monkey as my GUI system messed up when I started using reflection, I had to just work around it. <br><br></td></tr></table><br>
+<a name="2029822"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yahfree</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> I made the change you suggested and now I get the following compile error:<br><br>Compile Error<br><br>Cannot convert from Node&lt;String,AngelFont&gt; to AngelFont<br><br>The error goes away if I don't include this savegame code. Could be a bug with reflection? <br><br></td></tr></table><br>
+<a name="2029845"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >slenkar</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> could you try making a little demo? thats the only way things get fixed. <br><br></td></tr></table><br>
+<a name="2029847"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yahfree</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> I made a post in the bugs forum, just try importing reflection on the AngelFont demo packed with Monkey. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

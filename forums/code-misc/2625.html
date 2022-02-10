@@ -1,0 +1,102 @@
+<!DOCTYPE html><html lang="en" ><head ><title >lua_objectfromtable</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Function to create an object of a specified type from a Lua table, language=bmx, category=Miscellaneous'><meta name='author' content='N'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=9>Miscellaneous</a>/lua_objectfromtable</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2625.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >lua_objectfromtable by N</td><td align="right">2009 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> There's not really a whole lot to say about this aside from how it determines how to set a value.<br><br>Provided the key in the KV pair of the table is a string, the first thing the method will do is check for a field with the same name as the key.  If no field is found, it checks for a setter method matching "set&lt;key&gt;".  If no method is found, it checks for _key, where the key is prefixed with an underscore.<br><br>If a field is found in either the first or the last case, the method checks to see if the value's type will work when assigning it to the field, and if it does the value of the field is set to that.<br><br>If a method is found, the last case will not occur.  The method (referring to lua_objectfromtable) will check to make sure the value will work with the first argument of the found method.  If it does, the method is called and presumably something is set.<br><br>When assigning a value to something that takes an object of any type (excluding arrays and strings) and the value is a table, the function will attempt to create an object from the table.<br><br>If any value cannot be assigned because the type of the field and the value being assigned are incompatible, an exception will be thrown.  If you attempt to create an array with the method, an exception will be thrown.  If you do not provide a type for the object or the value at the index provided is not a table, Null is returned.<br><br>No values are pushed onto the stack. </td></tr><tr ><td class="cell"><pre class="code">Strict
+
+Import Brl.Reflection
+Import LuGI.Core
+
+Function lua_objectfromtable:Object(L@Ptr, index%, as:TTypeID)
+	Local reset% = lua_gettop(L)
+	
+	If Not (lua_istable(L, index) And as) Then
+		Return Null
+	EndIf
+	
+	Assert as._class &lt;&gt; ArrayTypeID._class Else "Cannot use lua_objectfromtable to create an array"
+	
+	lua_pushvalue(L, index)
+	lua_pushnil(L)
+	
+	Local obj:Object = as.NewObject()
+
+	' poor man's profiling
+'	Local findtime%=0
+'	Local fsettime%=0
+'	Local msettime%=0
+	
+'	Local _t%, _t2%, _t3%
+	
+	While lua_next(L, -2)
+		If lua_isstring(L, -2) Then
+'			_t=millisecs()
+			Local key$ = lua_tostring(L, -2)
+			Local f:TField = as.FindField(key)
+			If Not f Then
+				Local m:TMethod = as.FindMethod("set"+key)
+				If m Then
+'					_t2 = Millisecs()
+					Select m.ArgTypes()[0]
+						Case ByteTypeID, ShortTypeID, IntTypeID, LongTypeID
+							Assert lua_isnumber(L, -1) Else "Invalid value for integer setter argument"
+							m.Invoke(obj, [Object(String(lua_tointeger(L, -1)))])
+						Case FloatTypeID, DoubleTypeID
+							Assert lua_isnumber(L, -1) Else "Invalid value for float/double setter argument"
+							m.Invoke(obj, [Object(String(lua_tonumber(L, -1)))])
+						Case StringTypeID
+							Assert lua_isstring(L, -1) Else "Invalid value for string setter argument"
+						Default
+							If lua_istable(L, -1) And f.TypeID()._class &lt;&gt; ArrayTypeID._class Then
+								m.Invoke(obj, [lua_objectfromtable(L, -1, f.TypeID())])
+							Else
+								Assert lua_isbmaxobject(L, -1) Else "Invalid value for object setter argument"
+								m.Invoke(obj, [lua_tobmaxobject(L, -1)])
+							EndIf
+					End Select
+'					_t2 = Millisecs()-_t2
+'					msettime :+ _t2
+'					findtime :- _t2
+				Else
+					f = as.FindField("_"+key)
+				EndIf
+			EndIf
+'			findtime :+ Millisecs()-_t
+			
+			If f Then
+'				_t = Millisecs()
+				Select f.TypeID()
+					Case ByteTypeID, ShortTypeID, IntTypeID
+						Assert lua_isnumber(L, -1) Else "Invalid value for integer field"
+						f.SetInt(obj, lua_tointeger(L, -1))
+					Case LongTypeID
+						Assert lua_isnumber(L, -1) Else "Invalid value for long field"
+						f.SetLong(obj, lua_tointeger(L, -1))
+					Case FloatTypeID
+						Assert lua_isnumber(L, -1) Else "Invalid value for float field"
+						f.SetFloat(obj, lua_tonumber(L, -1))
+					Case DoubleTypeID
+						Assert lua_isnumber(L, -1) Else "Invalid value for double field"
+						f.SetDouble(obj, lua_tonumber(L, -1))
+					Case StringTypeID
+						Assert lua_isstring(L, -1) Else "Invalid value for string field"
+						f.Set(obj, lua_tostring(L, -1))
+					Default
+						If lua_istable(L, -1) And f.TypeID()._class &lt;&gt; ArrayTypeID._class Then
+							f.Set(obj, lua_objectfromtable(L, -1, f.TypeID()))
+						Else
+							Assert lua_isbmaxobject(L, -1) Else "Invalid value for object field"
+							f.Set(obj, lua_tobmaxobject(L, -1))
+						EndIf
+				End Select
+'				fsettime :+ Millisecs()-_t
+			EndIf
+		EndIf
+		
+		lua_pop(L, 1)
+	Wend
+	
+'	DebugLog "find time:       "+findtime+"ms"
+'	DebugLog "method set time: "+msettime+"ms"
+'	DebugLog "field set time:  "+fsettime+"ms"
+	
+	lua_settop(L, reset)
+	
+	Return obj
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br>None.<br><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,792 @@
+<!DOCTYPE html><html lang="en" ><head ><title >First person perspective movement &amp; mouselooking code</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='This code is designed as a basic framework to build a first person perspective game from, language=bb, category=3D Graphics - Misc'><meta name='author' content='Zethrax'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=2>3D Graphics - Misc</a>/First person perspective movement &amp; mouselooking code</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="1137.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >First person perspective movement &amp; mouselooking code by Zethrax</td><td align="right">2004 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> *** Blitz3D Code ***<br><br><br>First person perspective movement and mouselooking code.<br><br>The code is heavily commented, so just grab it and go for it.<br><br>Note that movement, jumping, fake gravity, etc is not that convincing. Doing all that in a convincing manner is a much more involved process and this code is just designed to be a starting point.<br><br>EDITS:-<br>Added code to show a gun using a second camera.<br>Added a crosshair.<br>Updated mouselooking and movement code.<br>Converted to render tweening.<br>Added a graphics resolution selector.<br>Added jumping, sprinting, configurable strafe speed, and fake gravity.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+EnableDirectInput True
+
+Dim A_temp_int_array( 0 ) ; A temporary integer array used by some functions. Used by 'SelectGraphicsMode' so declare here.
+
+Global G_font_underlined, G_font ; Globals used with fonts. Used by 'SelectGraphicsMode' so declare here.
+
+SelectGraphicsMode ; Select and set the full screen graphics mode.
+;Graphics3D 800, 600, 0, 2
+
+LoadFonts ;  Load the fonts again for the new graphics mode.
+
+HidePointer
+
+
+
+; == Declarations ==
+
+
+
+; - Keyboard scancode constants.
+Const C_KEY_LEFT_SHIFT = 42
+Const C_KEY_SPACE = 57
+Const C_KEY_LEFT_CONTROL = 29
+Const C_KEY_W = 17
+Const C_KEY_S = 31
+Const C_KEY_A = 30
+Const C_KEY_D = 32
+;Const C_KEY_ = 
+
+; -- Tweening and timing setup.
+Const C_TWEEN_LOGIC_UPDATE_RATE = 60 ; The desired number of logic updates per second (the logic FPS).
+Const C_TWEEN_PERIOD = 1000 / C_TWEEN_LOGIC_UPDATE_RATE
+Const C_DELTA_TIME# = 1.0 / C_TWEEN_LOGIC_UPDATE_RATE ; This multiplier should be used with any initialization values that may be affected by the 'C_TWEEN_LOGIC_UPDATE_RATE' value being changed.
+Global G_TWEEN_tween#
+Global G_TWEEN_ticks
+Global G_TWEEN_time_taken
+Global G_TWEEN_loop_count
+Global G_old_time
+Global G_world_time ; Holds the number of milliseconds from when the game\match session was started - excluding paused time periods.
+;---
+
+; -- Viewport.
+Global G_viewport_width = GraphicsWidth()
+Global G_viewport_height = GraphicsHeight()
+Global G_viewport_center_x = G_viewport_width / 2
+Global G_viewport_center_y = G_viewport_height / 2
+;------
+
+; -- Crosshair.
+Global G_show_crosshair = True ; The flag used to determine if the crosshair image is drawn. This can be set in user preferences, settings, and other interfaces.
+Global G_crosshair_x, G_crosshair_y ; The screen drawing position for the crosshair image. Set by 'CreateCrosshair'.
+;------
+
+; -- User
+Global G_user_walk_speed# = 0.15 ; The user's walking speed.
+Global G_user_sprint_speed# = 0.30 ; The user's sprint speed.
+Global G_user_strafe_speed# = 0.1 ; The user's strafing (sideways movement) speed. Range: 0.0 - 1.0. This value will be multiplied by 'G_user_movement_speed#' to get the final value.
+Global G_user_jump_impulse# = 0.5 ; The impulse value applied to the user's Y velocity when they jump.
+Global G_user_aircontrol_speed# = 0.06 ; The speed the user can move when airborne.
+Global G_user_old_y# ; Holds the old state of the user's velocity along the Y axis (jumping/falling).
+Global G_user_y_decrement# = 0.03 ; The value used to apply fake gravity to the user when they jump.
+Const C_USER_CENTERPOINT_HEIGHT# = 0.94
+Const C_USER_CAMERA_HEIGHT# = C_USER_CENTERPOINT_HEIGHT# * 2.0 - 0.1
+Const C_USER_TRACTION_LINEPICK_START# = -( C_USER_CENTERPOINT_HEIGHT# - 0.3 ) ; The relative start Y point for the user traction linepick.
+Const C_USER_TRACTION_LINEPICK_DISTANCE# = -0.6 ; The Y distance for the user traction linepick.
+Global G_user_airborne = False ; True = The user is airborne. False = The user is standing on something.
+Global G_user_platform ; The entity handle of any platform (floor, etc) that the user is standing on. If this is a zero then the user is in the air.
+Global G_user_platform_x#, G_user_platform_y#, G_user_platform_z# ; The position of the point the user is standing on (if G_user_platform = 0 then these values will be meaningless).
+Global G_user_platform_nx#, G_user_platform_ny#, G_user_platform_nz# ; The normal direction of the point the user is standing on (if G_user_platform = 0 then these values will be meaningless).
+
+; -- Mouselook
+Global G_user_pitch#
+Global G_mouselook_sensitivity# = 0.30 ; This sets the sensitivity of the mouse. It should normally be set via a preferences/settings system.
+;------
+
+; -- Mouse smoothing for mouselook
+; Note that 'G_enable_mouse_smoothing' and 'G_mouse_smoothing_que_length' can be used with the mouse smoothing user settings interface.
+Global G_enable_mouse_smoothing = True ; True = Mouse smoothing is turned on. False = Mouse smoothing is turned off.
+Global G_mouse_smoothing_que_length = 3 ; The degree of smoothing to apply. Higher value = Smoother but sloppier. Lower value = More responsive but also jaggier. Should be a minimum value of 2. Possibly subtract 1 in the settings interface display to avoid confusion, or just prevent the setting from going below 2.
+Global G_mouse_smoothing_que_max = G_mouse_smoothing_que_length - 1 ; The highest indexed slot in the mouse smoothing que.
+Global G_mouse_smoothing_que_sub_max = G_mouse_smoothing_que_max - 1 ; The second highest indexed slot in the mouse smoothing que.
+; Arrays used to store the que of mouse delta values. Note that the mouse delta values are integers so these arrays are integer arrays.
+Dim A_mouse_smoothing_que_x( G_mouse_smoothing_que_max )
+Dim A_mouse_smoothing_que_y( G_mouse_smoothing_que_max )
+;------
+
+
+; -- Collision constants
+Const C_COLLTYPE_geometry = 1
+Const C_COLLTYPE_user = 2
+;------
+
+; -- Pick constants.
+Const C_PICKTYPE_UNPICKABLE = 0 ; Unpickable (Default)
+Const C_PICKTYPE_SPHERE = 1 ; Sphere (EntityRadius is used)
+Const C_PICKTYPE_POLYGON = 2 ; Polygon
+Const C_PICKTYPE_BOX = 3 ; Box (EntityBox is used)
+;------
+
+
+
+; == Setup ==
+
+; -- Setup clouds.
+;Global G_cloud_tex = LoadTexture( "clouds1.bmp", 2 + 256 + 512 ) ; FLAGS: Alpha + Store texture in vram + Force the use of high color textures (color and mipmapping are set by default)
+;;Global G_cloud_tex = LoadTexture( "clouds1.png", 2 + 256 + 512 ) ; FLAGS: Alpha + Store texture in vram + Force the use of high color textures (color and mipmapping are set by default)
+;;Global G_cloud_tex = LoadTexture( "clouds2.bmp", 256 + 512 ) ; FLAGS: Store texture in vram + Force the use of high color textures (color and mipmapping are set by default)
+;Global G_cloud_plane = CreatePlane()
+;EntityTexture G_cloud_plane, G_cloud_tex
+;ScaleTexture G_cloud_tex, 500.0, 500.0
+;TurnEntity G_cloud_plane, 180.0, 0.0, 0.0
+;PositionEntity G_cloud_plane, 0.0, 100.0, 0.0
+;Global G_cloudspeed# = -0.001, G_cloudtexpos# = 0.0
+;------
+
+; -- Create a light;
+Global G_light = CreateLight()
+Global G_light_red# = 255.0, G_light_green# = 255.0, G_light_blue# = 255.0
+LightColor G_light, G_light_red#, G_light_green#, G_light_blue#
+RotateEntity G_light, 45.0, 45.0, 0.0, True
+;------
+
+; -- Create user entity.
+Global G_user = CreatePivot()
+PositionEntity G_user, 0.0, C_USER_CENTERPOINT_HEIGHT#, 0.0, True
+EntityRadius G_user, C_USER_CENTERPOINT_HEIGHT#
+EntityType G_user, C_COLLTYPE_user
+;------
+
+; -- Create user's camera.
+Global G_user_camera = CreateCamera( G_user )
+CameraViewport G_user_camera, 0, 0, G_viewport_width, G_viewport_height
+CameraRange G_user_camera, 0.5, 100.0 : CameraClsColor G_user_camera, $48, $A4, $FF
+CameraClsColor G_user_camera, 0.0, 106.0, 213.0 ; $48, $A4, $FF
+;CameraFogMode G_user_camera, 1
+;CameraFogColor G_user_camera, 0,0,0 ;0.0, 106.0, 213.0
+;CameraFogRange G_user_camera, 10.0, 40.0
+CameraZoom G_user_camera, 1.6 ; Set the camera focus (FOV).
+PositionEntity G_user_camera, 0.0, C_USER_CAMERA_HEIGHT#, 0.0, True
+;------
+
+
+; -- Ambient light.
+; Set the base ambient light colors. These would normally be set in a map file amd possibly modified by user settings.
+; These can also be used to dim and restore the screen when using the rendered image as a backdrop for the main menu areas while changing settings in-game.
+Global G_ambient_red# = 127.0, G_ambient_green# = 127.0, G_ambient_blue# = 127.0
+AmbientLight G_ambient_red#, G_ambient_green#, G_ambient_blue#
+;------
+
+
+; Create weapon camera.
+Global G_guncam = CreateOverlayCamera( -1, 0.0, -1000.0, 0.0 )
+
+; -- Create G_user's gun.
+Global gun = CreateCube()
+ScaleMesh gun, 0.05, 0.05, 1.0
+PositionMesh gun, 0.0, 0.0, 1.0
+UpdateNormals gun
+EntityParent gun, G_guncam
+PositionEntity gun, 0.3, -0.3, 0.3
+;------
+
+; -- Create some meshes to use as a movement reference.
+Global sphere = CreateSphere()
+UpdateNormals sphere
+PositionEntity sphere, 15.0, 1.0, 0.0, True
+SetAsGeometry( sphere )
+EntityShininess sphere, 1.0
+EntityColor sphere, 128,0,255
+
+Global cone = CreateCone()
+UpdateNormals cone
+PositionEntity cone, -15.0, 1.0, 0.0, True
+SetAsGeometry( cone )
+EntityShininess cone, 1.0
+EntityColor cone, 0,0,255
+
+Global cube = CreateCube()
+UpdateNormals cube
+PositionEntity cube, 0.0, 1.0, 15.0, True
+SetAsGeometry( cube )
+EntityShininess cube, 1.0
+EntityColor cube, 255,0,0
+
+Global cylinder = CreateCylinder()
+UpdateNormals cylinder
+PositionEntity cylinder, 0.0, 1.0, -15.0, True
+SetAsGeometry( cylinder )
+EntityShininess cylinder, 1.0
+EntityColor cylinder, 255,128,0
+;------
+
+; -- Create floor texture.
+Global G_floor_tex = CreateTexture( 256, 256, 9 ) ; FLAGS: Color, mipmapping.
+SetBuffer TextureBuffer( G_floor_tex )
+ClsColor 0,128,64 : Cls ; Draw the background color for the texture.
+Color 178,178,178
+For i = 0 To 123 Step 4
+	Rect i, i, 256 - ( i * 2 ), 256 - ( i * 2 ), False
+	Rect i + 1, i + 1, 256 - ( i * 2 ) - 1, 256 - ( i * 2 ) - 1, False
+Next
+;------
+; -- Create 2D floor plane.
+Global G_floor = CreatePlane()
+SetAsGeometry( G_floor )
+EntityTexture G_floor, G_floor_tex
+
+
+; Create crosshair.
+Global G_crosshair = CreateCrosshair( 2 ) ; Create the crosshair image using the default values set for the 'CreateCrosshair' function.
+; Available Crosshairs: 1 - Full square. 2 - Part square. 3 - Full circle. 4 - Part circle.
+
+;------
+
+
+;********************************
+; === Create debug media here ===
+
+
+
+;********************************
+
+
+; - Initialize the user's state.
+SetPlayerYaw 0.0 ; Set the player's initial yaw.
+G_user_old_y# = EntityY( G_user )
+;------
+
+Precache3DMedia ; Precache the loaded 3D media to force it to be uploaded to the graphics card.
+
+;------
+
+; == Main Code ==
+
+
+; -- Initialize the loop.
+Collisions C_COLLTYPE_user, C_COLLTYPE_geometry, 2, 2
+;------
+
+
+; -- Reset the collision state of collision source entities here --
+; (This prevents them from becoming caught-up on geometry they are set to collide with during initial positioning.)
+
+ResetEntity G_user
+; ---
+
+
+
+SyncGame ; Synch the game ready to play/resume. This also sets the backbuffer as the current buffer.
+
+; -- Main loop.
+While Not KeyHit ( 1 ) ; Exit the main loop if the escape key is pressed.
+	
+	; -- Update tweening.
+	Repeat
+		G_TWEEN_time_taken = MilliSecs() - G_old_time
+	Until G_TWEEN_time_taken
+	
+	; How many 'frames' have elapsed	.
+	G_TWEEN_ticks = G_TWEEN_time_taken / C_TWEEN_PERIOD
+	
+	; Calculate the fractional remainder.
+	G_TWEEN_tween# = Float( G_TWEEN_time_taken Mod C_TWEEN_PERIOD ) / Float( C_TWEEN_PERIOD )
+	
+	For G_TWEEN_loop_count = 1 To G_TWEEN_ticks
+		G_old_time = G_old_time + C_TWEEN_PERIOD
+		G_world_time = G_world_time + C_TWEEN_PERIOD ; Update the world time variable used with timeouts, etc.
+		If G_TWEEN_loop_count = G_TWEEN_ticks
+
+			; == Process spawns :: START ==
+
+			; Anything that needs to get 'teleported' while the program is running should have its position updated here via a managed spawn system with a delay built in.
+			; Don't forget to use 'ResetEntity' to reset the collision state for a moved entity. Otherwise it will probably not end up where you expect it to (see the 'ResetEntity' page in the online manual).
+
+			;UpdateAvatarSpawns
+			;UpdateItemSpawns
+
+			; == Process spawns :: END ==
+		
+			CaptureWorld
+		EndIf
+	
+		; == Update main game :: START ==
+
+		; Update the player's control inputs.
+		MouseLook()
+		MoveUser()
+
+;		; -- Some test to find the best way to dim the display while showing a pause menu.
+;		If KeyHit( 2 ) Then LightColor G_light, G_light_red# * 0.1, G_light_green# * 0.1, G_light_blue# * 0.1
+;		If KeyHit( 3 ) Then LightColor G_light, G_light_red#, G_light_green#, G_light_blue#
+;
+;		If KeyHit( 4 ) Then AmbientLight G_ambient_red# * 0.1, G_ambient_green# * 0.1, G_ambient_blue# * 0.1
+;		If KeyHit( 5 ) Then AmbientLight G_ambient_red#, G_ambient_green#, G_ambient_blue#
+;		;------		
+
+		; Update cloud texture scrolling.
+		;G_cloudtexpos# = G_cloudtexpos# + G_cloudspeed# : PositionTexture G_cloud_tex, 0.0, G_cloudtexpos#
+	
+		; == Update main game :: END ==
+	
+		UpdateWorld
+	
+	Next ; End of tweening loop.
+	
+	RenderWorld G_TWEEN_tween#
+
+	; Draw any 2D graphics here.
+
+	If G_show_crosshair Then DrawImage G_crosshair, G_crosshair_x, G_crosshair_y ; If the crosshair is flagged to be shown then draw the crosshair image.
+
+	; - Show the basic instructions for the demo.
+	Color 255,255,255
+	y = 10
+	Text 10, y, "Mouselook to look around" : y = y + 20
+	Text 10, y, "W, A, S, D to move" : y = y + 20
+	Text 10, y, "SPACEBAR to jump" : y = y + 20
+	Text 10, y, "LEFT-SHIFT to sprint" : y = y + 20
+	Text 10, y, "ESCAPE to exit" : y = y + 20
+	y = y + 20
+	Text 10, y, "User Airborne: " + G_user_airborne : y = y + 20
+	;Text 10, y, "" : y = y + 20
+	
+
+;	; -- Frames Per Second counter.
+;	; Place into the main program loop where it will be executed each frame. The variables used here do not need to be declared globlly as this will occur automatically if the routine is placed in the main program. The value of 'milli_secs' should be set from the 'MilliSecs()' Blitz function at the start of the main program loop.
+;	FPS_framecounter = FPS_framecounter + 1
+;	If milli_secs &gt;= FPS_timeout
+;		FPS_timeout = milli_secs + 1000
+;		FPS_framecount = FPS_framecounter
+;		FPS_framecounter = 0
+;	EndIf
+;	Text 10, 10, "FPS"
+;	Text 40, 10, FPS_framecount
+;	;------
+	
+	Flip
+
+Wend
+;------
+
+End ; End the program.
+
+
+
+; == Functions ==
+
+
+
+Global G_mouseclick_item ; Global used with 'DrawHyperlink'.
+Function DrawHyperlink( x, y, linktext$, item )
+	; Draws the specified 'linktext$' as hyperlink text at the x and y locations on the screen.
+	; If the hyperlinked text is clicked on with the left mouse button then the value of 'item' will be returned in the global variable 'G_mouseclick_item'.
+	; Otherwise 'G_mouseclick_item' will contain a zero value.	
+	
+	SetFont G_font_underlined
+	
+	Local width = StringWidth( linktext$ )
+	Local height = FontHeight()
+	
+	Local mx = MouseX()
+	Local my = MouseY()
+
+	Local over_item = False
+	
+	If ( mx &gt;= x ) And ( mx &lt; ( x + width ) )
+		If ( my &gt;= y ) And ( my &lt; ( y + height ) )
+			over_item = True			
+		EndIf
+	EndIf
+	If over_item ; If the mouse pointer is over the hyperlink...
+		Color 0,128,0 ; Use the mouseover hyperlink color.
+		If MouseHit( 1 ) ; If the left mouse button has been pressed...
+			G_mouseclick_item = item ; Set G_mouseover_item to the item id.
+		EndIf			
+	Else
+		Color 62,158,255 ; Use the normal hyperlink color.
+	EndIf
+	Text x, y, linktext$
+	SetFont G_font
+	Color 255, 255, 255
+End Function
+
+
+
+Function LoadFonts()
+	; Note that 'LoadFont' will always return a non-zero handle even if it can't find the font. It seems to default to 'arial' in this case.
+	G_font_underlined = LoadFont( "arial", 16, True, False, True )
+	G_font = LoadFont( "arial", 16, True, False, False )
+	SetFont G_font
+End Function
+
+
+
+Function SelectGraphicsMode()
+	; Selects the full screen 3D graphics mode to set.
+
+	Graphics3D 470, 500
+	SetBuffer BackBuffer()
+	timer = CreateTimer( 60 )	
+	
+	; - Count the number of high-color modes.
+	num_modes = CountGfxModes3D()
+	mode_count = 0
+	For i = 1 To num_modes
+		If GfxModeDepth( i ) &gt; 31 Then mode_count = mode_count + 1
+	Next
+
+	; - Store all the high-color modes in the array with low-color modes filtered out.
+	Dim A_temp_int_array( mode_count )
+	x = 0
+	For i = 1 To num_modes
+		If GfxModeDepth( i ) &gt; 31 Then x = x + 1 : A_temp_int_array( x ) = i
+	Next
+	num_modes = mode_count
+	
+	LoadFonts
+	start_mode = num_modes
+	num_modes_to_show = 20
+	
+	Repeat
+		x = 10 : y = 10
+		Cls
+		Color 255,128,0
+		Text x, y, "[  =======  Select Graphics Mode  =======  ]" : y = y + 20
+		Color 223,223,0
+		Text x, y, "(Color modes lower than 32 bit are not shown)" : y = y + 20
+		Color 255,255,255
+		mode_count = 0
+		G_mouseclick_item = 0 ; Zero this global before updating the hyperlinks.
+		For i = start_mode To 1 Step -1
+			Text x, y, "Width: " + GfxModeWidth( A_temp_int_array( i ) )
+			Text x + 90, y, "Height: " + GfxModeHeight( A_temp_int_array( i ) )
+			Text x + 180, y, "Color Depth: " + GfxModeDepth( A_temp_int_array( i ) )
+			DrawHyperlink x + 295, y, "Fullscreen", A_temp_int_array( i )
+			DrawHyperlink x + 380, y, "Windowed", A_temp_int_array( i ) + 1000			
+			y = y + 20
+			mode_count = mode_count + 1
+			If mode_count = num_modes_to_show Then Exit ; Show a maximum of 'num_modes_to_show' modes on a page.
+		Next
+		
+		If start_mode &lt; num_modes ; If there are previous modes to show...
+			DrawHyperlink 10, 470, "&lt;&lt;&lt; Prev", -1
+		EndIf
+		If ( start_mode - num_modes_to_show ) &gt; 0 ; If there are more modes to show...
+			DrawHyperlink 220, 470, "Next &gt;&gt;&gt;", -2
+		EndIf		
+				
+		Flip
+		WaitTimer timer
+
+		;Cls : Print G_mouseclick_item : WaitKey
+		
+		If G_mouseclick_item &gt; 0 Then Exit ; A graphics mode hyperlink was clicked, so exit the loop and set the mode.
+		
+		; - Update navigation links.
+		Select G_mouseclick_item
+			Case -1 ; Previous page link clicked.
+				start_mode = start_mode + num_modes_to_show
+			Case -2 ; Next page link clicked.
+				start_mode = start_mode - num_modes_to_show
+		End Select
+		If KeyHit( 1 ) Then End
+	Forever
+
+	If G_mouseclick_item &gt; 1000 ; If windowed mode was selected...
+		G_mouseclick_item = G_mouseclick_item - 1000
+		x = 2 ; Set windowed mode.
+	Else ; Fullscreen mode was selected.
+		x = 1 ; Set fullscreen mode.
+	EndIf
+
+	EndGraphics
+	
+	Graphics3D GfxModeWidth( G_mouseclick_item ), GfxModeHeight( G_mouseclick_item ), GfxModeDepth( G_mouseclick_item ), x
+	Dim A_temp_int_array( 0 ) ; Free the memory used by this array.
+End Function
+
+
+
+Function MouseLook()
+	Local i, yaw#, pitch#
+	
+	If G_enable_mouse_smoothing ; Mouse smoothing is turned on, so we average the last few mouse delta values and use the result.
+		; -- Smooth the mouse.
+		For i = 0 To G_mouse_smoothing_que_sub_max
+			A_mouse_smoothing_que_x( i ) = A_mouse_smoothing_que_x( i + 1 )		
+			A_mouse_smoothing_que_y( i ) = A_mouse_smoothing_que_y( i + 1 )
+			yaw# = yaw# + A_mouse_smoothing_que_x( i )		
+			pitch# = pitch# + A_mouse_smoothing_que_y( i )
+		Next
+		A_mouse_smoothing_que_x( G_mouse_smoothing_que_max ) = MouseXSpeed()
+		A_mouse_smoothing_que_y( G_mouse_smoothing_que_max ) = MouseYSpeed()
+		yaw# = yaw# + A_mouse_smoothing_que_x( G_mouse_smoothing_que_max )
+		pitch# = pitch# + A_mouse_smoothing_que_y( G_mouse_smoothing_que_max )
+		yaw# = ( yaw# / G_mouse_smoothing_que_length ) * G_mouselook_sensitivity#
+		G_user_pitch# = G_user_pitch# + ( ( pitch# / G_mouse_smoothing_que_length ) * G_mouselook_sensitivity# )
+		;------
+	Else ; Mouse smoothing is turned off, so we just use the mouse delta values directly.
+		yaw# = MouseXSpeed() * G_mouselook_sensitivity#
+		G_user_pitch# = G_user_pitch# + ( MouseYSpeed() * G_mouselook_sensitivity# )
+	EndIf
+	
+	MoveMouse G_viewport_center_x, G_viewport_center_y ; Re-center the mouse.
+
+	TurnEntity G_user, 0.0, -yaw#, 0.0, True ; Turn the user on the Y (yaw) axis.
+	
+	; -- Limit the user's camera to within 180 degrees of pitch rotation. 'EntityPitch()' returns useless values so we need to use a variable to keep track of the camera pitch.
+	If G_user_pitch# &gt; 90.0 Then G_user_pitch# = 90.0
+	If G_user_pitch# &lt; -90.0 Then G_user_pitch# = -90.0
+	;------
+	
+	RotateEntity G_user_camera, G_user_pitch#, 0.0, 0.0 ; Pitch the user's camera up and down.
+
+	; Sync the rotation of the gun camera with the user's camera to sync the lighting on the gun.
+	RotateEntity G_guncam, EntityPitch# ( G_user_camera, True ), EntityYaw# ( G_user, True ), 0.0, True
+End Function
+
+
+
+Function SetPlayerYaw( yaw# )
+	RotateEntity G_user, 0.0, yaw#, 0.0, True
+End Function
+
+
+
+Function SetAsGeometry( entity, pick_geometry = C_PICKTYPE_POLYGON, obscurer = True )
+	EntityType entity, C_COLLTYPE_geometry
+	EntityPickMode entity, pick_geometry, obscurer
+End Function
+
+
+
+Function MoveUser()
+
+	; - Get the user's position.
+	user_x# = EntityX( G_user )
+	user_y# = EntityY( G_user )
+	user_z# = EntityZ( G_user )
+
+	; - Update the user's Y (vertical) velocity.
+	v# = user_y#
+	y_velocity# = v# - G_user_old_y#
+	G_user_old_y# = v#
+
+	; - Find out if the user is airborne
+	G_user_platform = LinePick( user_x#, user_y# + C_USER_TRACTION_LINEPICK_START#, user_z#, 0.0, C_USER_TRACTION_LINEPICK_DISTANCE#, 0.0, 0.05 )
+	If G_user_platform &lt;&gt; 0		
+		G_user_platform_x# = PickedX()
+		G_user_platform_y# = PickedY()
+		G_user_platform_z# = PickedZ()
+		G_user_platform_nx# = PickedNX()
+		G_user_platform_ny# = PickedNY()
+		G_user_platform_nz# = PickedNZ()
+		
+		G_user_airborne = False
+		xspeed# = G_user_strafe_speed#		
+	Else
+		G_user_airborne = True
+		; Set horizontal movement to aircontrol values.
+		zspeed# = G_user_aircontrol_speed#
+		xspeed# = zspeed#
+	EndIf
+
+	If KeyHit( C_KEY_SPACE ) Then do_jump = True ; This check needs to be outide the conditional block below or the KeyHits will que up.
+
+	If G_user_airborne = 0 ; Prevent the user from jumping and sprinting while they are in the air.
+
+		; Process the user's walk/sprint control input.
+		If KeyDown( C_KEY_LEFT_SHIFT )
+			zspeed# = G_user_sprint_speed#
+		Else
+			zspeed# = G_user_walk_speed#
+		EndIf
+	
+		; Process the user's jumping/falling control input.
+		If do_jump ; Up/Jump. The 'SPACE' key.
+			y_velocity# = y_velocity# + G_user_jump_impulse#
+			;user_jumped = True
+		EndIf
+		
+		;If KeyDown( C_KEY_LEFT_CONTROL ) ; Down/Crouch. The 'LEFT-CONTROL' key.
+		;EndIf
+
+	EndIf
+
+	; Process the user's sideways (strafing) control input.
+	If KeyDown( C_KEY_D ) ; Right. The 'D' key.
+		x# = 1.0
+		moved = True
+	Else If KeyDown( C_KEY_A ) ; Left. The 'A' key.
+		x# = -1.0
+		moved = True
+	EndIf
+
+	; Process the user's forward-backward control input.
+	If KeyDown( C_KEY_W ) ; Forward. The 'W' key.
+		z# = 1.0
+		moved = True
+	Else If KeyDown( C_KEY_S ) ; Backward. The 'S' key.
+		z# = -1.0
+		moved = True
+	EndIf
+
+	If moved ; If horizontal movement has occurred.
+		; - Normalize the horizontal movement vectors. This prevents simultaneous key presses resulting in incorrect speeds.
+		; Note that his is done manually rather than using TFormNormal as it's necessary to control the order in which normalization and transformation occur.
+		v# = Sqr( x# * x# + z# * z# ) ; Calculate the normalization value.
+		x# = x# / v# : z# = z# / v# ; Normalize the horizontal movement values. Note that v# will always be non-zero as long as this code is only run when horizontal movement has occurred.
+
+		TFormVector x# * xspeed#, 0.0, z# * zspeed#, G_user, 0 ; Transform the horizontal movement vector from the character's space into world space
+		
+		TranslateEntity G_user, TFormedX(), 0.0, TFormedZ() ; Move the user horizontally.
+	EndIf
+	
+	y_velocity# = y_velocity# - G_user_y_decrement#
+
+	TranslateEntity G_user, 0.0, y_velocity#, 0.0 ; Move the user vertically.
+End Function
+
+
+
+
+Function Precache3DMedia()
+	; NOTES:
+	; This function should only need to be run when a new map/level is first loaded. It should normally be executed by the map file loader routine after loading and creating the renderable media, but before the media is positioned, hidden or has its alpha set to zero.
+
+	; -- Precache the game's 3D graphics media. This forces the media to be uploaded to the video card. This should be done before any of the media is positioned, hidden or has its alpha set to zero to turn off rendering. Note that the camera will end up pointing back to where it started, so there is no need to reset its orientation.
+	
+	For i = 1 To 4
+		TurnEntity G_user_camera, 0.0, 90.0, 0.0, True
+		RenderWorld
+	Next
+End Function
+
+
+
+Function SyncGame()
+	; NOTES:
+	; This function should be run immediately before a game session begins and also after resuming from a pause.
+
+	; *** At this point everything should be setup and ready to start/restart the game immediately. ***
+
+	; Reset the input devices.
+	MoveMouse G_viewport_center_x, G_viewport_center_y
+	FlushMouse
+	FlushKeys 
+	MouseXSpeed()
+	MouseYSpeed()
+	MouseHit(1)
+	MouseHit(2)
+	MouseHit(3)
+
+	; Set and render the backbuffer, and then flip it to the frontbuffer.
+	SetBuffer BackBuffer()
+	RenderWorld
+	Flip
+
+	; Synch the timing. This assumes that the 'G_old_time' global holds the Millisecs() time
+	; set at the start of the previous loop and is used with render-tweening or delta-timing.
+	G_old_time = MilliSecs()
+	
+End Function
+
+
+
+Function CreateOverlayCamera( order, x#, y#, z#, fov = 1.6 )
+; USAGE:
+; Creates a camera to be used for a heads-up display (HUD), GUI, or user weapon model.
+; The rendered output from this camera will overlay the output from higher order cameras (the output from the higher order cameras will be drawn first).
+; Using a separate camera for this prevents the rendered media from poking through walls and other geometry.
+; Note that this method is unlikely to add extra overhead as the same amount of data is being rendered.
+
+; PARAMETERS:
+; order - This sets the drawing order of the camera. 'order' should be a negative number, so that the camera is drawn on top of the main camera graphics. The highest value negative number will be drawn last (eg. The '-2' camera will be drawn after the '-1' camera.).
+; x#, y#, z# - Set the camera's absolute world position. The position should set so that the camera and its associated 3D graphic objects do not interfere with any other cameras.
+; fov - The camera's field of view (Default: 1.6).
+
+; RETURNS:
+; The new camera's entity handle is returned.
+
+
+	Local cam = CreateCamera()	
+	CameraViewport cam, 0, 0, G_viewport_width, G_viewport_height
+	PositionEntity cam, x#, y#, z#, True ; 
+	CameraRange cam, 0.2, 5.0
+	CameraZoom cam, fov
+	EntityOrder cam, order
+	CameraClsMode cam, False, True ; This prevents the background graphics from being overwritten by the camera's clearscreen color.
+	;CameraProjMode cam, projmode
+	Return cam
+End Function
+
+
+
+Function CreateCrosshair( crosshair_type = 1, crosshair_size = 32, color_red = 0, color_green = 255, color_blue = 0 )
+	; This function creates the crosshair image.
+	
+	; PARAMETERS:-
+	; crosshair_type - Selects the drawing algorithm used to create the crosshair image. You can add your own algorithms in the appropriate select block below.
+	; crosshair_size - Holds the width and height of the crosshair image. It's recommended that this be an even number so that it is correctly centered for most resolutions.
+	;	- If this is a negative number then the size will be set relative to the graphics height on the assumption that the size supplied is for a 600 pixel high graphics resolution (eg. a test resolution of 800x600). The resulting size will also be an even number.
+	; color_red, color_green, color_blue - The color of the crosshair image.
+	
+	; Returns the image handle of the crosshair image. The 'G_crosshair_x' and 'G_crosshair_y' globals are also set to the drawing position for the crosshair image.
+	
+	; Note that this function changes the current drawing buffer. The buffer will need to be reset to the backbuffer before the match/level starts ('SyncGame' does this automatically).
+
+	; Declare the variables used with the crosshair drawing algorithms.
+	Local v1, v2, v3, v4
+	
+	
+	; -- If crosshair_size is a negative number then set the size relative to the graphics height.
+	; This code makes the assumption that the original size value supplied is for a 600 pixel high graphics resolution (eg. a test resolution of 800x600).
+	; The resulting size is also converted to be an even number (divisible by 2).
+	If crosshair_size &lt; 0
+		crosshair_size = ( Float( Abs( crosshair_size ) ) / 600.0 ) * G_viewport_height
+		crosshair_size = ( crosshair_size / 2 ) * 2 ; Convert the size to an even number.
+	EndIf
+	;------
+	
+	Local crosshair = CreateImage( crosshair_size, crosshair_size ) ; Create the crosshair image.
+	SetBuffer ImageBuffer( crosshair ) ; Set the current drawing buffer to be the image buffer for the crosshair image.
+	
+	Color color_red, color_green, color_blue; Set the drawing color for the crosshair image.
+	
+	; -- Draw the crosshair image according to the specified 'crosshair_type'.
+	; You can add your own algorithms into this select block to make your own crosshair shapes.
+	; Note that a better result could possibly be obtained for some of these by creating a much larger image and then scaling it down with 'ScaleImage'.
+	; Using the 'Line' command instead of 'Plot' would allow some bits of the crosshair image to scale better.
+	Select crosshair_type ; Select the type of crosshair image to draw.
+	
+		Case 1 ; Full square.
+			Rect 0, 0, crosshair_size, crosshair_size, False
+			v3 = ( ( crosshair_size / 16 ) / 2 ) * 2 ; The '16' assumes that the minimum sized crosshair is 32 pixels wide. The result is an even number.
+			v4 = v3 / 2
+			v1 = ( crosshair_size / 2 ) - v3 : v2 = v1 + v3 + v4
+			Plot v1, v1 : Plot v2, v1 : Plot v2, v2 : Plot v1, v2
+			v1 = v1 - v4 : v2 = v2 + v4
+			Plot v1, v1 : Plot v2, v1 : Plot v2, v2 : Plot v1, v2
+	
+		Case 2 ; Part square.
+			Rect 0, 0, crosshair_size, crosshair_size, False
+			Color 0, 0, 0
+			v1 = ( ( crosshair_size / 3 ) / 2 ) * 2 ; Create an approximate 1/3 value that is an even number.
+			v2 = ( crosshair_size - v1 ) / 2
+			v3 = v2 - 1
+			Rect 0, v3, crosshair_size, v2, True
+			Rect v3, 0, v2, crosshair_size, True
+			Color color_red, color_green, color_blue
+			v3 = ( ( crosshair_size / 16 ) / 2 ) * 2 ; The '16' assumes that the minimum sized crosshair is 32 pixels wide. The result is an even number.
+			v4 = v3 / 2
+			v1 = ( crosshair_size / 2 ) - v3 : v2 = v1 + v3 + v4
+			Plot v1, v1 : Plot v2, v1 : Plot v2, v2 : Plot v1, v2
+			v1 = v1 - v4 : v2 = v2 + v4
+			Plot v1, v1 : Plot v2, v1 : Plot v2, v2 : Plot v1, v2
+
+		Case 3 ; Full circle.
+			Oval 0, 0, crosshair_size, crosshair_size, False
+			Color color_red, color_green, color_blue
+			v3 = ( ( crosshair_size / 16 ) / 2 ) * 2 ; The '16' assumes that the minimum sized crosshair is 32 pixels wide. The result is an even number.
+			v4 = v3 / 2
+			v1 = ( crosshair_size / 2 ) - v3 : v2 = v1 + v3 + v4
+			Plot v1, v1 : Plot v2, v1 : Plot v2, v2 : Plot v1, v2
+			v1 = v1 - v4 : v2 = v2 + v4
+			Plot v1, v1 : Plot v2, v1 : Plot v2, v2 : Plot v1, v2
+
+		Case 4 ; Part circle.
+			Oval 0, 0, crosshair_size, crosshair_size, False
+			Color 0, 0, 0
+			v1 = ( ( crosshair_size / 3 ) / 2 ) * 2 ; Create an approximate 1/3 value that is an even number.
+			v2 = ( crosshair_size - v1 ) / 2
+			v3 = v2 - 1
+			Rect 0, v3, crosshair_size, v2, True
+			Rect v3, 0, v2, crosshair_size, True
+			Color color_red, color_green, color_blue
+			v3 = ( ( crosshair_size / 16 ) / 2 ) * 2 ; The '16' assumes that the minimum sized crosshair is 32 pixels wide. The result is an even number.
+			v4 = v3 / 2
+			v1 = ( crosshair_size / 2 ) - v3 : v2 = v1 + v3 + v4
+			Plot v1, v1 : Plot v2, v1 : Plot v2, v2 : Plot v1, v2
+			v1 = v1 - v4 : v2 = v2 + v4
+			Plot v1, v1 : Plot v2, v1 : Plot v2, v2 : Plot v1, v2
+	End Select
+	;------
+	
+	; Set the values for the globals that hold the drawing position for the crosshair image.
+	G_crosshair_x = G_viewport_center_x - ( crosshair_size / 2 ) : G_crosshair_y = G_viewport_center_y - ( crosshair_size / 2 )
+	
+	Return crosshair
+End Function
+</textarea> </td></tr><tr ><td class="cell"><pre class="code">The code is at: http://www.blitzbasic.com/codearcs/codearcs.php?code=1137</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SgtSanders</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> Fantastic! Good work! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Boiled Sweets</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> Needs dampening <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Trader3564</td><td align="right"><font class=tiny>2007</font></td></tr></table></td></tr><tr ><td class="posttext"> Nice, but its not finished :( i can't jump, and not run, and i can walk up to over 90' hills if not more. <br>But hey, what has be done is great. Its a great start!!! I hope to work this out a bit more. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Zethrax</td><td align="right"><font class=tiny>2015</font></td></tr></table></td></tr><tr ><td class="posttext"> I've updated this a bit since I wrote the original code 10 years ago. The following things have been changed.<br><br>EDITS:-<br>Added code to show a gun using a second camera.<br>Added a crosshair.<br>Updated mouselooking and movement code.<br>Converted to render tweening.<br>Added a graphics resolution selector.<br>Added jumping, sprinting, configurable strafe speed, and fake gravity. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

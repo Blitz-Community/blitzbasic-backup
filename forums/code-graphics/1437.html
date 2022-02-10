@@ -1,0 +1,482 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Webcam-class for Windows</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='A small bmx class to capture pictures from a webcam into a pixmap, language=bmx, category=Graphics'><meta name='author' content='Mirko'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=1>Graphics</a>/Webcam-class for Windows</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="1437.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Webcam-class for Windows by Mirko</td><td align="right">2005 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> It is just a small class to capture pictures from a webcam and put them into a pixmap so you can draw them on the bmx screen.<br>Pherhaps someone might find this usefull for something.<br>If you manage to optimize the code, don't forgett to let me know ;-)<br>(It's windows only!) </td></tr><tr ><td class="cell"><pre class="code">'Application: webcam - class
+'Author: 		Mirko 'NAPALM' Tocchella
+'Description: 	I little wrapper to capture pictures from a webcam and put
+'				them into a pixmap	
+'				At the end of the source there is a little example
+'
+
+Import BRL.System
+
+Import PUB.Win32
+
+
+extern "Win32"
+	function webcam_GetActiveWindow:int () "Win32" = "GetActiveWindow"
+	Function webcam_SendMessage( hWnd,MSG,wParam,lParam) "Win32" = "SendMessageA"
+	Function webcam_FreeLibrary ( hnd:Int ) "Win32" = "FreeLibrary"
+end extern
+
+const WM_CAP_START = WM_USER
+
+const WM_CAP_SET_CALLBACK_ERROR = WM_CAP_START + 2
+const WM_CAP_SET_CALLBACK_STATUS = WM_CAP_START + 3
+const WM_CAP_SET_CALLBACK_YIELD = WM_CAP_START + 4
+const WM_CAP_SET_CALLBACK_FRAME = WM_CAP_START + 5
+const WM_CAP_SET_CALLBACK_VIDEOSTREAM = WM_CAP_START + 6
+const WM_CAP_SET_CALLBACK_WAVESTREAM = WM_CAP_START + 7
+
+const WM_CAP_DRIVER_CONNECT = WM_CAP_START + 10
+const WM_CAP_DRIVER_GET_CAPS = WM_CAP_START + 14
+
+const WM_CAP_DLG_VIDEOFORMAT = WM_CAP_START + 41
+const WM_CAP_DLG_VIDEOSOURCE = WM_CAP_START + 42
+const WM_CAP_DLG_VIDEODISPLAY = WM_CAP_START + 43
+
+const WM_CAP_GET_VIDEOFORMAT = WM_CAP_START +44
+const WM_CAP_SET_VIDEOFORMAT = WM_CAP_START +45
+
+const WM_CAP_SET_PREVIEW = WM_CAP_START + 50
+const WM_CAP_SET_OVERLAY = WM_CAP_START + 51
+const WM_CAP_SET_PREVIEWRATE = WM_CAP_START + 52
+const WM_CAP_SET_SCALE = WM_CAP_START +53
+const WM_CAP_GET_STATUS = WM_CAP_START + 54
+
+const WM_CAP_SET_CALLBACK_CAPCONTROL = WM_CAP_START + 85
+
+
+type TWebcam
+	field  Handle:Int
+	field  DeviceID:Int
+	field  FrameRate:Int
+	field  LibHandle:Int
+	global Width:Int
+	global Height:Int
+	global PMWidth:Int
+	global PMHeight:Int
+	global Image:TPixmap 
+	field webcam_CreateCaptureWindow:Int (WName:Byte Ptr, Style:int, X:int, y:int, w:int, h:Int, ..
+									  ParentWnd:int, ID:int) "Win32"
+	
+	method New ()
+		Image = CreatePixmap(16,16,PF_RGB888)
+		FrameRate = 15
+		Handle = NULL
+		DeviceID = -1
+		' Get the library handle
+		LibHandle = LoadLibraryA("AVICAP32.DLL")
+		If Not LibHandle Then Throw "Can't load AVICAP32.DLL"
+		
+		' Get the Adress of the capCreateCaptureWindow function
+		webcam_CreateCaptureWindow = GetProcAddress( LibHandle, "capCreateCaptureWindowA" ) 
+'		If Not webcam_CreateCaptureWindow Then Throw "Can't get adress of capCreateCaptureWindowA"			
+	End Method
+	
+	method Delete ()
+		DeInit()
+		FreeLibrary(LibHandle)
+		Image = NULL
+	End Method
+	
+	method Init:Int (WHnd:Int, x:int, y:int, w:int, h:Int)
+		local res:int = false
+		if (Handle &lt;&gt; NULL) DeInit()
+		DeviceID = -1
+		Handle = Webcam_CreateCaptureWindow (NULL, WS_VISIBLE+WS_CHILD, x, y, w, h, WHnd, 1)
+		if (Handle &lt;&gt; NULL)
+			res = ConnectDevice()
+			if (res) EnablePreviewMode(true)
+			if (res) SetFrames(Framerate)			
+		endif
+		return (res)
+	End Method
+	
+	method DeInit ()
+		if (handle &lt;&gt; NULL)
+			DestroyWindow (Handle)
+			Handle = NULL			
+		end if		
+		DeviceID = -1
+	End Method
+	
+	Method ConnectDevice:Int ()
+		if (deviceID = -1)
+  		  for local i:int = 0 to 9
+			local res:Int = Webcam_SendMessage(Handle, WM_CAP_DRIVER_CONNECT, i, 0)
+			if (res &lt;&gt; 0)
+			  DeviceID = i
+			  exit
+			endif
+		  Next
+		endif
+		return (DeviceID &lt;&gt; -1)		
+	End Method
+	
+	method EnablePreviewMode (enable:Int)
+		if (DeviceID &lt;&gt; -1)
+			Webcam_SendMessage (Handle, WM_CAP_SET_PREVIEW, enable, 0)
+		end if		
+	End Method
+	
+	method EnableOverlayMode (enable:Int)
+		if (DeviceID &lt;&gt; -1)
+			Webcam_SendMessage (Handle, WM_CAP_SET_OVERLAY, enable, 0)
+		end if		
+	End Method
+	
+	method SetFrames (XFrames:Int)
+		FrameRate = XFrames
+		if (DeviceID &lt;&gt; -1)
+			Webcam_SendMessage (Handle, WM_CAP_SET_PREVIEWRATE, FrameRate, 0)
+		end if		
+	End Method
+	
+	method ShowSettings (nr:Int) 'use 0 to 2	
+		if (DeviceID &lt;&gt; -1)
+			Webcam_SendMessage (Handle, WM_CAP_DLG_VIDEOFORMAT+nr, 0, 0)
+		end if		
+	End Method
+	
+	method SetScale (DoScale:Int)
+		if (DeviceID &lt;&gt; -1)
+			Webcam_SendMessage (Handle, WM_CAP_SET_SCALE, DoScale, 0)
+		end if		
+	End Method
+	
+	method SetFrameCallbackRoutine ()
+		if (DeviceID &lt;&gt; -1)		   
+			local Routine:Byte Ptr 
+			Routine = FrameCallback
+			Webcam_SendMessage (Handle, WM_CAP_SET_CALLBACK_FRAME, 0, int(Routine))
+		end if		
+	End Method
+	
+	method SetPMSize (w:int, h:int)
+		PMWidth = w
+		PMHeight = h
+	End Method
+	
+	method SetSize (w:int, h:int)
+		local res:Int = false
+		if (DeviceID &lt;&gt; -1)		   
+			' Get The size of the structure first
+			local size:Int = Webcam_SendMessage (Handle, WM_CAP_GET_VIDEOFORMAT, 0, NULL)
+			if (size &gt; 0)
+				' Get The Space for the Data
+				local Bank:TBank = createBank(size)
+				Webcam_SendMessage (Handle, WM_CAP_GET_VIDEOFORMAT, size, int(BankBuf(Bank)))
+				'Manipulate the buffer
+				Width  = PeekInt(Bank, 4)
+				Height = PeekInt(Bank, 8)
+				DebugLog "Width: "+Width+" Height: "+Height
+				PokeInt(Bank, 4, w)
+				PokeInt(Bank, 8, h)
+				'Write it back
+				res = Webcam_SendMessage (Handle, WM_CAP_SET_VIDEOFORMAT, size, int(BankBuf(Bank)))
+				if (res)
+					Width  = w
+					Height = h	
+				end if
+				Bank = NULL
+			end if			
+		end if		
+		return(res)
+	End Method
+	
+function FrameCallback (lwnd:Int, lpVHdr:Byte Ptr)
+	local VideoHeader:Tbank = CreateStaticBank(lpVHdr, 40)
+	local VideoMemoryAdress:Byte ptr	= Byte Ptr(PeekInt(VideoHeader, 0))
+	local dwBytesUsed:Int				= PeekInt(VideoHeader, 4)	
+
+	if (dwBytesUsed = (Width*Height*3)) ' 640 * 480 * 24bit
+		local TempMap:TPixMap = CreateStaticPixMap (VideomemoryAdress, Width, Height, Width*3,PF_BGR888)		
+'		WebCamImage = LoadImage(TempMap)
+		Image = YFlipPixmap(TempMap)
+		if (PMWidth &lt;&gt; Width) or (PMHeight &lt;&gt; Height)
+			Image = ResizePixMap (Image, PMWidth,PMHeight)
+		endif
+	else
+		debuglog "Wrong Picture Size. Expected "+Width+"/"+Height	
+	end if
+End Function
+	
+	
+End type
+
+'rem 
+
+' TEST
+graphics 800,600,0'32,60
+local whnd = Webcam_GetActiveWindow()
+local Webcam:TWebcam = new TWebcam
+local rot:Int
+
+if (Webcam.Init(whnd, 0,0,640,480))
+'	Webcam.ShowSettings(0)
+	Webcam.SetFrames(30)
+	Webcam.SetSize(320,240)
+	Webcam.SetPMSize(800,600)
+	Webcam.SetScale(false)
+	Webcam.EnablePreviewMode(false)
+	Webcam.EnableOverlayMode(false)
+	Webcam.SetFrameCallbackRoutine()
+	while not keyhit(key_escape)
+		cls 
+		setcolor 255,255,255
+		DrawPixMap (Webcam.Image, 0,0)
+		drawtext "Memory usage:"+MemAlloced(), 0,580
+		flip
+		flushmem
+	wend
+else
+	RuntimeError ("Cant Initialize Webcam")	
+end if
+endgraphics()
+'end rem</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xlsior</td><td align="right"><font class=tiny>2005</font></td></tr></table></td></tr><tr ><td class="posttext"> . <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Filax</td><td align="right"><font class=tiny>2005</font></td></tr></table></td></tr><tr ><td class="posttext"> It's strange i get an error on ?<br><br>FreeLibrary(LibHandle)<br><br>And in the console output :<br><br>Warning: resolving _GetActiveWindow by linking to _GetActiveWindow@0<br>Use --enable-stdcall-fixup to disable these warnings<br>Use --disable-stdcall-fixup to disable these fixups<br>Warning: resolving _SendMessageA by linking to _SendMessageA@16<br><br>Process complete <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>2005</font></td></tr></table></td></tr><tr ><td class="posttext"> Nice job, Mirko. I ran into the same problem as Filax, but hacked it to work for me...<br><br><pre class=code>
+'Application: webcam - class
+'Author: 		Mirko 'NAPALM' Tocchella
+'Description: 	I little wrapper to capture pictures from a webcam and put
+'				them into a pixmap	
+'				At the end of the source there is a little example
+'
+
+Import BRL.System
+
+Import PUB.Win32
+
+
+'Extern "Win32"
+'	Function webcam_GetActiveWindow:Int () "Win32" = "GetActiveWindow"
+'	Function webcam_SendMessage( hWnd,MSG,wParam,lParam) "Win32" = "SendMessageA"
+'	Function webcam_FreeLibrary ( hnd:Int ) "Win32" = "FreeLibraryA"
+'End Extern
+
+Global webcam_GetActiveWindow:Int () "Win32"
+Global webcam_SendMessage( hWnd,MSG,wParam,lParam) "Win32"
+Global webcam_FreeLibrary ( hnd:Int ) "Win32"
+
+user32 = LoadLibraryA ("user32.dll")
+
+If user32 webcam_GetActiveWindow = GetProcAddress (user32, "GetActiveWindow")
+If user32 webcam_SendMessage = GetProcAddress (user32, "SendMessageA")
+
+kernel32 = LoadLibraryA ("kernel32.dll")
+
+If kernel32 webcam_FreeLibrary = GetProcAddress (kernel32, "FreeLibrary")
+
+Const WM_CAP_START = WM_USER
+
+Const WM_CAP_SET_CALLBACK_ERROR = WM_CAP_START + 2
+Const WM_CAP_SET_CALLBACK_STATUS = WM_CAP_START + 3
+Const WM_CAP_SET_CALLBACK_YIELD = WM_CAP_START + 4
+Const WM_CAP_SET_CALLBACK_FRAME = WM_CAP_START + 5
+Const WM_CAP_SET_CALLBACK_VIDEOSTREAM = WM_CAP_START + 6
+Const WM_CAP_SET_CALLBACK_WAVESTREAM = WM_CAP_START + 7
+
+Const WM_CAP_DRIVER_CONNECT = WM_CAP_START + 10
+Const WM_CAP_DRIVER_GET_CAPS = WM_CAP_START + 14
+
+Const WM_CAP_DLG_VIDEOFORMAT = WM_CAP_START + 41
+Const WM_CAP_DLG_VIDEOSOURCE = WM_CAP_START + 42
+Const WM_CAP_DLG_VIDEODISPLAY = WM_CAP_START + 43
+
+Const WM_CAP_GET_VIDEOFORMAT = WM_CAP_START +44
+Const WM_CAP_SET_VIDEOFORMAT = WM_CAP_START +45
+
+Const WM_CAP_SET_PREVIEW = WM_CAP_START + 50
+Const WM_CAP_SET_OVERLAY = WM_CAP_START + 51
+Const WM_CAP_SET_PREVIEWRATE = WM_CAP_START + 52
+Const WM_CAP_SET_SCALE = WM_CAP_START +53
+Const WM_CAP_GET_STATUS = WM_CAP_START + 54
+
+Const WM_CAP_SET_CALLBACK_CAPCONTROL = WM_CAP_START + 85
+
+
+Type TWebcam
+	Field  Handle:Int
+	Field  DeviceID:Int
+	Field  FrameRate:Int
+	Field  LibHandle:Int
+	Global Width:Int
+	Global Height:Int
+	Global PMWidth:Int
+	Global PMHeight:Int
+	Global Image:TPixmap 
+	Field webcam_CreateCaptureWindow:Int (WName:Byte Ptr, Style:Int, X:Int, y:Int, w:Int, h:Int, ..
+									  ParentWnd:Int, ID:Int) "Win32"
+	
+	Method New ()
+		Image = CreatePixmap(16,16,PF_RGB888)
+		FrameRate = 15
+		Handle = Null
+		DeviceID = -1
+		' Get the library handle
+		LibHandle = LoadLibraryA("AVICAP32.DLL")
+		If Not LibHandle Then Throw "Can't load AVICAP32.DLL"
+		
+		' Get the Adress of the capCreateCaptureWindow function
+		webcam_CreateCaptureWindow = GetProcAddress( LibHandle, "capCreateCaptureWindowA" ) 
+'		If Not webcam_CreateCaptureWindow Then Throw "Can't get adress of capCreateCaptureWindowA"			
+	End Method
+	
+	Method Delete ()
+		DeInit()
+		webcam_FreeLibrary(LibHandle)
+		Image = Null
+	End Method
+	
+	Method Init:Int (WHnd:Int, x:Int, y:Int, w:Int, h:Int)
+		Local res:Int = False
+		If (Handle &lt;&gt; Null) DeInit()
+		DeviceID = -1
+		Handle = Webcam_CreateCaptureWindow (Null, WS_VISIBLE+WS_CHILD, x, y, w, h, WHnd, 1)
+		If (Handle &lt;&gt; Null)
+			res = ConnectDevice()
+			If (res) EnablePreviewMode(True)
+			If (res) SetFrames(Framerate)			
+		EndIf
+		Return (res)
+	End Method
+	
+	Method DeInit ()
+		If (handle &lt;&gt; Null)
+			DestroyWindow (Handle)
+			Handle = Null			
+		End If		
+		DeviceID = -1
+	End Method
+	
+	Method ConnectDevice:Int ()
+		If (deviceID = -1)
+  		  For Local i:Int = 0 To 9
+			Local res:Int = Webcam_SendMessage(Handle, WM_CAP_DRIVER_CONNECT, i, 0)
+			If (res &lt;&gt; 0)
+			  DeviceID = i
+			  Exit
+			EndIf
+		  Next
+		EndIf
+		Return (DeviceID &lt;&gt; -1)		
+	End Method
+	
+	Method EnablePreviewMode (enable:Int)
+		If (DeviceID &lt;&gt; -1)
+			Webcam_SendMessage (Handle, WM_CAP_SET_PREVIEW, enable, 0)
+		End If		
+	End Method
+	
+	Method EnableOverlayMode (enable:Int)
+		If (DeviceID &lt;&gt; -1)
+			Webcam_SendMessage (Handle, WM_CAP_SET_OVERLAY, enable, 0)
+		End If		
+	End Method
+	
+	Method SetFrames (XFrames:Int)
+		FrameRate = XFrames
+		If (DeviceID &lt;&gt; -1)
+			Webcam_SendMessage (Handle, WM_CAP_SET_PREVIEWRATE, FrameRate, 0)
+		End If		
+	End Method
+	
+	Method ShowSettings (nr:Int) 'use 0 to 2	
+		If (DeviceID &lt;&gt; -1)
+			Webcam_SendMessage (Handle, WM_CAP_DLG_VIDEOFORMAT+nr, 0, 0)
+		End If		
+	End Method
+	
+	Method SetScale (DoScale:Int)
+		If (DeviceID &lt;&gt; -1)
+			Webcam_SendMessage (Handle, WM_CAP_SET_SCALE, DoScale, 0)
+		End If		
+	End Method
+	
+	Method SetFrameCallbackRoutine ()
+		If (DeviceID &lt;&gt; -1)		   
+			Local Routine:Byte Ptr 
+			Routine = FrameCallback
+			Webcam_SendMessage (Handle, WM_CAP_SET_CALLBACK_FRAME, 0, Int(Routine))
+		End If		
+	End Method
+	
+	Method SetPMSize (w:Int, h:Int)
+		PMWidth = w
+		PMHeight = h
+	End Method
+	
+	Method SetSize (w:Int, h:Int)
+		Local res:Int = False
+		If (DeviceID &lt;&gt; -1)		   
+			' Get The size of the structure first
+			Local size:Int = Webcam_SendMessage (Handle, WM_CAP_GET_VIDEOFORMAT, 0, Null)
+			If (size &gt; 0)
+				' Get The Space for the Data
+				Local Bank:TBank = CreateBank(size)
+				Webcam_SendMessage (Handle, WM_CAP_GET_VIDEOFORMAT, size, Int(BankBuf(Bank)))
+				'Manipulate the buffer
+				Width  = PeekInt(Bank, 4)
+				Height = PeekInt(Bank, 8)
+				DebugLog "Width: "+Width+" Height: "+Height
+				PokeInt(Bank, 4, w)
+				PokeInt(Bank, 8, h)
+				'Write it back
+				res = Webcam_SendMessage (Handle, WM_CAP_SET_VIDEOFORMAT, size, Int(BankBuf(Bank)))
+				If (res)
+					Width  = w
+					Height = h	
+				End If
+				Bank = Null
+			End If			
+		End If		
+		Return(res)
+	End Method
+	
+Function FrameCallback (lwnd:Int, lpVHdr:Byte Ptr)
+	Local VideoHeader:TBank = CreateStaticBank(lpVHdr, 40)
+	Local VideoMemoryAdress:Byte Ptr	= Byte Ptr(PeekInt(VideoHeader, 0))
+	Local dwBytesUsed:Int				= PeekInt(VideoHeader, 4)	
+
+	If (dwBytesUsed = (Width*Height*3)) ' 640 * 480 * 24bit
+		Local TempMap:TPixmap = CreateStaticPixmap (VideomemoryAdress, Width, Height, Width*3,PF_BGR888)		
+'		WebCamImage = LoadImage(TempMap)
+		Image = YFlipPixmap(TempMap)
+		If (PMWidth &lt;&gt; Width) Or (PMHeight &lt;&gt; Height)
+			Image = ResizePixmap (Image, PMWidth,PMHeight)
+		EndIf
+	Else
+		DebugLog "Wrong Picture Size. Expected "+Width+"/"+Height	
+	End If
+End Function
+	
+	
+End Type
+
+'rem 
+
+' TEST
+Graphics 800,600',0'32,60
+Local whnd = Webcam_GetActiveWindow()
+Local Webcam:TWebcam = New TWebcam
+Local rot:Int
+
+If (Webcam.Init(whnd, 0,0,640,480))
+'	Webcam.ShowSettings(0)
+	Webcam.SetFrames(30)
+	Webcam.SetSize(320,240)
+	Webcam.SetPMSize(800,600)
+	Webcam.SetScale(False)
+	Webcam.EnablePreviewMode(False)
+	Webcam.EnableOverlayMode(False)
+	Webcam.SetFrameCallbackRoutine()
+	While Not KeyHit(key_escape)
+		Cls 
+		DrawPixmap (Webcam.Image, 0, 0)
+		SetColor 255,255,255
+		DrawText "Memory usage:"+MemAlloced(), 0,580
+		Flip
+		FlushMem
+	Wend
+Else
+	RuntimeError ("Cant Initialize Webcam")	
+End If
+EndGraphics()
+'end rem
+</pre> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Mirko</td><td align="right"><font class=tiny>2005</font></td></tr></table></td></tr><tr ><td class="posttext"> I sorry that i did not notice that someone asked a question, but i not going to this code archiv page very often, as i know my code ;-)<br><br>I have a selfmade include file with all the needed routines an much more which i use in any of my applications, so i did not notice that i forgott to include some routines, sorry.<br><br>But James completed the code, as far as i can see. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Lukasha</td><td align="right"><font class=tiny>2005</font></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br>I copied the code,<br>but it doesn't work.<br>There's only a black screen and if I close the program,<br>there's an error.<br>Did I make a mistake?<br><br>thx, Lukas Hauprich <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >MarkAM</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> Discovered the problem.  My camera only generates 12 BPP images ...... need to write conversion for different BPP modes (8,12,16,24 and 32) ... Will post updated code once completed. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

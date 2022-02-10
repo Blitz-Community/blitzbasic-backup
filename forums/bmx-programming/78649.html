@@ -1,0 +1,74 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Speeding up Sockets</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Speeding up Sockets</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Speeding up Sockets</a><br><br>
+<a name="882771"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >foosh</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> So I'm working an a massively multiplayer online game client, and I'm running into a little snag. Right now (in the early stages), every time a player moves, the new coordinates are sent to every user in the game. The game runs VERY slow with two players, and I was wondering if you could give me any pointers on how to optimize my code.<br><br>I've included a link to an archive with my code. You need python to run the server. To get the game running, cd into the server directory and type "python simpleserver.py". Then launch client and client copy to test it out with 2 users online. You control using arrow keys.<br><br><a href="http://www.gamemakersgarage.com/downloads/vulcan.zip" target="_blank">http://www.gamemakersgarage.com/downloads/vulcan.zip</a><br><br>You want to compile client.bmx if you're going to compile. network.bmx controls networking, and player.bmx controls player functions.<br><br>Thank you very much in advance for your help, and feel free to use the code you see in your games.<br><br>foosh <br><br></td></tr></table><br>
+<a name="883140"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >pls</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi foosh!<br><br> I took a look at your code. There are several things you should probably change or at least reconsider:<br><br> - Do not send messages updating coordinates  every time they change, send them a couple of times a second instead... a quick change on you main loop in order to send /receive positions only 5 times a second keeps your famerate higher.<br><br><pre class=code>
+Local elapsed:Int=MilliSecs()
+
+While Not KeyDown(Key_ESCAPE) Or AppTerminate()
+	Cls
+	time_passed_secs = stop-start
+	time_passed_secs = time_passed_secs/1000
+	start = MilliSecs()
+	DrawText "fps: " + (time_passed_secs*1000),200,465
+	main_player.UpdateState()
+	For Local o:TGameObject=EachIn GameObjectList
+		o.DrawSelf()
+	Next
+	DrawText "alias: " + player_name,0,465
+	DrawText "x,y: " + main_player.X+","+main_player.Y,400,465
+	Flip
+	stop = MilliSecs()
+	If(elapsed+200&lt;MilliSecs())
+		If Not (main_player.X=main_player.pX And main_player.Y=main_player.pY) Then game_network.sendCoords(main_player.X,main_player.Y)
+		game_network.updateMap()
+		elapsed=MilliSecs()
+	End If
+Wend
+</pre><br><br>- While receiving data from the network you are getting loads of intermediate positions from the remote objects... and you are probably only interested in the "latest one" and can easily calculate the intermediate points to make remote objects move smoother on the local display. Some sample code to ilustrate it (it probably breaks the function purpose but try it out to see what I mean):<br><br>Also, going thru the objects list several times, for each and every  single one of those intermediate changes,  was killing your your framerate. You would probably do much better if you got a notification from the game server on "when" and "what" objects changed, so you would request the latest (not the history) info on the ones that "interest" you. <br><br><pre class=code>
+Method updateMap()
+	Local other_player:TOtherPlayer
+	Local mapState:String
+	Local parseCoords:String[]
+	Local x,y,id:Int
+	Local name:String
+		
+	Local last:Int[][]	
+	Local unfinished:Int=1
+	Local updated:Int=0
+	
+	While(unfinished=1)
+		If SocketReadAvail(socket) &gt; 0 Then
+			mapState = ReadLine(stream)
+			If mapState Then
+				parseCoords = mapState.split(":")
+				id = parseCoords[0].toint()
+				parseCoords = parseCoords[1].split(",")
+				x = Trim(parseCoords[0]).toint()
+				y = Trim(parseCoords[1]).toint()
+				name = Trim(parseCoords[2])
+				Print x+"*"+y+"*"+name+"*"+id+"*"
+				updated =+ 1
+			End If
+		Else
+			If(updated)
+				For Local o:TGameObject=EachIn GameObjectList
+					If o.ID = id Then
+						o.X = x
+						o.Y = y
+					Else
+						other_player = TOtherPlayer.Create(name,file_server+"playerorange.png",x,y,id)
+					End If
+				Next
+			End If
+			unfinished=0
+		End If
+	Wend
+End Method
+</pre><br><br>- A echo server may be used for game room handling... but it is NOT your best option for keeping track of remote objects in real time... use must use UDP for that.<br><br> PLS<br><br>PS: "I'm working an a massively multiplayer online game client"... you will fail (sorry!). Code a few smaller networks games (real time or turn based), have fun, and give yourself a chance of finishing a game. <br><br></td></tr></table><br>
+<a name="883273"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >foosh</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I know I may not finish, but regardless I wanna get as far as I can, and then perhaps use what I have to make a fun game. It's been a great learning experience so far, and I'm enjoying it!<br><br>I was considering porting my code to C++ for threading capabilities, etc... but the overhead is just too much, so I just wanna push the limits of BlitzMax.<br><br>Thank you very much for your help! I'll be implementing your suggestions, and I also think I found a few ways to optimize my own code since I last posted.<br><br>I'll post occasionally about progress. (it'll be slow) =)<br><br>Thanks a lot!<br>foosh <br><br></td></tr></table><br>
+<a name="883295"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dreamora</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> The main problem for the slowdown is the fact that you trash the socket totally.<br><br>WriteLine / ReadLine are a TOTAL no go for realtime!<br>They work by reading byte per byte till they find an end line, which is about the worst thing you can do!<br><br>Make your application write packets.<br>A packets contains:<br><br>1. Unique ID definining the content<br>1.2. Size of the packet in whole if it has varying sizes (for something that transfers strings like chat for example)<br>2. The content as specifyed by the Unique ID<br><br>For example for the position update you would have a<br><br>const P_UpdatePosition:int = 1<br><br><br>and the packet structure would be<br>byte | float | float | float | float | float | float<br><br>or in non typed:<br>P_UpdatePosition | X | Y | Z | RotationX | RotationY | RotationZ<br><br>the | are not written into the package, they are only to visually seperate the different byte parts.<br>That way the server / client just has to:<br>1. Check if bytes are available<br>2. if yes, read the first byte to get the type of package<br>3. Wait till as many bytes are at least available as the message size is. In above case this would mean wait till at least 24 bytes are available<br>4. ReadBytes and read the whole remaining message as 1 memory block.<br>5. parse the data out of the block in the way you prefer (TBank, memcopy into a TPositionUpdate type instance, ...)<br><br>If your game is ground based with no free 3D movement, RotationX and RotationZ can be removed theoretically.<br>if it is 2D you can remove the Z as well <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

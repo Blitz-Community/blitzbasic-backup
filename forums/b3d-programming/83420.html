@@ -1,0 +1,744 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Function pointers</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Function pointers</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >Function pointers</a><br><br>
+<a name="941283"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Noobody</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> So, since I'm currently messing around with Lua, I got interested, if it's possible to find out the pointer that points to a user-defined Blitzbasic function.<br><br>It should be possible, since every time, when Blitz calls a function, it pushes the current instruction pointer onto the stack, so that the called function is able to return to this point.<br>So, imagine, you wrote a function in C in combination with inline assembler, that is called by your Blitz function right after the function itself is called.<br>The C function then reads the instruction pointer, which was pushed by Blitz onto the stack, and gets a value that points to the instruction right after the Blitz function calls the C function.<br>Everything you have to do now is to subtract a small value from this instruction pointer and you get... the pointer to the Blitz function!<br><br>I tried it out and it actually works - but there're still problems.<br>It seems that Blitz uses a different calling convention when calling Blitz functions than the _stdcall convention.<br>That leads to a memory access violation, when the Blitz function tries to return to its caller.<br><br><pre class=code>Global Pointer
+
+Test()
+CallFunction( Pointer ) ;&lt;--- This is the C function that calls the Blitz function by it's pointer
+WaitKey()
+End
+
+Function Test()
+	Pointer = FunctionPointer() ;&lt;--- This is the C function that returns the function pointer
+	
+	Print "This works! Function pointer: " + Pointer
+
+	Return  ;&lt;--- This works fine when the function is called by Blitz
+	;however, when the DLL calls this function, 'Return' leads to a MAV
+End Function</pre><br><br><br>I found a way to avoid this, but it's not as clean as I want it to be.<br>I rewrote 'CallFunction' so it remembers from where it was called (using the instruction pointer on the stack).<br>The Blitz function then calls a C function 'ReturnInt' instead of 'Return', when it's called by the DLL.<br>'ReturnInt' then jumps back to the instruction pointer saved by 'CallFunction'.<br>This actually works, but it leaves a really messy stack behind, which leads to a stack overflow, if you let the DLL call the Blitz function too often.<br><br>So, is there anyone out there who knows, how a Blitz function has to be called or which convention it uses?<br>It would be very nice to get the function pointers to work, especially for DLLs that require Callback functions or for example Lua, which would call user-defined Blitz functions, when used in the script.<br><br>My current test code in Blitz:<br><pre class=code>Global Pointer, Call
+
+Print Test()
+CallFunction( Pointer )
+WaitKey()
+End
+
+Function Test()
+	Pointer = FunctionPointer()
+	
+	Print "Works! Call no. " + Call
+	
+	Call = Call + 1
+	
+	If Call = 1 Then
+		Return 5
+	Else
+		ReturnInt( 5 )
+	EndIf
+End Function</pre><br><br>C++ - Code:<br><pre class=code>#define BBEXPORT extern "C" _declspec(dllexport)
+
+void (__stdcall *JumpFunction)(void);
+
+BBEXPORT int __stdcall FunctionPointer() {
+	unsigned int StackPosition, Adress;
+
+	__asm {
+		mov StackPosition,esp
+		mov esp,ebp
+		add esp,4
+		pop Adress
+		mov esp,StackPosition
+	}
+
+	return Adress - 8;
+}
+
+BBEXPORT int __stdcall CallFunction( int (__stdcall *B3DFunction)(void) ) {
+	unsigned int StackPosition;
+
+	__asm {
+		mov StackPosition,esp
+		mov esp,ebp
+		add esp,4
+		pop JumpFunction
+		mov esp,StackPosition
+	}
+
+	return B3DFunction();
+}
+
+BBEXPORT void __stdcall ReturnInt( int Value ) {
+	__asm {
+		mov eax,[Value]
+	}
+
+	JumpFunction();
+}</pre> <br><br></td></tr></table><br>
+<a name="941668"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Warner</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is a very interesting read. Thank you. So, at this point, this is like a special form of Gosub ? You could use it not only for functions, but you can use it at any point in your program, right ?<br>I have not much experience with C++, which compiler do you use ? My guess would be you should use cdecl, since userlib functions should be declared that way as well. <br><br></td></tr></table><br>
+<a name="941683"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Noobody</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> So, at this point, this is like a special form of Gosub ? You could use it not only for functions, but you can use it at any point in your program, right ? <br></div><br><br>Yes, that's right.<br>You could use it at any point in your program, save the pointer and use this pointer to jump to that piece of code later.<br><br>Thank you for the hint with Gosub - this was the solution for my problem!<br>It seems that when you create a label, save the pointer to this label and jump from the DLL to that label, you're able to jump back with 'Return'.<br><br>So, the following code works:<br><pre class=code>Global Pointer
+GoSub Test
+
+CallFunction( Pointer )
+WaitKey()
+End
+
+.Test
+	Pointer = FunctionPointer()
+	Print "Hello, I am called from both Blitz and C!"
+Return ;&lt;---- With GoSub instead of Function, 'Return' works without a Memory Access Violation</pre><br><br>The only problem ist that you can't use either types or string variables, when the code is called from the DLL.<br>But with a bit of a workaround, you can get this to work too.<br><br><pre class=code>Global Pointer, FirstCall = True
+GoSub Test
+
+CallFunction( Pointer )
+WaitKey()
+End
+
+.Test
+	Pointer = FunctionPointer()
+	
+	If FirstCall Then
+		FirstCall = False
+		Return
+	Else
+		B3DFunction()
+	EndIf
+Return
+
+Function B3DFunction()
+	StringVar$ = "This function can handle strings without a problem!"
+	
+	Print StringVar
+End Function</pre><br>Meaning, if you let the code after the label call a regular Blitz function, everything works fine.<br><br>So, with this DLL, we finally have the feature of function pointers in Blitz :)<br>A bit messy though, but working.<br><br><div class="quote"> I have not much experience with C++, which compiler do you use ? <br></div><br>I use Visual C++ 2008 Express Edition (long name :/).<br><br><div class="quote"> My guess would be you should use cdecl, since userlib functions should be declared that way as well.  <br></div><br>I already tried all kinds of calling conventions, but none would work.<br>And my Userlibs.txt says "All functions MUST use the _stdcall calling convention.", so I ended up with that. <br><br></td></tr></table><br>
+<a name="941853"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> It's only a guess: The Return Adress is stored on the Stack, just like the parameters. The function caller writes everything to the stack (first the return address, then the parameters), then calls the function. The function reads "down" the stack, including and finally the return adress (filo). I still have no idea where the result is stored (eg a=test(b)), esp. because the result may also be a string or float... At the end the Stackpointer might have to be corrected, so there won't be any stack under- or overflow.<br><br>But as I said in the beginning: this was only a guess. From somebody who didn't touch assembler for years. <br><br></td></tr></table><br>
+<a name="952671"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ZJP</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>This my own version with PowerBasic.<br><br>PowerBasic DLL. Very short DLL ;-)<br><pre class=code>
+'++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+' Pointeur de fonction / Gosub-Return
+'++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#COMPILER PBWIN 9
+#COMPILE DLL
+'
+FUNCTION FunctionPointer ALIAS "FunctionPointer" () EXPORT AS LONG
+    DIM StackPosition AS LONG
+    DIM Adress AS LONG
+
+      !  mov StackPosition,esp
+      !  mov esp,ebp
+      !  add esp,4
+      !  pop Adress
+      !  mov esp,StackPosition
+
+    FUNCTION = Adress - 8
+END FUNCTION
+
+SUB GOSUB_EXTRN ALIAS "Gosub_Extrn" (BYVAL Adresse AS LONG PTR) EXPORT
+    GOSUB DWORD Adresse
+END SUB
+</pre><br><br>Decls<br><pre class=code>
+.lib "BLITZ_FP.DLL"
+
+FunctionPointer%()    : "FunctionPointer"
+Gosub_Extrn(Adresse%) : "Gosub_Extrn"
+</pre><br><br>Blitz3D Test<br><br><pre class=code>
+Global V$      ; No Pb with string. works well in Debug or Release Mode
+Global Pointer ; Init pointer
+Gosub Test            ; Call From Blitz3D
+Gosub_Extrn(Pointer) ; Call From/By the DLL
+WaitKey()
+End
+
+.Test
+	Pointer = FunctionPointer()
+        v$="Pointer value is " + Pointer
+	Print "Hello, I am called from both Blitz and C!"
+        Print V$
+Return 
+</pre><br><br>This is a good way for external timer/thread calls ;-)<br>Next step? Maybe :<br><br>THREAD_MASTER_INIT<br>TRDx=THREAD_CREATE(Pointer)<br>STATUS=THREAD_STATUS(TRDx)<br>THREAD_CLOSE(TRDx) <br>THREAD_MASTER_CLOSE<br><br>Thx for the idea ;-)<br><br>JP<br>Edit : It would be interesting to use the other cores (with a C2D/C2Q and SetThreadAffinityMask ) for threads ;-) <br><br></td></tr></table><br>
+<a name="952674"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ZJP</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> The FreeBasic version ;-)<br><br><pre class=code>
+'
+FUNCTION FunctionPointer ALIAS "FunctionPointer" ()  AS UInteger Export
+    DIM StackPosition AS UInteger
+    DIM Adress AS UInteger
+    Asm
+      	mov [StackPosition],esp
+      	mov esp,ebp
+      	Add esp,4
+      	pop [Adress]
+      	mov esp,[StackPosition]
+    End Asm
+    Return Adress - 8
+END FUNCTION
+
+SUB GOSUB_EXTRN ALIAS "Gosub_Extrn" (BYVAL Adresse AS UInteger PTR) EXPORT
+    Asm Call [Adresse]
+END SUB
+</pre><br><br>The .decls<br><br><pre class=code>
+.lib "BLITZFB_FP.DLL"
+
+FunctionPointer%()    : "FunctionPointer@0"
+Gosub_Extrn(Adresse%) : "Gosub_Extrn@4"
+</pre> <br><br></td></tr></table><br>
+<a name="952682"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ZJP</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thread for Blitz.<br>New post here <a href="http://www.blitzbasic.com/Community/posts.php?topic=84325" target="_blank">http://www.blitzbasic.com/Community/posts.php?topic=84325</a><br><br>JP <br><br></td></tr></table><br>
+<a name="952700"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >MikhailV</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cool! And my old experiments - <a href="http://fastlibs.com/temp/ThreadsAndPointers.zip" target="_blank">http://fastlibs.com/temp/ThreadsAndPointers.zip</a> (Ñan work in a debug-mode!)<br><br>Some functions from decls-file:<br><pre class=code>
+FunctionPointer% ()
+DataPointer% ()
+LabelPointer% ()
+ArrayPointer% ()
+VarPointer% ()
+TypePointer% (type*)
+
+CallFunction% (FunctionPointer%)
+CallFunctionVarInt% (FunctionPointer%, value%)
+CallFunctionVarFloat% (FunctionPointer%, value#)
+CallFunctionVarType% (FunctionPointer%, value*)
+
+GotoPointer% (LabelPointer%)
+GosubPointer% (LabelPointer%)
+
+CreateThread% (FunctionPointer%, Value%)
+FreeThread% (Thread%)
+PriorityThread% (Thread%, Priority%)
+PauseThread% (Thread%)
+ResumeThread% (Thread%)
+WaitThread% (Thread%, Timeout%)
+IsThread% (Thread%)
+
+...
+</pre><br><br>*EDIT: Archive updated (+1 new example) <br><br></td></tr></table><br>
+<a name="952764"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ZJP</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hahaha. Good technique. He had to think. I appreciate.<br><pre class=code>
+MyFunctionFirstPointer = FunctionPointer()
+	Goto skip
+	MyFunctionFirst()
+	.skip
+</pre><br>or<br><pre class=code>
+MyFirstLabelPointer = LabelPointer()
+	Goto skip
+	Goto MyFirstLabel
+	.skip
+</pre><br>JP<br><br>PS : "Example_WindowCallback.bb" is a empty file :-) <br><br></td></tr></table><br>
+<a name="952771"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >MikhailV</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks :)<br><br>Example_WindowCallback.bb  not empty!<br>Contains important warning:<br><br>"DON'T USE function pointers for window-callbacks, it's incorrect for Blitz3D.<br>Blitz3D generate window messages in self code and your callback goto into infinite loop (and stack-overflow MAV after)!"<br><br> :D <br><br></td></tr></table><br>
+<a name="952858"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ZJP</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> New version.<br><br>More "elegant". (MikhailV ;-) )<br>But, Impossible to use Global and Debug mode :-(<br><pre class=code>
+Blitz source
+
+; Init The pointer. Do not change this structure
+;++++++++++++++++++++++++++++++++++++
+Pointer = GetPointer()
+	Goto skip
+	Goto Test
+	.skip
+;++++++++++++++++++++++++++++++++++++
+
+While Not KeyDown(1)
+	a=a+1
+	Print "This is the main " + A
+	Delay 100
+	If a=30 Then Gosub_Ex pointer
+Wend
+End 
+
+.Test
+	Print "Hello, I am called from the DLL"
+	For i=1 To 1000
+		Delay 1
+		Print "&gt;&gt;&gt;&gt; CALL BY THE DLL "+ i
+    Next
+Return 
+</pre><br><br>PowerBasic dll code<br><pre class=code>
+#COMPILER PBWIN 9
+#COMPILE DLL
+'
+FUNCTION GetPointer ALIAS "GetPointer" () EXPORT AS LONG
+    DIM StackPosition AS LONG
+    DIM Adress AS LONG
+
+      !  mov StackPosition,esp
+      !  mov esp,ebp
+      !  add esp,4
+      !  pop Adress
+      !  mov esp,StackPosition
+
+    FUNCTION = Adress + 8
+END FUNCTION
+
+SUB Gosub_Ex ALIAS "Gosub_Ex" (BYVAL Adresse AS LONG PTR) EXPORT
+    GOSUB DWORD Adresse
+END SUB
+</pre> <br><br></td></tr></table><br>
+<a name="953950"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> @MixailV<br><br>This question is a bit redundant, but are we free to use your DLL? <br><br></td></tr></table><br>
+<a name="956565"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >MikhailV</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Yasha: Free for all :) <br><br></td></tr></table><br>
+<a name="972998"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ZJP</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>Your lib works in debug mode now. Cool.<br><br>JP <br><br></td></tr></table><br>
+<a name="973137"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >MikhailV</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> @ZJP: Yeeesss :) <br><br></td></tr></table><br>
+<a name="974354"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Rroff</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is really really neat - using fastpointer - I can create a common framework for my applications - and then call standard init, main, exit, etc. functions without having to implicitly name them :) great job guys.<br><br>Also great for stuff like individual entity events when handled through a generic entity handler.<br><br>EDIT: Not to forget the threading potential - thats a real stroke of genius. <br><br></td></tr></table><br>
+<a name="1134386"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> @MikhailV :<br>Any way to get the source of fastpointer dll ? (at least the basis : FunctionPointer and CallFunction) <br><br></td></tr></table><br>
+<a name="1134388"></a>
+
+<a name="1134390"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> Why the heck do I get in trouble when posting in old threads, but THIS guy posts in here, and its O! Well here ya go friend. Here's some help. :&lt;<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1134392"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Adam Novagen</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> Funny, I don't notice anyone offering to help him; the first post after his is your complaint. And you're right, he shouldn't be posting in an old thread, he should 1) use Google and 2) failing that, start a new thread for his question. <br><br></td></tr></table><br>
+<a name="1134400"></a>
+
+<a name="1134401"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> Guys, as I'm not a "newbie" I maybe deserve a little more respect than 2 people not glad with someone who resurect an old topic because all he needs is related to this topic ^^<br><br>I need the help of MikhailV, and all I need is related to this topic.<br>And you're not administrator or moderator on blitzbasic's forum ...<br>Sorry but : I don't care about your opinion unless you really answer the question/problem I posted<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1134402"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> u can stop with the smart alec comments anytime now. or I will continue haunting ur threads. so BACKOFF, and have a nice day. :) Thank u! :) <br><br></td></tr></table><br>
+<a name="1134403"></a>
+
+<a name="1134404"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#22">[#22]</a></td></tr></table></td></tr><tr ><td class="posttext"> If (for any reason you imagine) you don't want to respect me, really, I don't care, but, at least, respect this topic which is not mine ^^<br><br>and once again, sorry but :<br>I have no time to waste on your delirium, so maybe we can go back to serious things now ?!<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1134405"></a>
+
+<a name="1134410"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#23">[#23]</a></td></tr></table></td></tr><tr ><td class="posttext"> Or maybe u can quit being a jerk long enough to figure out ur problem, then leave us alone :) Good day! :) *Tips top hat*<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1134435"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ross C</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#24">[#24]</a></td></tr></table></td></tr><tr ><td class="posttext"> There's nothing wrong with bumping an old thread, if your specifically requiring information within that thread. If he was to start a new topic, he'd need to copy and paste all the relevant information into the new thread, or provide a link to the old thread. Which people will click on and read anyway.<br><br>Don't worry Bobysait. He's just antsy because you bumped a thread above his. <br><br></td></tr></table><br>
+<a name="1134441"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ando</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#25">[#25]</a></td></tr></table></td></tr><tr ><td class="posttext"> Bobysait has done nothing wrong......and is in fact showing a high level of patience.   :) <br><br></td></tr></table><br>
+<a name="1134446"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#26">[#26]</a></td></tr></table></td></tr><tr ><td class="posttext"> whatever <br><div class="quote"> maybe u can quit being a jerk long enough to figure out ur problem <br></div><br>I don't know if being a "jerk" would have allowed me to solve such a problem but, in fact, I did<br>At least, I solved the second part of the problem by writing the c++ code of a "CallFunction" wich supports as many arguments as I needed. (wich finally allows me to get my script engine working)<br><br>I still don't understand how MikhailV has done to get the function pointers ... All I can get is Label pointers and some virtual/local function pointers that are not persistant :/<br>At the moment, my engine can work in assossiation to the FunctionPointer function from FastPointer dll, but I would really want it to work with its own FunctionPointer (The aim is to export a single dll for my whole project and skip FastPointer.dll)<br><br>I'll wait for MikhailV's answer as he did it (and its function also works with debugger enabled while mine doesn't)<br><br><br>ps : I don't really worry about Thundros ;)<br>He is probably very young, by time he'll probably learn how to behave on a programming forum :)<br><br>...<br>I hope<br><br>And thanks for the support ;) <br><br></td></tr></table><br>
+<a name="1134447"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ross C</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#27">[#27]</a></td></tr></table></td></tr><tr ><td class="posttext"> And! I BET you he doesn't even own a tophat! I bet you!<br><br><div class="quote"> <br>Or maybe u can quit being a jerk long enough to figure out ur problem<br> <br></div><br><br>Ha, That's rich!<br><br><div class="quote"> <br>then leave us alone :) Good day! :) *Tips top hat*<br> <br></div><br><br>Us? Your own your own buddy ;) <br><br></td></tr></table><br>
+<a name="1134450"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#28">[#28]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nope, bobbysait is a jerk, and he knows it. period. end of story. Thundros out <br><br></td></tr></table><br>
+<a name="1134452"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ross C</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#29">[#29]</a></td></tr></table></td></tr><tr ><td class="posttext"> Why is he a jerk? <br><br></td></tr></table><br>
+<a name="1134456"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#30">[#30]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> bobbysait is a jerk, and he knows it <br></div><br>All I know is that you are annoying although useless in this topic (wich one you probably don't understand a word by the way)<br><br>So, happy for me, I don't waste time thinking about people who come and pretend I am a "douche" or a "jerk" or else just because I posted something in a relevant place :) <br><br></td></tr></table><br>
+<a name="1134463"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Adam Novagen</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#31">[#31]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Thundros out <br></div>Don't I wish.<br><br>In an effort to make things productive again, Bob, I apologize for my earlier post; I've been a bit on edge recently due to <i><b>various things</b></i>, and really didn't need to be so curt. <br><br></td></tr></table><br>
+<a name="1134509"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >stayne</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#32">[#32]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Thundros out <br></div><br><br>*spits coffee everywhere and cheers* <br><br></td></tr></table><br>
+<a name="1134511"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#33">[#33]</a></td></tr></table></td></tr><tr ><td class="posttext"> Out of this topic, u numbskulls &gt;&lt; <br><br></td></tr></table><br>
+<a name="1134517"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Naughty Alien</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#34">[#34]</a></td></tr></table></td></tr><tr ><td class="posttext"> ..what does it mean 'Thundros' anyway??.. <br><br></td></tr></table><br>
+<a name="1134518"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#35">[#35]</a></td></tr></table></td></tr><tr ><td class="posttext"> A mix between Andross from Starfox and Thunder? I dont know o.O I just made it up <br><br></td></tr></table><br>
+<a name="1134519"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >stayne</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#36">[#36]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thundros how old are you?  I want to see a picture of you. <br><br></td></tr></table><br>
+<a name="1134520"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#37">[#37]</a></td></tr></table></td></tr><tr ><td class="posttext"> Im not showing u a picture of me. Then u can post it all over the net. Not that I would mind the fame. But no. <br><br></td></tr></table><br>
+<a name="1134525"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Naughty Alien</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#38">[#38]</a></td></tr></table></td></tr><tr ><td class="posttext"> ..why not ? Im just curious, nothing else ? .. <br><br></td></tr></table><br>
+<a name="1134597"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#39">[#39]</a></td></tr></table></td></tr><tr ><td class="posttext"> No. I dont trust u. Nor do I trust ANYONE hardly. <br><br></td></tr></table><br>
+<a name="1134604"></a>
+
+<a name="1134605"></a>
+
+<a name="1134885"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ando</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#40">[#40]</a></td></tr></table></td></tr><tr ><td class="posttext"> .....<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1134606"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#41">[#41]</a></td></tr></table></td></tr><tr ><td class="posttext"> Im very secure about myself. so im sorry. i must pass that up. <br><br></td></tr></table><br>
+<a name="1134621"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Naughty Alien</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#42">[#42]</a></td></tr></table></td></tr><tr ><td class="posttext"> ..why dont you trust me..I have shown myself in few threads here, where all other people show themselves..there is nothing wrong to share such things among fellow coders.. <br><br></td></tr></table><br>
+<a name="1134688"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#43">[#43]</a></td></tr></table></td></tr><tr ><td class="posttext"> Dont take it personally. I dont trust anybody but myself or my family. And ur petty peer pressure does NOT work on me. :) Good day :) <br><br></td></tr></table><br>
+<a name="1134693"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Rob the Great</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#44">[#44]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>Im very secure about myself. so im sorry. i must pass that up. <br> <br></div><br>The lady doth protest too much, methinks. <br><br></td></tr></table><br>
+<a name="1134701"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#45">[#45]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well so much for any hope of getting a response from MikhailV.<br><br>Well done Thundros! Another interesting thread killed! Keep this up and soon these forums will be cleansed of any of that pesky "stuff worth reading" we all hate.<br><br>Do you even know what a function pointer is? You don't, do you. For the love of all that is good in the world (what little you've left behind you) please just <i>shut the hell up</i>, and please, please, <i>please</i> never post in this thread again. <i>Especially</i> not to respond to this message.<br><br><br>On topic... Function pointers. I believe Bobysait was asking for the source to FastPointer.dll? I too would be interested in seeing this if it's ever released. It's not really a big deal, but it would be nice to make some libs able to stand alone. <br><br></td></tr></table><br>
+<a name="1134702"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#46">[#46]</a></td></tr></table></td></tr><tr ><td class="posttext"> u obviously DONT "thinks" because Im not a girl, jerk -.- <br><br></td></tr></table><br>
+<a name="1134703"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#47">[#47]</a></td></tr></table></td></tr><tr ><td class="posttext"> o ill respond to this message all i want. ur insignificance does NOT bother me anymore. :) <br><br></td></tr></table><br>
+<a name="1134726"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >stayne</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#48">[#48]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> ur insignificance does NOT bother me anymore. <br></div><br><br>Perfunctory banter.  Too much sugar? <br><br></td></tr></table><br>
+<a name="1134742"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ginger Tea</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#49">[#49]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm glad this forum doesn't rank people by post count's, these threads always end up nothing but postcount++ with little actually said.<br><br>Yes I am aware that this post is an example of what I'm talking about ;) <br><br></td></tr></table><br>
+<a name="1134745"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#50">[#50]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> does NOT bother me anymore. <br></div><br><br>I don't understand what part of any of this makes you think we give a damn about what bothers <i>you</i>. Your opinion doesn't matter.<br><br><i>You</i> are being an irritating prick by making it impossible to keep any thread on topic with your ridiculous random insults hurled at people who made the mistake of not realising you would show up at some point in the future. <i>You</i> bother <i>us</i>. <br><br></td></tr></table><br>
+<a name="1134748"></a>
+
+<a name="1134749"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#51">[#51]</a></td></tr></table></td></tr><tr ><td class="posttext"> Mods. Please Ban him. I'm sick of him calling me names, and putting me down.<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1134758"></a>
+
+<a name="1134841"></a>
+
+<a name="1134884"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ando</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#52">[#52]</a></td></tr></table></td></tr><tr ><td class="posttext"> .....<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1134764"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#53">[#53]</a></td></tr></table></td></tr><tr ><td class="posttext"> U know what? thats a good idea. Since ur the creator of the idea, I will let u create it. :) <br><br></td></tr></table><br>
+<a name="1134766"></a>
+
+<a name="1134883"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ando</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#54">[#54]</a></td></tr></table></td></tr><tr ><td class="posttext"> .....<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1134794"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#55">[#55]</a></td></tr></table></td></tr><tr ><td class="posttext"> @All :<br>Explaining Thundros how he is wrong or not in his behavior will never make him stop ... so let us be more mature.<br>Let's stop contributing to this childishness, we're here to learn, we're here to share programming skill to those who need<br>We're for sure not here to insult people or try to explain others they are "jerk" or else as we're not here to explain a child that what he does is stupid or not (his parents should do it, or moderators, but we should just ignore him, not answer him again and again).<br><br>So, please all, Stop all this counter-productive speeches and let's go back to the real aim of this topic !<br><br>We're (for most) adult people, and for this reason, we should not take care when someone come and tell us we're "jerk", we don't mind actually because we know this is wrong, as we know that all the personns with credibility on this forum won't take care of this too<br>We only lose our credibility when we give this more importance than we should.<br><br>So let's get back to the topic and leave thundros tell what he wants<br>Just ignore him and he'll probably stop by himself, or moderators will moderate him. <br><br></td></tr></table><br>
+<a name="1134816"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sting</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#56">[#56]</a></td></tr></table></td></tr><tr ><td class="posttext"> So has anyone gathered any stats on this pointer setup? On its overhead I mean? If not I can probably try some things myself. Just curious if this effects speed at all. <br><br></td></tr></table><br>
+<a name="1134817"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#57">[#57]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Just curious if this effects speed at all. <br></div><br><br>Well bear in mind that to call a function by pointer, you have to first call CallFunction...<br><br>I wouldn't worry about it. In a language like C or BlitzMax you might get a difference, because function pointers change how the CPU loads the jump target and can interfere with branch prediction and so on... but Blitz3D is almost completely non-optimised anyway so this stuff is unlikely to be noticeable.<br><br>More importantly, in any situation where using function pointers is a sensible design choice (e.g. storing a bunch of "actions" in an array, with a large number of "actions"), finding a way to do it without function pointers almost always will be a <i>lot</i> slower (so the true comparison is not just direct call vs. pointer call; it's direct-call-at-the-end-of-a-massive-select-block vs. array-read-plus-pointer-call, or something like that). <br><br></td></tr></table><br>
+<a name="1134818"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sting</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#58">[#58]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes, replacing a large number of "actions" is a good thing in my opinion. I've just been working around it in blitz for so long that I need to research proper optimization patterns again. :P I might play around with this. <br><br></td></tr></table><br>
+<a name="1134854"></a>
+
+<a name="1134855"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#59">[#59]</a></td></tr></table></td></tr><tr ><td class="posttext"> Bob, take ur attitude, and make like Elvis, and leave the building until u quit flaming ppl. -.- I will only stop when u stop.<br><br>I haven't done anything wrong. I am following protocol. Ur the ones who are treating me bad.<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1134861"></a>
+
+<a name="1134862"></a>
+
+<a name="1134863"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ginger Tea</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#60">[#60]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> and make like Elvis, <br></div><br>Dying on the toilet with a burger in hand?<br><div class="quote"> and leave the building <br></div><br>Make shift coffin just steal the other stalls door.<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1134867"></a>
+
+<a name="1134868"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#61">[#61]</a></td></tr></table></td></tr><tr ><td class="posttext"> All I can say is that c++ language run faster than blitz3d does<br>So, to get extra stuff to do things like map, list etc ... a simple dll+decls works like a charm, but if we want to use for exemple a fast and robust physic engine (like bullet) that performs transformation on blitz entity matrix inside the dll, it could be more efficient with the function MoveEntity/TurnEntity/etc directly in the dll core<br>And at last, in blitz code we would only have some basic function to setup and update entities like "AddEntity" "UpdatePhysic" (with no extra function in blitz code or include of big file that we would need to export for each project)<br>(And it would be an better security to "protect" source when we sell libraries than releasing an include bb file)<br><br><br>By the way, my goal is to get all the stuff exported in a "super" dll that performs all I have ever wanted blitz3d to do, and that, without having to multiply the export "bb" includes and dll files (whole sources into a single Dll + decls and no includes)<br><br>And as I need to build mesh from splines directly in the Dll, I need pointers to CreateMesh/CreateSurface/AddVertex/AddTriangle/VertexNormal and VertexColor/VertexCoords/etc and RotateEntity/PositionEntity/ScaleEntity/...<br><br>But for sure, for scripting engine, it will never be as fast and simple as a c++ one that uses function pointers.<br><br>So, if Mark Sibly doesn't want for some reason release a new blitz3d version that allow the use of function pointers (maybe it's not possible or not in his todo list), then it would be great to have at least the fastpointer.dll source code (if MikhailV is Ok)<br><br>@Yasha : Do you think you could code something similar ? ("Yes we Can !")<br>I'm not a begginer for sure, but I still don't understand how to get blitz function pointers<br><br>I can only call functions using fastpointer pointers using my dll ... and with strange errors on some functions like AddTriangle that don't allow me to use variable to set V0,V1,V2 ...<br><br>for exemple, I have coded a simple "triangle" mesh in my dll using fastpointer to send pointers of blitz functions to the dll<br><br><pre class=code>
+BBAEXPint CreateSampleMesh()
+{
+	int mesh = bb_CreateMesh(0);
+	int surf = bb_CreateSurface(mesh,0);
+	bb_AddVertex (surf, -1.0f,+1.0f,0.0f, 0.0f,0.0f,0.0f);
+	bb_AddVertex (surf, +1.0f,+1.0f,0.0f, 1.0f,0.0f,0.0f);
+	bb_AddVertex (surf, +0.0f,-1.0f,0.0f, 0.5f,1.0f,0.0f);
+	bb_AddTriangle (surf,0,1,2);
+	return mesh;
+};
+</pre><br>This code works and creates a triangle that I can use in blitz3d, move, transform, access vertices etc with no issue ...<br><br><br>but, this<br><pre class=code>
+BBAEXPint CreateSampleMesh()
+{
+	int mesh = bb_CreateMesh(0);
+	int surf = bb_CreateSurface(mesh,0);
+	int a = bb_AddVertex (surf, -1.0f,+1.0f,0.0f, 0.0f,0.0f,0.0f);
+	int b = bb_AddVertex (surf, +1.0f,+1.0f,0.0f, 1.0f,0.0f,0.0f);
+	int c = bb_AddVertex (surf, +0.0f,-1.0f,0.0f, 0.5f,1.0f,0.0f);
+	int t = bb_AddTriangle (surf,a,b,c);
+	return mesh;
+};
+</pre><br>does not work.<br>When I run accross the vertices and triangles in blitz, the vertices are well defined but the triangle exported refers to vertices {0,0,2} (not 0,1,2) and I can't point the reason<br><br><br><br>ps : here are the source of the dll part for blitz function (I can't assume this is a good way to code it, I'm not a "real" c++ professional programmer)<br><br>the header file<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+#pragma once
+
+using namespace std;
+
+/* ------------------------------------------------------- */
+/* Prefix d'export de function                             */
+/* ------------------------------------------------------- */
+	
+	#define BBAEXP extern "C" _declspec(dllexport)
+	#define BBACALL _stdcall
+	
+	#define bbString const char*
+	
+	#define BBAEXPstring BBAEXP bbString BBACALL
+	#define BBAEXPvoid BBAEXP void BBACALL
+	#define BBAEXPcint BBAEXP const int BBACALL
+	#define BBAEXPint BBAEXP int BBACALL
+	#define BBAEXPcfloat BBAEXP const float BBACALL
+	#define BBAEXPfloat BBAEXP float BBACALL
+	#define BBAEXPstr BBAEXP const char* BBACALL
+	
+	
+	
+/* ------------------------------------------------------- */
+/* reinterpret_cast                                        */
+/* ------------------------------------------------------- */
+	
+	#define rcast_f4 reinterpret_cast&lt;Float4* __restrict&gt;
+	#define rcast_i reinterpret_cast&lt;int&gt;
+	#define rcast_v reinterpret_cast&lt;void*&gt;
+	
+	
+/*======================================================================*/
+/*                          Define bb Function pointers */
+/*======================================================================*/
+	
+	
+	static int (*bbPtr_CreatePivot_) (int);
+	static int (*bbPtr_CreateCamera_) (int);
+	static int (*bbPtr_CreateLight_) (int,int);
+	static int (*bbPtr_CreateMesh_) (int);
+	static int (*bbPtr_CreateSprite_) (int);
+	static int (*bbPtr_CreateTerrain_) (int,int);
+	static int (*bbPtr_CreatePlane_) (int,int);
+	static int (*bbPtr_CreateMirror_) (int);
+	static int (*bbPtr_CreateListener_) (int,float,float,float);
+	static int (*bbPtr_CreateSurface_) (int,int);
+	static int (*bbPtr_AddVertex_) (int,float,float,float,float,float,float);
+	static int (*bbPtr_AddTriangle_) (int,int,int,int);
+	static void (*bbPtr_VertexCoords_) (int,int,float,float,float);
+	static void (*bbPtr_VertexNormal_) (int,int,float,float,float);
+	static void (*bbPtr_VertexColor_) (int,int,float,float,float,float);
+	static void (*bbPtr_VertexTexCoords_) (int,int,float,float,float,int);
+	
+	
+	BBAEXPvoid Register_CreatePivot (int (*bbFuncPtr)(int));
+	BBAEXPint bb_CreatePivot (int parent);
+	
+	BBAEXPvoid Register_CreateCamera (int (*bbFuncPtr)(int));
+	BBAEXPint bb_CreateCamera (int parent);
+	
+	BBAEXPvoid Register_CreateLight (int (*bbFuncPtr)(int,int));
+	BBAEXPint bb_CreateLight (int type,int parent);
+	
+	BBAEXPvoid Register_CreateMesh (int (*bbFuncPtr)(int));
+	BBAEXPint bb_CreateMesh (int parent);
+	
+	BBAEXPvoid Register_CreateSprite (int (*bbFuncPtr)(int));
+	BBAEXPint bb_CreateSprite (int parent);
+	
+	BBAEXPvoid Register_CreateTerrain (int (*bbFuncPtr)(int,int));
+	BBAEXPint bb_CreateTerrain (int gridsize,int parent);
+	
+	BBAEXPvoid Register_CreatePlane (int (*bbFuncPtr)(int,int));
+	BBAEXPint bb_CreatePlane (int segment,int parent);
+	
+	BBAEXPvoid Register_CreateMirror (int (*bbFuncPtr)(int));
+	BBAEXPint bb_CreateMirror (int parent);
+	
+	BBAEXPvoid Register_CreateListener (int (*bbFuncPtr)(int,float,float,float));
+	BBAEXPint bb_CreateListener (int parent,float rolloff,float doppler,float distance);
+	
+	BBAEXPvoid Register_CreateSurface (int (*bbFuncPtr)(int,int));
+	BBAEXPint bb_CreateSurface (int mesh,int brush);
+	
+	BBAEXPvoid Register_AddVertex (int (*bbFuncPtr)(int,float,float,float,float,float,float));
+	BBAEXPint bb_AddVertex (int surface,float x,float y,float z,float u,float v,float w);
+	
+	BBAEXPvoid Register_AddTriangle (int (*bbFuncPtr)(int,int,int,int));
+	BBAEXPint bb_AddTriangle (int surface,int i,int j,int k);
+	
+	BBAEXPvoid Register_VertexCoords (void (*bbFuncPtr)(int,int,float,float,float));
+	BBAEXPvoid bb_VertexCoords (int surface,int i,float x,float y,float z);
+	
+	BBAEXPvoid Register_VertexNormal (void (*bbFuncPtr)(int,int,float,float,float));
+	BBAEXPvoid bb_VertexNormal (int surface,int i,float nx,float ny,float nz);
+	
+	BBAEXPvoid Register_VertexColor (void (*bbFuncPtr)(int,int,float,float,float,float));
+	BBAEXPvoid bb_VertexColor (int surface,int i,float r,float g,float b,float a);
+	
+	BBAEXPvoid Register_VertexTexCoords (void (*bbFuncPtr)(int,int,float,float,float,int));
+	BBAEXPvoid bb_VertexTexCoords (int surface,int i,float u,float v,float w,int set);
+	
+	
+	
+	BBAEXPint CreateSampleMesh();
+</textarea><br><br><br>the cpp file<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+#pragma once
+#include "stdafx.h"
+
+
+int (__stdcall *bbSignature_I_I) (int);
+int (__stdcall *bbSignature_I_II) (int,int);
+int (__stdcall *bbSignature_I_IFFF) (int,float,float,float);
+int (__stdcall *bbSignature_I_IFFFFFF) (int,float,float,float,float,float,float);
+int (__stdcall *bbSignature_I_IIII) (int,int,int,int);
+void (__stdcall *bbSignature_V_IIFFF) (int,int,float,float,float);
+void (__stdcall *bbSignature_V_IIFFFF) (int,int,float,float,float,float);
+void (__stdcall *bbSignature_V_IIFFFI) (int,int,float,float,float,int);
+
+
+__inline void asmP1(unsigned int &amp;StackPosition)
+	{__asm {
+	mov StackPosition,esp
+	mov esp,ebp
+	add esp,4};};
+__inline void asmP2(unsigned int &amp;StackPosition){__asm {mov esp,StackPosition};};
+
+
+
+BBAEXPvoid Register_CreatePivot (int (*bbFuncPtr)(int))
+	{bbPtr_CreatePivot_= bbFuncPtr;};
+BBAEXPvoid Register_CreateCamera (int (*bbFuncPtr)(int))
+	{bbPtr_CreateCamera_= bbFuncPtr;};
+BBAEXPvoid Register_CreateLight (int (*bbFuncPtr)(int,int))
+	{bbPtr_CreateLight_= bbFuncPtr;};
+BBAEXPvoid Register_CreateMesh (int (*bbFuncPtr)(int))
+	{bbPtr_CreateMesh_= bbFuncPtr;};
+BBAEXPvoid Register_CreateSprite (int (*bbFuncPtr)(int))
+	{bbPtr_CreateSprite_= bbFuncPtr;};
+BBAEXPvoid Register_CreateTerrain (int (*bbFuncPtr)(int,int))
+	{bbPtr_CreateTerrain_= bbFuncPtr;};
+BBAEXPvoid Register_CreatePlane (int (*bbFuncPtr)(int,int))
+	{bbPtr_CreatePlane_= bbFuncPtr;};
+BBAEXPvoid Register_CreateMirror (int (*bbFuncPtr)(int))
+	{bbPtr_CreateMirror_= bbFuncPtr;};
+BBAEXPvoid Register_CreateListener (int (*bbFuncPtr)(int,float,float,float))
+	{bbPtr_CreateListener_= bbFuncPtr;};
+BBAEXPvoid Register_CreateSurface (int (*bbFuncPtr)(int,int))
+	{bbPtr_CreateSurface_= bbFuncPtr;};
+BBAEXPvoid Register_AddVertex (int (*bbFuncPtr)(int,float,float,float,float,float,float))
+	{bbPtr_AddVertex_= bbFuncPtr;};
+BBAEXPvoid Register_AddTriangle (int (*bbFuncPtr)(int,int,int,int))
+	{bbPtr_AddTriangle_= bbFuncPtr;};
+BBAEXPvoid Register_VertexCoords (void (*bbFuncPtr)(int,int,float,float,float))
+	{bbPtr_VertexCoords_= bbFuncPtr;};
+BBAEXPvoid Register_VertexNormal (void (*bbFuncPtr)(int,int,float,float,float))
+	{bbPtr_VertexNormal_= bbFuncPtr;};
+BBAEXPvoid Register_VertexColor (void (*bbFuncPtr)(int,int,float,float,float,float))
+	{bbPtr_VertexColor_= bbFuncPtr;};
+BBAEXPvoid Register_VertexTexCoords (void (*bbFuncPtr)(int,int,float,float,float,int))
+	{bbPtr_VertexTexCoords_= bbFuncPtr;};
+
+
+BBAEXPint bb_CreatePivot (int parent)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_I_I};
+	asmP2 (StackPosition);return bbPtr_CreatePivot_(parent);};
+
+BBAEXPint bb_CreateCamera (int parent)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_I_I};
+	asmP2 (StackPosition);return bbPtr_CreateCamera_(parent);};
+
+BBAEXPint bb_CreateLight (int type,int parent)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_I_II};
+	asmP2 (StackPosition);return bbPtr_CreateLight_(type,parent);};
+
+BBAEXPint bb_CreateMesh (int parent)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_I_I};
+	asmP2 (StackPosition);return bbPtr_CreateMesh_(parent);};
+
+BBAEXPint bb_CreateSprite (int parent)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_I_I};
+	asmP2 (StackPosition);return bbPtr_CreateSprite_(parent);};
+
+BBAEXPint bb_CreateTerrain (int gridsize,int parent)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_I_II};
+	asmP2 (StackPosition);return bbPtr_CreateTerrain_(gridsize,parent);};
+
+BBAEXPint bb_CreatePlane (int segment,int parent)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_I_II};
+	asmP2 (StackPosition);return bbPtr_CreatePlane_(segment,parent);};
+
+BBAEXPint bb_CreateMirror (int parent)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_I_I};
+	asmP2 (StackPosition);return bbPtr_CreateMirror_(parent);};
+
+BBAEXPint bb_CreateListener (int parent,float rolloff,float doppler,float distance)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_I_IFFF};
+	asmP2 (StackPosition);return bbPtr_CreateListener_(parent,rolloff,doppler,distance);};
+
+BBAEXPint bb_CreateSurface (int mesh,int brush)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_I_II};
+	asmP2 (StackPosition);return bbPtr_CreateSurface_(mesh,brush);};
+
+BBAEXPint bb_AddVertex (int surface,float x,float y,float z,float u,float v,float w)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_I_IFFFFFF};
+	asmP2 (StackPosition);return bbPtr_AddVertex_(surface,x,y,z,u,v,w);};
+
+BBAEXPint bb_AddTriangle (int surface,int i,int j,int k)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_I_IIII};
+	asmP2 (StackPosition);return bbPtr_AddTriangle_(surface,i,j,k);};
+
+BBAEXPvoid bb_VertexCoords (int surface,int i,float x,float y,float z)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_V_IIFFF};
+	asmP2 (StackPosition);bbPtr_VertexCoords_(surface,i,x,y,z);};
+
+BBAEXPvoid bb_VertexNormal (int surface,int i,float nx,float ny,float nz)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_V_IIFFF};
+	asmP2 (StackPosition);bbPtr_VertexNormal_(surface,i,nx,ny,nz);};
+
+BBAEXPvoid bb_VertexColor (int surface,int i,float r,float g,float b,float a)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_V_IIFFFF};
+	asmP2 (StackPosition);bbPtr_VertexColor_(surface,i,r,g,b,a);};
+
+BBAEXPvoid bb_VertexTexCoords (int surface,int i,float u,float v,float w,int set)
+	{unsigned int StackPosition;asmP1 (StackPosition);__asm {pop bbSignature_V_IIFFFI};
+	asmP2 (StackPosition);bbPtr_VertexTexCoords_(surface,i,u,v,w,set);};
+
+
+
+
+
+BBAEXPint CreateSampleMesh()
+{
+	int mesh = bb_CreateMesh(0);
+	int surf = bb_CreateSurface(mesh,0);
+	int a = bb_AddVertex (surf, -1.0f,+1.0f,0.0f, 0.0f,0.0f,0.0f);
+	int b = bb_AddVertex (surf, +1.0f,+1.0f,0.0f, 1.0f,0.0f,0.0f);
+	int c = bb_AddVertex (surf, +0.0f,-1.0f,0.0f, 0.5f,1.0f,0.0f);
+	int t = bb_AddTriangle (surf,a,b,c);
+	return mesh;
+};
+</textarea><br><br><br>and the blitz file that export and register pointers<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+; ------------------------------------------------------
+; Initialize Blitz Function and send Pointers to the Dll
+; ------------------------------------------------------
+
+; Assume there is a single call ! (singleton-like)
+Global bbFuncToDllPointers_Registered = False
+
+Function bbFuncToDll_RegisterPointers % ()
+	
+	If bbFuncToDllPointers_Registered = True Then Return True
+	
+	Local FPtrToDll_CreatePivot = FunctionPointer() : Goto Skip_FPtr_CreatePivot : CreatePivot(0)
+		.Skip_FPtr_CreatePivot
+		Register_CreatePivot(FPtrToDll_CreatePivot)
+	Local FPtrToDll_CreateCamera = FunctionPointer() : Goto Skip_FPtr_CreateCamera : CreateCamera(0)
+		.Skip_FPtr_CreateCamera
+		Register_CreateCamera(FPtrToDll_CreateCamera)
+	Local FPtrToDll_CreateLight = FunctionPointer() : Goto Skip_FPtr_CreateLight : CreateLight(0, 0)
+		.Skip_FPtr_CreateLight
+		Register_CreateLight(FPtrToDll_CreateLight)
+	Local FPtrToDll_CreateMesh = FunctionPointer() : Goto Skip_FPtr_CreateMesh : CreateMesh(0)
+		.Skip_FPtr_CreateMesh
+		Register_CreateMesh(FPtrToDll_CreateMesh)
+	Local FPtrToDll_CreateSprite = FunctionPointer() : Goto Skip_FPtr_CreateSprite : CreateSprite(0)
+		.Skip_FPtr_CreateSprite
+		Register_CreateSprite(FPtrToDll_CreateSprite)
+	Local FPtrToDll_CreateTerrain = FunctionPointer() : Goto Skip_FPtr_CreateTerrain : CreateTerrain(0, 0)
+		.Skip_FPtr_CreateTerrain
+		Register_CreateTerrain(FPtrToDll_CreateTerrain)
+	Local FPtrToDll_CreatePlane = FunctionPointer() : Goto Skip_FPtr_CreatePlane : CreatePlane(0, 0)
+		.Skip_FPtr_CreatePlane
+		Register_CreatePlane(FPtrToDll_CreatePlane)
+	Local FPtrToDll_CreateMirror = FunctionPointer() : Goto Skip_FPtr_CreateMirror : CreateMirror(0)
+		.Skip_FPtr_CreateMirror
+		Register_CreateMirror(FPtrToDll_CreateMirror)
+	Local FPtrToDll_CreateListener = FunctionPointer() : Goto Skip_FPtr_CreateListener : CreateListener(0, 0, 0, 0)
+		.Skip_FPtr_CreateListener
+		Register_CreateListener(FPtrToDll_CreateListener)
+	Local FPtrToDll_CreateSurface = FunctionPointer() : Goto Skip_FPtr_CreateSurface : CreateSurface(0, 0)
+		.Skip_FPtr_CreateSurface
+		Register_CreateSurface(FPtrToDll_CreateSurface)
+	Local FPtrToDll_AddVertex = FunctionPointer() : Goto Skip_FPtr_AddVertex : AddVertex(0, 0, 0, 0, 0, 0, 0)
+		.Skip_FPtr_AddVertex
+		Register_AddVertex(FPtrToDll_AddVertex)
+	Local FPtrToDll_AddTriangle = FunctionPointer() : Goto Skip_FPtr_AddTriangle : AddTriangle(0, 0, 0, 0)
+		.Skip_FPtr_AddTriangle
+		Register_AddTriangle(FPtrToDll_AddTriangle)
+	Local FPtrToDll_VertexCoords = FunctionPointer() : Goto Skip_FPtr_VertexCoords : VertexCoords(0, 0, 0, 0, 0)
+		.Skip_FPtr_VertexCoords
+		Register_VertexCoords(FPtrToDll_VertexCoords)
+	Local FPtrToDll_VertexNormal = FunctionPointer() : Goto Skip_FPtr_VertexNormal : VertexNormal(0, 0, 0, 0, 0)
+		.Skip_FPtr_VertexNormal
+		Register_VertexNormal(FPtrToDll_VertexNormal)
+	Local FPtrToDll_VertexColor = FunctionPointer() : Goto Skip_FPtr_VertexColor : VertexColor(0, 0, 0, 0, 0, 0)
+		.Skip_FPtr_VertexColor
+		Register_VertexColor(FPtrToDll_VertexColor)
+	Local FPtrToDll_VertexTexCoords = FunctionPointer() : Goto Skip_FPtr_VertexTexCoords : VertexTexCoords(0, 0, 0, 0, 0, 0)
+		.Skip_FPtr_VertexTexCoords
+		Register_VertexTexCoords(FPtrToDll_VertexTexCoords)
+	bbFuncToDllPointers_Registered = True
+	
+	Return True
+	
+End Function
+
+bbFuncToDll_RegisterPointers ( )
+</textarea><br><br><br><br><br><br>pps : If needed, I made an automatic bb code to exports those 3 files that maybe will help... (it only requires a dll of my own to use List/map and a basic tokenizer)<br><br><br><br><br><br>@Thundros :<br>As long as you're off-topic, I don't care about what you 're saying.<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1134873"></a>
+
+<a name="1134874"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#62">[#62]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> strange errors on some functions like AddTriangle <br></div><br><br>Yeah, I've noticed this as well. The Blitz3D engine functions either don't work or don't work reliably with FastPointer. The simplest option is to wrap them in a B3D user function that conforms to the FastPointer expectation (i.e. returns an int, takes one parameter, defined in Blitz code). It's not efficient but at least you get around the part where they don't work at all.<br><br><br><div class="quote"> @Yasha : Do you think you could code something similar ? ("Yes we Can !")<br>I'm not a begginer for sure, but I still don't understand how to get blitz function pointers <br></div><br><br>Write a DLL like FastPointer, or update B3D to use function pointers?<br><br>I'd much rather write a B3D compiler that had proper native support for function pointers, actually - much easier (not least beause I'm not too sharp with the asm). If I recall correctly, Mark gave the green light to Xaron's BitsBasic project (for which I offered the start of a compiler), so it might be OK? I haven't asked. I can write a backend for my B3D-compatible example if people think there's a demand for a new compiler (it would need a 3D engine: Irrlicht wrapped with a B3D command set might be a good choice).<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1134917"></a>
+
+<a name="1134926"></a>
+
+<a name="1134927"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#63">[#63]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Write a DLL like FastPointer, or update B3D to use function pointers? <br></div><br>I thought about a Dll like FastPointer<br><br>At the moment, the way to use FastPointer with more arguments goes by passing banks or handles of type ... it's slow and not efficient<br>And blitz3d still remains a slow language (2 to 10% slower than c++ for most operations) it would be very intersting to have the "hard" parts coded in c++ and the body of the project coded in blitz, but as you pointed it : "if people think there's a demand for [...]"<br>I don't think there is much people anymore standing for blitz3d<br>Some of them maybe wait for a new blitz3d (V2) with next gen features, but it will never come... so ...<br>perhaps we should evolve to blitzmax and give credits to new 3D engines ...<br>I must admite I'm a bit tired to all those restrictions with blitz3d<br>I love this language but probably not enough to support it more longer without real new enhancements.<br><br>IMHO we're in 2012 ... maybe blitz3d should be released as open source ...<br><br>And, if 2012 was the EOH (End Of Humanity), we could know it intimately before dying :p<br><br><font class="tiny">Last edited 2012</font><br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

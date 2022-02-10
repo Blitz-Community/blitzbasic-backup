@@ -1,0 +1,1438 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Array programming</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Array programming</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Array programming</a><br><br>
+<a name="1299846"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> So a while back we had <a href="/posts.php?topic=104119" target="_blank">a little discussion about array programming</a> and whether it was a useful concept in languages like BlitzMax. I don't know what other people think, but I think it is.<br><br>So anyway building on the suggestions in that thread that we ought to establish a set of array-primitives to enable people to start adopting the style, I've had this sitting around in my Projects folder for some months now:<br><br>"arraymax.bmx" (basic sequence and operator types)<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import BRL.LinkedList
+Import BRL.Reflection
+
+SuperStrict
+'NoDebug
+
+Type Seq Abstract
+	Function Make:Seq(from:Object)
+		Local s:Seq
+		If Object[](from)
+			s = OSeq._Make(Object[](from)[..])
+		ElseIf TList(from)
+			s = OSeq._Make(TList(from).ToArray())
+		ElseIf Int[](from)
+			s = ISeq._Make(Int[](from)[..])
+		ElseIf Float[](from)
+			s = FSeq._Make(Float[](from)[..])
+		Else
+			ArrayMaxException.Raise("Seq.Make: unrecognised base sequence type '" + TTypeId.ForObject(from).Name() + "'")
+		EndIf
+		Return s
+	End Function
+	
+	Method Map:Seq(op:MonadicOp) Abstract
+	Method Each(op:MonadicOp) Abstract
+	Method Zip:Seq(op:DyadicOp, with:Seq) Abstract
+	Method Fold:Object(op:DyadicOp, start:Object) Abstract
+	Method FoldR:Object(op:DyadicOp, start:Object) Abstract
+	Method Filter:Seq(bits:Seq) Abstract
+	
+	Method asISeq:ISeq() Abstract
+	Method asFSeq:FSeq() Abstract
+	Method asOSeq:OSeq() Abstract
+	
+	Method Length:Int() Abstract
+End Type
+
+Type ISeq Extends Seq Final
+	Function _Make:ISeq(buf:Int[])
+		Local s:ISeq = New Self ; s._buf = buf ; Return s
+	End Function
+	
+	Field _buf:Int[]
+	
+	Method Map:Seq(op:MonadicOp)
+		Local out:Int[_buf.Length], in:Int[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out<i> = op.IntFunc(in[i])
+		Next
+		Return ISeq._Make(out)
+	End Method
+	Method Each(op:MonadicOp)
+		Local in:Int[] = _buf
+		For Local i:Int = 0 Until in.Length
+			op.IntFunc(in[i])
+		Next
+	End Method
+	Method Zip:Seq(op:DyadicOp, with:Seq)
+		Local in:Int[] = _buf, in2:Int[] = with.asISeq()._buf
+		Local ln:Int = Min(in.Length, in2.Length), out:Int[ln]
+		For Local i:Int = 0 Until ln
+			out[i] = op.IntFunc(in[i], in2[i])
+		Next
+		Return ISeq._Make(out)
+	End Method
+	Method Fold:Object(op:DyadicOp, start:Object)
+		Local acc:Int = Int(start.ToString())
+		For Local k:Int = EachIn _buf
+			acc = op.IntFunc(acc, k)
+		Next
+		Return String(acc)
+	End Method
+	Method FoldR:Object(op:DyadicOp, start:Object)
+		Local acc:Int = Int(start.ToString()), in:Int[] = _buf
+		For Local i:Int = _buf.Length - 1 To 0 Step -1
+			acc = op.IntFunc(in[i], acc)
+		Next
+		Return String(acc)
+	End Method
+	Function Unfold:ISeq(gen:ISeqBuilder)
+		Local tmp:TList = CreateList(), sz:Int = 0
+		While Not gen.Finished()
+			tmp.AddLast(IntBox.Make(gen.NextValue())) ; sz :+ 1
+		Wend
+		Local buf:Int[sz], k:Int = 0
+		For Local i:IntBox = EachIn tmp
+			buf[k] = i.val ; k :+ 1
+		Next
+		Return Self._Make(buf)
+	End Function
+	Method Filter:Seq(bits:Seq)
+		Local fil:Int[] = bits.asISeq()._buf, tmp:TList = CreateList(), in:Int[] = _buf, sz:Int = 0
+		For Local i:Int = 0 Until in.Length
+			If fil[i] Then tmp.AddLast(IntBox.Make(in[i])) ; sz :+ 1
+		Next
+		Local out:Int[sz], k:Int = 0
+		For Local i:IntBox = EachIn tmp
+			out[k] = i.val ; k :+ 1
+		Next
+		Return Self._Make(out)
+	End Method
+	
+	Method asISeq:ISeq()
+		Return Self
+	End Method
+	Method asFSeq:FSeq()
+		Local out:Float[_buf.Length], in:Int[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = Float(in[i])
+		Next
+		Return FSeq._Make(out)
+	End Method
+	Method asOSeq:OSeq()
+		Local out:Object[_buf.Length], in:Int[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = String(in[i])
+		Next
+		Return OSeq._Make(out)
+	End Method
+	
+	Method At:Int(index:Int)
+		Return _buf[index]
+	End Method
+	Method Set(index:Int, val:Int)
+		_buf[index] = val
+	End Method
+	Method Length:Int()
+		Return _buf.Length
+	End Method
+End Type
+
+Type FSeq Extends Seq Final
+	Function _Make:FSeq(buf:Float[])
+		Local s:FSeq = New Self ; s._buf = buf ; Return s
+	End Function
+	
+	Field _buf:Float[]
+	
+	Method Map:Seq(op:MonadicOp)
+		Local out:Float[_buf.Length], in:Float[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = op.FloatFunc(in[i])
+		Next
+		Return FSeq._Make(out)
+	End Method
+	Method Each(op:MonadicOp)
+		Local in:Float[] = _buf
+		For Local i:Int = 0 Until in.Length
+			op.FloatFunc(in[i])
+		Next
+	End Method
+	Method Zip:Seq(op:DyadicOp, with:Seq)
+		Local in:Float[] = _buf, in2:Float[] = with.asFSeq()._buf
+		Local ln:Int = Min(in.Length, in2.Length), out:Float[ln]
+		For Local i:Int = 0 Until ln
+			out[i] = op.FloatFunc(in[i], in2[i])
+		Next
+		Return FSeq._Make(out)
+	End Method
+	Method Fold:Object(op:DyadicOp, start:Object)
+		Local acc:Float = Float(start.ToString())
+		For Local k:Float = EachIn _buf
+			acc = op.FloatFunc(acc, k)
+		Next
+		Return String(acc)
+	End Method
+	Method FoldR:Object(op:DyadicOp, start:Object)
+		Local acc:Float = Float(start.ToString()), in:Float[] = _buf
+		For Local i:Int = _buf.Length - 1 To 0 Step -1
+			acc = op.FloatFunc(in[i], acc)
+		Next
+		Return String(acc)
+	End Method
+	Function Unfold:FSeq(gen:FSeqBuilder)
+		Local tmp:TList = CreateList(), sz:Int = 0
+		While Not gen.Finished()
+			tmp.AddLast(FloatBox.Make(gen.NextValue())) ; sz :+ 1
+		Wend
+		Local buf:Float[sz], k:Int = 0
+		For Local f:FloatBox = EachIn tmp
+			buf[k] = f.val ; k :+ 1
+		Next
+		Return Self._Make(buf)
+	End Function
+	Method Filter:Seq(bits:Seq)
+		Local fil:Int[] = bits.asISeq()._buf, tmp:TList = CreateList(), in:Float[] = _buf, sz:Int = 0
+		For Local i:Int = 0 Until in.Length
+			If fil[i] Then tmp.AddLast(FloatBox.Make(in[i])) ; sz :+ 1
+		Next
+		Local out:Float[sz], k:Int = 0
+		For Local f:FloatBox = EachIn tmp
+			out[k] = f.val ; k :+ 1
+		Next
+		Return Self._Make(out)
+	End Method
+	
+	Method asISeq:ISeq()
+		Local out:Int[_buf.Length], in:Float[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = Int(in[i])
+		Next
+		Return ISeq._Make(out)
+	End Method
+	Method asFSeq:FSeq()
+		Return Self
+	End Method
+	Method asOSeq:OSeq()
+		Local out:Object[_buf.Length], in:Float[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = String(in[i])
+		Next
+		Return OSeq._Make(out)
+	End Method
+	
+	Method At:Float(index:Int)
+		Return _buf[index]
+	End Method
+	Method Set(index:Int, val:Float)
+		_buf[index] = val
+	End Method
+	Method Length:Int()
+		Return _buf.Length
+	End Method
+End Type
+
+Type OSeq Extends Seq Final
+	Function _Make:OSeq(buf:Object[])
+		Local s:OSeq = New Self ; s._buf = buf ; Return s
+	End Function
+	
+	Field _buf:Object[]
+	
+	Method Map:Seq(op:MonadicOp)
+		Local out:Object[_buf.Length], in:Object[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = op.ObjFunc(in[i])
+		Next
+		Return OSeq._Make(out)
+	End Method
+	Method Each(op:MonadicOp)
+		Local in:Object[] = _buf
+		For Local i:Int = 0 Until in.Length
+			op.ObjFunc(in[i])
+		Next
+	End Method
+	Method Zip:Seq(op:DyadicOp, with:Seq)
+		Local in:Object[] = _buf, in2:Object[] = with.asOSeq()._buf
+		Local ln:Int = Min(in.Length, in2.Length), out:Object[ln]
+		For Local i:Int = 0 Until ln
+			out[i] = op.ObjFunc(in[i], in2[i])
+		Next
+		Return OSeq._Make(out)
+	End Method
+	Method Fold:Object(op:DyadicOp, start:Object)
+		Local acc:Object = start
+		For Local k:Object = EachIn _buf
+			acc = op.ObjFunc(acc, k)
+		Next
+		Return start
+	End Method
+	Method FoldR:Object(op:DyadicOp, start:Object)
+		Local acc:Object = start, in:Object[] = _buf
+		For Local i:Int = _buf.Length - 1 To 0 Step -1
+			acc = op.ObjFunc(in[i], acc)
+		Next
+		Return acc
+	End Method
+	Function Unfold:OSeq(gen:OSeqBuilder)
+		Local tmp:TList = CreateList()
+		While Not gen.Finished()
+			tmp.AddLast(gen.NextValue())
+		Wend
+		Return Self._Make(tmp.ToArray())
+	End Function
+	Method Filter:Seq(bits:Seq)
+		Local fil:Int[] = bits.asISeq()._buf, tmp:TList = CreateList(), in:Object[] = _buf
+		For Local i:Int = 0 Until in.Length
+			If fil[i] Then tmp.AddLast(in[i])
+		Next
+		Return Self._Make(tmp.ToArray())
+	End Method
+	
+	Method asISeq:ISeq()
+		Local out:Int[_buf.Length], in:Object[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = Int(in[i].ToString())
+		Next
+		Return ISeq._Make(out)
+	End Method
+	Method asFSeq:FSeq()
+		Local out:Float[_buf.Length], in:Object[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = Float(in[i].ToString())
+		Next
+		Return FSeq._Make(out)
+	End Method
+	Method asOSeq:OSeq()
+		Return Self
+	End Method
+	
+	Method At:Object(index:Int)
+		Return _buf[index]
+	End Method
+	Method Set(index:Int, val:Object)
+		_buf[index] = val
+	End Method
+	Method Length:Int()
+		Return _buf.Length
+	End Method
+End Type
+
+Type MonadicOp Abstract
+	Function MakeI:MonadicOp(op:Int(val:Int)) Final
+		Local o:MonadicIFuncOp = New MonadicIFuncOp
+		o.f = op
+		Return o
+	End Function
+	Function MakeF:MonadicOp(op:Float(val:Float)) Final
+		Local o:MonadicFFuncOp = New MonadicFFuncOp
+		o.f = op
+		Return o
+	End Function
+	Function MakeO:MonadicOp(op:Object(val:Object)) Final
+		Local o:MonadicOFuncOp = New MonadicOFuncOp
+		o.f = op
+		Return o
+	End Function
+	
+	Method IntFunc:Int(val:Int)
+		NotImplementedException(Self, "Int")
+	End Method
+	Method FloatFunc:Float(val:Float)
+		NotImplementedException(Self, "Float")
+	End Method
+	Method ObjFunc:Object(val:Object)
+		NotImplementedException(Self, "Object")
+	End Method
+	
+	Method Compose:MonadicOp(op:MonadicOp)
+		Local comp:MonadicCompOp = New MonadicCompOp
+		comp.f = Self ; comp.g = op
+		Return comp
+	End Method
+End Type
+
+Type DyadicOp Abstract
+	Function MakeI:DyadicOp(op:Int(x:Int, y:Int)) Final
+		Local o:DyadicIFuncOp = New DyadicIFuncOp
+		o.f = op
+		Return o
+	End Function
+	Function MakeF:DyadicOp(op:Float(x:Float, y:Float)) Final
+		Local o:DyadicFFuncOp = New DyadicFFuncOp
+		o.f = op
+		Return o
+	End Function
+	Function MakeO:DyadicOp(op:Object(x:Object, y:Object)) Final
+		Local o:DyadicOFuncOp = New DyadicOFuncOp
+		o.f = op
+		Return o
+	End Function
+	
+	Method IntFunc:Int(x:Int, y:Int)
+		NotImplementedException(Self, "Int")
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		NotImplementedException(Self, "Float")
+	End Method
+	Method ObjFunc:Object(x:Object, y:Object)
+		NotImplementedException(Self, "Object")
+	End Method
+	
+	Method Compose:DyadicOp(op:MonadicOp)
+		Local comp:DyadicCompOp = New DyadicCompOp
+		comp.f = Self ; comp.g = op
+		Return comp
+	End Method
+	
+	Method BindI:MonadicOp(x:Int)
+		Local o:MonadicBindIOp = New MonadicBindIOp
+		o.d = Self ; o.x = x
+		Return o
+	End Method
+	Method BindF:MonadicOp(x:Float)
+		Local o:MonadicBindFOp = New MonadicBindFOp
+		o.d = Self ; o.x = x
+		Return o
+	End Method
+	Method BindO:MonadicOp(x:Object)
+		Local o:MonadicBindOOp = New MonadicBindOOp
+		o.d = Self ; o.x = x
+		Return o
+	End Method
+	
+	Method Flip:DyadicOp()
+		Local o:DyadicFlipOp = New DyadicFlipOp
+		o.d = Self
+		Return o
+	End Method
+End Type
+
+Type ISeqBuilder Abstract
+	Method Finished:Int() Abstract
+	Method NextValue:Int() Abstract
+End Type
+Type FSeqBuilder Abstract
+	Method Finished:Int() Abstract
+	Method NextValue:Float() Abstract
+End Type
+Type OSeqBuilder Abstract
+	Method Finished:Int() Abstract
+	Method NextValue:Object() Abstract
+End Type
+
+Type ArrayMaxException Final
+	Function Make:ArrayMaxException(msg:String)
+		Local ex:ArrayMaxException = New Self
+		ex.msg = msg
+		Return ex
+	End Function
+	Function Raise(msg:String)
+		Throw Self.Make(msg)
+	End Function
+	Field msg:String
+	Method ToString:String()
+		Return msg
+	End Method
+End Type
+
+Private
+
+Type MonadicCompOp Extends MonadicOp Final
+	Field f:MonadicOp, g:MonadicOp
+	Method IntFunc:Int(val:Int)
+		Return f.IntFunc(g.IntFunc(val))
+	End Method
+	Method FloatFunc:Float(val:Float)
+		Return f.FloatFunc(g.FloatFunc(val))
+	End Method
+	Method ObjFunc:Object(val:Object)
+		Return f.ObjFunc(g.ObjFunc(val))
+	End Method
+End Type
+Type DyadicCompOp Extends DyadicOp Final
+	Field f:DyadicOp, g:MonadicOp
+	Method IntFunc:Int(x:Int, y:Int)
+		Return f.IntFunc(g.IntFunc(x), g.IntFunc(y))
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return f.FloatFunc(g.FloatFunc(x), g.FloatFunc(y))
+	End Method
+	Method ObjFunc:Object(x:Object, y:Object)
+		Return f.ObjFunc(g.ObjFunc(x), g.ObjFunc(y))
+	End Method
+End Type
+
+Type MonadicIFuncOp Extends MonadicOp Final
+	Field f:Int(val:Int)
+	Method IntFunc:Int(val:Int)
+		Return f(val)
+	End Method
+End Type
+Type MonadicFFuncOp Extends MonadicOp Final
+	Field f:Float(val:Float)
+	Method FloatFunc:Float(val:Float)
+		Return f(val)
+	End Method
+End Type
+Type MonadicOFuncOp Extends MonadicOp Final
+	Field f:Object(val:Object)
+	Method ObjFunc:Object(val:Object)
+		Return f(val)
+	End Method
+End Type
+
+Type DyadicIFuncOp Extends DyadicOp Final
+	Field f:Int(x:Int, y:Int)
+	Method IntFunc:Int(x:Int, y:Int)
+		Return f(x, y)
+	End Method
+End Type
+Type DyadicFFuncOp Extends DyadicOp Final
+	Field f:Float(x:Float, y:Float)
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return f(x, y)
+	End Method
+End Type
+Type DyadicOFuncOp Extends DyadicOp Final
+	Field f:Object(x:Object, y:Object)
+	Method ObjFunc:Object(x:Object, y:Object)
+		Return f(x, y)
+	End Method
+End Type
+
+Type MonadicBindIOp Extends MonadicOp Final
+	Field d:DyadicOp, x:Int
+	Method IntFunc:Int(y:Int)
+		Return d.IntFunc(x, y)
+	End Method
+End Type
+Type MonadicBindFOp Extends MonadicOp Final
+	Field d:DyadicOp, x:Float
+	Method FloatFunc:Float(y:Float)
+		Return d.FloatFunc(x, y)
+	End Method
+End Type
+Type MonadicBindOOp Extends MonadicOp Final
+	Field d:DyadicOp, x:Object
+	Method ObjFunc:Object(y:Object)
+		Return d.ObjFunc(x, y)
+	End Method
+End Type
+
+Type DyadicFlipOp Extends DyadicOp Final
+	Field d:DyadicOp
+	Method IntFunc:Int(x:Int, y:Int)
+		Return d.IntFunc(y, x)
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return d.FloatFunc(y, x)
+	End Method
+	Method ObjFunc:Object(x:Object, y:Object)
+		Return d.ObjFunc(y, x)
+	End Method
+End Type
+
+Type IntBox Final
+	Function Make:IntBox(val:Int)
+		Local b:IntBox = New Self ; b.val = val ; Return b
+	End Function
+	Field val:Int
+End Type
+Type FloatBox Final
+	Function Make:FloatBox(val:Float)
+		Local b:FloatBox = New Self ; b.val = val ; Return b
+	End Function
+	Field val:Float
+End Type
+
+Function NotImplementedException(src:Object, typ:String)
+	Local opType:TTypeId = TTypeId.ForObject(src), opCat:String
+	If opType.ExtendsType(TTypeId.ForName("MonadicOp")) Then opCat = "Monadic" Else opCat = "Dyadic"
+	ArrayMaxException.Raise(opCat + " operation '" + opType.Name() + "' does not implement an operation for " + typ + " sequences")
+End Function
+
+Public
+
+</textarea><br><br>"arraymax-basis.bmx" (a basis library of fundamental operators):<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import BRL.LinkedList
+Import BRL.Reflection
+
+SuperStrict
+'NoDebug
+
+Type Seq Abstract
+	Function Make:Seq(from:Object)
+		Local s:Seq
+		If Object[](from)
+			s = OSeq._Make(Object[](from)[..])
+		ElseIf TList(from)
+			s = OSeq._Make(TList(from).ToArray())
+		ElseIf Int[](from)
+			s = ISeq._Make(Int[](from)[..])
+		ElseIf Float[](from)
+			s = FSeq._Make(Float[](from)[..])
+		Else
+			ArrayMaxException.Raise("Seq.Make: unrecognised base sequence type '" + TTypeId.ForObject(from).Name() + "'")
+		EndIf
+		Return s
+	End Function
+	
+	Method Map:Seq(op:MonadicOp) Abstract
+	Method Each(op:MonadicOp) Abstract
+	Method Zip:Seq(op:DyadicOp, with:Seq) Abstract
+	Method Fold:Object(op:DyadicOp, start:Object) Abstract
+	Method FoldR:Object(op:DyadicOp, start:Object) Abstract
+	Method Filter:Seq(bits:Seq) Abstract
+	
+	Method asISeq:ISeq() Abstract
+	Method asFSeq:FSeq() Abstract
+	Method asOSeq:OSeq() Abstract
+	
+	Method Length:Int() Abstract
+End Type
+
+Type ISeq Extends Seq Final
+	Function _Make:ISeq(buf:Int[])
+		Local s:ISeq = New Self ; s._buf = buf ; Return s
+	End Function
+	
+	Field _buf:Int[]
+	
+	Method Map:Seq(op:MonadicOp)
+		Local out:Int[_buf.Length], in:Int[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = op.IntFunc(in[i])
+		Next
+		Return ISeq._Make(out)
+	End Method
+	Method Each(op:MonadicOp)
+		Local in:Int[] = _buf
+		For Local i:Int = 0 Until in.Length
+			op.IntFunc(in[i])
+		Next
+	End Method
+	Method Zip:Seq(op:DyadicOp, with:Seq)
+		Local in:Int[] = _buf, in2:Int[] = with.asISeq()._buf
+		Local ln:Int = Min(in.Length, in2.Length), out:Int[ln]
+		For Local i:Int = 0 Until ln
+			out[i] = op.IntFunc(in[i], in2[i])
+		Next
+		Return ISeq._Make(out)
+	End Method
+	Method Fold:Object(op:DyadicOp, start:Object)
+		Local acc:Int = Int(start.ToString())
+		For Local k:Int = EachIn _buf
+			acc = op.IntFunc(acc, k)
+		Next
+		Return String(acc)
+	End Method
+	Method FoldR:Object(op:DyadicOp, start:Object)
+		Local acc:Int = Int(start.ToString()), in:Int[] = _buf
+		For Local i:Int = _buf.Length - 1 To 0 Step -1
+			acc = op.IntFunc(in[i], acc)
+		Next
+		Return String(acc)
+	End Method
+	Function Unfold:ISeq(gen:ISeqBuilder)
+		Local tmp:TList = CreateList(), sz:Int = 0
+		While Not gen.Finished()
+			tmp.AddLast(IntBox.Make(gen.NextValue())) ; sz :+ 1
+		Wend
+		Local buf:Int[sz], k:Int = 0
+		For Local i:IntBox = EachIn tmp
+			buf[k] = i.val ; k :+ 1
+		Next
+		Return Self._Make(buf)
+	End Function
+	Method Filter:Seq(bits:Seq)
+		Local fil:Int[] = bits.asISeq()._buf, tmp:TList = CreateList(), in:Int[] = _buf, sz:Int = 0
+		For Local i:Int = 0 Until in.Length
+			If fil[i] Then tmp.AddLast(IntBox.Make(in[i])) ; sz :+ 1
+		Next
+		Local out:Int[sz], k:Int = 0
+		For Local i:IntBox = EachIn tmp
+			out[k] = i.val ; k :+ 1
+		Next
+		Return Self._Make(out)
+	End Method
+	
+	Method asISeq:ISeq()
+		Return Self
+	End Method
+	Method asFSeq:FSeq()
+		Local out:Float[_buf.Length], in:Int[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = Float(in[i])
+		Next
+		Return FSeq._Make(out)
+	End Method
+	Method asOSeq:OSeq()
+		Local out:Object[_buf.Length], in:Int[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = String(in[i])
+		Next
+		Return OSeq._Make(out)
+	End Method
+	
+	Method At:Int(index:Int)
+		Return _buf[index]
+	End Method
+	Method Set(index:Int, val:Int)
+		_buf[index] = val
+	End Method
+	Method Length:Int()
+		Return _buf.Length
+	End Method
+End Type
+
+Type FSeq Extends Seq Final
+	Function _Make:FSeq(buf:Float[])
+		Local s:FSeq = New Self ; s._buf = buf ; Return s
+	End Function
+	
+	Field _buf:Float[]
+	
+	Method Map:Seq(op:MonadicOp)
+		Local out:Float[_buf.Length], in:Float[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = op.FloatFunc(in[i])
+		Next
+		Return FSeq._Make(out)
+	End Method
+	Method Each(op:MonadicOp)
+		Local in:Float[] = _buf
+		For Local i:Int = 0 Until in.Length
+			op.FloatFunc(in[i])
+		Next
+	End Method
+	Method Zip:Seq(op:DyadicOp, with:Seq)
+		Local in:Float[] = _buf, in2:Float[] = with.asFSeq()._buf
+		Local ln:Int = Min(in.Length, in2.Length), out:Float[ln]
+		For Local i:Int = 0 Until ln
+			out[i] = op.FloatFunc(in[i], in2[i])
+		Next
+		Return FSeq._Make(out)
+	End Method
+	Method Fold:Object(op:DyadicOp, start:Object)
+		Local acc:Float = Float(start.ToString())
+		For Local k:Float = EachIn _buf
+			acc = op.FloatFunc(acc, k)
+		Next
+		Return String(acc)
+	End Method
+	Method FoldR:Object(op:DyadicOp, start:Object)
+		Local acc:Float = Float(start.ToString()), in:Float[] = _buf
+		For Local i:Int = _buf.Length - 1 To 0 Step -1
+			acc = op.FloatFunc(in[i], acc)
+		Next
+		Return String(acc)
+	End Method
+	Function Unfold:FSeq(gen:FSeqBuilder)
+		Local tmp:TList = CreateList(), sz:Int = 0
+		While Not gen.Finished()
+			tmp.AddLast(FloatBox.Make(gen.NextValue())) ; sz :+ 1
+		Wend
+		Local buf:Float[sz], k:Int = 0
+		For Local f:FloatBox = EachIn tmp
+			buf[k] = f.val ; k :+ 1
+		Next
+		Return Self._Make(buf)
+	End Function
+	Method Filter:Seq(bits:Seq)
+		Local fil:Int[] = bits.asISeq()._buf, tmp:TList = CreateList(), in:Float[] = _buf, sz:Int = 0
+		For Local i:Int = 0 Until in.Length
+			If fil[i] Then tmp.AddLast(FloatBox.Make(in[i])) ; sz :+ 1
+		Next
+		Local out:Float[sz], k:Int = 0
+		For Local f:FloatBox = EachIn tmp
+			out[k] = f.val ; k :+ 1
+		Next
+		Return Self._Make(out)
+	End Method
+	
+	Method asISeq:ISeq()
+		Local out:Int[_buf.Length], in:Float[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = Int(in[i])
+		Next
+		Return ISeq._Make(out)
+	End Method
+	Method asFSeq:FSeq()
+		Return Self
+	End Method
+	Method asOSeq:OSeq()
+		Local out:Object[_buf.Length], in:Float[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = String(in[i])
+		Next
+		Return OSeq._Make(out)
+	End Method
+	
+	Method At:Float(index:Int)
+		Return _buf[index]
+	End Method
+	Method Set(index:Int, val:Float)
+		_buf[index] = val
+	End Method
+	Method Length:Int()
+		Return _buf.Length
+	End Method
+End Type
+
+Type OSeq Extends Seq Final
+	Function _Make:OSeq(buf:Object[])
+		Local s:OSeq = New Self ; s._buf = buf ; Return s
+	End Function
+	
+	Field _buf:Object[]
+	
+	Method Map:Seq(op:MonadicOp)
+		Local out:Object[_buf.Length], in:Object[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = op.ObjFunc(in[i])
+		Next
+		Return OSeq._Make(out)
+	End Method
+	Method Each(op:MonadicOp)
+		Local in:Object[] = _buf
+		For Local i:Int = 0 Until in.Length
+			op.ObjFunc(in[i])
+		Next
+	End Method
+	Method Zip:Seq(op:DyadicOp, with:Seq)
+		Local in:Object[] = _buf, in2:Object[] = with.asOSeq()._buf
+		Local ln:Int = Min(in.Length, in2.Length), out:Object[ln]
+		For Local i:Int = 0 Until ln
+			out[i] = op.ObjFunc(in[i], in2[i])
+		Next
+		Return OSeq._Make(out)
+	End Method
+	Method Fold:Object(op:DyadicOp, start:Object)
+		Local acc:Object = start
+		For Local k:Object = EachIn _buf
+			acc = op.ObjFunc(acc, k)
+		Next
+		Return start
+	End Method
+	Method FoldR:Object(op:DyadicOp, start:Object)
+		Local acc:Object = start, in:Object[] = _buf
+		For Local i:Int = _buf.Length - 1 To 0 Step -1
+			acc = op.ObjFunc(in[i], acc)
+		Next
+		Return acc
+	End Method
+	Function Unfold:OSeq(gen:OSeqBuilder)
+		Local tmp:TList = CreateList()
+		While Not gen.Finished()
+			tmp.AddLast(gen.NextValue())
+		Wend
+		Return Self._Make(tmp.ToArray())
+	End Function
+	Method Filter:Seq(bits:Seq)
+		Local fil:Int[] = bits.asISeq()._buf, tmp:TList = CreateList(), in:Object[] = _buf
+		For Local i:Int = 0 Until in.Length
+			If fil[i] Then tmp.AddLast(in[i])
+		Next
+		Return Self._Make(tmp.ToArray())
+	End Method
+	
+	Method asISeq:ISeq()
+		Local out:Int[_buf.Length], in:Object[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = Int(in[i].ToString())
+		Next
+		Return ISeq._Make(out)
+	End Method
+	Method asFSeq:FSeq()
+		Local out:Float[_buf.Length], in:Object[] = _buf
+		For Local i:Int = 0 Until out.Length
+			out[i] = Float(in[i].ToString())
+		Next
+		Return FSeq._Make(out)
+	End Method
+	Method asOSeq:OSeq()
+		Return Self
+	End Method
+	
+	Method At:Object(index:Int)
+		Return _buf[index]
+	End Method
+	Method Set(index:Int, val:Object)
+		_buf[index] = val
+	End Method
+	Method Length:Int()
+		Return _buf.Length
+	End Method
+End Type
+
+Type MonadicOp Abstract
+	Function MakeI:MonadicOp(op:Int(val:Int)) Final
+		Local o:MonadicIFuncOp = New MonadicIFuncOp
+		o.f = op
+		Return o
+	End Function
+	Function MakeF:MonadicOp(op:Float(val:Float)) Final
+		Local o:MonadicFFuncOp = New MonadicFFuncOp
+		o.f = op
+		Return o
+	End Function
+	Function MakeO:MonadicOp(op:Object(val:Object)) Final
+		Local o:MonadicOFuncOp = New MonadicOFuncOp
+		o.f = op
+		Return o
+	End Function
+	
+	Method IntFunc:Int(val:Int)
+		NotImplementedException(Self, "Int")
+	End Method
+	Method FloatFunc:Float(val:Float)
+		NotImplementedException(Self, "Float")
+	End Method
+	Method ObjFunc:Object(val:Object)
+		NotImplementedException(Self, "Object")
+	End Method
+	
+	Method Compose:MonadicOp(op:MonadicOp)
+		Local comp:MonadicCompOp = New MonadicCompOp
+		comp.f = Self ; comp.g = op
+		Return comp
+	End Method
+End Type
+
+Type DyadicOp Abstract
+	Function MakeI:DyadicOp(op:Int(x:Int, y:Int)) Final
+		Local o:DyadicIFuncOp = New DyadicIFuncOp
+		o.f = op
+		Return o
+	End Function
+	Function MakeF:DyadicOp(op:Float(x:Float, y:Float)) Final
+		Local o:DyadicFFuncOp = New DyadicFFuncOp
+		o.f = op
+		Return o
+	End Function
+	Function MakeO:DyadicOp(op:Object(x:Object, y:Object)) Final
+		Local o:DyadicOFuncOp = New DyadicOFuncOp
+		o.f = op
+		Return o
+	End Function
+	
+	Method IntFunc:Int(x:Int, y:Int)
+		NotImplementedException(Self, "Int")
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		NotImplementedException(Self, "Float")
+	End Method
+	Method ObjFunc:Object(x:Object, y:Object)
+		NotImplementedException(Self, "Object")
+	End Method
+	
+	Method Compose:DyadicOp(op:MonadicOp)
+		Local comp:DyadicCompOp = New DyadicCompOp
+		comp.f = Self ; comp.g = op
+		Return comp
+	End Method
+End Type
+
+Type ISeqBuilder Abstract
+	Method Finished:Int() Abstract
+	Method NextValue:Int() Abstract
+End Type
+Type FSeqBuilder Abstract
+	Method Finished:Int() Abstract
+	Method NextValue:Float() Abstract
+End Type
+Type OSeqBuilder Abstract
+	Method Finished:Int() Abstract
+	Method NextValue:Object() Abstract
+End Type
+
+Type ArrayMaxException Final
+	Function Make:ArrayMaxException(msg:String)
+		Local ex:ArrayMaxException = New Self
+		ex.msg = msg
+		Return ex
+	End Function
+	Function Raise(msg:String)
+		Throw Self.Make(msg)
+	End Function
+	Field msg:String
+	Method ToString:String()
+		Return msg
+	End Method
+End Type
+
+Private
+
+Type MonadicCompOp Extends MonadicOp Final
+	Field f:MonadicOp, g:MonadicOp
+	Method IntFunc:Int(val:Int)
+		Return f.IntFunc(g.IntFunc(val))
+	End Method
+	Method FloatFunc:Float(val:Float)
+		Return f.FloatFunc(g.FloatFunc(val))
+	End Method
+	Method ObjFunc:Object(val:Object)
+		Return f.ObjFunc(g.ObjFunc(val))
+	End Method
+End Type
+Type DyadicCompOp Extends DyadicOp Final
+	Field f:DyadicOp, g:MonadicOp
+	Method IntFunc:Int(x:Int, y:Int)
+		Return f.IntFunc(g.IntFunc(x), g.IntFunc(y))
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return f.FloatFunc(g.FloatFunc(x), g.FloatFunc(y))
+	End Method
+	Method ObjFunc:Object(x:Object, y:Object)
+		Return f.ObjFunc(g.ObjFunc(x), g.ObjFunc(y))
+	End Method
+End Type
+
+Type MonadicIFuncOp Extends MonadicOp Final
+	Field f:Int(val:Int)
+	Method IntFunc:Int(val:Int)
+		Return f(val)
+	End Method
+End Type
+Type MonadicFFuncOp Extends MonadicOp Final
+	Field f:Float(val:Float)
+	Method FloatFunc:Float(val:Float)
+		Return f(val)
+	End Method
+End Type
+Type MonadicOFuncOp Extends MonadicOp Final
+	Field f:Object(val:Object)
+	Method ObjFunc:Object(val:Object)
+		Return f(val)
+	End Method
+End Type
+
+Type DyadicIFuncOp Extends DyadicOp Final
+	Field f:Int(x:Int, y:Int)
+	Method IntFunc:Int(x:Int, y:Int)
+		Return f(x, y)
+	End Method
+End Type
+Type DyadicFFuncOp Extends DyadicOp Final
+	Field f:Float(x:Float, y:Float)
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return f(x, y)
+	End Method
+End Type
+Type DyadicOFuncOp Extends DyadicOp Final
+	Field f:Object(x:Object, y:Object)
+	Method ObjFunc:Object(x:Object, y:Object)
+		Return f(x, y)
+	End Method
+End Type
+
+Type IntBox Final
+	Function Make:IntBox(val:Int)
+		Local b:IntBox = New Self ; b.val = val ; Return b
+	End Function
+	Field val:Int
+End Type
+Type FloatBox Final
+	Function Make:FloatBox(val:Float)
+		Local b:FloatBox = New Self ; b.val = val ; Return b
+	End Function
+	Field val:Float
+End Type
+
+Function NotImplementedException(src:Object, typ:String)
+	Local opType:TTypeId = TTypeId.ForObject(src), opCat:String
+	If opType.ExtendsType(TTypeId.ForName("MonadicOp")) Then opCat = "Monadic" Else opCat = "Dyadic"
+	ArrayMaxException.Raise(opCat + " operation '" + opType.Name() + "' does not implement an operation for " + typ + " sequences")
+End Function
+
+Public
+
+</textarea><br><br>Crappy example:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import "arraymax-basis.bmx"
+Import "arraymax.bmx"
+
+SuperStrict
+
+
+Local s:Seq = Seq.Make([1, 2, 3, 4, 5])
+Local t:ISeq = s.Map(OpNegate).asISeq()
+
+'For Local i:Int = 0 Until t.Length()
+'	Print t.At(i)
+'Next
+t.Map(OpPrint)
+
+s.Zip(OpAdd, Seq.Make([1, 1, 1, 1, 1])).Map(OpPrint)
+
+Type FiboBuilder Extends ISeqBuilder Final
+	Function Make:FiboBuilder(count:Int)
+		Local b:FiboBuilder = New FiboBuilder
+		b.count = count
+		b.prev2 = 0 ; b.prev1 = 1
+		Return b
+	End Function
+	Field count:Int, prev1:Int, prev2:Int
+	Method Finished:Int()
+		Return count = 0
+	End Method
+	Method NextValue:Int()
+		count :- 1
+		Local t:Int = prev2
+		prev2 = prev1 ; prev1 :+ t
+		Return t
+	End Method
+End Type
+
+s = ISeq.Unfold(FiboBuilder.Make(20))
+s.Each(OpPrint)
+
+Print "~ndone."
+End
+</textarea><br><br>Normally I try to polish these things up a lot more and, like, document them, before making them public - but the reason I'm dumping this half-finished idea out there is because I'm kinda stuck for ideas where to go from here, so it needs some collaboration in the form of suggestions (for more basic operators, for more primitive constructors, for any examples). Problem with a technique that's basically "as fundamental as loops" is that ... well, it's so fundamental that you can't really "present" it as a thing unto itself the way you can with more complex constructs. Help?<br><br>What would be nice is if we can build a kind of "standard basis" of array operators and sequence functions that can form a base layer for general-purpose loop-free Max programming going forward. In the long run, I'd like to turn this idea into something useful that helps people write much shorter code. I'd [i]really</i> like to turn it into something that's seen as a "Max primitive" so that this gets accepted as the "easy way to do things" over writing explicit loops (it <i>is</i> technically simpler - one line is simpler than three - but it's obviously unfamiliar right now, so let's change that).<br><br><br>A minimal explanation of the dump above:<br><br>- the basic data type is the "Seq". This is an opaque array of values. You can construct it with Seq.Make from an array of numbers, an array of objects, or from a TList. The idea is that the internal representation of the Seq is not so important and you can "shimmer" e.g. an int Seq into an object Seq (you can request a translation of an int/float/object seq into any of the other three types: data may be lost, obviously, depending upon what it actually contains). There's room for more underlying Seq representations if they become useful.<br><br>- a Seq supports the fundamental recursion-operators:<br>--- Map (create a new Seq with each value transformed by the given operator)<br>--- Each (apply the given operator to each value, don't create a new Seq though)<br>--- Zip (combine the values in this Seq with those in another, using the given operator, to form an output Seq)<br>--- Fold ("roll up" the values in this Seq into a single value, starting from 0)<br>--- FoldR (start from the other end)<br>--- Unfold (build a Seq up from a single value by repeated application of a SeqBuilder object)<br>--- Filter (keep only the values in a Seq that are matched to "true" values in a mask Seq)<br><br>Operators are objects with a value-processing method (IntFunc, FloatFunc or ObjFunc). Implement these methods to create an operator that can process values in a Seq. Not all operators have to work on all kinds of contained value (e.g. Minus won't work with Objects by default; trying will throw an exception). Operators can be monadic or dyadic. You can compose operators together, and there are convenience constructors to build them from function pointers to save you defining new types for everything. Dyadic operators can also be bound to a value (creating a monadic) or argument-flipped. More ideas for operator convenience functions are definitely wanted.<br><br>The Basis is a short library of fundamental BlitzMax operations wrapped up in Ops so you can get started with the basics immediately. It includes:<br><br>--- all of the arithmetic operators<br>--- create instance (of a type identified by a string)<br>--- get field (identified by string)<br>--- get element of array (by numeric index; that is, where "BlitzMax array" is the contained type of object in an Object Seq)<br>--- Asc, Chr, ToString, Print<br><br>While composing these together could theoretically do pretty much anything, obviously it would also make more sense to write custom operators for other specific scenarios.<br><br>As is evident from the fact that you can apply any operator to a Seq of any underlying type, this is a very dynamic system. Dynamic typing is the order of the day. Static typing is possible with array programming but we don't have the tools to express it in BlitzMax's type system, so I decided to embrace dynamism from the start instead.<br><br><br>This is intended to enable and encourage a highly compact, compositional style of writing. Performance is not a particular priority. This stuff is fast enough in interpreted languages like Python and so on; BlitzMax can easily handle the strain. You can always go back to writing explicit loops if you <i>need</i> performance, but the idea here is to start out by making things easier on the programmer, and fix that problem if/when it arises. (That said, I'd still compile with NoDebug once it's thoroughly tested.)<br><br>It's not much code yet. As I said, this is just a starting point; I'm interested in taking suggestions and building it up. <br><br></td></tr></table><br>
+<a name="1299848"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I pasted the first file twice and for some reason can't edit the post now (is it too long? didn't hit the char limit). The actual basis file:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Import BRL.Reflection
+Import "arraymax.bmx"
+
+SuperStrict
+'NoDebug
+
+
+Global OpInstance:InstanceOp = New InstanceOp
+Type InstanceOp Extends MonadicOp Final
+	Method ObjFunc:Object(val:Object)
+		Return TTypeId.ForName(val.ToString()).NewObject()
+	End Method
+End Type
+
+Global OpMin:MinOp = New MinOp
+Type MinOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return Min(x, y)
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return Min(x, y)
+	End Method
+	Method ObjFunc:Object(x:Object, y:Object)
+		If x.Compare(y) &lt;= 0 Then Return x Else Return y
+	End Method
+End Type
+
+Global OpMax:MaxOp = New MaxOp
+Type MaxOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return Max(x, y)
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return Max(x, y)
+	End Method
+	Method ObjFunc:Object(x:Object, y:Object)
+		If x.Compare(y) &gt; 0 Then Return x Else Return y
+	End Method
+End Type
+
+Global OpMember:MemberOp = New MemberOp
+Type MemberOp Extends DyadicOp Final
+	Method ObjFunc:Object(x:Object, y:Object)
+		Local fldn:String = y.ToString(), fld:TField = TTypeId.ForObject(x).FindField(fldn)
+		If fld Then Return fld.Get(x) Else Return Null
+	End Method
+End Type
+
+Global OpElement:ElementOp = New ElementOp
+Type ElementOp Extends DyadicOp Final
+	Method ObjFunc:Object(x:Object, y:Object)
+		Local xt:TTypeId = TTypeId.ForObject(x)
+		If xt.ExtendsType(ArrayTypeId) Then Return xt.GetArrayElement(x, Int(y.ToString())) Else Return Null
+	End Method
+End Type
+
+Global OpNegate:NegateOp = New NegateOp
+Type NegateOp Extends MonadicOp Final
+	Method IntFunc:Int(val:Int)
+		Return -val
+	End Method
+	Method FloatFunc:Float(val:Float)
+		Return -val
+	End Method
+End Type
+
+Global OpIdentity:IdentityOp = New IdentityOp
+Type IdentityOp Extends MonadicOp Final
+	Method IntFunc:Int(val:Int)
+		Return val
+	End Method
+	Method FloatFunc:Float(val:Float)
+		Return val
+	End Method
+	Method ObjFunc:Object(val:Object)
+		Return val
+	End Method
+End Type
+
+Global OpComplement:ComplementOp = New ComplementOp
+Type ComplementOp Extends MonadicOp Final
+	Method IntFunc:Int(val:Int)
+		Return ~val
+	End Method
+End Type
+
+Global OpNot:NotOp = New NotOp
+Type NotOp Extends MonadicOp Final
+	Method IntFunc:Int(val:Int)
+		Return Not val
+	End Method
+End Type
+
+Global OpAbs:AbsOp = New AbsOp
+Type AbsOp Extends MonadicOp Final
+	Method IntFunc:Int(val:Int)
+		Return Abs(val)
+	End Method
+	Method FloatFunc:Float(val:Float)
+		Return Abs(val)
+	End Method
+End Type
+
+Global OpSgn:SgnOp = New SgnOp
+Type SgnOp Extends MonadicOp Final
+	Method IntFunc:Int(val:Int)
+		Return Sgn(val)
+	End Method
+	Method FloatFunc:Float(val:Float)
+		Return Sgn(val)
+	End Method
+End Type
+
+Global OpPow:PowOp = New PowOp
+Type PowOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x ^ y
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return x ^ y
+	End Method
+End Type
+
+Global OpMul:MulOp = New MulOp
+Type MulOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x * y
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return x * y
+	End Method
+End Type
+
+Global OpDiv:DivOp = New DivOp
+Type DivOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		If y &lt;&gt; 0 Then Return x / y Else Return 0
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return x / y
+	End Method
+End Type
+
+Global OpMod:ModOp = New ModOp
+Type ModOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x Mod y
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return x Mod y
+	End Method
+End Type
+
+Global OpShl:ShlOp = New ShlOp
+Type ShlOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x Shl y
+	End Method
+End Type
+
+Global OpShr:ShrOp = New ShrOp
+Type ShrOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x Shr y
+	End Method
+End Type
+
+Global OpSar:SarOp = New SarOp
+Type SarOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x Sar y
+	End Method
+End Type
+
+Global OpAdd:AddOp = New AddOp
+Type AddOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x + y
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return x + y
+	End Method
+	Method ObjFunc:Object(x:Object, y:Object)
+		If String(x) And String(y)
+			Return String(x) + String(y)
+		Else
+			Local tx:TTypeId = TTypeId.ForObject(x), ty:TTypeId = TTypeId.ForObject(y)
+			If tx.Name() &lt;&gt; ty.Name() Then ArrayMaxException.Raise("cannot add non-matching types '" + tx.Name() + "' and '" + ty.Name() + "'")
+			If Not tx.ExtendsType(ArrayTypeId) Then ArrayMaxException.Raise("cannot add non-array type '" + tx.Name() + "'")
+			Local xl:Int = tx.ArrayLength(x), yl:Int = ty.ArrayLength(y), ret:Object = tx.NewArray(xl + yl)
+			For Local i:Int = 0 Until xl
+				tx.SetArrayElement(ret, i, tx.GetArrayElement(x, i))
+			Next
+			For Local i:Int = 0 Until yl
+				ty.SetArrayElement(ret, xl + i, ty.GetArrayElement(y, i))
+			Next
+			Return ret
+		EndIf
+	End Method
+End Type
+
+Global OpSub:SubOp = New SubOp
+Type SubOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x - y
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return x - y
+	End Method
+End Type
+
+Global OpBitAnd:BitAndOp = New BitAndOp
+Type BitAndOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x &amp; y
+	End Method
+End Type
+
+Global OpBitOr:BitOrOp = New BitOrOp
+Type BitOrOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x | y
+	End Method
+End Type
+
+Global OpBitXor:BitXorOp = New BitXorOp
+Type BitXorOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x ~ y
+	End Method
+End Type
+
+Global OpEq:EqOp = New EqOp
+Type EqOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x = y
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return x = y
+	End Method
+	Method ObjFunc:Object(x:Object, y:Object)
+		If x.Compare(y) = 0 Then Return "1" Else Return ""
+	End Method
+End Type
+
+Global OpNEq:NEqOp = New NEqOp
+Type NEqOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x &lt;&gt; y
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return x &lt;&gt; y
+	End Method
+	Method ObjFunc:Object(x:Object, y:Object)
+		If x.Compare(y) &lt;&gt; 0 Then Return "1" Else Return ""
+	End Method
+End Type
+
+Global OpLess:LessOp = New LessOp
+Type LessOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x &lt; y
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return x &lt; y
+	End Method
+	Method ObjFunc:Object(x:Object, y:Object)
+		If x.Compare(y) &lt; 0 Then Return "1" Else Return ""
+	End Method
+End Type
+
+Global OpGreater:GreaterOp = New GreaterOp
+Type GreaterOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x &gt; y
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return x &gt; y
+	End Method
+	Method ObjFunc:Object(x:Object, y:Object)
+		If x.Compare(y) &gt; 0 Then Return "1" Else Return ""
+	End Method
+End Type
+
+Global OpLEq:LEqOp = New LEqOp
+Type LEqOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x &lt;= y
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return x &lt;= y
+	End Method
+	Method ObjFunc:Object(x:Object, y:Object)
+		If x.Compare(y) &lt;= 0 Then Return "1" Else Return ""
+	End Method
+End Type
+
+Global OpGEq:GEqOp = New GEqOp
+Type GEqOp Extends DyadicOp Final
+	Method IntFunc:Int(x:Int, y:Int)
+		Return x &gt;= y
+	End Method
+	Method FloatFunc:Float(x:Float, y:Float)
+		Return x &gt;= y
+	End Method
+	Method ObjFunc:Object(x:Object, y:Object)
+		If x.Compare(y) &gt;= 0 Then Return "1" Else Return ""
+	End Method
+End Type
+
+Global OpAsc:AscOp = New AscOp
+Type AscOp Extends MonadicOp Final
+	Method ObjFunc:Object(val:Object)
+		Return String(Asc(val.ToString()))
+	End Method
+End Type
+
+Global OpChr:ChrOp = New ChrOp
+Type ChrOp Extends MonadicOp Final
+	Method ObjFunc:Object(val:Object)
+		Return Chr(Int(val.ToString()))
+	End Method
+End Type
+
+Global OpToString:ToStringOp = New ToStringOp
+Type ToStringOp Extends MonadicOp Final
+	Method ObjFunc:Object(val:Object)
+		Return val.ToString()
+	End Method
+End Type
+
+Global OpPrint:PrintOp = New PrintOp
+Type PrintOp Extends MonadicOp Final
+	Method IntFunc:Int(val:Int)
+		Print val ; Return val
+	End Method
+	Method FloatFunc:Float(val:Float)
+		Print val ; Return val
+	End Method
+	Method ObjFunc:Object(val:Object)
+		Print val.ToString() ; Return val
+	End Method
+End Type
+
+</textarea> <br><br></td></tr></table><br>
+<a name="1316595"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> In the type "ISeq"<br>-&gt; Method Map<br>You've got a "&lt;i&gt;" instead of [i]<br>I don't why you can't edit the first post, but it seems some data are corrupted.<br><br>It runs fine while correcting the bracket.<br>Whatever, I 'm even not sure to understand what I'm reading in your topic :)<br><br>What are you planning to do ?<br>a kind of script-syntax to replace blitzmax code ?<br><br>To be honnest, I feel like the more explicit a language is, the more words you need to remove counter-intuitive senses.<br>So : too lite codes can be really really hard to understand. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

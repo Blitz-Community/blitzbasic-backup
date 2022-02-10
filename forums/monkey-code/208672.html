@@ -1,0 +1,425 @@
+<!DOCTYPE html><html lang="en" ><head ><title >NineSlice: more robust ninepatch</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >NineSlice: more robust ninepatch</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >NineSlice: more robust ninepatch</a><br><br>
+<a name="2090217"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I think this is in decent enough shape to release right now. Basically, it's a ninepatch system specifically meant for games, which often need nicer windows than plain old ninepatches give.<br><br><img src="http://raphkoster.com/monkey/nineslice/nineslice.jpg"><br><br>Demo: <a href="http://raphkoster.com/monkey/nineslice/" target="_blank">http://raphkoster.com/monkey/nineslice/</a><br><br>You can grab the top edge of a window to drag it and the bottom right corner to resize it to see the tiling behaviors. This code doesn't do any of that though. :)<br><br>What it does:<br><br>- You can load either one image and have it sliced into thirds for you, or nine separate ones, in which case you can have them all be different sizes.<br>- it will draw this as a ninepatch, as usual<br>- you can adjust border widths.<br>- more importantly, it supports edges and a center that tiles, best-fits, or stretches. You can do this per edge.<br><br>TILE_STRETCH is the usual ninepatch behavior. This is what you see in the gray window in the demo.<br><br>TILE_CLIP will tile perfectly, but that means that a repeating texture will get cut off at the right and bottom edges. This is the grid pattern in the wood window.<br><br>TILE_FIT will attempt to tile perfectly, but will adjust each tile very slightly so that there is always a whole number of tiles. This is the bubble window -- both edges and center. It's also the bottom edge (the braid) in the wood window.<br><br>The wood window has all three methods used in one window -- sides and top are stretch.<br><br>The red progress bar is stretch; the blue bubble one, however, is using clip; you can see how you can get more gamelike bars with it.<br><br>Note that it also has stuff like minimum widths in there, and therefore doesn't currently handle a border being set to smaller than the actual art. <br><br>Needless to say, tiling is a ton more draw calls. So you can always query NineSlice.DrawCalls to see how many are piling up. Be sure to clear it too :)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import mojo
+
+Const TILE_STRETCH = 0	 	' stretches pieces on the edges
+Const TILE_FIT = 1			' resizes pieces on the edges slightly so that there's never a cut off tile
+Const TILE_CLIP = 2			' does not resize tiles; the last ones will clip
+
+'summary: A class for stretchable windows and backgrounds, supporting a variety of graphical options.
+Class NineSlice
+	Field topLeft:Image
+	Field top:Image
+	Field topRight:Image
+	Field left:Image
+	Field center:Image
+	Field right:Image
+	Field bottomLeft:Image
+	Field bottom:Image
+	Field bottomRight:Image
+	
+	Field tileTop:Int
+	Field tileLeft:Int
+	Field tileBottom:Int
+	Field tileRight:Int
+	Field tileCenter:Int
+	
+	Field borderTop:Float
+	Field borderLeft:Float
+	Field borderRight:Float
+	Field borderBottom:Float
+	
+	Field minWidth:Int
+	Field minHeight:Int
+	
+	Field name:String
+	
+	Field clipDir:Int  ' TODO: Make it so that it chooses which edges to add clipped tiles (current defaults to bottom)
+	Field drawCenter:Bool = True
+	
+	Global DrawCalls:Int = 0
+	
+	'summary: creates a new NineSlice from a set of nine images. Can be set to stretch the edges, tile them, or best-fit them.
+	Method New(n:String, tl:Image, t:Image, tr:Image, l:Image, c:Image, r:Image, bl:Image, b:Image, br:Image, tile:Int = TILE_STRETCH)
+		Self.name = n
+		topLeft = tl
+		top = t
+		topRight = tr
+		left = l
+		center = c
+		right = r
+		bottomLeft = bl
+		bottom = b
+		bottomRight = br
+		
+		tileTop = tile
+		tileLeft = tile
+		tileRight = tile
+		tileBottom = tile
+		tileCenter = tile
+		
+		borderTop = topLeft.Height
+		borderBottom = bottomLeft.Height
+		borderLeft = topLeft.Width
+		borderRight = topRight.Width
+		
+		minWidth = borderLeft + borderRight + Max(top.Width, bottom.Width)
+		minHeight = borderTop + borderBottom + Max(left.Width, right.Width)
+	End
+	
+	'summary: creates a new NineSlice from a single image, automatically slicing it in thirds. Can be set to tile, stretch, or best-fit the borders.
+	Method New(n:String, tl:Image, tile:Int = TILE_STRETCH)
+		If tl = Null
+			DebugLog("Failed to load NineSlice source image " + n + ".")
+			Return
+		EndIf
+		Self.name = n
+		Local width:Float = Ceil(tl.Width / 3)
+		Local height:Float = Ceil(tl.Height / 3)
+		Local width2:Float = Floor(tl.Width - tl.Width / 3)
+		Local height2:Float = Floor(tl.Height - tl.Height / 3)
+				
+		topLeft = tl.GrabImage(0, 0, width, height)
+		top = tl.GrabImage(width, 0, width, height)
+		topRight = tl.GrabImage(width2, 0, width, height)
+		left = tl.GrabImage(0, height, width, height)
+		center = tl.GrabImage(width, height, width, height)
+		right = tl.GrabImage(width2, height, width, height)
+		bottomLeft = tl.GrabImage(0, height2, width, height)
+		bottom = tl.GrabImage(width, height2, width, height)
+		bottomRight = tl.GrabImage(width2, height2, width, height)
+		
+		tileTop = tile
+		tileLeft = tile
+		tileRight = tile
+		tileBottom = tile
+		tileCenter = tile
+		
+		borderTop = height
+		borderBottom = height
+		borderLeft = width
+		borderRight = width
+		
+		minWidth = borderLeft + borderRight + Max(top.Width, bottom.Width)
+		minHeight = borderTop + borderBottom + Max(left.Width, right.Width)		
+	End
+	
+	'summary: Sets the four border sizes, in pixels.
+	Method Border(t:Int, b:Int, l:Int, r:Int)
+		borderTop = t
+		borderBottom = b
+		borderLeft = l
+		borderRight = r
+		
+		minWidth = borderLeft + borderRight + Max(top.Width, bottom.Width)
+		minHeight = borderTop + borderBottom + Max(left.Width, right.Width)			
+	End
+	
+	'summary: sets the border size for all sides at once, in pixels.
+	Method Border(b:Int)
+		borderTop = b
+		borderBottom = b
+		borderLeft = b
+		borderRight = b
+		minWidth = borderLeft + borderRight + Max(top.Width, bottom.Width)
+		minHeight = borderTop + borderBottom + Max(left.Width, right.Width)			
+	End	
+	
+	'summary: sets the tiling method. Use TILE_STRETCH, TILE_FIT, or TILE_CLIP.
+	Method Tile(tile:Int)
+		tileTop = tile
+		tileLeft = tile
+		tileRight = tile
+		tileBottom = tile
+		tileCenter = tile		
+	End
+
+	'summary: sets the tiling method. Use TILE_STRETCH, TILE_FIT, or TILE_CLIP.
+	Method Tile(topTiling:Int, leftTiling:Int, rightTiling:Int, bottomTiling:Int, centerTiling:Int)
+		tileTop = topTiling
+		tileLeft = leftTiling
+		tileRight = rightTiling
+		tileBottom = bottomTiling
+		tileCenter = centerTiling
+	End
+		
+	'summary: Draws a NineSlice of the specified size at the specified location.
+	Method Draw(x, y, w, h)
+		Local xs:Float, ys:Float
+
+		If w &lt; minWidth Then w = minWidth
+		If h &lt; minHeight Then h = minHeight
+				
+		Local interiorWidth:Float = Ceil(w - borderLeft - borderRight)
+		Local interiorHeight:Float = Ceil(h - borderTop - borderBottom)
+		
+		If topLeft &lt;&gt; Null Then DrawImage(topLeft, x, y)
+		DrawCalls += 1
+		
+		Local dbgStr:String = name + ":"
+		If tileTop = TILE_STRETCH
+			xs = interiorWidth / top.Width
+			ys = borderTop / top.Height
+			If top &lt;&gt; Null Then DrawImage(top, x + borderLeft, y, 0, xs, ys)
+			DrawCalls += 1
+			
+		ElseIf tileTop = TILE_FIT
+			Local numFit:Float = interiorWidth / top.Width
+			Local gap:Float = numFit - Floor(numFit)
+			Local gapScale:Float = gap / Floor(numFit)
+			xs = gapScale + 1
+			ys = borderTop / top.Height
+			For Local i = 0 To numFit - 1
+				If top &lt;&gt; Null Then DrawImage(top, x + borderLeft + i * (top.Width * xs), y, 0, xs + 0.1, ys)
+				DrawCalls += 1
+			Next
+		ElseIf tileTop = TILE_CLIP
+			Local numFit:Float = interiorWidth / top.Width
+			Local gap:Float = numFit - Floor(numFit)
+			numFit = Floor(numFit)
+			xs = 1
+			ys = borderTop / top.Height
+
+			For Local xp = 0 Until numFit
+				If top &lt;&gt; Null Then DrawImage(top, x + borderLeft + xp * top.Width * xs, y, 0, xs, ys)
+				DrawCalls += 1
+			Next
+			PushMatrix()
+			Scale xs, ys
+			If top &lt;&gt; Null Then DrawImageRect(top, x + borderLeft + numFit * top.Width * xs, y, 0, 0, top.Width * gap + 1, top.Height)
+			DrawCalls += 1
+			PopMatrix()
+		EndIf
+
+		xs = 1
+		ys = borderRight / topRight.Width
+		If topRight &lt;&gt; Null Then DrawImage(topRight, x + w - borderRight, y, 0, xs, ys)
+		DrawCalls += 1
+		
+		If tileLeft = TILE_STRETCH Then
+			xs = borderLeft / left.Width
+			ys = interiorHeight / left.Height
+			If left &lt;&gt; Null Then DrawImage(left, x, y + borderTop, 0, xs, ys)
+			DrawCalls += 1
+		ElseIf tileLeft = TILE_FIT
+			Local numFit:Float = interiorHeight / left.Height
+			Local gap:Float = numFit - Floor(numFit)
+			Local gapScale:Float = gap / Floor(numFit)
+			ys = 1 + gapScale
+			xs = borderLeft / left.Width
+			For Local i = 0 To numFit - 1
+				If left &lt;&gt; Null Then DrawImage(left, x, y + borderTop + i * left.Height * ys, 0, xs, ys + 0.1)
+				DrawCalls += 1
+			Next
+		ElseIf tileLeft = TILE_CLIP
+			Local numFit:Float = interiorHeight / left.Height
+			Local gap:Float = numFit - Floor(numFit)
+			numFit = Floor(numFit)
+			ys = 1
+			xs = borderLeft / left.Width
+
+			For Local yp = 0 Until numFit
+				If left &lt;&gt; Null Then DrawImage(left, x, y + borderTop + yp * left.Height * ys)
+				DrawCalls += 1
+			Next
+			PushMatrix()
+			Scale xs, ys
+			If left &lt;&gt; Null Then DrawImageRect(left, x, y + borderTop + numFit * left.Height * ys, 0, 0, left.Width, left.Height * gap + 1)
+			DrawCalls += 1
+			PopMatrix()
+		EndIf
+	
+		If drawCenter = True
+			If tileCenter = TILE_STRETCH Then
+				xs = interiorWidth / center.Width
+				ys = interiorHeight / center.Height
+				If center &lt;&gt; Null Then DrawImage(center, x + borderLeft, y + borderTop, 0, xs, ys)
+				DrawCalls += 1
+			ElseIf tileCenter = TILE_FIT Then
+				Local numFit:Float = interiorHeight / center.Height
+				Local gap:Float = numFit - Floor(numFit)
+				Local gapScale:Float = gap / Floor(numFit)
+				Local ycap:Int = 1
+				If numFit &gt;= 1 Then
+					ys = 1 + gapScale
+					ycap = numFit
+				Else
+					numFit = gap
+				EndIf
+				
+				Local numFit2:Float = interiorWidth / center.Width
+				gap = numFit2 - Floor(numFit2)
+				gapScale = gap / Floor(numFit2)
+				Local xcap:Int = 1
+				If numFit2 &gt;= 1 Then
+					xs = 1 + gapScale
+					xcap = numFit2
+				Else
+					xs = numFit2
+				EndIf
+				For Local xp = 0 To xcap - 1
+					For Local yp = 0 To ycap - 1
+						If center &lt;&gt; Null Then DrawImage(center, x + borderLeft + xp * center.Width * xs, y + borderTop + yp * center.Height * ys, 0, xs + 0.1, ys + 0.1)
+						DrawCalls += 1
+					Next
+				Next
+			ElseIf tileCenter = TILE_CLIP Then
+				Local numFit:Float = interiorHeight / center.Height
+				Local gap:Float = numFit - Floor(numFit)
+				Local numFit2:Float = interiorWidth / center.Width
+				Local gap2:Float = numFit2 - Floor(numFit2)
+				numFit2 = Floor(numFit2)
+				numFit = Floor(numFit)
+				xs = 1
+				ys = 1
+				For Local xp = 0 Until numFit2
+					For Local yp = 0 Until numFit
+						If center &lt;&gt; Null Then DrawImage(center, x + borderLeft + xp * center.Width * xs, y + borderTop + yp * center.Height * ys, 0, xs, ys)
+						DrawCalls += 1
+					Next
+				Next
+				For Local xp = 0 Until numFit2
+					If center &lt;&gt; Null Then DrawImageRect(center, x + borderLeft + xp * center.Width * xs, y + borderTop + numFit * center.Height, 0, 0, center.Width, center.Height * gap + 1)
+					DrawCalls += 1
+				Next
+				For Local yp = 0 Until numFit
+					If center &lt;&gt; Null Then DrawImageRect(center, x + borderLeft + numFit2 * center.Width * xs, y + borderTop + yp * center.Height, 0, 0, center.Width * gap2 + 1, center.Height)
+					DrawCalls += 1
+				Next
+				If center &lt;&gt; Null Then DrawImageRect(center, x + borderLeft + numFit2 * center.Width * xs, y + borderTop + numFit * center.Height, 0, 0, center.Width * gap2 + 1, center.Height * gap + 1)
+				DrawCalls += 1
+			EndIf
+		EndIf
+		
+		If tileRight = TILE_STRETCH Then
+			xs = borderRight / right.Width
+			ys = interiorHeight / right.Height
+			If right &lt;&gt; Null Then DrawImage(right, x + w - borderRight, y + borderTop, 0, xs, ys)
+			DrawCalls += 1
+		ElseIf tileRight = TILE_FIT
+			Local numFit:Float = interiorHeight / right.Height
+			Local gap:Float = numFit - Floor(numFit)
+			Local gapScale:Float = gap / Floor(numFit)
+			ys = 1 + gapScale
+			xs = borderRight / right.Width
+			For Local i = 0 To numFit - 1
+				If right &lt;&gt; Null Then DrawImage(right, x + w - borderRight, y + borderTop + i * right.Height * ys, 0, xs, ys + 0.1)
+				DrawCalls += 1
+			Next
+		ElseIf tileRight = TILE_CLIP
+			Local numFit:Float = interiorHeight / right.Height
+			Local gap:Float = numFit - Floor(numFit)
+			numFit = Floor(numFit)
+			ys = 1
+			xs = borderRight / right.Width
+
+			For Local yp = 0 Until numFit
+				If right &lt;&gt; Null Then DrawImage(right, x + w - borderRight, y + borderTop + yp * right.Height * ys)
+				DrawCalls += 1
+			Next
+			PushMatrix()
+			Scale xs, ys
+			If right &lt;&gt; Null Then DrawImageRect(right, x + w - borderRight, y + borderTop + numFit * right.Height * ys, 0, 0, right.Width, right.Height * gap + 1)
+			DrawCalls += 1
+			PopMatrix()		
+		EndIf
+		
+		xs = borderLeft / bottomLeft.Width
+		ys = borderBottom / bottomLeft.Height
+		If bottomLeft &lt;&gt; Null Then DrawImage(bottomLeft, x, y + h - borderBottom, 0, xs, ys)
+		DrawCalls += 1
+		
+		If tileBottom = TILE_STRETCH Then
+			xs = interiorWidth / bottom.Width
+			ys = borderBottom / bottom.Height
+			If bottom &lt;&gt; Null Then DrawImage(bottom, x + borderLeft, y + h - borderBottom, 0, xs, ys)
+			DrawCalls += 1
+		ElseIf tileBottom = TILE_FIT
+			Local numFit:Float = interiorWidth / bottom.Width
+			Local gap:Float = numFit - Floor(numFit)
+			Local gapScale:Float = gap / Floor(numFit)
+			xs = 1 + gapScale
+			ys = borderBottom / bottom.Height
+			For Local i = 0 To numFit - 1
+				If bottom &lt;&gt; Null Then DrawImage(bottom, x + borderLeft + i * bottom.Width * xs, y + h - borderBottom, 0, xs + 0.1, ys)
+				DrawCalls += 1
+			Next
+		Else If tileBottom = TILE_CLIP
+			Local numFit:Float = interiorWidth / bottom.Width
+			Local gap:Float = numFit - Floor(numFit)
+			numFit = Floor(numFit)
+			xs = 1
+			ys = borderBottom / bottom.Height
+
+			For Local xp = 0 Until numFit
+				If bottom &lt;&gt; Null Then DrawImage(bottom, x + borderLeft + xp * bottom.Width * xs, y + h - borderBottom, 0, xs, ys)
+				DrawCalls += 1
+			Next
+			PushMatrix()
+			Scale xs, ys
+			If bottom &lt;&gt; Null Then DrawImageRect(bottom, x + borderLeft + numFit * bottom.Width * xs, y + h - borderBottom, 0, 0, bottom.Width * gap + 1, bottom.Height)
+			DrawCalls += 1
+			PopMatrix()		
+		EndIf
+		
+		xs = borderRight / bottomRight.Width
+		ys = borderBottom / bottomRight.Height
+		If bottomRight &lt;&gt; Null Then DrawImage(bottomRight, x + w - borderRight, y + h - borderBottom, 0, xs, ys)
+		DrawCalls += 1
+	End
+	
+End
+</textarea> <br><br></td></tr></table><br>
+<a name="2090159"></a>
+
+<a name="2090157"></a>
+
+<a name="2090158"></a>
+
+<a name="2090151"></a>
+
+<a name="2089958"></a>
+
+<a name="2089964"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> cool <br><br></td></tr></table><br>
+<a name="2089984"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> What's a nine patch? XD <br><br></td></tr></table><br>
+<a name="2090002"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Supertino</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Not tried your code Raph as I developed my own ninepatch a while back and this is not a snipe at your implementation Raph but beware of issues around grabbing an image of a grabbed image, in other words if someone is uses Atlas's and uses grab image to get the images out of that they wont be able to use grabimage on those images due to issues with what surfaces mojo\monkey refers to see. <a href="http://www.monkey-x.com/Community/posts.php?topic=2301#22522" target="_blank">http://www.monkey-x.com/Community/posts.php?topic=2301#22522</a><br><br>For that reason and because I use atlas's that use grabimage I used exclusively used DrawImageRect with my ninepatch.<br><br>Just some food for thought.  Your ninepatch does more than mine does so I think I'll go update =D <br><br></td></tr></table><br>
+<a name="2090034"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Paul - Taiphoz</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> @ziggy its a method for splitting a texture up into 9 patchs for scaling and rendering. like this.<br><br><img src="http://tekeye.biz/wp-content/uploads/2012/02/NinePatchScalingDiagram.png"> <br><br></td></tr></table><br>
+<a name="2090037"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Supertino, thanks for the heads-up! I haven't integrated this into any atlases yet so I hadn't run into that.<br><br>One of the things about releasing code like this is that I keep holding off on integrating it with stuff like atlases or creating dependencies with other code because very quickly you end up with a framework rather than a useful bit of code. :P Like, I would like to integrate this with the AnimImage stuff I posted, but as soon as I do that, I'm basically saying you need both. <br><br>I pulled this out of a GUI system I am working on only because it was easily abstracted...<br><br>Makes me wish we had a preprocessor directive that lets you query for the existence of specific modules. Anybody else running into this sort of issue? <br><br></td></tr></table><br>
+<a name="2090038"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just went to post up a demo and saw that HTML5 shows gaps all over the place with the tiling. :P Sorry everyone, works fine in GLFW ;) <br><br></td></tr></table><br>
+<a name="2090042"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Makes me wish we had a preprocessor directive that lets you query for the existence of specific modules. Anybody else running into this sort of issue? <br></div><br>Nah, not really. Anything that can't be abstracted, accessed with an interface or incorporated wholesale probably doesn't belong in the code if it's meant to be reusable.<br><br>When I designed inputPointers for simpleUI, I was worried originally that it would need a scale aware pointer from autoscale/autofit to have any wide adoption. However I eventually worked around it by packing in a pointer which checks the global matrix. If you have a feature that you want to play well with your other module but still distribute them separately, then create a compatible interface between them using existing type primitives, or built in containers/classes for i/o. <br><br></td></tr></table><br>
+<a name="2090041"></a>
+
+<a name="2090071"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Makes me wish we had a preprocessor directive that lets you query for the existence of specific modules. Anybody else running into this sort of issue? <br></div><br><br>The usual response to this sort of thing is to define an interface that your code can use to access the functionality and then provide a separate implementation of that interface for a specific module if you want. That way people can use the module on its own, with the module you've provided an interface implementation for or with other code that provides the same functionality if they provide their own implementation of your interface.<br><br>I wrote some nine-slice code a while back but never used it much. I think it worked across targets at the time at least. I'll see if I can dig it up.<br><br>By the way, I believe that the problem Supertino mentioned was fixed, or at least the change I provided was added to mojo. <br><br></td></tr></table><br>
+<a name="2090086"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok! been doing this for years and didn't know it was called nine patch! Nice bit of code! <br><br></td></tr></table><br>
+<a name="2090112"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Supertino</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote">  Just went to post up a demo and saw that HTML5 shows gaps all over the place with the tiling. :P Sorry everyone, works fine in GLFW ;) <br></div><br><br>I had that same same issue, I think it's par for the course when dealing with floats on the stretchable parts, an easy fix for me was to overlap.. erm.... underlap? the stretched sides by 1 pixel on any side that meets a corner. <br><br></td></tr></table><br>
+<a name="2090152"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Code is updated, gaps are gone I think. Also fixed a couple other bugs I spotted. <br><br></td></tr></table><br>
+<a name="2090156"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> Demo and screenshot added at the top. <br><br></td></tr></table><br>
+<a name="2090167"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Michael Flad</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> I use various variations of 9/3 patches in my games too and I'd like to make a suggestion for a small addition.<br><br>Make the drawing of the middle filler tile optional using a flag and you can use the class to draw dynamic sized frames/outlines/cursors <br><br></td></tr></table><br>
+<a name="2090218"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice idea. Code updated in original post. You can set .drawCenter to True or False to have it appear. I suppose extending it to any of the nine pieces might make sense in some cases, to avoid overdrawing alpha. <br><br></td></tr></table><br>
+<a name="2090216"></a>
+
+<a name="2090370"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> A more complete ninePatch system also includes 4 borders (opaque pixel lines): Android uses such a system. <br><br>top border: defines col split positions for tiles<br>1 | 2 | 3<br>4 | 5 | 6<br>7 | 8 | 9<br><br>left border: defines row split position for tiles: <br>1 2 3<br>-------<br>4 5 6<br>-------<br>7 8 9<br><br>right border/bottom border: define content area within the ninepatch.<br><br>Together with code this makes ninePatches more selfcontained (no need for further configuration except special tiling/scaling behaviour). Using the content area definition allows artists to use decorations more freely and avoids another incode-configuration (or xml/...).<br><br><br>@Atlases<br>It does not matter if you read from an atlas or single sprites as soon as you can stretch/tile image parts.<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="2090384"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> Derron, the border functionality is in there, just not done with reading the pixel line. The scissor area, though, I am not a fan of making part of the NineSlice class, because one of its applications is as a building block for GUI systems, which likely define their own gadgets with their own scissors. I'd rather have the window define clip regions than the window background art define it.<br><br>I gather that in Android a NinePatch is actually a UI widget?<br><br>It wouldn't be very hard to add the pixel line functionality in... <br><br></td></tr></table><br>
+<a name="2090492"></a>
+
+<a name="2090493"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> I use this in my GUI-System (BlitzMax) too ... without much hassle. For simple usage it just redirects some work from configfiles to the artfiles.<br><br>Gadgets (or Widgets) normally consists of smaller elements - so they are compositions (except basic widgets):<br>Label: Basic widget (text display)<br>Panel: Basic widget (a background sprite or color) <br>Button: consists of Panel + Label (maybe some Panels for Overlays like Icons)<br>Input: Button extension to handle "keystroke receiving"<br>CheckBox: some kind of Button with no background but eg. an Overlay<br>Window: Outside: Panel + Label + Buttons (if it is a Windows-like window), Content: Panel<br>ScrollBar: Panel + 3 Buttons (up, position, down)<br>ScrollablePanel: Panel + 2 Scrollbars<br>List: ScrollablePanel, ListItems: BasicWidget with custom draw (could be images or whatever)<br>DropDown: Input/Button + List (hidden when closed)<br>...<br>If you need more decorations on an element, you easily could add them as "Panels" (covering all or specific areas) of the widget.  <br><br>Of course you always could code it as extension from the basewidget to avoid making things "complicated" but you then loose some OOP benefits (less code for same functionality).<br><br><br>@Android<br>No it is not a widget, but some kind of "Sprite" (in my framework a Sprite can be a single part of an image or a ninepatch collection - so the enduser does not need to know what underlying technique is used: user just says: Draw this sprite at a size of (Width,Height) and the framework either stretches the image or does ninepatch-scaling).<br><br>Do not ignore that each image with 4 * pixel borders adds (2*h+2w-4) bytes of used RAM (or VideoRAM), So if you are coding at the limit, a text configuration could be the better option. Your framework then just could offer both ways.<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

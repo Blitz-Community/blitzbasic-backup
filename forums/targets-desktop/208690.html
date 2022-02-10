@@ -1,0 +1,192 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Idea: DrawPadding and CreateTransparentPadding</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Idea: DrawPadding and CreateTransparentPadding</h1><a href="forums.php" >Monkey Targets Forums</a>/<a href="topics.php?forum=300" >Desktop</a>/<a href="#bottom" >Idea: DrawPadding and CreateTransparentPadding</a><br><br>
+<a name="2091442"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nori</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've got the following problem: Keeping a padding in the texture still gives jaggies on rotated sprites. No matter if the padding was copied exactly or with alpha = 0. And it's not depending on texture sizes and clamping either, the filter simply makes jaggies on all sides of a rotated Image.<br><br><br>----------------<br><br><br>This is the (4x enlarged) output of the code below:<br><br><img src="http://i61.tinypic.com/qskthy.png"><br><br>It looks the same on Intel HD Graphics 4600, ATI Radeon 5450 and Nvidia FX 5500.<br><br>I don't know what OpenGL modes I might be missing, the filtering is actually there, just not on polygon edges.<br><br>DrawImageRect a... does the same (see Mojo code) as using XYPadding with even 4 pixels of copied padding, still it's jaggy.<br>DrawImageRect b... draws it with the transparent padding.<br><br><br><pre class=code>
+#MOJO_IMAGE_FILTERING_ENABLED = True
+
+Import mojo
+
+Class Test Extends App
+	Field a:Image
+	Field b:Image
+
+	Method OnCreate()
+		a = LoadImage("20x20_red.png")
+		b = LoadImage("8x8_red_on_20x20_transparent.png")
+	End
+
+	Method OnUpdate()
+	End
+
+	Method OnRender()
+		Cls 255,255,255
+
+		DrawImageRect a, 100.0, 100.0, 4, 4, 12, 12, 25.0, 1.0, 1.0, 0
+
+		DrawImageRect b, 140.0, 98.0, 0, 0, 20, 20, 25.0, 1.0, 1.0, 0
+	End
+End
+
+Function Main()
+	New Test()
+End
+</pre><br><br><a href="https://www.sendspace.com/file/fku58k" target="_blank">https://www.sendspace.com/file/fku58k</a><br><br><br>----------------<br><br><br>What fixes it is drawing padded images at x-1, y-1 <b>with</b> their padding, which therefore needs to have alpha = 0. So, if you don't use XYPadding you will need one pixel padding, if you use XYPadding you will need two pixels of padding. No matter what, it's not good this way, you would need to work with modified coordinates and dimensions and can't simply design your game without knowing about this or creating some helper class. So it would be very nice if Mojo could do this for me. I mean, there should be flag called Image.DrawPadding that makes DrawImage draw the image with the padding at the extended coordinates.<br><br>Another thing is, I don't want to keep the padding in the image files myself. XYPadding is ok the way it is and it can't be changed to work differently anyway. But in general, when you export images from a graphics software (e.g. Xara), they don't contain a padding, yet I want it to look nice. So if you could give Mojo a flag called Image.CreateTransparentPadding, that would be neat. Mojo would then create a transparent padding at LoadImage.<br><br>----------------<br><br>So here are two patches for Mojo GLFW and I would be glad if you could consider implementing this or something simmilar.<br><br>This is the patch for the <b>DrawPadding</b> flag.<br><br>In modules/mojo/graphics.monkey:<br><br>At the consts add:<br><pre class=code>...
+	Const DrawPadding=8
+</pre><br><br>At the fields add:<br><pre class=code>...
+	Field px#,py#
+</pre><br><br>The beginning of ApplyFlags must be this:<br><pre class=code>...
+		flags=iflags
+
+		If flags &amp; DrawPadding
+			px = 2
+			py = 2
+		Endif
+</pre><br><br>SetHandle Method must be this:<br><pre class=code>...
+	Method SetHandle( tx#,ty# )
+		Self.tx=tx+px*0.5
+		Self.ty=ty+px*0.5
+		Self.flags=Self.flags &amp; ~MidHandle
+	End
+</pre><br><br>HandleX and HandleY must be this:<br><pre class=code>...
+	Method HandleX#()
+		Return tx-px*0.5
+	End
+	
+	Method HandleY#()
+		Return ty-py*0.5
+	End
+</pre><br><br>Width and Height must be this:<br><pre class=code>...
+	Method Width()
+		Return width-px
+	End
+
+	Method Height()
+		Return height-py
+	End
+</pre><br><br>The end of ApplyFlags must be:<br><pre class=code>...
+		If flags &amp; Image.MidHandle
+			SetHandle (width-px)/2.0,(height-py)/2.0
+		Endif
+		
+		If frames.Length=1 And frames[0].x=0 And frames[0].y=0 And width=surface.Width And height=surface.Height And Not (flags &amp; DrawPadding)
+			flags|=FullFrame
+		Endif
+	End
+</pre><br><br>And the modified DrawSurface2 calls will must be, from first to last occurance:<br><br>1)<pre class=code>...
+		renderDevice.DrawSurface2 image.surface,x-image.tx,y-image.ty,f.x,f.y,image.width,image.height
+</pre><br>2)<pre class=code>...
+		renderDevice.DrawSurface2 image.surface,0,0,f.x,f.y,image.width,image.height
+</pre><br>3)<pre class=code>...
+	renderDevice.DrawSurface2 image.surface,-image.tx+x,-image.ty+y,srcX+f.x,srcY+f.y,srcWidth+image.px,srcHeight+image.py
+</pre><br>4)<pre class=code>...
+	renderDevice.DrawSurface2 image.surface,0,0,srcX+f.x,srcY+f.y,srcWidth+image.px,srcHeight+image.py
+</pre><br><br>----------------------<br><br>This is the patch for <b>CreateTransparentPadding</b> for GLFW<br><br>In graphics.monkey:<br><br>At the Image consts, add the new flag:<br><br><pre class=code>...
+	Const CreateTransparentPadding=16
+</pre><br><br>The LoadImage functions must be this:<br><br><pre class=code>...
+Function LoadImage:Image( path$,frameCount=1,flags=Image.DefaultFlags )
+	#If TARGET = "glfw"
+	Local createTransparentPadding% = 0
+	If flags &amp; Image.CreateTransparentPadding
+		createTransparentPadding = 2
+	Endif
+
+	Local surf:=device.LoadSurface( FixDataPath(path), createTransparentPadding, frameCount )
+	#Else
+	Local surf:=device.LoadSurface( FixDataPath(path) )	
+	#Endif
+	If surf Return (New Image).Init( surf,frameCount,flags )
+End
+
+Function LoadImage:Image( path$,frameWidth,frameHeight,frameCount,flags=Image.DefaultFlags )
+	#If TARGET = "glfw"
+	Local surf:=device.LoadSurface( FixDataPath(path), 0, 0 )
+	#Else
+	Local surf:=device.LoadSurface( FixDataPath(path) )
+	#Endif
+	If surf Return (New Image).Init( surf,0,0,frameWidth,frameHeight,frameCount,flags,Null,0,0,surf.Width,surf.Height )
+End
+</pre><br><br><br><br>In graphicsdevice.monkey the declaration must be this:<br><pre class=code>...
+	#If TARGET = "glfw"
+	Method LoadSurface:Surface( path$, createTransparentPadding#, frameCount# )
+	#Else
+	Method LoadSurface:Surface( path$ )
+	#Endif
+</pre><br><br><br><br>In mojo.glfw.cpp:<br><br><br>The declarations must be this:<br><pre class=code>...
+	virtual gxtkSurface *LoadSurface( String path,int createTransparentPadding,int frameCount );
+	virtual gxtkSurface *CreateSurface( int width,int height );
+	virtual bool LoadSurface__UNSAFE__( gxtkSurface *surface,String path,int createTransparentPadding,int frameCount );
+</pre><br><br>The new function and modified LoadSurface methods must be this:<br><pre class=code>...
+static void _createTransparentPadding( unsigned char **_data,int *_width,int *_height,int depth,int padding,int frameCount ){
+
+	if(padding==0) return;
+	if(frameCount==0) return;
+
+	unsigned char* data   = *_data;
+	int            width  = *_width;
+	int            height = *_height;
+
+	int frameWidth       = width / frameCount;
+	int paddedFrameWidth = frameWidth + padding;
+	int paddedWidth      = frameCount * paddedFrameWidth;
+
+	int paddedHeight = height + padding;
+
+	unsigned char* paddedData = (unsigned char*) calloc(1, paddedWidth * paddedHeight * depth);
+
+	int srcStride = width       * depth;
+	int dstStride = paddedWidth * depth;
+
+	for(int frame=0; frame&lt;frameCount; ++frame)
+	{
+		unsigned char *src = data + (frame * frameWidth) * depth;
+		unsigned char *dst = paddedData + (padding/2 * paddedWidth + padding/2 + frame * paddedFrameWidth) * depth;
+
+		for(int y=0; y&lt;height; ++y)
+		{
+			memcpy(dst, src, frameWidth*depth);
+			src += srcStride;
+			dst += dstStride;
+		}
+	}
+
+	*_data = paddedData;
+	free(data);
+
+	*_width  = paddedWidth;
+	*_height = paddedHeight;
+}
+
+bool gxtkGraphics::LoadSurface__UNSAFE__( gxtkSurface *surface,String path,int createTransparentPadding,int frameCount ){
+
+	int width,height,depth;
+	unsigned char *data=BBGlfwGame::GlfwGame()-&gt;LoadImageData( path,&amp;width,&amp;height,&amp;depth );
+	if( !data ) return false;
+
+	_createTransparentPadding(&amp;data,&amp;width,&amp;height,depth,createTransparentPadding,frameCount);
+
+	surface-&gt;SetData( data,width,height,depth );
+	return true;
+}
+
+gxtkSurface *gxtkGraphics::LoadSurface( String path,int createTransparentPadding,int frameCount ){
+	gxtkSurface *surf=new gxtkSurface();
+	if( !LoadSurface__UNSAFE__( surf,path,createTransparentPadding,frameCount ) ) return 0;
+	surf-&gt;Bind();
+	return surf;
+}
+</pre><br><br>----------------------<br><br>Usage:<br><pre class=code>...
+Local image = LoadImage("unpadded.png", 1, Image.DrawPadding | Image.CreateTransparentPadding)
+</pre> <br><br></td></tr></table><br>
+<a name="2091441"></a>
+
+<a name="2090356"></a>
+
+<a name="2090355"></a>
+
+<a name="2090331"></a>
+
+<a name="2090328"></a>
+
+<a name="2090323"></a>
+
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

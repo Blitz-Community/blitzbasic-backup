@@ -1,0 +1,232 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Shader for emulating standard gl lighting behavior</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Shader for emulating standard gl lighting behavior</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=103" >OpenGL Module</a>/<a href="#bottom" >Shader for emulating standard gl lighting behavior</a><br><br>
+<a name="728073"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> This will give the exact same results as standard OpenGL lights.  You have to tell the shader which lights are active by setting the activelights parameter to indicate the number of active lights.  The shader will automatically detect what kind of light it is.  I got rid of the specular color, because it was causing some weird results.<br><br>I would like to add averaged normal mapping to this, but don't have a clue how.<br><br>This code was based on 3DLabs' ShaderGen output.<br><br>Fragment program:<br><pre class=code>uniform sampler2D texture0;
+
+void main (void) 
+{
+    vec4 color;
+    color = gl_Color*2.0;
+    color *= texture2D(texture0, gl_TexCoord[0].xy);
+	color=clamp(color,0.0,1.0);
+    gl_FragColor = color;
+}</pre>Vertex program:<br><pre class=code>vec4 Ambient;
+vec4 Diffuse;
+vec4 Specular;
+
+attribute short activelights;
+
+void pointLight(in int i, in vec3 normal, in vec3 eye, in vec3 ecPosition3)
+{
+   float nDotVP;       // normal . light direction
+   float nDotHV;       // normal . light half vector
+   float pf;           // power factor
+   float attenuation;  // computed attenuation factor
+   float d;            // distance from surface to light source
+   vec3  VP;           // direction from surface to light position
+   vec3  halfVector;   // direction of maximum highlights
+
+   // Compute vector from surface to light position
+   VP = vec3 (gl_LightSource[i].position) - ecPosition3;
+
+   // Compute distance between surface and light position
+   d = length(VP);
+
+   // Normalize the vector from surface to light position
+   VP = normalize(VP);
+
+   // Compute attenuation
+   attenuation = 1.0 / (gl_LightSource[i].constantAttenuation +
+       gl_LightSource[i].linearAttenuation * d +
+       gl_LightSource[i].quadraticAttenuation * d * d);
+
+   halfVector = normalize(VP + eye);
+
+   nDotVP = max(0.0, dot(normal, VP));
+   //nDotHV = max(0.0, dot(normal, halfVector));
+
+   //if (nDotVP == 0.0)
+   //{
+       pf = 0.0;
+   //}
+   //else
+   //{
+   //    pf = pow(nDotHV, gl_FrontMaterial.shininess);
+   //}
+   Ambient  += gl_LightSource[i].ambient * attenuation;
+   Diffuse  += gl_LightSource[i].diffuse * nDotVP * attenuation;
+   //Specular += gl_LightSource[i].specular * pf * attenuation;
+}
+
+void spotLight(in int i, in vec3 normal, in vec3 eye, in vec3 ecPosition3)
+{
+   float nDotVP;			// normal . light direction
+   float nDotHV;			// normal . light half vector
+   float pf;				// power factor
+   float spotDot;		   // cosine of angle between spotlight
+   float spotAttenuation;   // spotlight attenuation factor
+   float attenuation;	   // computed attenuation factor
+   float d;				 // distance from surface to light source
+   vec3  VP;				// direction from surface to light position
+   vec3  halfVector;		// direction of maximum highlights
+
+   // Compute vector from surface to light position
+   VP = vec3 (gl_LightSource[i].position) - ecPosition3;
+
+   // Compute distance between surface and light position
+   d = length(VP);
+
+   // Normalize the vector from surface to light position
+   VP = normalize(VP);
+
+   // Compute attenuation
+   attenuation = 1.0 / (gl_LightSource[i].constantAttenuation +
+	   gl_LightSource[i].linearAttenuation * d +
+	   gl_LightSource[i].quadraticAttenuation * d * d);
+
+   // See if point on surface is inside cone of illumination
+   spotDot = dot(-VP, normalize(gl_LightSource[i].spotDirection));
+
+   if (spotDot &lt; gl_LightSource[i].spotCosCutoff)
+   {
+	   spotAttenuation = 0.0; // light adds no contribution
+   }
+   else
+   {
+	   spotAttenuation = pow(spotDot, gl_LightSource[i].spotExponent);
+
+   }
+   // Combine the spotlight and distance attenuation.
+   attenuation *= spotAttenuation;
+
+   halfVector = normalize(VP + eye);
+
+   nDotVP = max(0.0, dot(normal, VP));
+   //nDotHV = max(0.0, dot(normal, halfVector));
+
+   //if (nDotVP == 0.0)
+   //{
+	   pf = 0.0;
+   //}
+   //else
+   //{
+//	   pf = pow(nDotHV, gl_FrontMaterial.shininess);
+//
+  // }
+   Ambient  += gl_LightSource[i].ambient * attenuation;
+   Diffuse  += gl_LightSource[i].diffuse * nDotVP * attenuation;
+   //Specular += gl_LightSource[i].specular * pf * attenuation;
+
+}
+
+void directionalLight(in int i, in vec3 normal)
+{
+   float nDotVP;		 // normal . light direction
+   float nDotHV;		 // normal . light half vector
+   float pf;			 // power factor
+
+   nDotVP = max(0.0, dot(normal, normalize(vec3 (gl_LightSource[i].position))));
+   //nDotHV = max(0.0, dot(normal, vec3 (gl_LightSource[i].halfVector)));
+
+   //if (nDotVP == 0.0)
+   //{
+	   pf = 0.0;
+   //}
+   //else
+   //{
+//	   pf = pow(nDotHV, gl_FrontMaterial.shininess);
+   //}
+   Ambient  += gl_LightSource[i].ambient;
+   Diffuse  += gl_LightSource[i].diffuse * nDotVP;
+   //Specular += gl_LightSource[i].specular * pf;
+}
+
+vec3 fnormal(void)
+{
+	//Compute the normal 
+	vec3 normal = gl_NormalMatrix * gl_Normal;
+	normal = normalize(normal);
+	return normal;
+}
+
+void ProcessLight(in int i, in vec3 normal, in vec3 eye, in vec3 ecPosition3)
+{
+	if (gl_LightSource[i].spotCutoff==180.0)
+	{
+		if (gl_LightSource[i].position.w==0.0)
+		{
+			directionalLight(i, normal);
+		}
+		else
+		{
+			pointLight(i, normal, eye, ecPosition3);
+		}
+	}
+	else
+	{
+	spotLight(i,normal,eye,ecPosition3);
+	}
+}
+
+void flight(in vec3 normal, in vec4 ecPosition, float alphaFade)
+{
+	vec4 color;
+	vec3 ecPosition3;
+	vec3 eye;
+	int i;
+
+	ecPosition3 = (vec3 (ecPosition)) / ecPosition.w;
+	eye = vec3 (0.0, 0.0, 1.0);
+
+	// Clear the light intensity accumulators
+	Ambient  = vec4 (0.0);
+	Diffuse  = vec4 (0.0);
+	Specular = vec4 (0.0);
+
+	if (activelights&gt;0)
+	{
+		ProcessLight(0,normal,eye,ecPosition3);
+	}
+	if (activelights&gt;1)
+	{
+		ProcessLight(1,normal,eye,ecPosition3);
+	}
+	//if (activelights&gt;2)
+	//{
+	//	ProcessLight(2,normal,eye,ecPosition3);
+	//}
+	//if (activelights&gt;3)
+	//{
+	//	ProcessLight(3,normal,eye,ecPosition3);
+	//}
+
+   color = gl_FrontLightModelProduct.sceneColor +
+      Ambient  * gl_FrontMaterial.ambient +
+      Diffuse  * gl_FrontMaterial.diffuse;
+    color += Specular * gl_FrontMaterial.specular;
+    color = clamp( color, 0.0, 1.0 );
+    gl_FrontColor = color;
+    gl_FrontColor.a *= alphaFade;
+}
+
+void main (void)
+{
+	vec3  transformedNormal;
+	float alphaFade = 1.0;
+
+	// Eye-coordinate position of vertex, needed in various calculations
+	vec4 ecPosition = gl_ModelViewMatrix * gl_Vertex;
+
+	// Do fixed functionality vertex transform
+	gl_Position = ftransform();
+	transformedNormal = fnormal();
+	flight(transformedNormal, ecPosition, alphaFade);
+
+	//Enable texture coordinates
+	gl_TexCoord[0] = gl_MultiTexCoord0;
+	//gl_TexCoord[1] = gl_MultiTexCoord1;
+	//gl_TexCoord[2] = gl_MultiTexCoord2;
+	//gl_TexCoord[3] = gl_MultiTexCoord3;
+
+}</pre> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,2146 @@
+<!DOCTYPE html><html lang="en" ><head ><title >mod to miracles verlet physics code.</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >mod to miracles verlet physics code.</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >mod to miracles verlet physics code.</a><br><br>
+<a name="235752"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> now with mesh cages AND player meshes that match collision cage orientation.<br>NOTE: requires car.x file located in Samples\Blitz 3D Samples\mak\driver. if the code crashes move car.x into a directory with the code and modify the loadmesh statement.<br><br><pre class=code>
+; 3D Verlet Functions
+
+; from Thomas Jakobsen's "Advanced Character Physics"
+; www.gamasutra.com/resource_guide/20030121/jacobson_01.shtml
+; Adapted for Blitz3D by Chris "Miracle" Casey, May 6 2003
+;
+; Added polymesh "cage" around verlet group and made constraint distance auto-calculating - Dave Cornish
+; Need to make polymesh cage a collideable entity. I have had some minor success with this but its very complicated
+; so it is left OUT of this version.
+; Added player mesh and orient that mesh to the collision mesh
+
+Graphics3D height,width,0,1
+
+Const height=640
+Const width=480
+Const ACTIVE=1
+Const radius#=.33333
+Const size#=1.5
+Const ITERATIONS = 5				; How many loops through the "relaxation" routine, Lower = speed up / lose accuracy
+Global fTimeStep#
+Global vGrav.Vector = Vector(0.0,4,0.0)	; Gravity	
+Global Temp.Vector=Vector()									
+Global vTemp1.Vector = Vector(0,0,0)	; Some temporary vectors for calculations
+Global vTemp2.Vector = Vector(0,0,0)
+Global tol# = 0.001
+
+Type Vector
+	Field x#
+	Field y#
+	Field z#
+End Type
+
+Type VerletPack							; Contains everything we need for basic physics
+	Field m.Vector							; Current position
+	Field old.Vector						; Last position
+	Field a.Vector							; Accumulated forces
+	Field radius#							; Collision radius from center
+	Field mass#							; Arbitrary mass unit
+	Field entity							; Placeholder for the 3D sphere
+	Field obj								; Which construct is this verlet a part of?
+	Field vertex							; vertex assigned to verlet
+	Field surface							; surface id from cube type
+	Field mesh							; mesh id from cube type
+End Type
+
+Type Constraint							; Two verlets connected by a mutual spring
+	Field v1.VerletPack
+	Field v2.VerletPack
+	Field d#								; Distance between verlets
+End Type
+
+Type cube
+	Field v.VerletPack[8]
+	Field player							; Player mesh
+	Field center.VerletPack					; Used to pisition player mesh
+	Field x1.VerletPack						; Used to orient player mesh to collision mesh/verlets
+	Field x2.VerletPack
+	Field z1.VerletPack
+	Field z2.VerletPack
+	Field X_vec#							; Junk for calculations
+	Field Y_vec#
+	Field Z_vec#
+End Type
+
+ClearTextureFilters
+SetBuffer BackBuffer()
+Collisions ACTIVE,ACTIVE,2,1
+MoveMouse width/2,height/2
+
+lgt = CreateLight()
+cam = CreateCamera()
+flr = CreateCube()
+
+ScaleEntity flr,20,20,20
+PositionEntity flr,0,10,0
+EntityType flr,ACTIVE
+grid_tex=CreateTexture( 256,256,1+4+8)
+SetBuffer TextureBuffer( grid_tex )
+ScaleTexture grid_tex,.2,.2
+Color 255,255,255:Rect 0,0,256,256,False
+grid_tex2=CreateTexture( 32,32,1)
+SetBuffer TextureBuffer( grid_tex2 )
+ScaleTexture grid_tex2,100,100
+Color 0,0,60:Rect 0,0,32,32,False
+EntityTexture flr,grid_tex,0,1
+EntityTexture flr,grid_tex2,0,0
+TextureBlend grid_tex,3
+EntityFX flr,1
+FlipMesh flr
+SetBuffer BackBuffer()
+
+For m = 1 To 10			; Let's make some cubes!
+	xa# = 0
+	xb# = m*5 +5
+	xc# = 0
+	cc.cube = New cube
+	mesh=CreateMesh()
+	surface=CreateSurface(mesh)
+	cc\player=LoadMesh( "..\Samples\Blitz 3D Samples\mak\driver\car.x" ) ; this can be loaded in the "Samples\Blitz 3D Samples\mak\driver"
+	FitMesh cc\player,-size,-size,-size,size*2,size*2,size*2
+	
+	; Yes, all the below is necessary to create a stable 9-verlet "cube" ...
+	a.VerletPack = Verlet(xa - size, xb - size, xc - size, radius, 1.0, m, 0, 0, 0,surface,mesh,True)
+	b.VerletPack = Verlet(xa + size, xb - size, xc - size, radius, 1.0, m, 0, 0, 0,surface,mesh,True)
+	c.VerletPack = Verlet(xa + size, xb + size, xc - size, radius, 1.0, m, 255, 0, 0,surface,mesh,True)
+	d.VerletPack = Verlet(xa - size, xb + size, xc - size, radius, 1.0, m, 0, 255, 0,surface,mesh,True)
+	e.VerletPack = Verlet(xa - size, xb - size, xc + size, radius, 1.0, m, 0, 0, 0,surface,mesh,True)
+	f.VerletPack = Verlet(xa + size, xb - size, xc + size, radius, 1.0, m, 0, 0, 0,surface,mesh,True)
+	g.VerletPack = Verlet(xa + size, xb + size, xc + size, radius, 1.0, m, 0, 0, 255,surface,mesh,True)
+	h.VerletPack = Verlet(xa - size, xb + size, xc + size, radius, 1.0, m, 0, 0, 0,surface,mesh,True)
+	i.VerletPack = Verlet(xa, xb, xc,size, 1.0, m, 255, 255, 255,surface,mesh,True)
+	
+	AddTriangle(surface,0,2,1)
+	AddTriangle(surface,0,3,2)
+	AddTriangle(surface,0,1,5)
+	AddTriangle(surface,0,5,4)
+	AddTriangle(surface,0,4,7)
+	AddTriangle(surface,0,7,3)
+	
+	AddTriangle(surface,6,1,2)
+	AddTriangle(surface,6,2,3)
+	AddTriangle(surface,6,5,1)
+	AddTriangle(surface,6,4,5)
+	AddTriangle(surface,6,7,4)
+	AddTriangle(surface,6,3,7)
+	
+	UpdateNormals mesh
+	EntityType mesh,0
+	EntityColor mesh,255,0,0	
+	EntityAlpha mesh,0
+	
+	; Edges - distance 1.0
+	Constraint2(a,b)
+	Constraint2(b,c)
+	Constraint2(a,d)
+	Constraint2(c,d)
+	Constraint2(e,f)	
+	Constraint2(f,g)
+	Constraint2(e,h)
+	Constraint2(g,h)
+	Constraint2(a,e)
+	Constraint2(b,f)
+	Constraint2(c,g)
+	Constraint2(d,h)
+
+	; Cross-faces - distance ~Sqr(2.0)
+	Constraint2(a,c)
+	Constraint2(b,d)
+	Constraint2(e,g)
+	Constraint2(f,h)
+	Constraint2(a,f)
+	Constraint2(a,h)
+	Constraint2(b,e)
+	Constraint2(b,g)
+	Constraint2(c,f)
+	Constraint2(c,h)
+	Constraint2(d,e)
+	Constraint2(d,g)
+
+	; Diagonals - distance ~Sqr(3.0)
+	Constraint2(a,g)
+	Constraint2(b,h)
+	Constraint2(c,e)
+	Constraint2(d,f)
+	
+	; Constraining the center sphere - distance ~0.5 * Sqr(3.0)
+	Constraint2(a,i)
+	Constraint2(b,i)
+	Constraint2(c,i)
+	Constraint2(d,i)
+	Constraint2(e,i)
+	Constraint2(f,i)
+	Constraint2(g,i)
+	Constraint2(h,i)
+	
+	cc\v[0] = i
+	cc\v[1] = a
+	cc\v[2] = b
+	cc\v[3] = c
+	cc\v[4] = d
+	cc\v[5] = e
+	cc\v[6] = f
+	cc\v[7] = g
+	cc\v[8] = h
+	
+	; Set up variables used for player mesh
+	cc\center=i
+	cc\x1=c
+	cc\x2=d
+	cc\z1=g
+	cc\z2=c
+Next
+
+;********* functions defined ********************************************
+Function TimeStep()							; The main loop
+	AccumulateForces()
+	DoVerlet()
+	SatisfyConstraints2()
+End Function
+
+Function AccumulateForces()					; As of right now, we only accumulate gravity
+	For v.VerletPack = Each VerletPack
+		CloneVector(v\a,vGrav)
+	Next
+End Function
+
+Function DoVerlet()
+	For v.VerletPack = Each VerletPack
+		CloneVector(vTemp1,v\m)
+		MulVecScalar(vTemp2,v\a,fTimeStep * fTimeStep)		; a * timestep * timestep
+		AddVector2(v\old,vTemp2)							; old = old + a * ts * ts
+		SubVector2(v\m,v\old)								; m = m - old + a * ts * ts
+		AddVector2(v\m,vTemp1)								; m += m - old + a * ts * ts
+		CloneVector(v\old,vTemp1)
+	Next
+End Function
+
+Function SatisfyConstraints2()
+	For n = 1 To ITERATIONS
+		For c.Constraint = Each Constraint
+			SetDistance(c\v1,c\v2,c\d)
+		Next
+		
+		For cc.cube = Each cube
+			bing = 0
+			q.cube = cc
+			While bing = 0
+				If q &lt;&gt; Last cube
+					q = After q
+					dp# = ((cc\v[0]\m\x - q\v[0]\m\x) * (cc\v[0]\m\x - q\v[0]\m\x)) + ((cc\v[0]\m\y - q\v[0]\m\y) * (cc\v[0]\m\y - q\v[0]\m\y)) + ((cc\v[0]\m\z - q\v[0]\m\z) * (cc\v[0]\m\z - q\v[0]\m\z))
+					If dp &lt; 6.0
+						For aa = 0 To 8
+							For bb = 0 To 8
+								l# = cc\v[aa]\radius + q\v[bb]\radius
+								dp2# = ((cc\v[aa]\m\x - q\v[bb]\m\x) * (cc\v[aa]\m\x - q\v[bb]\m\x)) + ((cc\v[aa]\m\y - q\v[bb]\m\y) * (cc\v[aa]\m\y - q\v[bb]\m\y)) + ((cc\v[aa]\m\z - q\v[bb]\m\z) * (cc\v[aa]\m\z - q\v[bb]\m\z))
+								If dp2 &lt; (l * l) 
+									SetDistance(cc\v[aa],q\v[bb],l)
+									SubVector(vTemp1,cc\v[aa]\m,cc\v[aa]\old)
+									MulVecScalar2(vTemp1,.4 * fTimeStep)
+									AddVector2(cc\v[aa]\old,vTemp1)
+								EndIf
+							Next
+						Next
+					EndIf
+				Else
+					bing = 1
+				EndIf
+			Wend
+		Next
+	Next
+End Function
+
+	
+Function SetDistance(v1.VerletPack,v2.VerletPack,dist#)	
+		SubVector(vTemp1,v1\m,v2\m)
+		deltalength# = Sqr((vTemp1\x * vTemp1\x) + (vTemp1\y * vTemp1\y) + (vTemp1\z * vTemp1\z))
+		If deltalength &lt;= 0.0 deltalength = 0.0001
+		diff# = (deltalength - dist) / deltalength
+		tmass# = v1\mass + v2\mass
+		MulVecScalar(vTemp2,vTemp1,diff * (v2\mass / tmass))
+		SubVector2(v1\m,vTemp2)
+		MulVecScalar(vTemp2,vTemp1,diff * (v1\mass / tmass))
+		AddVector2(v2\m,vTemp2)
+End Function
+
+Function CageVerlet2(v.VerletPack)				; Collision code
+	col = False
+	If v\m\x &lt;&gt; EntityX(v\entity)
+		v\m\x=EntityX(v\entity)
+		col = True
+	EndIf
+	If v\m\y &lt;&gt; EntityY(v\entity)
+		v\m\y=EntityY(v\entity)
+		col = True
+	EndIf
+	If v\m\z &lt;&gt; EntityZ(v\entity)
+		v\m\z=EntityZ(v\entity)
+		col = True
+	EndIf
+	If col
+		SubVector(vTemp1,v\m,v\old)
+		MulVecScalar2(vTemp1,0.4 * fTimeStep)
+		AddVector2(v\old,vTemp1)
+	EndIf
+End Function
+
+Function Verlet.VerletPack(x#,y#,z#,radius#, mass# = 1.0, obj%, red,green,blue,surface,mesh,state)
+	v.VerletPack = New VerletPack
+	v\surface=surface
+	v\mesh=mesh
+	v\vertex=AddVertex(v\surface,x,y,z)
+	v\m = Vector(x,y,z)
+	v\entity = CreatePivot()
+	PositionEntity v\entity,x,y,z
+	EntityType v\entity, ACTIVE
+	EntityRadius v\entity,radius#
+	v\old = Vector(x,y,z)
+	v\a = Vector(0.0,0.0,0.0)
+	If radius &lt;= 0.0 radius = 0.01
+	v\radius = radius
+	If mass &lt;= 0.0 mass = 0.01
+	v\mass = mass
+	v\obj = obj
+	Return v
+End Function
+
+Function Constraint2.Constraint(v1.VerletPack,v2.VerletPack)
+	c.Constraint = New Constraint
+	c\v1 = v1
+	c\v2 = v2
+	c\d = Sqr((v2\m\x - v1\m\x)^2 + (v2\m\y - v1\m\y)^2 + (v2\m\z - v1\m\z)^2)
+	;Return c	; You may need this someday ... we don't for what we have here
+End Function
+
+;// Create a Vector
+Function Vector.Vector(x#=0.0,y#=0.0,z#=0.0)
+	v.Vector = New Vector
+	v\x=x
+	v\y=y
+	v\z=z
+	Return v
+End Function 
+
+;// Vector 1 is set to Vector 2
+Function CloneVector(v1.Vector,v2.Vector)
+	v1\x = v2\x
+	v1\y = v2\y
+	v1\z = v2\z
+End Function
+
+;// Vector Scalar Multiplication
+;// Form of Vector1 = Vector2 * Scalar
+Function MulVecScalar(v1.Vector,v2.Vector,s#)
+	v1\x = v2\x * s
+	v1\y = v2\y * s
+	v1\z = v2\z * s
+End Function
+
+;// Form of Vector1 = Vector1 + Vector2
+Function AddVector2(v1.Vector,v2.Vector)
+	v1\x = v1\x + v2\x
+	v1\y = v1\y + v2\y
+	v1\z = v1\z + v2\z
+End Function
+
+;// Form of Vector1 = Vector1 - Vector2
+Function SubVector2(v1.Vector,v2.Vector)
+	v1\x = v1\x - v2\x
+	v1\y = v1\y - v2\y
+	v1\z = v1\z - v2\z
+End Function
+
+;// Vector Subtraction
+;// Form of Vector1 = Vector2 - Vector3
+Function SubVector(v1.Vector,v2.Vector,v3.Vector)
+	v1\x = v2\x - v3\x
+	v1\y = v2\y - v3\y
+	v1\z = v2\z - v3\z
+End Function
+
+;// Form of Vector1 = Vector1 * Scalar
+Function MulVecScalar2(v1.Vector,s#)
+	v1\x = v1\x * s
+	v1\y = v1\y * s
+	v1\z = v1\z * s
+End Function
+
+;************* deltatime function ******************
+Global new_time=MilliSecs(), old_time=MilliSecs()
+Function delta_time#(new_time)
+	delta_t#=(new_time - old_time) * .001
+	old_time=new_time
+Return delta_t#
+End Function
+
+;**************** main loop ***************************************	
+While Not KeyHit(1)
+	fTimeStep#=delta_time(MilliSecs())
+	TimeStep()
+				
+	For v.VerletPack = Each VerletPack
+		VertexCoords v\surface,v\vertex,v\m\x,v\m\y,v\m\z
+		UpdateNormals v\mesh
+		PositionEntity v\entity,v\m\x,v\m\y,v\m\z
+	Next
+	
+	For temp_cube.cube = Each cube
+		PositionEntity temp_cube\player,EntityX(temp_cube\center\entity),EntityY(temp_cube\center\entity),EntityZ(temp_cube\center\entity)
+		temp_cube\X_vec=EntityX(temp_cube\x1\entity)-EntityX(temp_cube\x2\entity)
+		temp_cube\Y_vec=EntityY(temp_cube\x1\entity)-EntityY(temp_cube\x2\entity)
+		temp_cube\Z_vec=EntityZ(temp_cube\x1\entity)-EntityZ(temp_cube\x2\entity)
+		AlignToVector temp_cube\player, temp_cube\X_vec, temp_cube\Y_vec, temp_cube\Z_vec, 1		
+		temp_cube\X_vec=EntityX(temp_cube\z1\entity)-EntityX(temp_cube\z2\entity)
+		temp_cube\Y_vec=EntityY(temp_cube\z1\entity)-EntityY(temp_cube\z2\entity)
+		temp_cube\Z_vec=EntityZ(temp_cube\z1\entity)-EntityZ(temp_cube\z2\entity)
+		AlignToVector temp_cube\player, temp_cube\X_vec, temp_cube\Y_vec, temp_cube\Z_vec, 3
+		
+	Next
+	
+	UpdateWorld
+	For v.VerletPack = Each VerletPack
+		CageVerlet2(v)
+	Next
+		
+	PositionEntity cam,0,0,0
+	RotateEntity cam,MouseY()-height*.5 ,(-MouseX())-width*.5+50,0
+	MoveEntity cam,0,0,-15
+	
+	RenderWorld
+	Flip False
+	
+Wend
+
+End
+</pre> <br><br></td></tr></table><br>
+<a name="235758"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Difference</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Exellent! <br><br></td></tr></table><br>
+<a name="235771"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> spose i should do a better job of giving miracle the credit for posting his original sources. i have been working on something very similar to this for ages but didnt know what that verlets even existed. <br><br>this has given me a boost towards my ultimate goal of "non symmetrical" simulated rigid body physics and collisions. what i mean by "non symmetrical" is that the objects can be of nearly any shape (nothing radically extreme but nearly any shape) and they will collide with both a terrain mesh and any other verlet mesh.<br><br>but heres the HARD part. each verlet entity located at the "corners" of the object are the only points that a collision is checked for. so if we create a poly mesh like in the code above we CAN check collisions against that mesh IF the verlet sphere inititates the collision. i already have this working in a different version. but the verlets CANNOT collide with the mesh if the mesh initiates the collision. because in B3d all collisions must be intitated by the sphere first. this is why in many experiments the object can "sink" thru the terrain or other mesh. because if the mesh moves vertically, even the smallest amount, the built in collisions for B3d stop working =(<br><br>my hope is with very creative usage of the exisiting functions i can "fake it". but i have to admit it has been a nightmare.<br><br>the other portion of what im working on is to extract the verlet groups position CG and rotational CG so a much higher detailed mesh can be used for the player and the much much lower detail verlet mesh can be used for the collision routines. <br><br>anyways take care. <br><br></td></tr></table><br>
+<a name="235875"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've been working on a verlet system as well, although it isn't as sofisticated as yours. I intend to make my own collision code eventually, yet for now I'm using blitzes.<br><br>Here's mine with a sample polygon:<br><br><pre class=code>
+
+Global dest_xang#,dest_yang#
+
+Type vector
+ Field x#,y#,z#
+End Type
+
+Type particle
+ Field N.vector
+ Field O.vector
+ Field F.vector
+ Field pivot
+ Field col_pivot
+ Field l
+End Type
+
+Type Constraint
+ Field Cp1.particle
+ Field Cp2.particle
+ Field e#
+ Field Td
+End Type
+
+Const Grav#=-.0001
+
+Graphics3D 640,480
+
+Const environ_t=1,p_t=2
+
+Collisions p_t,environ_t,2,1
+
+SeedRnd MilliSecs()
+
+For r=0 To 1
+p.particle=Object.particle(createparticle(0,0,0,Rnd(-5,5),Rnd(-5,5),Rnd(-5,5)))
+
+sp=CreateSphere()
+PositionEntity sp,0,0,0
+EntityParent sp,p\pivot
+EntityColor sp,255,0,0
+ScaleEntity sp,5,5,5
+
+p2.particle=Object.particle(createparticle(10,0,0,10+Rnd(-5,5),Rnd(-5,5),Rnd(-5,5)))
+
+sp1=CreateSphere()
+PositionEntity sp1,10,0,0
+EntityParent sp1,p2\pivot
+EntityColor sp1,0,255,0
+ScaleEntity sp1,5,5,5
+
+p3.particle=Object.particle(createparticle(5,8.660254,0,5+Rnd(-5,5),8.660254+Rnd(-5,5),Rnd(-5,5)))
+
+sp2=CreateSphere()
+PositionEntity sp2,5,8.660254,0
+EntityParent sp2,p3\pivot
+EntityColor sp2,0,0,255
+ScaleEntity sp2,5,5,5
+
+lp.particle=Object.particle(createparticle(0,0,20,Rnd(-5,5),Rnd(-5,5),Rnd(-5,5)+20))
+
+lsp=CreateSphere()
+PositionEntity lsp,0,0,20
+EntityParent lsp,lp\pivot
+EntityColor lsp,255,0,0
+ScaleEntity lsp,5,5,5
+
+lp2.particle=Object.particle(createparticle(10,0,20,10+Rnd(-5,5),Rnd(-5,5),Rnd(-5,5)+20))
+
+lsp1=CreateSphere()
+PositionEntity lsp1,10,0,20
+EntityParent lsp1,lp2\pivot
+EntityColor lsp1,0,255,0
+ScaleEntity lsp1,5,5,5
+
+lp3.particle=Object.particle(createparticle(5,8.660254,20,5+Rnd(-5,5),8.660254+Rnd(-5,5),Rnd(-5,5)+20))
+
+lsp2=CreateSphere()
+PositionEntity lsp2,5,8.660254,20
+EntityParent lsp2,lp3\pivot
+EntityColor lsp2,0,0,255
+ScaleEntity lsp2,5,5,5
+
+InstantC p.particle,p2.particle
+InstantC p.particle,p3.particle
+InstantC p2.particle,p3.particle
+
+instantC lp.particle,lp2.particle
+InstantC lp.particle,lp3.particle
+InstantC lp2.particle,lp3.particle
+
+InstantC p.particle,lp.particle
+InstantC p2.particle,lp2.particle
+InstantC p3.particle,lp3.particle
+
+InstantC p.particle,lp3.particle
+InstantC p2.particle,lp.particle
+InstantC p3.particle,lp2.particle
+
+InstantC p.particle,lp2.particle
+InstantC p2.particle,lp3.particle
+InstantC p3.particle,lp.particle
+
+Next
+
+cube=CreateCube()
+FlipMesh cube
+ScaleEntity cube,100,100,100
+EntityType cube,environ_t
+
+l1=CreateLight(1)
+RotateEntity l1,20,45,0
+LightColor l1,255,255,255
+
+Global cam=CreateCamera()
+CameraRange cam,1,1000
+
+PositionEntity cam,0,0,-10
+pp=CreatePivot()
+
+Global l=MilliSecs()
+
+While Not KeyHit(1)
+ If rn Then
+  accf
+  verlet
+  constraints
+ EndIf
+ If KeyHit(59) Then 
+  rn=Not rn
+  For a.particle=Each particle
+   a\l=MilliSecs()
+  Next
+ EndIf
+
+ If KeyHit(14) Then
+  For ab.constraint=Each constraint
+   ab\td=ab\td*1.1
+  Next
+ EndIf
+ 
+ If KeyHit(13) Then
+  For ab.constraint=Each constraint
+   ab\td=ab\td/1.1
+  Next
+ EndIf
+
+
+ If Not MouseDown(3) Then 
+  movecam
+  MoveEntity cam,0,0,MouseZSpeed()*2+MouseDown(1)*5+MouseDown(2)*-5 
+ Else 
+  MoveEntity cam,0,0,-MouseYSpeed()*2
+  MoveMouse GraphicsWidth()/2,GraphicsHeight()/2
+ EndIf
+ 
+ RenderWorld 
+ Flip
+Wend
+
+Function createparticle(x#,y#,z#,ox#,oy#,oz#)
+ a.particle=New particle
+ 
+ a\N.vector=New vector
+ a\O.vector=New vector
+ a\F.vector=New vector
+ 
+ a\pivot=CreatePivot()
+
+ a\col_pivot=CreatePivot(a\pivot)
+ EntityType a\col_pivot,p_t
+ EntityRadius a\col_pivot,.1
+
+ a\N\x#=x#
+ a\N\y#=y#
+ a\N\z#=z#
+ 
+ a\O\x#=ox#
+ a\O\y#=oy#
+ a\O\z#=oz#
+
+ PositionEntity a\pivot,a\n\x#,a\n\y#,a\n\z#
+ Return Handle(a.particle)
+End Function
+
+Function InstantC(Tp1.particle,Tp2.particle,eff#=1)
+ a.constraint=New constraint
+ a\Cp1.particle=Tp1.particle
+ a\Cp2.particle=Tp2.particle
+ a\td=Sqr((Tp1\N\x#-Tp2\N\x#)^2+(Tp1\N\y#-Tp2\N\y#)^2+(Tp1\N\z#-Tp2\N\z#)^2)
+ a\e#=eff#
+End Function
+
+Function accf()
+ For a.particle = Each particle
+  a\F\y#=grav#
+ Next
+End Function
+
+Function verlet()
+ For a.particle = Each particle
+  a\N\x#=EntityX#(a\pivot)
+  a\N\y#=EntityY#(a\pivot)
+  a\N\z#=EntityZ#(a\pivot)
+  
+  tx#=a\N\x#
+  ty#=a\N\y#
+  tz#=a\N\z#
+  
+  m#=(MilliSecs()-a\l)
+  a\N\x#=2*a\N\x#-a\O\x#+a\F\x#*m#*m#
+  a\N\y#=2*a\N\y#-a\O\y#+a\F\y#*m#*m#
+  a\N\z#=2*a\N\z#-a\O\z#+a\F\z#*m#*m#
+
+  a\l=MilliSecs()
+  
+  a\O\x=tx#
+  a\O\y=ty#
+  a\O\z=tz#
+  PositionEntity a\pivot,a\N\x#,a\N\y#,a\N\z#
+ Next
+End Function 
+
+Function constraints()
+ For it=0 To 5
+  UpdateWorld
+  For a.particle = Each particle
+   If EntityCollided(a\col_pivot,environ_t) Then 
+    EntityParent a\col_pivot,0
+    PositionEntity a\pivot,EntityX#(a\col_pivot),EntityY#(a\col_pivot),EntityZ#(a\col_pivot)   
+    EntityParent a\col_pivot,a\pivot
+   EndIf
+  Next
+  For c.constraint=Each constraint
+   dx#=EntityX#(c\Cp1\pivot)-EntityX#(c\Cp2\pivot)
+   dy#=EntityY#(c\Cp1\pivot)-EntityY#(c\Cp2\pivot)
+   dz#=EntityZ#(c\cp1\pivot)-EntityZ#(c\cp2\pivot)
+   cd#=Sqr(dx#^2+dy#^2+dz#^2)
+   diff#=(cd#-c\td#)/cd#
+   PositionEntity c\Cp1\pivot,EntityX#(c\Cp1\pivot)-(dx#*diff#*c\e#*.5),EntityY#(c\Cp1\pivot)-(dy#*diff#*c\e#*.5),EntityZ#(c\cp1\pivot)-(dz#*diff#*c\e#*.5)
+   PositionEntity c\Cp2\pivot,EntityX#(c\Cp2\pivot)+(dx#*diff#*c\e#*.5),EntityY#(c\Cp2\pivot)+(dy#*diff#*c\e#*.5),EntityZ#(c\cp2\pivot)+(dz#*diff#*c\e#*.5)
+  Next
+ Next
+End Function
+
+; the rest is from Rob hutchison
+Function movecam()
+ mxs=MouseXSpeed()/2
+ mys=MouseYSpeed()/2
+		
+ ; Update destination camera angle x and y values
+ dest_xang#=dest_xang#+mys
+ dest_yang#=dest_yang#-mxs
+	
+ ; Curve camera angle values towards destination values
+ xang#=CurveValue#(xang#,dest_xang#,5)
+ yang#=CurveValue#(yang#,dest_yang#,5)
+	
+ RotateEntity cam,xang#,yang#,0
+ MoveMouse GraphicsWidth()/2,GraphicsHeight()/2
+End Function
+
+Function CurveValue#(current#,destination#,curve)
+	current#=current#+((destination#-current#)/curve)
+	Return current#
+End Function
+</pre><br><br>hmm. I hope the code bracket thingies work. oh well.<br>Anyway, I used to have a function that converted any mesh into a physical object. The only problem is that some of the meshes weren't welded, creating bunchs of little triangles.  I tried to integrate a weld procedure into the code, but it didn't work, and I forgot to backup the function before. Anyway, I didn't have to worry about rotation, as all i had to do was reposition each vertex.  It worked pretty well, but for complex objects, the constraint itterations went way up. <br><br></td></tr></table><br>
+<a name="236010"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Miracle</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice to see someone picking this up.<br><br>The problem of "I can collide with you, but you can't collide with me" is what stymied my development of a true verlet-to-shell collision algo. The best I could come up with was the idea that any collision with a shell was actually a collision with every verlet that made up the construct inside that shell, at the angle between the collision point and each individual verlet plus the combined angle of the movement of the two masses. So you take the complete mass of one construct and apply it to each verlet in the other construct proportional to their masses, and vice versa. Then you snap all the constraints, move the shells, test for collisions again, and so on and so on. Like I said, it's a lotta work.<br><br>And ... that's all I've got. :) <br><br></td></tr></table><br>
+<a name="236026"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> instead of applying the collision force to every verlet i want to do something like...<br><br>collision code will be two ways, verlet to polymesh (already working just fine)<br>AND <br>for EACH poly in mesh<br>   check for collision to ALL verlet entity's<br>   get penetration distance/angle<br>   for each verlet attached to current poly<br>      apply force derived from penetration distance/angle<br>   next<br>next<br><br>so this way we only apply the force to the verlets directly connect to the polygon which initiated a collision with a verlet. and we let the constraints do all the hard work to make it bounce properly.<br><br>the part i dont have is a plane to radius collision routine that returns:<br>entity collided<br>collision time (maybe not needed)<br>collision origin x,y,z<br>collision normals <br><br></td></tr></table><br>
+<a name="236104"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> For my collision code, I was considering some elaborate pre-proccessing to speed up the game, assuming that the verlet constraints stayed the same length throughout.  I am thinking about trying to check through the level's geometry looking for areas that protrude and are thin enough to fit between two connected particles, and storring them in an array local to that constraint. To speed up this process I could do this once per verletentity/level combination, and save the result to a file.  <br><br>  Anyway, at runtime, there would be checks with all the level's polys, and a check for a constraint collision against protruding areas.  <br><br>  Still haven't astually given any thought to verlet-verlet entity collisions though. This seems hard since you need to figure out where exactly you can collide, as all you have is some points with constraints between them.  You would have to diffine triangles or quads, or some non-point representation of it's area between the points. I'm wondering, do your cube to cube collisions work with more complex verletentities dmc?  and about your collision problem, when you say radius, do you mean a sphere?<br><br> Oh yeah, and if you want to use any of the above ideas, go right ahead.  I don't have enough coding finnesse to do it anywho.  I did sorta think it woul be cool to rig up a verletentity thing where a guy is running up stairs in slow mo, and is kicked by that one ninja model, and sent soaring back down although obviesly inheriting it's previous animation.  It would also be cool if the running up stairs guy looked like Agent Smith from The MAtrix.........<br><br>How do you do that "code" box thing anyway? <br><br></td></tr></table><br>
+<a name="236149"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> for my purposes (purely experimentation in simulation) pre processing isnt an option. but if you have a static level then thats definatly one way to go.<br><br>as far as more complex shapes yes they work for any non-radical shape. what i mean is, as long as the distance between each neighboring point is sort of close to all the other distances it will be stable. so a low poly collision cage for a car would work well, so would a boat, but you might have problems with an airplane because the wings and the body form a more radical shape than something that is roughly cubic, pyrimidal (is that a word? =), or shperical. think of geomotric shapes and it will be just fine.<br><br>if you mean the box thing being the area the verlet cubes bounce around in, thats just a regular BB cube entity that has its normals flipped. <br><br></td></tr></table><br>
+<a name="236308"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> nah by the "code" box thing, I meant puting that code box around your code in the forums.  I know it's somthing like &lt;code/&gt;....&lt;\code&gt; or [code/]....[\code].  In fact, I used the same flipped normals cube strategy in my code.  <br><br>(several minutes  later)<br><br>I looked at the constraints part, and most of it is the cube-cube physics(or other object).  Correct me if I'm wrong, but the verlet-verlet collision is just comparing the points' various distances, and in case of violation, changes two points position,and one of the old positions. I'm not sure how it's supposed to work, as half the time I'm confused with clever coding.  <br><br> Anyway, I was looking over your code and although this isn't at all essintial, shouldn't the cageverlet2 function be called inside satisfy constraints?  What might happen is that the constraints would modify the position of a point, and then the cageverlet2 functrion would reposition the point, and the constraints once again satisfied. Yet right now, it's updating the constraints, and then updating the cage, without giving the constraints a chance to once again correct themselves. <br><br></td></tr></table><br>
+<a name="236337"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Miracle</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Note that we do the collide-constraint-cage thing several times each frame, so the verlets straighten themselves out over time. I've tried rearranging the routines every which way but it all shakes out about the same.<br><br>The biggest problem with complex shapes is the enormous number of constraints you have to add for each additional verlet.  To make the most stable shape, you need to connect every verlet to every other verlet in the whole model. So it's possible to create a detailed collision model for any shape, but there would be hundreds of constraints holding the whole mess together. <br><br></td></tr></table><br>
+<a name="236569"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yeah, that's what's so cool about the Verlet system: it doesn't accumalate errors. instead it just corrects them over a couple frames.(I changed does to doesn't i an edit) <br><br>  The constraint thing is definitly true. I tried making a sphere(16) out of verlets, and my system ran less than 1 fps.  I was thinking that perhaps a user could supply a high poly mesh for graphics, and a low poly one for physics. the system would take the low poly one, create a verlet for each vertex, and then create constraints between each combination.  You could then assign each high poly vertex to a nearby verlet. If you really wanted to get fancy, You could assign them with weights, so that each high poly vertice could be assigned to two verlets, with varrying wheights.  If you didn't want the mesh to ever deform, you might be able to figure out how to position and rotate the high-poly mesh to match. <br><br></td></tr></table><br>
+<a name="236649"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> you hit the nail on the head about using low poly models for the pysics and use high poly models for the visuals. i dont think connecting the two together with more constraints is the answer though. if i can get past some trouble spots the way im planning on doing it to measure the angular displacement of the center verlet to an avg of the outer verlets. then assigning pitch yaw and roll using quaternions so i dont get any gimbla lock.<br><br>im putting aside the verlet mesh to verlet mesh collision for now so i can make some head way in making the simulation run more stable with larger timje steps. if the time steps get to large the verlet cage can either collapse or turn itself inside out. the method of integration being used in the code above is eulers method. one calc per time step. i have some runge kutta integration code i got for a single spring entity. it is amazing how stable it runs under runge kutta. so im trying to get both the force accumulation and constraint calculations and collision repsonse to use runge kutta. wish me luck hehe <br><br></td></tr></table><br>
+<a name="236857"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> See, that's why I'm trying to do the position vertexes<br>instead of positioning entity. Of course, the positioning<br>is no problem, but I'm scared of the Quaternions, as I never did actually get them to work. If you wanted an even faster method, you could assume that all verlets were in <br>there correct position only using one outer verlet and <br>skipping the average. but only do this if you are sure the <br>object is stable. Otherwise you'll end up with jumpy <br>results.  Are you sure it's eulers integration? I thought <br>euler integration used a current position and velocity <br>instead of the verlet integration which uses Position and Old position. Looking at the code, it looks like your using <br>verlet integration.   I don't know what Runge Kutta is.<br>I've only heard of euler and verlet. I'll do a google search methinks.  Whatever it is, sounds good. If you get it working, post some code and I'll try and adapt mine. <br><br></td></tr></table><br>
+<a name="236861"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> ohh i think you are right. verlet is a method integration.<br><br>i dont know if using one for orientation will look right. but ill give it a try.<br><br>yes ill post the code as soon as i get past certain problems. <br><br></td></tr></table><br>
+<a name="236869"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> oh wait! Yes you actually need two outside one, to accomadate for Roll. Your averaging idea would produce <br>better results, it would be little slower though. <br><br>Looked up Runge Cutta. looks like it has somthing to do with derivation Calculus.<br>Scarry. Almost as scary as quaternions. Did you use Runge Kutta to discover the correct equations, our is your program activly doing Calculus?<br>If the Latter is true I would be impressed. Of course, all the sites about Runge Kutta said it was easy to program,<br>but It's kinda cool to think of a blitz program doing calculus, while I only know what calculus does, not how to use it. <br><br></td></tr></table><br>
+<a name="236890"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jhocking</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> Holy Moses, this is so cool! <br><br></td></tr></table><br>
+<a name="236925"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> bot, <br><br>the calculation here are what was originally presented by miracle from his translation of the original source, except some minor changes of what happens where as you originally noted the placement of the cageverlet function. i moved that so i could capture the collision data more efficiently without doing it for each contraint. because that makes it happen way to many times per loop.<br><br>soooo.... on to runge kutta. i think ive got some of this confused. ok heres what i THINK i figured out. (please note im a math newbie) it looks like i have to stick with a finite difference method of integration (verlet, leap frog, or preferably velocity verlet). runge kutta wont work here i think because it is based on ordinary differential equations. my mind is melting trying to sort this out lol.<br><br>heres what is being used for X axis as an example:<br><pre class=code>
+;v\O = old position, v\c = current position, v\force = gravity, fTimeStep = time elapsed
+CloneVector(vTemp1,v\C_pos)	; vTemp1\x = v\C_pos\x
+MulVecScalar(vTemp2,v\force,fTimeStep * fTimeStep) ; vTemp2\x = v\force\x * (fTimeStep * fTimeStep)
+AddVector2(v\O_pos,vTemp2)	; v\O_pos\x = v\O_pos\x + vTemp2\x
+SubVector2(v\C_pos,v\O_pos)	; v\C_pos\x = v\C_pos\x - v\O_pos\x
+AddVector2(v\C_pos,vTemp1)	; v\C_pos\x = v\C_pos\x + vTemp1\x
+CloneVector(v\O_pos,vTemp1)	; v\O_pos\x = vTemp1\x
+</pre><br>i looks like v\o and v\c are the "one step forward and one step back" as referenced in the link below.<br><br>ok check out this page:<br><a href="http://www.tau.ac.il/~becker/course/integration.html#verlet" target="_blank">http://www.tau.ac.il/~becker/course/integration.html#verlet</a><br><br>so im trying to decipher which this code is using (if any of them!)<br><br>ill post the simple example for runge kutta in another post.<br>and if you interested i can also post some quaternion functions that make sense =) <br><br></td></tr></table><br>
+<a name="236926"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> RUNGE KUTTA INTEGRATION<br><br>ok heres a sample of code that is simulation a mass connected to a single spring (invisible at the moment).<br><br>the functions in the main loops solve_eulers and solve_kutta are the intergrators. swap these out in the main loop. at a step size of .1 seconds the kutta method runs stable. the eulers method (once per loop) just blows up miserably.<br><br>please note i cleaned this up pretty quick so if you find stuff that doesnt look like it needs to be there it prolly doesnt =)<br><br><pre class=code>
+Graphics3D 640,480,0,1
+
+;  Single spring &amp; single mass, in one dimension (moving horizontally)
+;  vars[0] = position (x) with origin as above
+;  vars[1] = velocity (v=x')
+;  R = rest length
+;  len = current length of spring = x - origin.x
+;  L = how much spring is stretched from rest length
+;  L = len - R = x - origin.x - R
+;  k = spring constant
+;  b = damping constant
+;  F = m a  (force = mass * acceleration) leads to:
+;  F = -kL -bv = -k(x - origin.x - R) -bv = m v'
+;  so diffeq's are:
+;  x' = v
+;  v' = -(k/m)(x - origin.x - R) -(b/m)v
+
+;  /* Explanation of how to code up differential equations:
+;    The variables are stored in the vars[] array.
+;    Let y = var[0], w = var[1], z = var[2], etc.
+;    The differential equations must all be first order, in the form:
+;      y' = f(t, y, w, z, ...)
+;      w' = g(t, y, w, z, ...)
+;      z' = h(t, y, w, z, ...)
+;      ...
+;    You will have as many equations as there are variables
+;
+;    diffeq0 returns the right hand side of the first equation
+;      y' = f(t, y, w, z, ...)
+;    diffeq1 returns the right hand side of the second equation
+;      w' = g(t, y, w, z, ...)
+;  */
+Global m_Spring.S_Spring = New S_Spring;
+Global m_Mass.S_mass = New S_Mass;
+Global vars.array= New array
+Global inp.array=New array
+Global k1.array=New array
+Global k2.array=New array
+Global k3.array=New array
+Global k4.array=New array
+Global sim_time# = 0;
+
+Const numVars = 2;    // number of variables in vars[]
+Const MAX_VARS = 40;
+
+Type S_Spring
+	Field m_SpringConst#
+	Field m_RestLength#
+	Field m_X1#
+End Type
+
+Type S_Mass
+	Field m_Mass#
+	Field m_Damping#
+End Type
+
+Type array
+	Field value#[max_vars]
+End Type
+
+m_Spring\m_SpringConst# = 3
+m_Spring\m_RestLength# = 2.2;
+m_Spring\m_X1# = 200;  // left end of spring
+
+m_Mass\m_Mass# = .5;
+m_Mass\m_Damping# = 0.2;
+
+Function diffeq0#(t#, name.array); t = time, x = array of variables
+Return name\value[1]; x' = v
+End Function
+
+Function diffeq1#(t#, name.array ); t = time, x = array of variables
+	r# = -m_Spring\m_SpringConst*(name\value[0] - m_Spring\m_X1 - m_Spring\m_RestLength) - m_Mass\m_Damping*name\value[1]; v' = -(k/m)(x - R) - (b/m) v
+Return r# / m_Mass\m_Mass;
+End Function
+
+;// executes the i-th diffeq
+;// i = which diffeq,  t=time,  x= array of variables
+Function evaluate#(i, t#, name.array )
+	If i=0  Return diffeq0(t, name.array);
+	If i=1  Return diffeq1(t, name.array);
+End Function
+
+;  // A version of Runge-Kutta method using arrays
+;  // Calculates the values of the variables at time t+h
+;  // t = last time value
+;  // h = time increment
+;  // vars = array of variables
+;  // N = number of variables in x array
+Function solve_kutta(t#, h#)
+	For i=0 To numVars-1
+      		k1\value[i] = evaluate(i,t,vars.array);     // evaluate at time t
+	Next
+	 
+	For i=0 To numVars-1
+		inp\value#[I] = vars\value#[i]+k1\value[i]*h/2; // set up input to diffeqs
+	Next
+
+	For i=0 To numVars-1
+		k2\value#[I] = evaluate(i,t+h/2,inp.array);  // evaluate at time t+h/2
+	Next
+	
+	For i=0 To numVars-1
+		inp\value#[I] = vars\value#[i]+k2\value#[i]*h/2; // set up input to diffeqs
+	Next
+	
+	For i=0 To numVars-1
+		k3\value#[I] = evaluate(i,t+h/2,inp.array);  // evaluate at time t+h/2
+	Next
+	
+	For i=0 To numVars-1
+		inp\value#[I] = vars\value#[i]+k3\value#[i]*h; // set up input to diffeqs
+	Next
+	
+	For i=0 To numVars-1
+		k4\value#[I] = evaluate(i,t+h,inp.array);    // evaluate at time t+h
+	Next
+	
+	For i=0 To numVars-1
+		vars\value#[I] = vars\value#[I]+( k1\value[I]+2*k2\value#[I]+2*k3\value#[I]+k4\value#[I] )*h/6
+	Next
+End Function
+
+Function solve_eulers(t#, h#)
+
+	For i=0 To numVars-1
+      		k1\value[i] = evaluate(i,t,vars.array);     // evaluate at time t
+	Next
+	 
+	For i=0 To numVars-1
+		vars\value#[I] = vars\value#[I]+( k1\value[I])*h
+	Next
+End Function
+
+Global camera=CreateCamera()
+Global light=CreateLight(1)
+Global sphere=CreateSphere(8)
+
+RotateEntity light,0,0,0
+MoveEntity camera,0,20,-20
+ScaleEntity sphere,5,5,5
+;/////////////////////////////////////////////////////////////////////////////
+; main loop
+;/////////////////////////////////////////////////////////////////////////////
+Delay 1000
+h# = .1 ;this is the step size. keep it at .1 and swap out the solve functions.
+sim_time#=.0
+Global temptt#=1
+While Not KeyHit(1)
+	;solve_kutta(sim_time, h)	;swap these two functions. runge kutta will run stable
+	solve_eulers(sim_time, h)	;at much higher time steps than eulers
+	PositionEntity sphere,0,vars\value#[0]/10,0
+	sim_time#=sim_time#+h#
+	
+	RenderWorld
+	Flip
+	
+Wend
+
+End
+</pre> <br><br></td></tr></table><br>
+<a name="236974"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> cool. It works quite well, as compared to euler's which goes insane. saddly, I don't understand it. <br><br> I would definitly be interested with some sensible quaternions!<br><br>  The code your using is standered verlet as outlined by the link at the top of the code. it all boils down to Current=2*current-old+a*t^2.  You probably understand this, but what it means is <br><br>Current=current+velocity+velocity from acceleration.<br><br>The velocity is given by (current-old).<br><br>And about that cage-verlet thing. It shouldn't and wouldn't be doing it for each constraint. It would do it every ITERATION. as you can see at the top of the constraint code,<br><br>For n = 1 To ITERATIONS<br><br><br>This doesn't mean it's going through every constraint, instead it is simply doing the physics repeaditly until it gets it right.  An ideal verlet system would have checks to see if it should exit early.  I was thinking that if my system ever matured, I would add another loop around the iterations one to go through different objects. this way, the system could give up on one object, and continue to the rest while normally it might have to either stop the whole system or continue with a hopless task.<br><br>heh. you think your a math newbie. I don't know much about calculus except that a dirivitive gives the rate of change, and the integral gives the area on a graph of the equation.<br><br><br>jhocking:<br> are you talking about the verlet or the calculus? either one, I agree. <br><br></td></tr></table><br>
+<a name="237246"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> ok its going to be a while before i can get that quaternion code posted. its embedded in a VERY large program. but i will post it here as soon as i can. <br><br></td></tr></table><br>
+<a name="237249"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ouch. I hate it when I have a good set of functions muddled by my code. I can wait for the quaternion stuff as my system doesn't need it yet.<br><br> But once I get it, I'll probably use it.(If I can get it working) <br><br></td></tr></table><br>
+<a name="237282"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#22">[#22]</a></td></tr></table></td></tr><tr ><td class="posttext"> ok here we go. simple quaternion functions. i tired to explain it with comments in the code. hopefully you can break it down and find it usefull.<br><br><pre class=code>
+;original source can be found on the blitzbasic website. sorry i cannot remember who did
+;it but he gets credit for starting this.
+
+;added delta_rot function and modified the original functions to be more user friendly
+;and allow for non pre-computed rotation values to be used.
+
+Graphics3D 800,600,32,2
+SetBuffer BackBuffer()
+cube = CreateExampleCube()
+cam = CreateCamera()
+TranslateEntity cam, -5, -5, -5
+PointEntity cam, cube
+CameraViewport cam, 0, 0, GraphicsWidth (), GraphicsHeight ()
+
+Global oldp#=0,oldy#=0,oldr#=0
+Global tempRot.Rotation = New Rotation
+
+Const QuatToEulerAccuracy# = .001
+
+Type Rotation
+	Field pitch#, yaw#, roll#
+End Type
+
+Type Quat
+	Field w#, x#, y#, z#
+End Type
+
+tempquat.Quat = New Quat
+cubequat.quat = New quat
+
+FillRotation(tempRot, 0, 0, 0)	; setting up an empty rotation value
+								; this is where you would set your starting orientation.
+								
+
+
+EulerToQuat (cubeQuat, tempRot)	; convert these to quats to start it off. 
+								; it needs an old value And a New value and 
+								; and an old value.
+
+; convert a Rotation to a Quat
+Function EulerToQuat(out.Quat, src.Rotation)
+	; NB roll is inverted due to change in handedness of coordinate systems
+	Local cr# = Cos(-src\roll/2)
+	Local cp# = Cos(src\pitch/2)
+	Local cy# = Cos(src\yaw/2)
+
+	Local sr# = Sin(-src\roll/2)
+	Local sp# = Sin(src\pitch/2)
+	Local sy# = Sin(src\yaw/2)
+
+	; These variables are only here to cut down on the number of multiplications
+	Local cpcy# = cp * cy
+	Local spsy# = sp * sy
+	Local spcy# = sp * cy
+	Local cpsy# = cp * sy
+
+	; Generate the output quat
+	out\w = cr * cpcy + sr * spsy
+	out\x = sr * cpcy - cr * spsy
+	out\y = cr * spcy + sr * cpsy
+	out\z = cr * cpsy - sr * spcy
+End Function
+
+; convert a Quat to a Rotation
+Function QuatToEuler(out.Rotation, src.Quat)
+	Local sint#, cost#, sinv#, cosv#, sinf#, cosf#
+	Local cost_temp#
+
+	sint = (2 * src\w * src\y) - (2 * src\x * src\z)
+	cost_temp = 1.0 - (sint * sint)
+
+	If Abs(cost_temp) &gt; QuatToEulerAccuracy
+		cost = Sqr(cost_temp)
+	Else
+		cost = 0
+	EndIf
+
+If Abs(cost) &gt; QuatToEulerAccuracy
+		sinv = ((2 * src\y * src\z) + (2 * src\w * src\x)) / cost
+		cosv = (1 - (2 * src\x * src\x) - (2 * src\y * src\y)) / cost
+		sinf = ((2 * src\x * src\y) + (2 * src\w * src\z)) / cost
+		cosf = (1 - (2 * src\y * src\y) - (2 * src\z * src\z)) / cost
+	Else
+		sinv = (2 * src\w * src\x) - (2 * src\y * src\z)
+		cosv = 1 - (2 * src\x * src\x) - (2 * src\z * src\z)
+		sinf = 0
+		cosf = 1
+	EndIf
+
+	; Generate the output rotation
+	out\roll = -ATan2(sinv, cosv) ;  inverted due to change in handedness of coordinate system
+	out\pitch = ATan2(sint, cost)
+	out\yaw = ATan2(sinf, cosf)
+End Function
+
+
+Function delta_rot(p#,y#,r#)
+	newp#=p#-oldp#
+	newy=y-oldy
+	newr=r-oldr
+	oldp#=p#
+	oldy=y#
+	oldr=r#
+	FillRotation(tempRot, newp, newy, newr)
+End Function
+
+; result will be the same rotation as doing q1 then q2 (order matters!)
+Function MultiplyQuat(result.Quat, q1.Quat, q2.Quat)
+	Local a#, b#, c#, d#, e#, f#, g#, h#
+
+	a = (q1\w + q1\x) * (q2\w + q2\x)
+	b = (q1\z - q1\y) * (q2\y - q2\z)
+	c = (q1\w - q1\x) * (q2\y + q2\z)
+	d = (q1\y + q1\z) * (q2\w - q2\x)
+	e = (q1\x + q1\z) * (q2\x + q2\y)
+	f = (q1\x - q1\z) * (q2\x - q2\y)
+	g = (q1\w + q1\y) * (q2\w - q2\z)
+	h = (q1\w - q1\y) * (q2\w + q2\z)
+
+	result\w = b + (-e - f + g + h) / 2
+	result\x = a - ( e + f + g + h) / 2
+	result\y = c + ( e - f + g - h) / 2
+	result\z = d + ( e - f - g + h) / 2
+End Function
+
+; convenience function to fill in a rotation structure
+Function FillRotation(r.Rotation, pitch#, yaw#, roll#)
+	r\pitch = pitch
+	r\yaw = yaw
+	r\roll = roll
+End Function
+
+
+Function CreateExampleCube()
+	; This will create &amp; return a white cube with 3 coloured spikes going through it
+	; to emphasise the rotations, and also a light
+	Local cube = CreateCube()
+	Local xspike = CreateCone(16, True, cube)
+	Local yspike = CreateCone(16, True, cube)
+	Local zspike = CreateCone(16, True, cube)
+
+	Local tempBrush = CreateBrush(255, 255, 255)
+	PaintEntity cube, tempBrush
+	BrushColor tempbrush, 255, 0, 0
+	PaintEntity xspike, tempBrush
+	BrushColor tempbrush, 0, 255, 0
+	PaintEntity yspike, tempBrush
+	BrushColor tempbrush, 0, 0, 255
+	PaintEntity zspike, tempBrush
+
+	ScaleEntity xspike, 0.5, 4, 0.5
+	ScaleEntity yspike, 0.5, 4, 0.5
+	ScaleEntity zspike, 0.5, 4, 0.5
+
+	RotateEntity xspike, 0, 0, 0, 1
+	RotateEntity yspike, 90, 0, 0, 1
+	RotateEntity zspike, 0, 0, 90, 1
+
+	FreeBrush tempBrush
+
+	Local light = CreateLight(1)
+	PositionEntity light, -5, -5, -4
+
+	Return cube
+End Function
+
+
+;**************************************************
+;******* MAIN LOOP ********************************
+;**************************************************
+Repeat
+
+;NOTE: the values from the keypresses can be any number. 
+;This means you can use formulas To feed the delta_rot() Function.
+;This code differs from the original quaternion code in the archives
+;by allowing any number, the original required it be pre-computed
+;and was cumbersome because we dont always know whats going to be fed the functions.
+;
+;delta_rot,eulertoquat,mulitplyquat, and quattoeuler must be used in that order.
+;
+;finally just send the outputs (temprot) to an entity. pretty easy to use for
+;many things.
+If KeyDown(200)	 Then pitcht#=pitcht# + 1	;pitch+
+If KeyDown(208)	 Then pitcht#=pitcht# - 1	;pitch-
+If KeyDown(203)	 yawt#=yawt# + 1			;yaw+
+If KeyDown(205)	 yawt#=yawt# - 1			;yaw-
+If KeyDown(30)   rollt#=rollt# + 1			;roll+
+If KeyDown(44)   rollt#=rollt# - 1			;roll-
+	
+	delta_rot(pitcht#,yawt#,rollt#)
+	EulerToQuat (tempquat, tempRot)
+	MultiplyQuat(cubeQuat, cubeQuat, tempquat)
+	QuatToEuler (tempRot, cubeQuat)
+	
+	RotateEntity cube, tempRot\pitch, tempRot\yaw, tempRot\roll, 1
+
+	;
+	RenderWorld
+	Text 10, 10, "Standard Pitch:" + pitcht# Mod 360
+	Text 10, 20, "Standard Yaw:" + yawt# Mod 360
+	Text 10, 30, "Standard Roll:" + rollt# Mod 360
+	Text 10, 40, "Use cursor keys, a, z, and escape to exit"
+	Text 10, 50, "Quat Pitch:" + tempRot\pitch
+	Text 10, 60, "Quat Yaw:" + tempRot\yaw
+	Text 10, 70, "Quat Roll:" + tempRot\roll
+
+	Flip 
+	Until KeyHit(1)
+
+End
+</pre> <br><br></td></tr></table><br>
+<a name="237285"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#23">[#23]</a></td></tr></table></td></tr><tr ><td class="posttext"> ***** edited one problem solved ************************<br><br>OK for the verlet stuff im stuck hard.<br>these are the things i want to improve and/or add but are having problems figuring it out.<br><br>1) better method of integration, possibly velocity verlet integration. doesnt look like runge kutta apply's here. (unknown which to use)<br><br>2) polygon to sphere collider. currently in my code (not posted here) i have sphere to the objects polymesh and sphere to terrain working really well. but i need poly to sphere for when the colliding verlet "cube" started the collision with a face and not a sphere. <br><br>3) SOLVED --- deriving an orientation from the verlet "cube" so i can tie in a pivot at the CG with the high definition player mesh and match the cubes orientation. --- SOLVED<br><br>if anybody can help figure out these features please add your thoughts to this thread. <br><br></td></tr></table><br>
+<a name="237470"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Miracle</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#24">[#24]</a></td></tr></table></td></tr><tr ><td class="posttext"> 1. Dunno. Not sure where you're going with all this.<br><br>2. I wonder if you could use Blitz's own EntityCollided/CollisionX-Y-Z/TFormPoint commands to find the exact point of collision on the polymesh and transfer that impetus back to the nearest verlet(s) ...<br><br>3. Take two points along one axis and AlignToVector the polymesh, then take two points along another axis and AlignToVector again. <br><br></td></tr></table><br>
+<a name="237522"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#25">[#25]</a></td></tr></table></td></tr><tr ><td class="posttext"> 1) the simpler methods of itegration tend to blow up with larger step sizes. how it shows up with standard verlet integration is the shape will either collapse or turn itself inside out. its just to make the simulation more robust under wider range of situations. take a look at the runge kutta code. eulers method blows up while runge kutta runs stable. its posted a few panels above this one.<br><br>2) yeah i was hoping to try that. so i did some simple tests and if the polygon to which the sphere will contact, or vice versa, is moving the built in collision routines will not register a collision at all =( the polygon is only detected if it is static. so doesnt look like it will work here =(. in the version of code i have not posted i am using meshes intersect to detect if a "cube" is penetrating any other cube. since the polymesh for the cube collision uses so few polygons it doesnt slow it down a huge amount but it does suffer a noticeable performance hit. so as a start if i know they are collided i need to know where, when, at what angle, and by how much. then i can attempt to make the cubes react. i dont have know how to get that information currently.<br><br>3) hmm that may just work..... im definatly gonna try that!<br>i am wondering if that will give me an accurate roll value. thanks miracle. if it doesnt work ill post the results.<br>in the mean time im trying very hard to understand matrices. i know that is the approach that was used by the person who originaly posted the article that started all this. <br><br></td></tr></table><br>
+<a name="237588"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#26">[#26]</a></td></tr></table></td></tr><tr ><td class="posttext"> thanks for the quat funcs.<br><br>1)Seems to me like standard Verlet works fine. Although Velocity Verlet would give you better results for your goal of physics simulation. The simplicity of verlet would allow for faster games. Why do need larger steps anyway? a realistic simulation would have tiny steps. <br><br>2)You'll probably have to make your own collision code. Make sure it gives you penetration depth! as penetration depth is very useful later on for friction, and moving the verlets.  The good thing is there are lots of web articles about game collision code. I was thinking that you could NORMALIZE the position of the sphere local to a triangle, do a dot product with the triangles normal, and if the dot product is &gt;0 check the distance to the sphere perpindicular to the triangle(don't know how to do that).<br><br>3)the Align to vector sounds good, but you have to have verlets on two of the local axis and local origin. <br><br></td></tr></table><br>
+<a name="237628"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#27">[#27]</a></td></tr></table></td></tr><tr ><td class="posttext"> WOOT! good ideas for solving the orientation. works like a charm =) sometimes im my own worst enemy making things WAY more complex than they need to be hehe.<br><br>align to vector worked. but for anybody who is lurking out there and wants the details, the only way this will work for non perfect cube collision shapes is to add more verlets (possibly 4 to keep it balanced right) that represent a perfect X and Z axis direction. it then takes two align to vectors calls, one to align in the x direction and one to align in the z direction.<br><br>adding two to four more verlets wont kill the framerate to much i suspect. of course you only need to add these if the shape is not a perfect cuboid OR the shape doesnt naturally already contain verlets that will give you those angles.<br><br>thanks for the help. one down two to go.<br><br>p.s. i updated the code i originally posted in the first panel to show off the bouncing cars. give it a whirl looks pretty cool =) <br><br></td></tr></table><br>
+<a name="238079"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#28">[#28]</a></td></tr></table></td></tr><tr ><td class="posttext"> Awesome!  for a second I was really amazed at how "complex" yet smoot the scene seemed until I realized it was the cubes.  The orientation looks good though, and the bouncy cars are kinda funny. thanks for the code. <br><br></td></tr></table><br>
+<a name="238644"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#29">[#29]</a></td></tr></table></td></tr><tr ><td class="posttext"> I won't be here for one weeek. Leaving in an hour and a half. Unless I can get onto a computer, I won't post/respond. Oh yeah. and if botbuilder or botbuilder1 or bot builder posts, that just means I forgot my password ;-) <br><br></td></tr></table><br>
+<a name="238726"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#30">[#30]</a></td></tr></table></td></tr><tr ><td class="posttext"> lol, works for me. im not going to be active for a while in this thread because i need to do some serious coding. decided its time to make a program that will build the constraint links visually. so i have to model a vehicle and then make the program that uses the mesh to place the verlets that will be used.<br><br>have fun <br><br></td></tr></table><br>
+<a name="242420"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#31">[#31]</a></td></tr></table></td></tr><tr ><td class="posttext"> I decided to redo my system in hope of creating a powerful game-oriented verlet system, so I basically copied all the vector functions from your code(hope you don't mind), and created several new type structures.<br><pre class=code>
+Type structure
+ Field name$
+ Field Frst.entity
+ Field acc.vector
+ Field FirstC.constraint
+End Type
+
+Type entity
+ Field name$,mesh,sys.system
+ Field Nxt.entity,FirstP.particle,FirstC.constraint,s.structure
+End Type
+
+Type particle
+ Field Old.Vector,Current.Vector,Force.vector
+ Field ID,Nxt.particle,s.system
+ Field Anchor,Mass
+End Type 
+</pre><br><br>I'm using linked lists, so one particle gives the next particle, which gives the next particle, and on and on and on. It's a basic hierchal structure.   The top object, the structures, are made up of entities and constraints. The entities are then made up of particles/verlets and constraints. The general idea is that there is a main, possibly articulated object. This object could be a mech, a person, a trashcan, or anything. The object would be made of entities which are designed to be stable, or semi stable.  Then various constraints would be created in between the objects.  Anyway, you may be thinking that this would be quite a bit of unnessecary of work, but I was thinking that it would allow a programmer a way to create several objects, and then have them combined in various ways in-game. For instance, you could have an arrow and a rope in a level, the rope already a structure, and add the arrow to the rope structure, with constraints from the back of the arrow to the rope.  With some coding, you could then have a bow and shoot the arrow into some wood, and have the rope dangle.  I also thought it might be a useful feature to be able to selectivly update certain structures or objects.  You could use this if your game was running to slow on a machine. You would have a ftimestep value for each structure, and then only update the structures close to camera. Then, on every other update, structures in medium range are updated, and on every third update, far-away structures are updated. You store a ftimestep for each structure since if you just used the standard one, the close structures would recieve 3x the far away ones.  If you really wanted to get fancy, you could create a priority que for this. So all the close range would have a priority of say,10. The medium, a priority of 5, and the far-away, a priority of 1. then, every update each priority is upped by the number of updates it has been waiting. So even a far-away structure can get priority over a high priority one if it has been waiting long enough.  Anyway, every update the program would say how many of these structures can I process without slowing down my update rate? Then it would simply do that number, and reset the priorities.  <br><br>My next insane idea: Evolve constraints between particles. In other words, you would give this program a set of particles, and it would create several hundered different versions of the set with random constraints. the program would then evaluate their stability when falling on a plane.  the ones with the greatest stability to constraints ratio would then be mated/mutated into another genepool, and it continues. Unless you have seen/read somthing on genetic algorithms(GAs) this may seem like a crackpot idea, but it would actually work fairly well here.  GAs can easily solve much tougher problems. For instance, I recently read in Discover Magazine that a small program was created with a physical simulation of a human. They then evolved a brain for it over one-hundred generations, and it walked perfectly. The constraint-reduction problem would be easily solved by a GA.  Anyway, the whole point of this would be to reduce the number of constraints while maintaning resonable stability. I don't think that a one constraint for every combination of particle is necessary.<br><br>****READ THIS, IF ANYTHING, DMC/MIRACLE****<br> There is a bug in the DoVerlet function. It has forgotten the order of opperations, so that the old position is added to the acceleration, and then the new is subtracted from old. This would result in new=new-(old+acc) and applying the distributive property, new=new-old-acc. In other words, the acceleration is reversed. Ever wonder why the gravity was positive instead of negative? well this is the reason. It's fixable with one keypress. simply change the line<br><pre class=code>
+MulVecScalar(vTemp2,v\a,fTimeStep * fTimeStep)
+</pre><br>into<br><pre class=code>
+MulVecScalar(vTemp2,v\a,-fTimeStep * fTimeStep)
+</pre><br><br>well, don't know if you read al that(whew), but O well. as long as you read the bug report/fix. <br><br></td></tr></table><br>
+<a name="242730"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#32">[#32]</a></td></tr></table></td></tr><tr ><td class="posttext"> those are really good ideas. i would love to see a demo of some your concepts. since miracle posted the code to the public forums i didnt think he would mind me making some changes. i certainly dont if you use what i posted. heck just improve it! =)<br><br>i was wondering about the gravity being positive. thanks for catching that. <br><br>ok now for my status. well i did something i never should have done. bought star wars galaxys. needless to say i havent got a damn bit of code written thats worth showing. <br><br></td></tr></table><br>
+<a name="242790"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#33">[#33]</a></td></tr></table></td></tr><tr ><td class="posttext"> I don't have much new either. I just did the types, and adapted some of miracle's verlet functions to them. I hope to get started on my real code today. <br><br>Heh. somthing similar happened to me. I wanted to write some code yesterday, but I read an article on Gamustra about Mechwarrior 4's cool animation blending algorithms, and I had to check it out.  I already had MW4, so I ran it, and got hooked on the game once again. I only had time to write a couple of type statements and adapt miracles code.<br><br>So, I would gladly make a demo of them, but It's gonna be a while if ever.<br><br>the evolution one would come much later, although not hard, it would require my new verlet lib to actually work. <br><br></td></tr></table><br>
+<a name="246792"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#34">[#34]</a></td></tr></table></td></tr><tr ><td class="posttext"> Almost got it up to the level of my old lib. Only now it's run by linked lists, and it has structure objects with various entities. It's working well, but I still have a few kinks. For one, I'm redoing how it creates linked lists. before I had it search for a particle that didn't have a particle after it, and gave it the current particle. instead, I'm going to store the last one created. shouldn't be hard, I'm just not in the mood. I also have to split up some of the functions to allow for reapeating all the constraints in a structure.<br><br>soon however, soon. Then I'll advance to loading a mesh into an entity, so that the mesh's position reflects the entity. Then my own collision functions, then simple aerodynamics, and then evolving constraints, and finally, the most impossible of all, evolution of AI that actuates constraint musceles to walk/other tasks.<br><br>  I want to get to the aerodynamics part as I've thought quite a bit about it. It's actually very similar to how vertex lighting works. Simply take every verlet's associated vertice's normal and do a cross product with it by the local wind normal subtracted by the vertice's normalized velocity, and if the result is greater than 0(facing each other) then the the local wind normal subtracted by the vertice's normalized velocity is multiplied by the magnitude of the wind added to the magnitude of the vertice's velocity. Sounds complex, but at least I'm not trying to do any air-stream, high-low pressure stuff. Anyway, this simple model of aerodynamics ought to for instance, correct an arrows orientation as it flies. Since after you launch it, the arrow will begin to come down, imparting a velocity on the broad side of the arrow, rotating it in such a way to be more aerodynamic.<br><br>I should really stop having so many interests, and focus on one project.<br><br>I'm working on many Blitz projects right now. A dendritic growth simulator(simple started in 1 hour), a new type of paint program, verlet physics, an insane game, a model placement editer.<br><br>I suppose it's a good thing though. That way I don't really get bored programing. I simply switch projects. <br><br></td></tr></table><br>
+<a name="247552"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#35">[#35]</a></td></tr></table></td></tr><tr ><td class="posttext"> (sigh) I've practically hijacked this thread. No has posted for one whole week. And I've posted three, now four times. oh well. dmc out their?<br><br>Well, anyway, I have the new system to the level of my old system, except that I changed verlet integration to allow for speed changes as a game runs, as well as optimizing Miracle's method of doing it.<br><br>here's the pieces of code that manage it:<br><br><pre class=code>
+Global Ntime,Otime,Ntsq,Lmilli,NdivO#
+
+Function update()
+ If Lmilli=0 Then 
+  Ntime=10
+  Otime=10
+  NdivO=1
+ Else
+  Otime=Ntime
+  Ntime=MilliSecs()-LMilli
+  NdivO#=Float(Ntime)/Otime
+ EndIf
+ lmilli=MilliSecs()
+ Ntsq=Ntime*Ntime
+End Function
+
+Function indivVerlet(v.verlet)
+ If v.verlet&lt;&gt;Null Then
+  CloneVector(T,v\current)
+  MulVecScalar(T2,v\Force,Ntsq)						; a*timestep*timestep           				(Acceleration offset)
+  Addvector(T1,v\current,T2)						; N+a*timestep*timestep							(Acceleration with Current Position)
+  Subvector(T2,v\Current,v\Old)						; N-O											(Uncorrected Velocity)						 	     
+  MulvecScalar2(T2,NdivO#)                          ; (Newtime/Oldtime)(N-O)						(Time Corrected Velocity)
+  Addvector(v\current,T1,T2)						; N+Newtime/Oldtime(N-O)+a*Newtime*Oldtime		(Complete, time corrected physics)
+  CloneVector(v\old,T)
+ EndIf
+End Function
+</pre><br><br>Call update every loop, right before any physics is calculated. Call indiVerlet for every verlet particle you want updated. If anyone wants the full code, I'll post it. right now I need to post up a few questions relating to getting collisions working for it. <br><br></td></tr></table><br>
+<a name="247639"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#36">[#36]</a></td></tr></table></td></tr><tr ><td class="posttext"> That aerodynamics method sounds just like the way <a href="http://www.popsci.com/popsci/aviation/article/0,12543,463052,00.html" target="_blank">X-Plane</a> does its thing... <br><br></td></tr></table><br>
+<a name="247842"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#37">[#37]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yeah. I read about the X-Plane as I am subscribed to Popular science. Hadn't thought about it though as it was a while ago.Yep. Sounds like he's doing somthing similar except for the fact that it's more of a traditional physics system. Mine- the verlet physics system- Thinks of objects as a collection of dots and constraints upon the dots much like a 3d graphics engine does. I think that there system is proably more eficient, but less userfriendly, and less capable of doing articulated objects. Thanks for pointing it out though. I hadn't made the connection. <br><br></td></tr></table><br>
+<a name="249016"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#38">[#38]</a></td></tr></table></td></tr><tr ><td class="posttext"> im still out here. i havent posted because my code is not easily put up on the forum at the moment.<br><br>heres what i have been up to.<br><br>ive decided it would be fun to use the verlet stuff for driving simulator. i have a crude place holder for a car graphic at the moment until i get the nice one finished in lightwave. the verlet cage conforms to the approximate shape of the car body with 4 of the verlets placed precisely where the wheel mesh is. the wheel mesh is a seperate mesh from the car body so as the cage travels across the terrain it looks like the car has a real suspension. changing the mass of the verlets that represent the car body to be higher than the mass of the wheel loosens the suspension. having the wheel verlet and the body verlet the same tightens the suspension. i tied the body mesh to the center verlet abd gave the center a very high mass value so it doesnt twitch and vibrate. after all a car body is massive and the wheels should do most of the reactive motion. this is working really well so far. <br><br>adding forces, both linear and rotational, is simply done by temporarily parenting all the verlets to a pivot, which is controlled actively by player input, doing movement and rotation, and then unparenting the verlets so they can then act passively and handle the subtleties of physical simulation.<br><br>the car still needs mucho work though. i need a sophisticated friction model for the verlets that takes into account both rolling and static friction. thats what im hung up on at the moment.<br><br>but so far im very pleased. the car can go over rough terrain and i can watch the suspension work. i can take the car over jumps and it flies perfectly through the air and even the orientation it leaves the ramp is controlled by the suspension settings. surprisingly it arcs very nicely. if i land incorrectly the car tips over and rolls just like you might expect a car to do when it impacts the ground.<br><br>i really want to post the code but its such a mess right now im gonna wait till it makes more sense =)<br><br>ohh last minute edit: one cool thing is i can detect which verlet is collided with the terrain. so if the wheels leave the ground the player can no longer control the vehicle. also if the verlets that represent the body have collided with the terrain i can add a nice crash sound =) <br><br></td></tr></table><br>
+<a name="249354"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#39">[#39]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sounds cool. I'd love to see it in action. how are you handeling friction? Are you using a friction constant or are you taking into account the penetration depth of the verlet?<br><br>As you can see from the other topic, I've finished the basis of my new system. It's much improved, and runs at about the same speed. <br><br></td></tr></table><br>
+<a name="249372"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#40">[#40]</a></td></tr></table></td></tr><tr ><td class="posttext"> well friction is the part that needs work right now as described in the above post. the current friction is a total hack and not really worth of discussion. but here is what im hoping i can make work....<br><br>if the vector direction of travel for a wheel verlet is 0 degrees (parallel) to the direction the wheel can roll (xyz components are seperated and measured) the function it will be fed will return a 1 which is then multiplied by the velocity leaving it unchanged for rolling friction. if the vector varies off of parallel then the function will return a value less than one all the way to zero which is multiplied by the velocity so the verlet wont be allowed to travel off of the rolling direction much. god i hope this making sense lol im really tired. its something i got from a torque formula using sin's. if that doesnt look right i gotta hit the books i guess and see how to do it right.<br><br>it will be a long while before im ready to post here again. life is  kicking my ass and leaving little time to code.<br>good luck on your project.<br>when i have something worthy ill post it =) <br><br></td></tr></table><br>
+<a name="252698"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RayTracer</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#41">[#41]</a></td></tr></table></td></tr><tr ><td class="posttext"> I see you guys are talking about verlet physics , i am trying to implement this in my game ,and i am trying to make a verlet editor with witch you can edit a mesh's verlet collisions .But i don't know how to make the mesh rotate when the construct "tips over".I modified a little the verletentity code.Download my source files here: www.raduz.3x.ro/verletedit.zip<br>I would apreciate if any of you could help me solve this one.I apologyse 'cause the code is very messy ,and not very well explained <br><br></td></tr></table><br>
+<a name="252739"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#42">[#42]</a></td></tr></table></td></tr><tr ><td class="posttext"> a bit messy yes, but anyway, as discussed above, create an x and y verlet(or x and z or y and z, just has to have two axis), as well as a center verlet. position the object at the center verlet, and aligntovector the object to both axis. <br><br>for instance,<br><pre class=code>
+PositionEntity b\mesh,b\center\Current\x#,b\center\Current\y#,b\center\Current\z#
+    AlignToVector b\mesh,b\x\Current\x#-b\center\Current\x#,b\x\Current\y#-b\center\Current\y#,b\x\Current\z#-b\center\Current\z#,1
+    AlignToVector b\mesh,b\y\Current\x#-b\center\Current\x#,b\y\Current\y#-b\center\Current\y#,b\y\Current\z#-b\center\Current\z#,2
+</pre><br>(you'll have to adapt it for your code, as this is directly out of mine) <br><br></td></tr></table><br>
+<a name="252744"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#43">[#43]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh yeah, and since this topic is already up top, I might as well display my newest creation(mwuahaha)! this time I've split it all up into three .bb files one for vectors,one for main lib, and one as an example.<br><br>Vectors.bb:<br><pre class=code>
+;Got these from Dmc who got them from miracle, and I don't know if miracle made um or got um.
+
+Type Vector
+ Field x#
+ Field y#
+ Field z#
+End Type
+
+Function Vector.Vector(x#=0.0,y#=0.0,z#=0.0)
+	v.Vector = New Vector
+	v\x=x
+	v\y=y
+	v\z=z
+	Return v
+End Function 
+
+;// Vector 1 is set to Vector 2
+Function CloneVector(v1.Vector,v2.Vector)
+	v1\x = v2\x
+	v1\y = v2\y
+	v1\z = v2\z
+End Function
+
+;// Vector Scalar Multiplication
+;// Form of Vector1 = Vector2 * Scalar
+Function MulVecScalar(v1.Vector,v2.Vector,s#)
+	v1\x = v2\x * s
+	v1\y = v2\y * s
+	v1\z = v2\z * s
+End Function
+
+;// Form of Vector1 = Vector1 + Vector2
+Function AddVector2(v1.Vector,v2.Vector)
+	v1\x = v1\x + v2\x
+	v1\y = v1\y + v2\y
+	v1\z = v1\z + v2\z
+End Function
+
+;// Form of Vector1 = Vector1 - Vector2
+Function SubVector2(v1.Vector,v2.Vector)
+	v1\x = v1\x - v2\x
+	v1\y = v1\y - v2\y
+	v1\z = v1\z - v2\z
+End Function
+
+;// Form of Vector1 = Vector1 + Vector2
+Function AddVector(v1.Vector,v2.Vector,v3.vector)
+	v1\x = v2\x + v3\x
+	v1\y = v2\y + v3\y
+	v1\z = v2\z + v3\z
+End Function
+
+;// Vector Subtraction
+;// Form of Vector1 = Vector2 - Vector3
+Function SubVector(v1.Vector,v2.Vector,v3.Vector)
+	v1\x = v2\x - v3\x
+	v1\y = v2\y - v3\y
+	v1\z = v2\z - v3\z
+End Function
+
+;// Form of Vector1 = Vector1 * Scalar
+Function MulVecScalar2(v1.Vector,s#)
+	v1\x = v1\x * s
+	v1\y = v1\y * s
+	v1\z = v1\z * s
+End Function
+
+;// Form of Vector1 = Vector2 + Scalar
+Function AddVecScalar(v1.Vector,v2.vector,s#)
+	v1\x = v2\x + s
+	v1\y = v2\y + s
+	v1\z = v2\z + s
+End Function
+</pre> <br><br>Rep Verlet.bb:<br><pre class=code>
+Include "vectors.bb"
+
+;***********************************************************
+;Begining of Global and Constant Declerations 
+Global T.Vector=Vector()									
+Global T1.Vector = Vector()
+Global T2.Vector = Vector()
+Global Ntime,Otime,Ntsq,Lmilli,NdivO#,f
+Const dreps#=2,grav#=-.00001,buf#=10
+;***********************************************************
+;End of Global and Constant Declerations 
+
+
+;***********************************************************
+;Begining of Type Structure Declerations
+Type structure
+ Field name$
+ Field Frst.entity,Lst.entity
+ Field FirstC.constraint,LastC.constraint
+ Field Nxt.structure
+ Field fric#,CoG.Col_group
+ Field reps
+End Type
+
+Global LastS.structure=Null,FirstS.structure=Null
+
+Type entity
+ Field name$,mesh
+ Field Nxt.entity,firstV.verlet,LastV.verlet,FirstC.constraint,LastC.constraint,s.structure
+ Field center.verlet,x.verlet,y.verlet
+ Field Col_radius#
+End Type
+
+Type verlet
+ Field Old.Vector,Current.Vector,Force.vector
+ Field ID,Nxt.verlet,e.entity
+ Field Anchor,Mass#,collidable
+ Field rep															;Del
+ Field vertex
+End Type 
+
+Type constraint 
+ Field ID,s.structure,e.entity,Nxt.constraint
+ Field p1.verlet,p2.verlet,Desired_Dist#
+ Field springiness#,collidable
+ Field rep															;Del
+End Type
+
+Type Col_Group
+ Field min.vector,max.vector
+ Field Nxt.Col_Group,FirstXY.XY_col,FirstXZ.XZ_col,FirstZY.ZY_col,LastXY.XY_col,LastXZ.XZ_col,LastZY.ZY_col,FirstG.Col_Group,lastG.Col_Group
+End Type
+
+Type XY_col
+ Field z#,minx#,maxx#,miny#,maxy#
+ Field Nxt.xy_col
+End Type
+
+Type XZ_col
+ Field y#,minx#,maxx#,minz#,maxz#
+ Field Nxt.xZ_col
+End Type
+
+Type ZY_col
+ Field x#,minz#,maxz#,miny#,maxy#
+ Field Nxt.Zy_col
+End Type
+;***********************************************************
+;End of Type Structure Declerations 
+
+
+;***********************************************************
+;Begining of Non-specific Functions
+Function update()
+ If Lmilli=0 Then 
+  Ntime=10
+  Otime=10
+  NdivO=1
+ Else
+  Otime=Ntime
+  Ntime=MilliSecs()-LMilli
+  NdivO#=Float(Ntime)/Otime
+ EndIf
+ lmilli=MilliSecs()
+ Ntsq=Ntime*Ntime
+End Function
+
+Function positionreps()
+ For v.verlet=Each verlet
+  PositionEntity v\rep,v\current\x#,v\current\y#,v\current\z# 
+ Next
+ For b.entity=Each entity
+  If b\mesh&lt;&gt;0 Then
+   If b\center&lt;&gt;Null Then
+    PositionEntity b\mesh,b\center\Current\x#,b\center\Current\y#,b\center\Current\z#
+    AlignToVector b\mesh,b\x\Current\x#-b\center\Current\x#,b\x\Current\y#-b\center\Current\y#,b\x\Current\z#-b\center\Current\z#,1
+    AlignToVector b\mesh,b\y\Current\x#-b\center\Current\x#,b\y\Current\y#-b\center\Current\y#,b\y\Current\z#-b\center\Current\z#,2      
+   Else
+    v.verlet=b\FirstV.verlet
+    Repeat
+     If v\vertex&lt;&gt;0 Then VertexCoords GetSurface(b\mesh,CountSurfaces(b\mesh)),v\vertex,v\current\x#,v\current\y#,v\current\z#
+     If v\Nxt.verlet&lt;&gt;Null Then v.verlet=v\nxt.verlet Else Exit
+    Forever
+   EndIf  
+  EndIf
+ Next
+End Function
+;***********************************************************
+;End of Non-specific Functions
+
+
+;***********************************************************
+;Begining of Creation Functions
+Function CeConstraint.constraint(ent.entity,tp1.verlet,tp2.verlet,sp#)
+ c.constraint=New constraint
+ c\e.entity=ent.entity
+ c\p1.verlet=tp1.verlet
+ c\p2.verlet=tp2.verlet
+ c\springiness#=sp#
+ c\desired_dist#=Sqr((tp1\current\x#-tp2\current\x#)^2+(tp1\current\y#-tp2\current\y#)^2+(tp1\current\z#-tp2\current\z#)^2)
+ If ent\firstC.constraint=Null Then ent\firstC.constraint=c.constraint
+ If ent\LastC.constraint&lt;&gt;Null Then ent\LastC\Nxt.constraint=c.constraint
+ ent\LastC.constraint=c.constraint
+ Return c.constraint
+End Function
+
+Function CsConstraint.constraint(st.structure,tp1.verlet,tp2.verlet,sp#)
+ c.constraint=New constraint
+ c\s.structure=st.structure
+ c\p1.verlet=tp1.verlet
+ c\p2.verlet=tp2.verlet
+ c\springiness#=sp#
+ c\desired_dist#=Sqr((tp1\current\x#-tp2\current\x#)^2+(tp1\current\y#-tp2\current\y#)^2+(tp1\current\z#-tp2\current\z#)^2)
+ If st\firstC.constraint=Null Then st\firstC.constraint=c.constraint
+ If st\LastC.constraint&lt;&gt;Null Then st\LastC\Nxt.constraint=c.constraint
+ st\LastC.constraint=c.constraint
+ Return c.constraint
+End Function
+
+Function cstructure.structure(Name$)
+ news.structure=New Structure
+ news\name$=name$
+ news\fric#=.999
+ news\reps=dreps#
+ If LastS.structure&lt;&gt;Null Then LastS\Nxt.structure=news.structure
+ LastS.structure=news.structure
+ Return news.structure
+End Function
+
+Function Repetitions(s.structure,reps)
+ If s.structure&lt;&gt;Null Then
+  s\reps=reps
+ EndIf
+End Function
+
+Function centity.entity(Name$,struct.structure)
+ newe.entity=New entity
+ newe\name$=name$
+ newe\s.structure=struct.structure
+ If struct\Frst.entity=Null Then struct\Frst.entity=newe.entity
+ If struct\Lst.entity&lt;&gt;Null Then struct\Lst\NXt.entity=newe.entity
+ struct\Lst.entity=newe.entity
+ Return newe.entity
+End Function
+
+Function SetColRadius(e.entity,rad#)
+ If e&lt;&gt;Null Then e\col_radius#=rad#
+End Function
+
+Function crv.verlet(ent.entity,CX#,CY#,CZ#,OX#,OY#,OZ#,Anch=0,alpha=1)
+ v.verlet=New verlet 
+ v\current.vector=Vector.vector(cx#,cy#,cz#) 
+ v\Old.Vector=Vector.vector(ox#,oy#,oz#) 
+ v\mass#=1
+ v\Anchor=Anch
+ v\rep=CreateSphere()
+ ScaleEntity v\rep,5,5,5
+ EntityColor v\rep,255,0,0
+ PositionEntity v\rep,CX#,CY#,CZ#
+ EntityAlpha v\rep,alpha
+ v\force.vector=New vector
+ v\force\y#=grav#
+ v\e.entity=ent.entity
+ If ent\firstV.verlet=Null Then ent\firstV.verlet=v.verlet
+ If ent\LastV.verlet&lt;&gt;Null Then ent\LastV\NXt.verlet=v.verlet
+ ent\LastV.verlet=v.verlet
+ Return v.verlet;Handle(v.verlet)
+End Function
+
+Function csrv.verlet(ent.entity,CX#,CY#,CZ#,OX#,OY#,OZ#,SP,Anch=0,alpha=1)
+ v.verlet=New verlet 
+ v\current.vector=Vector.vector(cx#,cy#,cz#) 
+ v\Old.Vector=Vector.vector(ox#,oy#,oz#) 
+ v\mass#=1
+ v\Anchor=Anch
+ v\rep=CreateSphere()
+ ScaleEntity v\rep,5,5,5
+ EntityColor v\rep,255,0,0
+ PositionEntity v\rep,CX#,CY#,CZ#
+ EntityAlpha v\rep,alpha
+ v\force.vector=New vector
+ v\force\y#=grav#
+ v\e.entity=ent.entity
+ Select sp
+ Case 1:
+  ent\center.verlet=v.verlet
+ Case 2:
+  ent\x.verlet=v.verlet
+ Case 3:
+  ent\y.verlet=v.verlet
+ End Select
+ Return v.verlet;Handle(v.verlet)
+End Function
+
+Function cCol_Group.Col_group(parent.Col_Group,minx#,miny#,minz#,maxx#,maxy#,maxz#)
+ c.Col_Group=New col_group
+ c\min.vector=Vector.vector(minx#,miny#,minz#) 
+ c\max.vector=Vector.vector(maxx#,maxy#,maxz#)
+ If parent.Col_group&lt;&gt;Null Then
+  If parent\FirstG.Col_Group=Null Then parent\FirstG.Col_Group=c.Col_group
+  parent\LastG.Col_Group=c.Col_Group
+ EndIf
+ Return c.Col_Group
+End Function
+
+Function cXY.XY_Col(parent.Col_Group,minx#,miny#,maxx#,maxy#,z#)
+ xy.Xy_col=New XY_Col
+ xy\minx#=minx#
+ xy\miny#=miny#
+ xy\maxx#=maxx#
+ xy\maxy#=maxy#
+ xy\z#=z#
+ If parent.Col_Group&lt;&gt;Null Then
+  If parent\FirstXy.Xy_col=Null Then parent\FirstXy.Xy_col=xy.Xy_col
+  If parent\lastxy.xy_col&lt;&gt;Null Then parent\lastxy\Nxt.xy_col=xy.Xy_col
+  parent\lastXy.Xy_col=xy.Xy_col
+ EndIf
+ Return xy.XY_col
+End Function
+
+Function cXZ.XZ_Col(parent.Col_Group,minx#,minz#,maxx#,maxz#,y#)
+ xz.Xz_col=New Xz_Col
+ xz\minx#=minx#
+ xz\minz#=minz#
+ xz\maxx#=maxx#
+ xz\maxz#=maxz#
+ xz\y#=y#
+ If parent.Col_Group&lt;&gt;Null Then
+  If parent\FirstXz.Xz_col=Null Then parent\FirstXz.Xz_col=xz.Xz_col
+  If parent\lastxz.xz_col&lt;&gt;Null Then parent\lastxz\Nxt.xz_col=xz.Xz_col
+  parent\lastXz.Xz_col=xz.Xz_col
+ EndIf
+ Return xz.Xz_col
+End Function
+
+Function cZy.Zy_Col(parent.Col_Group,minz#,miny#,maxz#,maxy#,x#)
+ zy.zy_col=New zy_Col
+ zy\minz#=minz#
+ zy\miny#=miny#
+ zy\maxz#=maxz#
+ zy\maxy#=maxy#
+ zy\x#=x#
+ If parent.Col_Group&lt;&gt;Null Then
+  If parent\Firstzy.zy_col=Null Then parent\Firstzy.zy_col=zy.zy_col
+  If parent\lastzy.zy_col&lt;&gt;Null Then parent\lastzy\Nxt.zy_col=zy.zy_col
+  parent\lastzy.zy_col=zy.zy_col
+ EndIf
+ Return zy.zy_col
+End Function
+;***********************************************************
+;End of Creation Functions
+
+;***********************************************************
+;Begining of Specific Runtime Functions
+Function dostructure(st.structure)
+ e.entity=st\Frst.entity
+ If e.entity&lt;&gt;Null Then
+  Repeat 
+   doverlets e
+   If e.entity=st\lst.entity Then Exit Else e.entity=e\Nxt.entity
+  Forever
+  For r=1 To st\reps
+   c.constraint=st\firstC.constraint
+   e.entity=st\Frst.entity
+   If c.constraint&lt;&gt;Null Then
+    Repeat
+     Setdistance c\p1.verlet,c\p2.verlet,c\desired_dist#,c\springiness
+     If c.constraint=st\LastC.constraint Then Exit Else c.constraint=c\Nxt.constraint
+    Forever
+   EndIf
+   Repeat 
+    doconstraints e
+    If e.entity=st\Lst.entity Then Exit Else e.entity=e\Nxt.entity
+   Forever
+   collidest st
+  Next
+ EndIf
+End Function
+
+Function doentity(e.entity)
+ If e.entity&lt;&gt;Null Then
+  doverlets e
+  doconstraints e
+ EndIf
+End Function
+
+Function doverlets(e.entity)
+ v.verlet=e\firstV.verlet
+ If v.verlet&lt;&gt;Null Then
+  Repeat
+   indivVerlet v.verlet
+   If v.verlet=e\LastV.verlet Then Exit Else v.verlet=v\Nxt.verlet
+  Forever
+ EndIf
+ If e\center.verlet&lt;&gt;Null Then indivVerlet e\center.verlet
+ If e\x.verlet&lt;&gt;Null Then indivVerlet e\x.verlet
+ If e\y.verlet&lt;&gt;Null Then indivVerlet e\y.verlet
+End Function
+
+Function doconstraints(e.entity)
+ c.constraint=e\firstC.constraint
+ If c.constraint&lt;&gt;Null Then 
+  Repeat
+   Setdistance c\p1.verlet,c\p2.verlet,c\desired_dist#,c\springiness#
+   If c.constraint=e\LastC.constraint Then Exit Else c.constraint=c\Nxt.constraint
+  Forever
+ EndIf
+End Function
+
+Function indivVerlet(v.verlet)
+ If v.verlet&lt;&gt;Null Then;And v.verlet&lt;&gt;v\e\center.verlet Then
+  If v\Anchor=0 Then
+   CloneVector(T,v\current)
+   MulVecScalar(T2,v\Force,Ntsq)					; a*timestep*timestep           				(Acceleration offset)
+   ;DebugLog T2\x#+","+T2\y#+","+T2\z#+";"+(v.verlet=v\e\center.verlet)
+   Addvector(T1,v\current,T2)						; N+a*timestep*timestep							(Acceleration with Current Position)
+   Subvector(T2,v\Current,v\Old)					; N-O											(Uncorrected Velocity)						 	     
+   MulvecScalar2(T2,NdivO#*v\e\s\fric#)             ; (Newtime/Oldtime)(N-O)						(Time Corrected Velocity with basic friction)
+   Addvector(v\current,T1,T2)						; N+Newtime/Oldtime(N-O)+a*Newtime*Oldtime		(Complete, time corrected physics with basic friction)
+   CloneVector(v\old,T)
+   ;If v.verlet=v\e\center.verlet Then 
+   ;DebugLog T2\x#+","+T2\y#+","+T2\z#+";"+(v.verlet=v\e\center.verlet)
+   ;DebugLog 
+  Else
+   DebugLog 1
+   CloneVector(v\current,v\old)
+  EndIf
+ EndIf
+End Function
+
+Function SetDistance(p1.verlet,p2.verlet,dist#,sp#)	
+		SubVector(T1,p1\current,p2\current)
+		deltalength# = Sqr((T1\x * T1\x) + (T1\y * T1\y) + (T1\z * T1\z))
+		If deltalength# &lt;= 0.0 deltalength# = 0.0001
+		diff# = (deltalength# - dist#) / deltalength#
+		tmass# = p1\mass + p2\mass
+		MulVecScalar(T2,T1,diff# * (p2\mass / tmass)*sp#)
+		SubVector2(p1\current,T2)
+		MulVecScalar(T2,T1,diff# * (p1\mass / tmass)*sp#)
+		AddVector2(p2\current,T2)
+End Function
+
+Function collidest(st.structure)
+ If st\cog.Col_Group&lt;&gt;Null And st\frst.entity&lt;&gt;Null Then
+  e.entity=st\frst.entity
+  Repeat
+   collideE e,st\CoG
+   If e\Nxt.entity=st\Lst.entity Then Exit Else e.entity=e\Nxt.entity
+  Forever
+ ElseIf st\frst.entity&lt;&gt;Null Then
+  e.entity=st\frst.entity
+  cg.col_group=First Col_group
+  Repeat
+   collideE e,cg
+   If e\Nxt.entity=Null Then Exit Else e.entity=e\Nxt.entity
+  Forever
+ EndIf
+End Function
+
+Function collideE(e.entity,cg.Col_Group)
+ If e.entity&lt;&gt;Null And cg.Col_Group&lt;&gt;Null And e\FirstV.verlet&lt;&gt;Null Then
+  addvecScalar T,cg\min.vector,-e\col_radius
+  addvecScalar T1,cg\max.vector,e\col_radius
+  ;If e\center\current\x#=&gt;T\x# And e\center\current\y#=&gt;T\y# And e\center\current\z#=&gt;T\z# And e\center\current\x#&lt;=T1\x# And e\center\current\y#=&lt;T1\y# And e\center\current\z#=&lt;T1\z# Then
+   If cg\FirstXY&lt;&gt;Null Then
+    xyc.Xy_col=cg\FirstXY.Xy_col
+    Repeat
+     V.verlet=e\FirstV.verlet
+     Repeat
+      bts#=buf#*Sgn(v\current\z#-xyc\z#)
+      If (v\Old\z#&lt;=xyc\z# And v\current\z#=&gt;xyc\z#+bts#) Or (v\Old\z#=&gt;xyc\z# And v\current\z#&lt;=xyc\z#+bts#) Then;And (Not(v\current\z#=xyc\z# And v\Old\z#=xyc\z#)) Then 
+       If v\current\x#=&gt;xyc\minx# And v\current\y#=&gt;xyc\miny# And v\current\x#&lt;=xyc\maxx# And v\current\y#=&lt;xyc\maxy# Then
+        v\current\z#=xyc\z#+bts#;-2*Sgn(v\current\z#-xyc\z#)
+       Else
+       EndIf
+      EndIf
+      If v.verlet=e\lastV.verlet Then Exit Else v.verlet=v\Nxt.verlet
+     Forever
+     If xyc\Nxt.Xy_col=Null Then Exit Else xyc.Xy_col=xyc\Nxt.Xy_col
+    Forever
+   EndIf
+  
+  ;[temp]
+   If cg\FirstXZ&lt;&gt;Null Then
+    xzc.Xz_col=cg\FirstXZ.XZ_col
+    Repeat
+     V.verlet=e\FirstV.verlet
+     Repeat
+      bts#=buf#*Sgn(v\current\y#-xzc\y#) 
+      ;DebugLog bts#
+      If (v\Old\y#&lt;=xzc\y# And v\current\y#=&gt;xzc\y#+bts#) Or (v\Old\y#=&gt;xzc\y# And v\current\y#&lt;=xzc\y#+bts#) Then;And (Not(v\current\y#=xzc\y#+bts# And v\Old\y#=xzc\y#)) Then 
+       If v\current\x#=&gt;xzc\minx# And v\current\z#=&gt;xzc\minz# And v\current\x#&lt;=xzc\maxx# And v\current\z#&lt;=xzc\maxz# Then
+        v\current\y#=xzc\y#+bts#;-2*Sgn(v\current\y#-xzc\y#)
+       Else
+       EndIf
+      EndIf
+      If v.verlet=e\lastV.verlet Then Exit Else v.verlet=v\Nxt.verlet
+     Forever
+     If xzc\Nxt.Xz_col=Null Then Exit Else xzc.xz_col=xzc\Nxt.Xz_col
+    Forever
+   EndIf
+
+   If cg\FirstZy&lt;&gt;Null Then
+    zyc.zy_col=cg\FirstZy.Zy_col
+    Repeat
+     V.verlet=e\FirstV.verlet
+     Repeat
+      bts#=buf#*Sgn(v\current\x#-zyc\x#) 
+      If (v\Old\x#&lt;=zyc\x# And v\current\x#=&gt;zyc\x#+bts#) Or (v\Old\x#=&gt;zyc\x# And v\current\x#&lt;=zyc\x#+bts#) Then; And (Not(v\current\x#=zyc\x# And v\Old\x#=zyc\x#)) Then 
+       If v\current\z#=&gt;zyc\minz# And v\current\y#=&gt;zyc\miny# And v\current\z#&lt;=zyc\maxz# And v\current\y#&lt;=zyc\maxy# Then
+        v\current\x#=zyc\x#+bts#;-2*Sgn(v\current\x#-zyc\x#)
+       Else
+       EndIf
+      EndIf
+      If v.verlet=e\lastV.verlet Then Exit Else v.verlet=v\Nxt.verlet
+     Forever
+     If zyc\Nxt.zy_col=Null Then Exit Else zyc.zy_col=zyc\Nxt.zy_col
+    Forever
+   EndIf
+   ;[/temp]
+   If cg\nxt.Col_group&lt;&gt;Null Then collideE e,cg\nxt.Col_group ElseIf cg\firstg.Col_group&lt;&gt;Null Then collideE e,cg\firstg.Col_group
+  ;EndIf
+ EndIf
+End Function 
+;***********************************************************
+;End of Specific Runtime Functions
+</pre><br><br>Example 1:<br><pre class=code>
+Graphics3D 640,480,0,2
+
+Global dest_xang#,dest_yang#
+
+Include "Rep Verlet.bb"
+
+ti=MilliSecs()
+;ti=188221425
+SeedRnd ti
+DebugLog ti
+
+Dim RetV.verlet(1000)
+Dim RetV2.verlet(20,20)
+Dim RetV3.verlet(20,20,20)
+
+cg.col_group=cCol_Group.Col_group(Null,-200,-200,-200,200,200,200)
+Xyc.XY_col=cxy.XY_col(cg.col_group,-200,-200,200,200,200)
+Xyc1.XY_col=cxy.XY_col(cg.col_group,-200,-200,200,200,-200)
+Cxz.XZ_col=cxz.XZ_col(cg.col_group,-200,-200,200,200,-200)
+Cxz1.XZ_col=cxz.XZ_col(cg.col_group,-200,-200,200,200,200)
+Czy.Zy_col=czy.Zy_col(cg.col_group,-200,-200,200,200,-200)
+Czy1.Zy_col=czy.Zy_col(cg.col_group,-200,-200,200,200,200)
+
+;st.structure=vstring.structure(25*4,1)
+;st2.structure=vcube.structure()
+;repetitions st2,10
+st3.structure=Vcloth.structure(5*3,5*3,10/2)
+;st4.structure=Vgel.structure(10,10,10,7.5)
+;repetitions st4,4
+;Cxz3.XZ_col=cxz.XZ_col(cg.col_group,20,20,60,60,-40)
+
+For p.constraint=Each constraint
+ c=c+1
+Next
+
+For v.verlet=Each verlet
+ c2=c2+1
+Next
+
+DebugLog c+" constraints,"+c2+" verlets"
+
+HidePointer
+
+l1=CreateLight(1)
+RotateEntity l1,20,45,0
+LightColor l1,255,255,255
+
+Global cam=CreateCamera()
+CameraRange cam,10,20000
+
+PositionEntity cam,0,-50,-200
+;RotateEntity cam,0,180,0
+
+c2=CreateCube()
+ScaleEntity c2,20,20,20
+PositionEntity c2,0,-200,0
+EntityColor c2,0,255,0
+
+cg2.col_group=cCol_Group.Col_group(cg,-20,-220,-20,20,180,20)
+Cxz2.XZ_col=cxz.XZ_col(cg2.col_group,-20,-20,20,20,-180)
+xyc2.xy_col=cxy.xy_col(cg2.col_group,-20,-220,20,-180,-20)
+xyc3.xy_col=cxy.xy_col(cg2.col_group,-20,-220,20,-180,20)
+czy2.zy_col=czy.zy_col(cg2.col_group,-20,-220,20,-180,-20)
+czy3.zy_col=czy.zy_col(cg2.col_group,-20,-220,20,-180,20)
+
+;create next grid texture
+grid=CreateTexture( 64,64,0 )
+ScaleTexture grid,.25,.25
+SetBuffer TextureBuffer( grid )
+Color 255,255,255:Rect 0,0,32,32
+Color 128,128,128:Rect 32,0,32,32
+Color 128,128,128:Rect 0,32,32,32
+Color 255,255,255:Rect 32,32,32,32
+Color 0,0,255
+SetBuffer BackBuffer()
+Color 255,255,255
+
+cube=CreateCube()
+EntityTexture cube,grid
+FlipMesh cube
+ScaleEntity cube,200,200,200
+
+rn=0
+f=MilliSecs() 
+While Not KeyHit(1)
+ If rn Then  
+  update
+  ;dostructure st
+  ;dostructure st2
+  dostructure st3
+  ;dostructure st4
+  If KeyDown(200) Then 
+   RetV(0)\current\z#=RetV(0)\current\z#+1 
+   RetV(0)\old\z#=RetV(0)\current\z#+1
+  ElseIf KeyDown(208) Then 
+   RetV(0)\current\z#=RetV(0)\current\z#-1
+   RetV(0)\old\z#=RetV(0)\current\z#-1
+  EndIf
+  If KeyDown(203) Then 
+   RetV(0)\current\x#=RetV(0)\current\x#-1
+   RetV(0)\old\x#=RetV(0)\current\x#-1 
+  ElseIf KeyDown(205) Then 
+   RetV(0)\current\x#=RetV(0)\current\x#+1
+   RetV(0)\old\x#=RetV(0)\current\x#+1
+  End If
+  If KeyDown(201) Then 
+   RetV(0)\current\y#=RetV(0)\current\y#+2 
+   RetV(0)\old\y#=RetV(0)\current\y#+2
+  ElseIf KeyDown(209) Then 
+   RetV(0)\current\y#=RetV(0)\current\y#-1
+   RetV(0)\old\y#=RetV(0)\current\y#-1 
+  EndIf
+  positionreps 
+ EndIf
+
+ If KeyHit(59) Then rn=Not rn
+ If Not MouseDown(3) Then 
+  movecam
+  MoveEntity cam,0,0,MouseZSpeed()*2+MouseDown(1)*5+MouseDown(2)*-5 
+ Else 
+  MoveEntity cam,0,0,-MouseYSpeed()*2
+  MoveMouse GraphicsWidth()/2,GraphicsHeight()/2
+ EndIf
+
+ If KeyDown(57) Then 
+  md#=1000
+  For a.verlet=Each verlet
+   CameraProject cam,a\current\x#,a\current\y#,a\current\z#
+   dis#=Sqr((ProjectedX()-320)^2+(ProjectedY()-240)^2)
+   If dis#&lt;md# Then 
+    md#=dis#
+    sel.verlet=a.verlet
+   EndIf
+  Next
+   If md#&lt;10 Then 
+    dx#=EntityX(cam)-sel\current\x#
+    dy#=EntityY(cam)-sel\current\y#
+    dz#=EntityZ(cam)-sel\current\z#
+    cd#=1/Sqr(dx#^2+dy#^2+dz#^2)
+    n.vector=New vector
+    n\x#=cd*dx#
+    n\y#=cd*dy#
+    n\z#=cd*dz#
+    If KeyDown(29) Or KeyDown(157) Then 
+     mulvecscalar2(n.vector,50)
+     addvector(sel\old.vector,sel\current.vector,n.vector)
+    Else
+     mulvecscalar2(n.vector,-50)
+     addvector(sel\old.vector,sel\current.vector,n.vector)
+    EndIf
+   EndIf
+  EndIf
+
+ RenderWorld
+ Color 64,128,64
+ Rect 318-1,230-1,4+1,20+1
+ Rect 310-1,238-1,20+1,4+1
+ Flip
+ ttl=ttl+(MilliSecs()-f)
+ num=num+1
+ fps#=Float(ttl)/num
+ DebugLog fps# 
+ f=MilliSecs()
+Wend
+
+Function Vgel.structure(nx,ny,nz,stp#)
+ st.structure=cstructure.structure("gel")
+ e1.entity=Centity.entity("gelent",st) 
+ For x=1 To nx
+  For y=1 To ny
+   For z=1 To nz
+    If x=Int(nx/2) And y=Int(ny/2) And x=Int(nx/2) Then RetV3.verlet(x,y,z)=csrv(e1,(x-xoff#)*stp#,(z-zoff#)*stp#,(y-yoff#)*stp#,(x-xoff#)*stp#+Rnd(0,0),(z-zoff#)*stp#+Rnd(0,0),(y-yoff#)*stp#+Rnd(0,0),1,0,x=nx Or x=1 Or y=ny Or y=1 Or z=nz Or z=1) Else RetV3.verlet (x,y,z)=crv(e1,(x-xoff#)*stp#,(z-zoff#)*stp#,(y-yoff#)*stp#,(x-xoff#)*stp#+Rnd(0,0),(z-zoff#)*stp#+Rnd(0,0),(y-yoff#)*stp#+Rnd(0,0),0,x=nx Or x=1 Or y=ny Or y=1 Or z=nz Or z=1)
+    If x&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x-1,y,z),1)
+    If y&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x,y-1,z),1)
+    If z&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x,y,z-1),1)
+    If x&gt;1 And y&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x-1,y-1,z),1)
+    If x&gt;1 And z&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x-1,y,z-1),1)
+    If y&gt;1 And z&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x,y-1,z-1),1)
+    If y&gt;1 And z&gt;1 And x&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x-1,y-1,z-1),1)
+    If x&gt;2 And y&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x-2,y-1,z),1)
+    If x&gt;2 And z&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x-2,y,z-1),1)
+    If y&gt;2 And z&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x,y-2,z-1),1)
+    If x&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x-2,y,z),1)
+    If y&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x,y-2,z),1)
+    If z&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x,y,z-2),1)
+    If x&gt;2 And y&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x-2,y-2,z),1)
+    If x&gt;2 And z&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x-2,y,z-2),1)
+    If y&gt;2 And z&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x,y-2,z-2),1)
+    If x&gt;1 And y&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x-1,y-2,z),1)
+    If x&gt;1 And z&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x-1,y,z-2),1)
+    If y&gt;1 And z&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x,y-1,z-2),1)
+    If y&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x,y-2,z),1)
+    If z&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x,y,z-2),1)
+    If x&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV3(x,y,z),RetV3(x-2,y,z),1)
+   Next
+  Next
+ Next 
+ SetColRadius e1,Sqr((nx*stp#)^2+(ny*stp#)^2+(nz*stp#)^2)*1.25
+ Return st.structure
+End Function
+
+Function Vcloth.structure(nx,ny,Stp#)
+ st.structure=cstructure.structure("Cloth")
+ e1.entity=Centity.entity("clothent",st)
+ mesh=CreateMesh()
+ EntityColor mesh,255,0,0
+ surf=CreateSurface(mesh)
+ xoff#=nx*stp#/2/2/2/1.125
+ ;DebugLog nx*stp#/2/2/2/1.125
+ yoff#=ny*stp#/2/2/2/1.125
+ For x=1 To nx
+  For y=1 To ny
+   If x=Int(nx/2) And y=Int(ny/2) Then  RetV2.verlet (x,y)=csrv(e1,(x-xoff#)*stp#,0,(y-yoff#)*stp#,(x-xoff#)*stp#+Rnd(0,0),Rnd(0,0),(y-yoff#)*stp#+Rnd(0,0),1) Else RetV2.verlet (x,y)=crv(e1,(x-xoff#)*stp#,0,(y-yoff#)*stp#,(x-xoff#)*stp#+Rnd(0,0),Rnd(0,0),(y-yoff#)*stp#+Rnd(0,0),0)
+   If x&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV2(x,y),RetV2(x-1,y),1)
+   If y&gt;1 Then c2.constraint=CeConstraint.constraint(e1,RetV2(x,y),RetV2(x,y-1),1)
+   If x&gt;1 And y&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV2(x,y),RetV2(x-1,y-1),1)
+   If x&gt;2 And y&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV2(x,y),RetV2(x-2,y-2),1)
+   If x&gt;1 And y&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV2(x,y),RetV2(x-1,y-2),1)
+   If x&gt;2 And y&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV2(x,y),RetV2(x-2,y-1),1)
+   If x&gt;1 And y&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV2(x,y),RetV2(x-1,y-1),1)
+   If x&gt;3 And y&gt;3 Then c1.constraint=CeConstraint.constraint(e1,RetV2(x,y),RetV2(x-3,y-3),1)
+   If x&gt;1 And y&gt;3 Then c1.constraint=CeConstraint.constraint(e1,RetV2(x,y),RetV2(x-1,y-3),1)
+   If x&gt;3 And y&gt;1 Then c1.constraint=CeConstraint.constraint(e1,RetV2(x,y),RetV2(x-3,y-1),1)
+   If x&gt;3 And y&gt;3 Then c1.constraint=CeConstraint.constraint(e1,RetV2(x,y),RetV2(x-3,y-3),1)
+   If x&gt;2 And y&gt;3 Then c1.constraint=CeConstraint.constraint(e1,RetV2(x,y),RetV2(x-2,y-3),1)
+   If x&gt;3 And y&gt;2 Then c1.constraint=CeConstraint.constraint(e1,RetV2(x,y),RetV2(x-3,y-2),1)
+  Next
+ Next
+ SetColRadius e1,Sqr((nx*stp#)^2+(ny*stp#)^2)
+ Return st.structure
+End Function
+
+Function VString.structure(num,Stp#)
+ st.structure=cstructure.structure("String")
+ e1.entity=Centity.entity("STE",st)
+ For a=0 To num
+  If a=0 Then 
+   RetV.verlet (0)=crv(e1,0,0,0,0,0,0,1)
+  Else
+   RetV.verlet (a)=crv(e1,0,a*-Stp#,0,Rnd(-1,1),a*-stp#+Rnd(-1,1),Rnd(-1,1),0)
+   c1.constraint=CeConstraint.constraint(e1,RetV(a),RetV(a-1),1)
+   ;If a&gt;1 Then c2.constraint=CeConstraint.constraint(e1,RetV(a),RetV(a-2),1)
+  EndIf
+ Next
+ Return st.structure
+End Function
+
+Function Vcube.structure()
+ st.structure=cstructure.structure("Box")
+
+ e1.entity=centity.entity("Box entity",st)
+ v1.verlet=crv.verlet(e1,-10,-10,-10,-10+Rnd(-1,1),-10+Rnd(-1,1),-10+Rnd(-1,1))
+ v2.verlet=crv.verlet(e1,10,-10,-10,10+Rnd(-1,1),-10+Rnd(-1,1),-10+Rnd(-1,1))
+ v3.verlet=crv.verlet(e1,-10,10,-10,-10+Rnd(-1,1),10+Rnd(-1,1),-10+Rnd(-1,1))
+ v4.verlet=crv.verlet(e1,10,10,-10,10+Rnd(-1,1),1+Rnd(-1,1),-10+Rnd(-1,1))
+ v5.verlet=crv.verlet(e1,-10,-10,10,-10+Rnd(-1,1),-10+Rnd(-1,1),10+Rnd(-1,1))
+ v6.verlet=crv.verlet(e1,10,-10,10,10+Rnd(-1,1),-10+Rnd(-1,1),10+Rnd(-1,1))
+ v7.verlet=crv.verlet(e1,-10,10,10,-10+Rnd(-1,1),10+Rnd(-1,1),10+Rnd(-1,1))
+ v8.verlet=crv.verlet(e1,10,10,10,10+Rnd(-1,1),10+Rnd(-1,1),10+Rnd(-1,1))
+ cv.verlet=csrv.verlet(e1,0,0,0,Rnd(-1,1),Rnd(-1,1),Rnd(-1,1),1)
+ xv.verlet=csrv.verlet(e1,-10,0,0,-10+Rnd(-1,1),Rnd(-1,1),Rnd(-1,1),2)
+ yv.verlet=csrv.verlet(e1,0,10,0,Rnd(-1,1),10+Rnd(-1,1),Rnd(-1,1),3)
+
+ c1a.constraint=CeConstraint.constraint(e1,v1,v2,1)
+ c2a.constraint=CeConstraint.constraint(e1,v2,v4,1)
+ c3a.constraint=CeConstraint.constraint(e1,v3,v4,1)
+ c4a.constraint=CeConstraint.constraint(e1,v1,v3,1)
+ c5a.constraint=CeConstraint.constraint(e1,v2,v3,1)
+
+ c1b.constraint=CeConstraint.constraint(e1,v5,v6,1)
+ c2b.constraint=CeConstraint.constraint(e1,v6,v8,1)
+ c3b.constraint=CeConstraint.constraint(e1,v7,v8,1)
+ c4b.constraint=CeConstraint.constraint(e1,v5,v7,1)
+ c5b.constraint=CeConstraint.constraint(e1,v6,v7,1)
+
+ c1c.constraint=CeConstraint.constraint(e1,v1,v5,1)
+ c2c.constraint=CeConstraint.constraint(e1,v2,v6,1)
+ c3c.constraint=CeConstraint.constraint(e1,v3,v7,1)
+ c4c.constraint=CeConstraint.constraint(e1,v4,v8,1)
+
+ c1d.constraint=CeConstraint.constraint(e1,v1,v6,1)
+ c2d.constraint=CeConstraint.constraint(e1,v2,v8,1)
+ c3d.constraint=CeConstraint.constraint(e1,v3,v5,1)
+ c4d.constraint=CeConstraint.constraint(e1,v4,v7,1)
+
+ c1e.constraint=CeConstraint.constraint(e1,v1,cv,1)
+ c2e.constraint=CeConstraint.constraint(e1,v5,cv,1)
+ c3e.constraint=CeConstraint.constraint(e1,v2,cv,1)
+
+ c1f.constraint=CeConstraint.constraint(e1,cv,xv,1)
+ c2f.constraint=CeConstraint.constraint(e1,v4,xv,1)
+ c4f.constraint=CeConstraint.constraint(e1,v7,xv,1)
+
+ c1g.constraint=CeConstraint.constraint(e1,cv,yv,1)
+ c2g.constraint=CeConstraint.constraint(e1,v3,yv,1)
+ c4g.constraint=CeConstraint.constraint(e1,v7,yv,1)
+ c4g.constraint=CeConstraint.constraint(e1,xv,yv,1)
+
+ e1\mesh=CreateCube()
+ ScaleEntity e1\mesh,10,10,10
+ EntityColor e1\mesh,255,0,0
+
+ setcolradius e1,Sqr(2*20^2)
+
+ Return st.structure
+End Function
+
+; the rest is from Rob hutchison
+Function movecam()
+ mxs=MouseXSpeed()/2
+ mys=MouseYSpeed()/2
+		
+ ; Update destination camera angle x and y values
+ dest_xang#=dest_xang#+mys
+ dest_yang#=dest_yang#-mxs
+	
+ ; Curve camera angle values towards destination values
+ xang#=CurveValue#(xang#,dest_xang#,5)
+ yang#=CurveValue#(yang#,dest_yang#,5)
+	
+ RotateEntity cam,xang#,yang#,0
+ MoveMouse GraphicsWidth()/2,GraphicsHeight()/2
+End Function
+
+Function CurveValue#(current#,destination#,curve)
+	current#=current#+((destination#-current#)/curve)
+	Return current#
+End Function
+</pre><br><br>EDIT: Jeez I forgot I was posting on the BlitzBasic website...... code entries are huge. oh well. also, the example is really kinda 4 part. uncomment one of the st#.structure=Vcube(blahblah) commands to create a different object. also uncomment it's executer command, dostructure st#.<br><br>EDIT #2: Lookin forward to the car demo, Dmc! <br><br></td></tr></table><br>
+<a name="252961"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RayTracer</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#44">[#44]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks a lot bot builder <br><br></td></tr></table><br>
+<a name="252970"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#45">[#45]</a></td></tr></table></td></tr><tr ><td class="posttext"> hey thats pretty cool =)<br>wish i had more time to study your code.<br>heres just a short update...<br>1) found a crude method that prevents the suspension from turning inside out. im basically checking to see if the verlet that represents a tire has travelled farther than the suspension limits. it is working but needs refine to get rid of some graphical jitter. it was really weird when i didnt have this in place because every now and then the wheels would end up above the cars roof lol.<br>2) did some refinements on suspension stiffness. looks much better. the wheels previously where bouncing around either to much or too little. still being refined.<br>3) started to overhaul the friction hack i was using. friction is now calculated per verlet, and has different methods for that calculation on what type of object the verlet is representing. example the wheels now have allow for rolling friction in the direction of travel, but prevent the tires from sliding sideways. this was especially tricky to do. my solution was to use transform vector so the verlet xyz velocity value are transformed from world space to car pivot space. the i only allow for y and z calcualtions. x is ignored. still being refined...<br>4) got the wheels meshes tied to the wheel verlets to spin as the car moves forward or back based on speed.<br>5) car body now exhibits body roll due to engine torque and turning.<br>6) shifted the center verlet to the rear to approximate a correct wheel base and turning stuff.<br>7) i now correctly only send user input forces to either the front or the rear tires (turning and hitting accelerator). previously i was sending forces to all the verlets. this has allowed me to achieve much more realistic behavior.<br><br>problems im trying to solve.<br>floating point creep-error is causing me grief.<br>car is rolling over way to easy in a sharp turn.<br>for some reason the car is wanting to "snap roll" upside down when fying thru the air after jump. it appears that the forces when in flight are not equally distributed while not in contact with the ground.<br><br>back to the grind. <br><br></td></tr></table><br>
+<a name="253015"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RayTracer</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#46">[#46]</a></td></tr></table></td></tr><tr ><td class="posttext"> found the bug ...finaly ,i guess fatigue finally caught up with me.. <br><br></td></tr></table><br>
+<a name="253310"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RayTracer</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#47">[#47]</a></td></tr></table></td></tr><tr ><td class="posttext"> I have made a verlet above the center verlet and one below .i have set up the constraints then i tried to use this to orient the mesh: <br>[code]<br>x#=EntityX(cc\x2[1]\m)-EntityX(cc\x1[1]\m)<br>y#=EntityY(cc\x2[1]\m)-EntityY(cc\x1[1]\m)<br>z#=EntityZ(cc\x2[1]\m)-EntityZ(cc\x1[1]\m)<br>AlignToVector m_object, x#, y#, z#, 1<br><br>x#=EntityX(cc\x2[1]\m)-EntityX(cc\x1[1]\m)<br>y#=EntityY(cc\x2[1]\m)-EntityY(cc\x1[1]\m)<br>z#=EntityZ(cc\x2[1]\m)-EntityZ(cc\x1[1]\m)<br>AlignToVector m_object, x#, y#, z#, 3<br>[\code]<br>But t didn't work...What am i doing wrong? <br><br></td></tr></table><br>
+<a name="253426"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#48">[#48]</a></td></tr></table></td></tr><tr ><td class="posttext"> Uh, You need three verlets to get it working. from what I can tell your calling aligntovector on the same two verlets. You want three verlets, one in the center, and two on different axis.  For instance:<br><pre class=code>
+positionentity m_object,EntityX(cc\x1[1]\m),EntityY(cc\x1[1]\m),Entityz(cc\x1[1]\m)
+x#=EntityX(cc\x2[1]\m)-EntityX(cc\x1[1]\m) 
+y#=EntityY(cc\x2[1]\m)-EntityY(cc\x1[1]\m) 
+z#=EntityZ(cc\x2[1]\m)-EntityZ(cc\x1[1]\m) 
+AlignToVector m_object, x#, y#, z#, 1 
+
+x#=EntityX(cc\x3[1]\m)-EntityX(cc\x1[1]\m) 
+y#=EntityY(cc\x3[1]\m)-EntityY(cc\x1[1]\m) 
+z#=EntityZ(cc\x3[1]\m)-EntityZ(cc\x1[1]\m) 
+AlignToVector m_object, x#, y#, z#, 3
+</pre> <br>(assuming x1 is center, x2 is a positive x, and x3 is a positive z) <br><br></td></tr></table><br>
+<a name="253820"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RayTracer</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#49">[#49]</a></td></tr></table></td></tr><tr ><td class="posttext"> I have tried this :<br>cc\v[0]  center <br>cc\x1[0] verlet below<br>cc\x2[0] verlet above<br><br><pre class=code>
+
+a=verlet(EntityX(m_cg,True),EntityY(m_cg,True)-.5,EntityY(m_cg,True),0.1,1,1,1)
+b=verlet(EntityX(m_cg,True),EntityY(m_cg,True)+.5,EntityZ(m_cg,True),0.1,1,1,1)
+
+cc\x1[1]=a
+cc\x2[1]=b
+
+bd=cc\x1[1]\m
+
+;link with every verlet
+
+For seg.segment=Each segment
+	
+		For i=1 To seg\nrite
+			a=seg\sv[i]\pp[1]\obj
+			ad=seg\sv[i]\obj
+			constraint(a,cc\x1[1],EntityDistance(ad,bd))
+		Next
+	
+
+Next
+
+bd=cc\x2[1]\m
+
+For seg.segment=Each segment
+	
+	If seg\id=1 Then
+
+		For i=1 To seg\nrite
+			a=seg\sv[i]\pp[1]\obj
+			ad=seg\sv[i]\obj
+			constraint(a,cc\x2[1],EntityDistance(ad,bd))		
+
+		Next
+	
+	End If
+
+Next
+
+
+constraint(cc\x1[1],cc\x2[1],EntityDistance(cc\x1[1]\m,cc\x2[1]\m))
+constraint(cc\v[0],cc\x2[1],EntityDistance(cc\v[0]\m,cc\x2[1]\m))
+constraint(cc\v[0],cc\x1[1],EntityDistance(cc\v[0]\m,cc\x1[1]\m))
+
+</pre><br><br>and this is in the main loop :<br><br><pre class=code>
+			For cc.construct = Each construct   
+				PositionEntity m_object,EntityX(cc\v[0]\m),EntityY(cc\v[0]\m),EntityZ(cc\v[0]\m)
+				x#=EntityX(cc\x1[1]\m)-EntityX(cc\v[0]\m) 
+				y#=EntityY(cc\x1[0]\m)-EntityY(cc\v[0]\m) 
+				z#=EntityZ(cc\x1[0]\m)-EntityZ(cc\v[0]\m) 
+				AlignToVector m_object, x#, y#, z#, 1 
+
+				x#=EntityX(cc\x2[1]\m)-EntityX(cc\v[0]\m) 
+				y#=EntityY(cc\x2[1]\m)-EntityY(cc\v[0]\m) 
+				z#=EntityZ(cc\x2[1]\m)-EntityZ(cc\v[0]\m) 
+				AlignToVector m_object, x#, y#, z#, 3
+							
+			Next
+</pre><br><br>But i don't get the desired result .I appologise if i'm becoming iritating with this issue but it's really important for me to solve it <br><br></td></tr></table><br>
+<a name="254168"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#50">[#50]</a></td></tr></table></td></tr><tr ><td class="posttext"> Okay, the problem is that the two points above and below the center are on the same axis-the y axis- they have to be on different axis. So, you can keep the one above, but move the below one to be aligned with the x or the z axis. <br><br></td></tr></table><br>
+<a name="254464"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RayTracer</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#51">[#51]</a></td></tr></table></td></tr><tr ><td class="posttext"> Finnaly got it working ...thanks alot bot builder for your help <br><br></td></tr></table><br>
+<a name="254601"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#52">[#52]</a></td></tr></table></td></tr><tr ><td class="posttext"> Your Welcome. it's good to see other people working on verlet stuff other than me,dmc, and miracle.....<br><br>Anyway, I forgot to mention in one of my more recent posts my newest idea for making collisions faster.<br>My collision hierchy system is already moderatly crowded, but oh well. My idea is to include anti-collisions.<br>A standard collision type like quads, cylinders, boxes, cones, and spheres would be able to attatch <br>anti-collision types like anti cylinders, anti boxes, anti cones, and anti spheres.  This system is just like<br>carving in a modelling program, except that it runs FAST. All you have to do is check if a verlet is inside<br>a primitive collision type. If so, check if it's inside a anti collision type. If it's inside an anti <br>collision type, run collisions for it. If it's inside the sphere and not in an anti collision type, then <br>collide the verlet with the sphere. One of my mathematic savvy friends had another idea. Allow for any<br>object representable by a mathamatical formulae. This would allow for 3d spline collisions, Bezier patch<br>collisions, and wild shapes. I would have to create a math interpereter that evaluated strings though...<br>Ah well, the any mathematical shape thing is extremly ambitious. If I get all the stuff with <br>collisions, a collision editer, my own verlet editor with evolving constraints, aerodynamics, <br>evolving verlets, integration with boned models, and a cool demo to show it all off, I might do the mathy<br>thing.<br><br>Ah yes, and an update. My collisions are kinda dieing. They aren't working very well. I think it happened after I added box collisions. Oh well. I think I'll split the verlet code and the collision code for dev reasons, as it'll be easier to troubleshoot. Maybe I should comment my code one of these days.(muwahaha) <br><br></td></tr></table><br>
+<a name="255058"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#53">[#53]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cool, really looking forward to seeing 'native Blitz' car physics, dmc! <br><br></td></tr></table><br>
+<a name="255405"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#54">[#54]</a></td></tr></table></td></tr><tr ><td class="posttext"> i have put up the car demo in a new post in the advanced 3d forums. therefor i wont be contributing much to this older post. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,929 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Quicktime for Blitzmax</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Quicktime module for Blitzmax, language=bmx, category=Graphics'><meta name='author' content='AdamRedwoods'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=1>Graphics</a>/Quicktime for Blitzmax</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2698.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Quicktime for Blitzmax by AdamRedwoods</td><td align="right">2010 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Here is my implementation for Quicktime for Blitzmax. It currently only runs under Windows and MacOSX. <br><br>Updated: 2011 Dec 27 - improved playback speed with DrawMovieImage()<br><br>TO USE:<br>I have this module living under the "blitzmax/mods/addons.mod" directory.<br><br>MACOSX: You will have the framework installed with XCode. No need to install additional libraries.<br><br>WINDOWS: In order for this to work, you will need to register and download Apple's Quicktime SDK for Windows (its free). Copy these files into the module's folder. Here is a sample folder layout:<br>+blitzmax<br>++mod<br>+++addons.mod<br>++++quicktime.mod<br>+++++maxquicktime_glue.cpp<br>+++++quicktime.bmx<br>+++++QuicktimeSDK<br>++++++CIncludes<br>++++++Libraries<br>++++++RIncludes<br>++++++ComponentIncludes<br>++++++Tools<br><br>You will also need to modify a couple lines in the "Math64.h" file (to compile under MINGW) to read as follows:<br><pre class=code>
+#if TYPE_LONGLONG &amp;&amp; TARGET_OS_WIN32 &amp;&amp; !defined(__MINGW32__)
+    #define S64Max() 9223372036854775807i64
+
+..and...
+
+#if TYPE_LONGLONG &amp;&amp; TARGET_OS_WIN32 &amp;&amp; !defined(__MINGW32__)
+    #define U64Max() 0xffffffffffffffffui64
+</pre><br><br>WINDOWS &amp; MACOSX<br>You will then need the "maxquicktime_glue.cpp" file, and place it in the quicktime.mod folder.<br><br>maxquicktime_glue.cpp<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+#pragma once
+
+#ifndef __QTMOVIE_H
+#define __QTMOVIE_H
+
+
+
+#include &lt;stdio.h&gt;
+#include &lt;stdbool.h&gt;
+
+#if defined (_WIN32)
+#include &lt;brl.mod/blitz.mod/blitz.h&gt;
+#include "QuickTimeSDK/CIncludes/QTML.h"
+#include "QuickTimeSDK/CIncludes/Movies.h"
+
+const int kNativeEndianPixMap = 0;
+#endif
+
+#if defined (__APPLE__)
+#include &lt;brl.mod/blitz.mod/blitz.h&gt;
+#include &lt;QuickTime/Quicktime.h&gt;
+#include &lt;QuickTime/Movies.h&gt;
+#endif
+
+
+/*stop using gworlds:
+CGBitmapContext around your data buffer, and then call 
+CGBitmapContextCreateImage() to obtain a 
+CGImageRef for just-in- time drawing of that context
+*/
+
+class bmx_qt
+{
+public:
+	Movie		theMovie;
+	GWorldPtr    movieGWorld ;
+	Rect        movieRect ;
+	FSSpec		m_fileSpec;
+	OSType		m_pixelFormat;
+	short		resRefNum; //theFile
+	Rect 		bufferBounds;
+	MovieController  theController;
+	short 		resID;
+	OSErr		err;
+	
+	//CGContextRef ccr;
+	//CGColorSpaceRef colorspace;
+	
+	CTabHandle	cTable;
+	GDHandle	aGD;
+	short monitorPixelDepth;
+	TimeValue 	currentTime;
+	
+	bmx_qt() {
+		cTable=NULL;
+		aGD=0;
+		theController=NULL;
+		monitorPixelDepth=24;
+	};
+	~bmx_qt() {
+		delete this;
+	}
+};
+
+/*
+typedef long                            TimeValue;
+typedef long                            TimeScale;
+typedef wide                            CompTimeValue;
+typedef SInt64                          TimeValue64;
+struct TimeRecord {
+  CompTimeValue       value;                  // units (duration or absolute) (comptimevalue = wide)
+  TimeScale           scale;                  // units per second 
+  TimeBase            base;                   // refernce to the time base 
+};
+#if TARGET_RT_BIG_ENDIAN
+struct wide {
+  SInt32              hi;
+  UInt32              lo;
+};
+/*
+
+
+/* SET EXTERNS */	
+extern "C" {
+	bmx_qt * bmx_CreateQT();
+	
+
+	int bmx_NewMovieFromFile( bmx_qt * qtclass, char * filename);
+	int bmx_NewMovieFromURL( bmx_qt * qtclass, char * filename);
+	int bmx_NewMovieFromFileRef( bmx_qt * qtclass, int flag);
+	void bmx_DisposeMovie (bmx_qt * qtclass) ;
+	int bmx_OpenMovieFile( bmx_qt * qtclass, SInt8 permission);
+	int bmx_CloseMovieFile(bmx_qt * qtclass);
+	int bmx_NativePathNameToFSSpec(bmx_qt * qtclass, char * filename, int flag);
+	int bmx_FSMakeFSSpec(bmx_qt * qtclass, const unsigned char * filename);
+	int bmx_GetMovieLoadState(bmx_qt * qtclass);
+	
+	void bmx_GetMovieBox(  bmx_qt * qtclass);
+	int bmx_GetMovieWidth (bmx_qt * qtclass);
+	int bmx_GetMovieHeight (bmx_qt * qtclass);
+	int bmx_GetMovieTrackCount(bmx_qt * qtclass);
+	void bmx_SetMoviePlayHints(bmx_qt * qtclass , int hint1, int hint2) ;
+	
+	int bmx_NewMovieController(  bmx_qt * qtclass,  long flags);
+	void bmx_DisposeMovieController (bmx_qt * qtclass);
+	void bmx_SetMovieActive(bmx_qt * qtclass , bool flag);
+	void bmx_StartMovie(bmx_qt * qtclass );
+	int bmx_UpdateMovie(bmx_qt * qtclass );
+	void bmx_StopMovie(bmx_qt * qtclass );
+	int bmx_IsMovieDone(bmx_qt * qtclass );
+	
+	long bmx_GetMovieNextInterestingTime(bmx_qt * qtclass, int flags);
+	void bmx_SetMovieTimeValue(bmx_qt * qtclass, long newtime);
+	
+	void bmx_GoToBeginningOfMovie(bmx_qt * qtclass );
+	int bmx_GetMovieDuration(bmx_qt * qtclass);
+	long bmx_GetMovieTime(bmx_qt * qtclass);
+	long bmx_GetMovieTimeScale(bmx_qt * qtclass);
+	void bmx_SetMovieVolume ( bmx_qt * qtclass, float volume);
+	void bmx_MoviesTask(bmx_qt * qtclass, int flags);
+	
+	int bmx_NewGWorld(bmx_qt * qtclass, int w, int h, long flags);
+	int bmx_QTNewGWorldFromPtr( bmx_qt * qtclass,int pixelformat, int w, int h, char *buffer, long rowbytes, GWorldFlags flags);
+	void bmx_SetGWorld(bmx_qt * qtclass);
+	void bmx_SetMovieGWorld(bmx_qt * qtclass);
+	void bmx_DisposeGWorld(bmx_qt * qtclass);
+	int bmx_GetGWorldDevice( bmx_qt * qtclass);
+	int bmx_LockPixels (bmx_qt * qtclass);
+	void bmx_UnlockPixels (bmx_qt * qtclass);
+	
+	void bmx_PreRollMovie( bmx_qt * qtclass ,  TimeValue   time);
+}
+
+
+/*DEFINE EXTERN FUNCTIONS */
+bmx_qt * bmx_CreateQT() {
+	return new bmx_qt();
+}
+
+// create a data reference from a full path CFString
+Movie GetMovieFromFileString(char * filename,  OSErr err, short * id)
+{
+    Movie theMovie = 0;
+    Handle dataRef = NULL;
+    OSType dataRefType;
+	
+    //OSErr err;
+	
+	CFStringRef inPath = CFStringCreateWithCString (0,  filename,  0);
+	
+    // create the data reference
+    err = QTNewDataReferenceFromFullPathCFString(inPath, 0, 0, &amp;dataRef, &amp;dataRefType); //kQTNativeDefaultPathStyle, 0, &amp;dataRef, &amp;dataRefType);
+	
+    if (NULL != dataRef) {
+        // get a movie
+        //err = NewMovieFromDataRef(&amp;theMovie,
+		//                       (allowUserInteraction ? 0 :
+		//					   newMovieDontAskUnresolvedDataRefs),
+		//                     id, dataRef, dataRefType);
+		err = NewMovieFromDataRef(&amp;theMovie,
+								  newMovieActive|newMovieDontAskUnresolvedDataRefs,
+								  id, dataRef, dataRefType);
+		
+        // remember to dispose of the data reference handle
+        DisposeHandle(dataRef);
+    }
+	
+    return theMovie;
+}
+
+Movie GetMovieFromURLString(char * filename, OSErr err, short * id)
+{
+    Movie theMovie = 0;
+    Handle dataRef = NULL;
+    OSType dataRefType;
+	
+    //OSErr err;
+	
+	CFStringRef url = CFStringCreateWithCString (0,  filename, 0);
+	CFURLRef inPath = CFURLCreateWithString(NULL, url, NULL);
+	
+    // create the data reference
+    //err = QTNewDataReferenceFromFullPathCFString(inPath, kQTNativeDefaultPathStyle, 0, &amp;dataRef, &amp;dataRefType);
+	err = QTNewDataReferenceFromCFURL(inPath, 0, &amp;dataRef, &amp;dataRefType);
+	
+    if (NULL != dataRef) {
+        // get a movie
+        //err = NewMovieFromDataRef(&amp;theMovie,
+           //                       (allowUserInteraction ? 0 :
+			//					   newMovieDontAskUnresolvedDataRefs|newMovieAsyncOK),
+             //                     id, dataRef, dataRefType);
+		err = NewMovieFromDataRef(&amp;theMovie,
+								  newMovieActive|newMovieDontAskUnresolvedDataRefs|newMovieAsyncOK,
+								  0, dataRef, dataRefType); //used to have id there where 0 is
+		
+        // remember to dispose of the data reference handle
+        DisposeHandle(dataRef);
+    }
+	
+    return theMovie;
+}
+
+int bmx_NewMovieFromURL( bmx_qt * qtclass, char * filename) {
+	qtclass-&gt;theMovie = GetMovieFromURLString(filename,  qtclass-&gt;err, &amp;qtclass-&gt;resID);
+	if (!qtclass-&gt;theMovie) return qtclass-&gt;err;
+	return 0;
+}
+int bmx_NewMovieFromFile( bmx_qt * qtclass, char * filename) {
+	qtclass-&gt;theMovie = GetMovieFromFileString(filename,  qtclass-&gt;err, &amp;qtclass-&gt;resID);
+	if (!qtclass-&gt;theMovie) return qtclass-&gt;err;
+	return 0;
+}
+
+// NewMovieFromFile (&amp;theMovie, theFile, nil, nil, newMovieActive, nil);   // Get movie from file
+int bmx_NewMovieFromFileRef(  bmx_qt * qtclass, int flag) {
+	return NewMovieFromFile( &amp;qtclass-&gt;theMovie, qtclass-&gt;resRefNum, &amp;qtclass-&gt;resID,0, flag, 0);
+}
+void bmx_DisposeMovie (bmx_qt * qtclass) {
+	DisposeMovie (qtclass-&gt;theMovie);
+}
+int bmx_OpenMovieFile( bmx_qt * qtclass, SInt8 permission) {
+	return OpenMovieFile(  &amp;qtclass-&gt;m_fileSpec,  &amp;qtclass-&gt;resRefNum,  permission);
+}
+int bmx_CloseMovieFile( bmx_qt * qtclass) {
+	return CloseMovieFile( qtclass-&gt;resRefNum);
+}
+int bmx_NativePathNameToFSSpec(bmx_qt * qtclass, char * filename, int flag) {
+	
+#ifdef _WIN32
+	return NativePathNameToFSSpec(filename, &amp;qtclass-&gt;m_fileSpec, flag);
+#endif
+	
+}
+int bmx_FSMakeFSSpec(bmx_qt * qtclass, const unsigned char * filename) {
+	//being depricated by QT?
+	//c2pstr (filename);
+	return FSMakeFSSpec(0, 0L, filename, &amp;qtclass-&gt;m_fileSpec);
+}
+int bmx_GetMovieLoadState(bmx_qt * qtclass) {
+	return GetMovieLoadState(qtclass-&gt;theMovie);
+}
+
+int bmx_NewGWorld(bmx_qt * qtclass, int w, int h, long flags) {
+	qtclass-&gt;bufferBounds.left =0;
+	qtclass-&gt;bufferBounds.top =0;
+	qtclass-&gt;bufferBounds.right =w;
+	qtclass-&gt;bufferBounds.bottom =h;
+	return NewGWorld(&amp;qtclass-&gt;movieGWorld, qtclass-&gt;monitorPixelDepth, &amp;qtclass-&gt;bufferBounds, qtclass-&gt;cTable, qtclass-&gt;aGD, flags);
+}
+
+//QTNewGWorldFromPtr(    GWorldPtr      *gw,       OSType         pixelFormat,     const Rect     *boundsRect,     CTabHandle     cTable,   GDHandle       aGDevice,  GWorldFlags    flags,  void   *baseAddr,     long           rowBytes ); 
+int bmx_QTNewGWorldFromPtr( bmx_qt * qtclass,int pixelformat, int w, int h, char *buffer, long rowbytes, GWorldFlags flags) {
+	qtclass-&gt;bufferBounds.left =0;
+	qtclass-&gt;bufferBounds.top =0;
+	qtclass-&gt;bufferBounds.right =w;
+	qtclass-&gt;bufferBounds.bottom =h;
+	return QTNewGWorldFromPtr(&amp;qtclass-&gt;movieGWorld, pixelformat, &amp;qtclass-&gt;bufferBounds, qtclass-&gt;cTable, qtclass-&gt;aGD, flags|kNativeEndianPixMap , (char *)buffer, rowbytes);
+}
+void bmx_SetGWorld(bmx_qt * qtclass) {
+	SetGWorld(qtclass-&gt;movieGWorld, NULL); //GetGWorldDevice( qtclass-&gt;movieGWorld));
+}
+void bmx_SetMovieGWorld(bmx_qt * qtclass) {
+	SetMovieGWorld(qtclass-&gt;theMovie, qtclass-&gt;movieGWorld, NULL); //GetGWorldDevice( qtclass-&gt;movieGWorld));
+}
+int bmx_GetGWorldDevice( bmx_qt * qtclass) {
+	//GDevice aGD;
+	qtclass-&gt;aGD = GetGWorldDevice( qtclass-&gt;movieGWorld);
+	if(qtclass-&gt;aGD) return 0;
+	return -99;
+}
+void bmx_DisposeGWorld(bmx_qt * qtclass) {
+	DisposeGWorld(qtclass-&gt;movieGWorld);
+}
+
+/* doesn't exist for mswin
+int bmx_CGBitmapContextCreate (bmx_qt * qtclass, void * buffer, int w, int h, int bitsPerComponent, int bytesPerRow, int flags) {
+	//CGContextRef ccr;
+	//CGBitmapContextCreate (void *data,size_t width,size_t height,size_t bitsPerComponent,size_t bytesPerRow,CGColorSpaceRef colorspace,CGBitmapInfo bitmapInfo);
+	qtclass-&gt;ccr = CGBitmapContextCreate (void *buffer,w,h,bitsPerComponent,bytesPerRow,qtclass-&gt;colorspace,flags | kCGImageAlphaLast);
+	if (ccr) return 0;
+	return -99;
+}
+*/
+/*
+QTPixelBufferContextCreate (
+   CFAllocatorRef allocator,
+   CFDictionaryRef attributes,
+   QTVisualContextRef *newPixelBufferContext
+);
+*/
+
+int bmx_LockPixels (bmx_qt * qtclass) {
+#ifdef _WIN32
+	return LockPixels (qtclass-&gt;movieGWorld-&gt;portPixMap);
+#endif
+}
+void bmx_UnlockPixels (bmx_qt * qtclass) {
+#ifdef _WIN32
+	UnlockPixels (qtclass-&gt;movieGWorld-&gt;portPixMap);
+#endif
+}
+
+
+int bmx_NewMovieController(  bmx_qt * qtclass,  long flags) {
+	ComponentInstance x = NewMovieController(  qtclass-&gt;theMovie,  &amp;qtclass-&gt;movieRect,  flags);
+	qtclass-&gt;theController = x;
+	if(x) return 0;
+	return -99;
+}
+void bmx_DisposeMovieController (bmx_qt * qtclass) {
+	// Close movie controller, if any
+	DisposeMovieController(qtclass-&gt;theController);
+}
+
+void bmx_MoviesTask(bmx_qt * qtclass, int flags) {
+	if (qtclass-&gt;theController) MCIdle(qtclass-&gt;theController);
+	MoviesTask(qtclass-&gt;theMovie, flags);
+	
+}
+void bmx_SetMovieActive(bmx_qt * qtclass , bool flag) {
+	return SetMovieActive(qtclass-&gt;theMovie , flag);
+}
+void bmx_StartMovie(bmx_qt * qtclass ) {
+	StartMovie(qtclass-&gt;theMovie);
+}
+int bmx_UpdateMovie(bmx_qt * qtclass  ) {
+	return UpdateMovie(qtclass-&gt;theMovie);
+}
+void bmx_StopMovie(bmx_qt * qtclass ) {
+	StopMovie(qtclass-&gt;theMovie);
+}
+void bmx_GoToBeginningOfMovie(bmx_qt * qtclass ) {
+	GoToBeginningOfMovie(qtclass-&gt;theMovie );
+}
+int bmx_IsMovieDone(bmx_qt * qtclass ) {
+	return IsMovieDone(qtclass-&gt;theMovie );
+}
+
+long bmx_GetMovieNextInterestingTime(bmx_qt * qtclass, int flags) {
+	//OSType MovieMediaType
+	TimeValue gNextTime;
+	GetMovieNextInterestingTime(qtclass-&gt;theMovie, flags, 0, NULL, GetMovieTime(  qtclass-&gt;theMovie, 0), 0, &amp;gNextTime, NULL);
+	return (long) gNextTime;
+} 
+void bmx_SetMovieTimeValue(bmx_qt * qtclass, long newtime) {
+	SetMovieTimeValue(qtclass-&gt;theMovie, (TimeValue) newtime);
+}
+
+void bmx_SetMovieVolume ( bmx_qt * qtclass, float volume) {
+	SetMovieVolume ( qtclass-&gt;theMovie, volume );
+}
+
+void bmx_GetMovieBox(  bmx_qt * qtclass) {
+	GetMovieBox(  qtclass-&gt;theMovie,  &amp;qtclass-&gt;movieRect);
+}
+int bmx_GetMovieWidth (bmx_qt * qtclass) {
+	return qtclass-&gt;movieRect.right - qtclass-&gt;movieRect.left ;
+}
+int bmx_GetMovieHeight (bmx_qt * qtclass) {
+	return qtclass-&gt;movieRect.bottom - qtclass-&gt;movieRect.top ;
+}
+int bmx_GetMovieDuration(bmx_qt * qtclass) {
+	return (int) GetMovieDuration(qtclass-&gt;theMovie);
+}
+long bmx_GetMovieTime(bmx_qt * qtclass) {
+	TimeValue tv;
+	tv = GetMovieTime(  qtclass-&gt;theMovie, 0); //&amp;tm
+	qtclass-&gt;currentTime =tv;
+	return tv;
+}
+long bmx_GetMovieTimeScale(bmx_qt * qtclass) {
+	TimeValue tv;
+	return GetMovieTimeScale(  qtclass-&gt;theMovie);
+}
+int bmx_GetMovieTrackCount(bmx_qt * qtclass) {
+	return GetMovieTrackCount(qtclass-&gt;theMovie );
+}
+
+
+void bmx_SetMoviePlayHints(bmx_qt * qtclass , int hint1, int hint2) {
+	SetMoviePlayHints( qtclass-&gt;theMovie , hint1, hint2);
+}
+
+void bmx_PreRollMovie( bmx_qt * qtclass ,  TimeValue   time) {
+	PrerollMovie( qtclass-&gt;theMovie, time,  GetMoviePreferredRate(qtclass-&gt;theMovie) );
+}
+
+
+/*
+unsigned DLL_CALLCONV bmx_NewMovieFromFile( int &amp;theMovie, int filenum, int &amp;a, int &amp;b, int flag, int &amp;c) {
+	return NewMovieFromFile( *theMovie, filenum, *a, *b, flag, *c);
+}*/
+
+#endif
+
+
+/* */
+</textarea><br><br>The code is not foolproof, but it works. I've tested under win vista, win7, macosx 10.5.6 with QT 7.<br><br>quicktime.bmx: </td></tr><tr ><td class="cell"><pre class="code">''
+''Quicktime Module for MSWin &amp; MacOSX
+''by AdamRedwoods 2011
+''
+
+Module addons.quicktime
+
+?Win32
+ModuleInfo "CC_OPTS: -IQuickTimeSDK/CIncludes/"
+ModuleInfo "CC_OPTS: -IQuickTimeSDK/CIncludes/CoreFoundation"
+ModuleInfo "CC_OPTS: -IQuickTimeSDK/CIncludes/GNUCompatibility"
+Import "maxquicktime_glue.cpp"
+Import "QuickTimeSDK/Libraries/QTMLClient.lib" 
+Import "QuickTimeSDK/Libraries/CVClient.lib"
+?MacOS
+'ModuleInfo "LD_OPTS: -framework/System/Library/Frameworks/QuickTime.framework"
+ModuleInfo "LD_OPTS: -framework QuickTime"
+Import "maxquicktime_glue.cpp"
+?
+
+Import brl.Pixmap
+Import brl.glmax2d
+Import brl.standardio
+Import brl.GLGraphics
+
+
+Extern 
+	
+	Function bmx_CreateQT:Byte Ptr() ''cpp class
+    	Function EnterMovies() ' Initialize QuickTime 
+    	Function ExitMovies() ' Terminate QuickTime
+?Win32
+    	Function TerminateQTML() 'terminate QTML
+	Function InitializeQTML:Int(i:Int)  ' Initialize QTML
+?
+
+	Function bmx_OpenMovieFile:Int( qtclass:Byte Ptr, permission:Int) ''return -1 if error
+	Function bmx_CloseMovieFile(qtclass:Byte Ptr)
+	Function bmx_NewMovieFromFile:Int( qtclass:Byte Ptr, filename:Byte Ptr)
+	Function bmx_NewMovieFromURL:Int( qtclass:Byte Ptr, filename:Byte Ptr)
+	Function bmx_NewMovieFromFileRef:Int(qtclass:Byte Ptr, flags:Int)
+	Function bmx_GetMovieLoadState:Int(qtclass:Byte Ptr)
+	
+	'''EXTERN_API( ComponentInstance ) NewMovieController(  Movie         theMovie,  Const Rect *  movieRect,  Long someFlags);
+	Function bmx_NewMovieController:Int( qtclass:Byte Ptr, flags:Int=0) '' create new movie controller
+	
+	Function bmx_SetMovieActive(qtclass:Byte Ptr , boolean:Int)
+	Function bmx_StartMovie(qtclass:Byte Ptr )
+	Function bmx_MoviesTask( qtclass:Byte Ptr, flags:Int=0)
+	Function bmx_UpdateMovie:Int(qtclass:Byte Ptr )
+	Function bmx_StopMovie(qtclass:Byte Ptr)
+	Function bmx_GoToBeginningOfMovie(qtclass:Byte Ptr )
+	Function bmx_IsMovieDone(qtclass:Byte Ptr )
+	Function bmx_SetMovieVolume ( qtclass:Byte Ptr, volume:Float) ''volume is signed short: -1.0 to 1.0 ''neg volume is silent
+	
+	Function bmx_GetMovieNextInterestingTime:Int(qtclass:Byte Ptr, flags:Int)
+	Function bmx_SetMovieTimeValue(qtclass:Byte Ptr, newtime:Int)
+	
+	Function bmx_DisposeMovieController (qtclass:Byte Ptr) '                     // Close movie controller, if any
+	Function bmx_DisposeMovie (qtclass:Byte Ptr) ' // Destroy movie Object, If any 
+	Function bmx_FSMakeFSSpec:Int(qtclass:Byte Ptr, fullPath:Byte Ptr) ''in windows, pass full pathname
+	''' FSMakeFSRefUnicode (   Const FSRef *parentRef, UniCharCount nameLength, Const UniChar *name, TextEncoding textEncodingHint,FSRef *newRef)
+	''Function FSMakeFSRefUnicode (x:Int=0, filenamelength:Int, name:String, econdingHintConst:Int=0, newf:FSRef)
+	Function bmx_NativePathNameToFSSpec:Int(qtclass:Byte Ptr, filename:Byte Ptr, flag:Int=0)
+	
+	Function bmx_QTNewGWorldFromPtr:Int(qtclass:Byte Ptr, pixelformat:Int, w:Int, h:Int, buffer:Byte Ptr, rowbytes:Int, GWorldFlags:Int=0)
+	Function bmx_NewGWorld:Int(qtclass:Byte Ptr, w:Int, h:Int, flags:Int)
+	Function bmx_SetMovieGWorld:Int(qtclass:Byte Ptr)
+	Function bmx_SetGWorld(qtclass:Byte Ptr)   ' // Port Or Graphics world To make Current ''gdhandle null if gworld
+	Function bmx_DisposeGWorld(qtclass:Byte Ptr) ''; //close gworld
+	Function bmx_GetGWorldDevice:Int(qtclass:Byte Ptr)
+	Function bmx_LockPixels:Int(qtclass:Byte Ptr) ''return true 1 or false 0
+	Function bmx_UnlockPixels(qtclass:Byte Ptr)
+		
+	''Function CopyCStringToPascal(src:String, dst:String)
+	Function  c2pstr:Int(src:Byte Ptr)
+	
+	Function bmx_SetMoviePlayHints(qtclass:Byte Ptr , hints:Int=0, hint2:Int=0)
+	'hintsDontUseVideoOverlaySurface
+	
+	Function GetPixBaseAddr:Byte Ptr(pmhd:Object )
+	Function GetGWorldPixMap:Byte Ptr(gw:Byte Ptr )
+	'''EXTERN_API( Boolean ) PixMap32Bit(PixMapHandle pmHandle)
+	''Function GetPixRowBytes:int(pmhd:Object) ''NOT IN MSWIN
+
+	Function bmx_GetMovieBox(qtclass:Byte Ptr)
+	Function bmx_GetMovieWidth(qtclass:Byte Ptr)
+	Function bmx_GetMovieHeight(qtclass:Byte Ptr)
+	Function bmx_GetMovieDuration:Int(qtclass:Byte Ptr)
+	Function bmx_GetMovieTime:Int(qtclass:Byte Ptr)
+	Function bmx_GetMovieTimeScale:Int(qtclass:Byte Ptr)
+	Function bmx_GetMovieTrackCount:Int(qtclass:Byte Ptr)
+	
+	Function bmx_PreRollMovie( qtclass:Byte Ptr,  time:Int)
+	
+		
+EndExtern
+
+
+
+Const k1MonochromePixelFormat:Int       = $00000001', /* 1 bit indexed*/
+Const  k2IndexedPixelFormat:Int          = $00000002', /* 2 bit indexed*/
+Const  k4IndexedPixelFormat:Int          = $00000004', /* 4 bit indexed*/
+Const  k8IndexedPixelFormat:Int          = $00000008', /* 8 bit indexed*/
+Const  k16BE555PixelFormat:Int           = $00000010', /* 16 bit BE rgb 555 (Mac)*/
+Const  k24RGBPixelFormat:Int             = $00000018', /* 24 bit rgb */
+Const  k32ARGBPixelFormat:Int            = $00000020', /* 32 bit argb    (Mac)*/
+Const  k1IndexedGrayPixelFormat:Int      = $00000021', /* 1 bit indexed gray*/
+Const  k2IndexedGrayPixelFormat:Int      = $00000022', /* 2 bit indexed gray*/
+Const  k4IndexedGrayPixelFormat:Int      = $00000024', /* 4 bit indexed gray*/
+Const  k8IndexedGrayPixelFormat:Int      = $00000028' /* 8 bit indexed gray*/
+Const  k32BGRAPixelFormat:Int 		= 1111970369
+Const 	keepLocal:Int 	=8
+
+Const NEWMOVIEACTIVE:Int = 1 Shl 0
+
+Const mcTopLeftMovie:Int                = 1 Shl 0 ', /* usually centered */
+Const mcScaleMovieToFit:Int              = 1 Shl 1 ', /* usually only scales down */
+Const mcWithBadge:Int                    = 1 Shl 2 ', /* give me a badge */
+Const mcNotVisible:Int                   = 1 Shl 3 ', /* don't show controller */
+Const mcWithFrame :Int  			= 1 Shl 4
+
+Const hintsDontUseVideoOverlaySurface:Int = 1 Shl 16
+Const hintsOffscreen:Int                = 1 Shl 12
+Const hintsUseScreenBuffer:Int          = 1 Shl 5
+Const hintsAllowDynamicResize:Int       = 1 Shl 19
+
+Const kInitializeQTMLUseGDIFlag:Int   = 1 Shl 1
+
+Const deviceIsExternalBuffer:Int        = (1 Shl 3)
+Const deviceIsGDISurface:Int = 	64
+Const deviceIsIndirect:Int = 	1
+
+''nextInterestingTime flags
+Const nextTimeStep:Int =  1 Shl 4 
+'nextTimeMediaSample ''not recommended since messes up on mpeg
+'nextTimeEdgeOK
+
+Const   kMovieLoadStateError:Int                     = -1
+Const   kMovieLoadStateLoading:Int                  = 1000
+Const   kMovieLoadStateLoaded:Int                    = 2000
+Const   kMovieLoadStatePlayable:Int                  = 10000
+Const   kMovieLoadStatePlaythroughOK:Int            = 20000
+Const   kMovieLoadStateComplete:Int                  = 100000
+
+Rem
+
+hintsScrubMode                = 1 &lt;&lt; 0, /* mask == &amp;&amp; (if flags == scrub on, flags != scrub off) */
+  hintsLoop                     = 1 &lt;&lt; 1,
+  hintsDontPurge                = 1 &lt;&lt; 2,
+  hintsUseScreenBuffer          = 1 &lt;&lt; 5,
+  hintsAllowInterlace           = 1 &lt;&lt; 6,
+  hintsUseSoundInterp           = 1 &lt;&lt; 7,
+  hintsHighQuality              = 1 &lt;&lt; 8, /* slooooow */
+  hintsPalindrome               = 1 &lt;&lt; 9,
+  hintsInactive                 = 1 &lt;&lt; 11,
+  hintsOffscreen                = 1 &lt;&lt; 12,
+  hintsDontDraw                 = 1 &lt;&lt; 13,
+  hintsAllowBlacklining         = 1 &lt;&lt; 14,
+  hintsDontUseVideoOverlaySurface = 1 &lt;&lt; 16,
+  hintsIgnoreBandwidthRestrictions = 1 &lt;&lt; 17,
+  hintsPlayingEveryFrame        = 1 &lt;&lt; 18,
+  hintsAllowDynamicResize       = 1 &lt;&lt; 19,
+  hintsSingleField              = 1 &lt;&lt; 20,
+  hintsNoRenderingTimeOut       = 1 &lt;&lt; 21,
+  hintsFlushVideoInsteadOfDirtying = 1 &lt;&lt; 22,
+  hintsEnableSubPixelPositioning = 1L &lt;&lt; 23,
+  hintsRenderingMode            = 1L &lt;&lt; 24,
+  hintsAllowIdleSleep           = 1L &lt;&lt; 25, /* asks media handlers not to call UpdateSystemActivity etc */
+  hintsDeinterlaceFields        = 1L &lt;&lt; 26
+EndRem
+
+
+Type TQuickTime
+	Field isQTInit:Int =0
+	Field myQTClass:Byte Ptr = Null
+	Field debug:Int
+	Field _pixmap:TPixmap
+	Field texid:Int
+	Field imageframe:TGLImageFrame
+	
+	Method Init:Int(flags:Int=0)
+		If (isQTInit) Then Return True
+		If StartQT(flags) &lt;&gt; 0 Then Return False
+
+		If EnterMovies() &lt;&gt; 0
+			If debug Then Print "EnterMovies fail"
+			EndQT()
+			Return False
+		EndIf
+		myQTClass = bmx_CreateQT()
+		isQTInit =1
+		If debug Then Print "INIT ok"
+		Return True
+	EndMethod
+	
+	Method StartQT:Int(flags:Int =0)
+		?Win32
+		Local r:Int = InitializeQTML(flags) ''the check for QT on system
+		If r Then Print "Quicktime not found."
+		Return r
+		?MacOS
+		Return 0 ''assume QT is installed
+		?
+		Return 0 ''0= success (error code) in QT
+
+	EndMethod
+	
+	Method EndQT()
+		
+		?Win32
+		
+		TerminateQTML()
+		?
+		Return
+	EndMethod
+	
+	Method LoadMovieToPixmap:Int(filename:String, pixmap:TPixmap, flags:Int=0, isURL:Int=0)
+
+		Init()
+		
+		If Not myQTClass Or Not pixmap Then Return False
+		Local r:Int
+		Local pixw:Int = pixmap.width
+		Local pixh:Int = pixmap.height
+		r = OpenMovie(filename, 0, isURL)'newMovieActive)
+		If r Then Return False
+		
+		SetupGWorld(pixmap, flags)
+		
+		Return True
+	EndMethod
+	
+	Method LoadMovieToImage:Int(filename:String, img:TImage, flags:Int=0, isURL:Int=0)
+
+		Init()
+		
+		If Not myQTClass Or Not img Then Return False
+		Local r:Int
+		Local pixw:Int = img.width
+		Local pixh:Int = img.height
+		r = OpenMovie(filename, 0, isURL)'newMovieActive)
+		If r Then Return False
+		
+		If Not img.pixmaps[0] Then img.pixmaps[0] = TPixmap.Create( img.width,img.height,PF_RGB888 )
+		If img.pixmaps[0].format &lt;&gt; PF_RGB888 Then img.pixmaps[0] = img.pixmaps[0].convert(PF_RGB888) ;Print "convert to rgb888"
+		
+		SetupGWorld(img.pixmaps[0], flags)
+		
+		Return True
+	EndMethod
+	
+	Method SetupGWorld:Int(pixmap:TPixmap, flags:Int=0)
+		If Not pixmap Then Return False
+		Local r:Int
+		
+		'r=bmx_NewGWorld(myQTClass, 900, 600, 0)
+		r=bmx_QTNewGWorldFromPtr(myQTClass, 24, pixmap.width, pixmap.height,  PixmapPixelPtr(pixmap), pixmap.pitch, deviceIsExternalBuffer)'deviceIsIndirect)
+		If debug Then Print "Gworld: "+uinttoint(r)
+		
+		r = bmx_SetGWorld(myQTClass) ''works better than setmoviegworld in osx
+		r = bmx_SetMovieGWorld(myQTClass) ''need both for windows
+		If debug Then Print "setGW: "+uinttoint(r)
+		
+		r = bmx_NewMovieController (myQTClass, mcTopLeftMovie|mcNotVisible|flags)
+		If debug Then Print "controller: " +uinttoint(r)
+		bmx_SetMoviePlayHints(myQTClass, hintsOffscreen|hintsAllowDynamicResize, hintsOffscreen|hintsAllowDynamicResize )
+		If debug Then Print "hints ok"
+		r=bmx_SetMovieActive(myQTClass,True)
+		If debug Print "setactivem: "+uinttoint(r)
+		GotoBeginning()
+				
+		_pixmap = pixmap
+		
+		Return True
+	EndMethod
+	
+	''Opening a movie does not necessarily load the entirety
+	Method OpenMovie:Int(filename:String, flags:Int =0, isURL:Int = 0)
+		Init()
+		If Not myQTClass Then Return -1
+		
+		''determine isURL
+		If Not isURL And filename.StartsWith("http:") Then isURL = 1
+		
+		Local r:Int
+		'r = bmx_NativePathNameToFSSpec(myQTClass, filename, 0)
+		'If debug Then Print "fsspec: " +uinttoint(r)
+		'r= bmx_OpenMovieFile( myQTClass, 1)
+		'If debug Then Print "openfile "+uinttoint(r)
+		'If(r) Then Return -1
+		
+		''flags = newMovieActive
+		'r=bmx_NewMovieFromFile(myQTClass, flags)
+		If isURL Then	r = bmx_NewMovieFromURL(myQTClass, filename) Else r = bmx_NewMovieFromFile(myQTClass, filename)
+		
+		Local myLoadState:Int= kMovieLoadStateLoading
+		Local tick:Int =MilliSecs()
+		
+		While  Not (myLoadState &amp; kMovieLoadStatePlaythroughOK) 'And tick &lt;&gt; 0
+			bmx_GetMovieDuration(myQTClass)
+			myLoadState = bmx_GetMovieLoadState(myQTClass)
+		Wend
+		
+		If debug Then Print "newmovie: "+uinttoint(r)
+		bmx_CloseMovieFile(myQTClass) ''success close file
+		''get width and height and etc
+		bmx_GetMovieBox(myQTClass)
+		Return 0
+	EndMethod
+	
+	Method IsMovieReady:Int()
+		Local k:Int = bmx_GetMovieLoadState(myQTClass)
+		If k &amp; kMovieLoadStatePlaythroughOK Then Return True
+		Return False
+	EndMethod
+	
+	Method CloseMovie()
+		If Not myQTClass Then Return 
+		ExitMovies()
+		bmx_DisposeMovieController (myQTClass)
+		bmx_DisposeGWorld(myQTClass)
+		
+		EndQT()
+		isQtInit =0
+		If debug Then Print "CloseMovie ok"
+	EndMethod
+	
+	Method GetMovieWidth:Int()
+		Return bmx_GetMovieWidth(myQTClass)
+	EndMethod
+	Method GetMovieHeight:Int()
+		Return bmx_GetMovieHeight(myQTClass)
+	EndMethod
+	'' in seconds
+	Method GetMovieDuration:Float()
+		Return bmx_GetMovieDuration(myQTClass)/Float(bmx_GetMovieTimeScale(myQTClass))
+	EndMethod
+	Method GetMovieTracks:Int()
+		Return bmx_GetMovieTrackCount(myQTClass)
+	EndMethod
+	''in ticks
+	Method GetMovieTime:Int()
+		Return bmx_GetMovieTime(myQTClass)
+	EndMethod
+	'' in seconds
+	Method GetMovieTimeSecs:Float()
+		Return bmx_GetMovieTime(myQTClass)/Float(bmx_GetMovieTimeScale(myQTClass))
+	EndMethod
+	
+	'' volume is between 0.0 and 1.0
+	Method SetMovieVolume(vol:Float)
+		bmx_SetMovieVolume(myQTClass, vol)
+	EndMethod
+
+	''movie time in ticks
+	Method SetMovieTime(ms:Int)
+		bmx_SetMovieTimeValue(myQTClass, ms )
+	EndMethod
+
+	Method StartMovie()
+		If Not myQTClass Then Return
+		bmx_StartMovie(myQTClass)
+		If debug Then Print "startmovie ok"
+	EndMethod
+
+	Method StopMovie()
+		If Not myQTClass Then Return
+		bmx_StopMovie(myQTClass)
+		If debug Then Print "stopmovie ok"
+	EndMethod
+
+	Method UpdateMovie(update:Int=0)
+		'If update Then bmx_UpdateMovie(myQTClass)
+		bmx_MoviesTask(myQTClass,0)
+		'bmx_UpdateMovie(myQTClass)
+	EndMethod
+	
+	Method IsMovieDone:Int()
+		Return bmx_IsMovieDone(myQTClass)
+	EndMethod
+
+	Method DrawMovieImage(img:TImage, x:Int, y:Int)
+		If Not img Or Not _pixmap Then Return
+		
+		If Not texid
+			imageframe = TGLImageFrame.CreateFromPixmap( _pixmap,0 )
+			texid = imageframe.name
+			If debug Then Print "draw movie bind"
+		EndIf
+
+		img.pixmaps[0]=_pixmap
+		img.seqs[0]=0
+
+		If texid
+			glBindTexture(GL_TEXTURE_2D, texid)
+			glPixelStorei GL_UNPACK_ROW_LENGTH, _pixmap.pitch/BytesPerPixel[_pixmap.format]
+			
+			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, _pixmap.width, _pixmap.height, GL_RGB, GL_UNSIGNED_BYTE, _pixmap.pixels)
+			glPixelStorei GL_UNPACK_ROW_LENGTH,0
+			
+			imageframe.Draw( 0,0,_pixmap.width,_pixmap.height, x, y ,0,0,_pixmap.width,_pixmap.height)
+
+		EndIf
+			
+	EndMethod
+	
+	Method GotoBeginning()
+		bmx_GoToBeginningOfMovie(myQTClass)
+	EndMethod
+
+EndType
+
+
+
+Function UintToInt:Int(value:Int)
+      Const OFFSET_2:Int = 65536
+      Const MAXINT_2:Int = 32767
+
+        If Value &lt; 0 Or Value &gt;= OFFSET_2 Then Return value ' Overflow
+        If Value &lt;= MAXINT_2 Then
+          Return Value
+        Else
+          Return Value - OFFSET_2
+        End If
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Here is a sample test program. You will need to grab your own "Ironman2" trailer for the test or use the URLs.<br><br>Use the mouse to click to pause/play and click-hold with a move left/right to scrub the movie.<br><br>SEE UPDATED CODE BELOW <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xlsior</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> I have this module living under Blitzmax's "pub" module directory. <br></div><br><br>Not a good idea -- the pub and brl trees both get erased each time you install a blitzmax update on top of an existing installation.<br><br>You really should make your own subfolder under the mod folder to prevent that from happening. :-?<br><br>but an interesting addition nonetheless.  Does it do both video and audio, or just video? <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>ModuleInfo "BCC_OPTS: -O2"</pre><br>I don't think there is such an option - unless Mark sneaked something in there when I wasn't looking?<br><br>The latest version of BlitzMax may already be using -O2, however. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for the tips!<br>I've updated and revised the source code.<br><br>Yes, this quicktime module plays audio and video. The sample test program also allows scrubbing through the movie as well. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> - Updated module, now works with OSX.<br><br>- Also added capabilities to load from URL.<br><br>See example test file for cool trailers to view. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> UPDATED 2011 dec 27<br>- improved playback speed using DrawMovieImage( myimage, x, y)... I was able to play two apple trailers at the same time<br>- allows scaling, coloring, etc.<br>- can only use OpenGL<br><br>UPDATED sample code:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+''
+'' sample test code for Quicktime in BMax
+'' MSWin &amp; MacOSX
+'' by AdamRedwoods 2011
+
+SuperStrict
+
+Framework brl.GLMax2D
+Import addons.quicktime
+Import brl.standardio
+Import brl.filesystem
+Import brl.pixmap
+
+
+SetGraphicsDriver GLMax2DDriver()
+Local gd:TGraphicsDriver = GetGraphicsDriver()
+Graphics(900,600,0,60,GRAPHICS_BACKBUFFER)
+
+
+Local curdir:String = CurrentDir()
+'Local filename:String = curdir+"/ironman2_480p.mov"
+Local filename:String = "http://trailers.apple.com/movies/wb/thedarkknightrises/darkknightrises-tsr1_h480p.mov"
+'Local filename:String = "http://trailers.apple.com/movies/wb/harrypotterandthedeathlyhallowspart2/hp7part2-tlr2_h480p.mov"
+
+
+'Local mypix:TPixmap = CreatePixmap(900,600,PF_RGB888 ,3)
+Local myimage:TImage = CreateImage(900,600)
+
+
+Local myQT:TQuickTime = New TQuickTime
+'myQT.debug = True
+'If (Not myQT.LoadMovieToPixmap(filename, mypix))
+If (Not myQT.LoadMovieToImage(filename, myimage ))
+	Print "error"
+	End
+EndIf
+
+
+
+
+Print "width: "+myQT.GetMovieWidth()
+Print "height: "+myQT.GetMovieHeight()
+Print "duration: "+myQT.GetMovieDuration()
+Print "tracks: "+myQT.GetMovieTracks()
+
+myQT.StartMovie()
+
+Local j:Float
+Local i:Int=0
+Local stopstate:Int=0
+'SetBlend solidblend
+
+Repeat
+	SetClsColor 0,0,0
+	Cls
+	
+	SetColor 255,255,255
+	myQT.UpdateMovie()
+
+	'SetScale 2.0,2.0 ''now allows scaling, coloring, etc
+	myQT.DrawMovieImage (myimage, 0,0)
+
+	j = myQT.GetMovieTimeSecs()
+	DrawText ("s:"+j+" "+" t:"+myQT.GetMovieTime(), 1,1)
+	
+	If myQT.IsMovieDone() Then DrawText ("done.",1,10)
+	
+	Flip
+	
+	PollSystem()
+	Local xs:Int = MouseXSpeed()
+	If(AppTerminate()) 
+		myQT.StopMovie()
+		myQT.CloseMovie() ''save memory
+		End
+	Else If(MouseDown(1))
+		'Print MouseXSpeed()
+		
+		If(Abs(xs)&gt;2)
+			myQT.StopMovie()
+			myQT.SetMovieTime(myQT.GetMovieTime() + xs*100) ''in milliseconds
+			myQT.UpdateMovie()
+			stopstate = True
+		Else If(stopstate And MouseHit(1))
+			myQT.StartMovie()
+			 
+			stopstate =0
+		Else If MouseHit(1)
+			
+			myQT.StopMovie()
+			stopstate=1
+		EndIf
+	EndIf
+Forever
+End
+
+</textarea> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >burpy</td><td align="right"><font class=tiny>2012</font></td></tr></table></td></tr><tr ><td class="posttext"> (deleted) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>2012</font></td></tr></table></td></tr><tr ><td class="posttext"> mar 2012<br>- possible case issue for win32 CCOPTS in "QuickTime". corrected above. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Cobra Blade</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> Recently I tried rebuilding all of BlitzMax's modules using the latest version of OS X &amp; Xcode and received this error from maxquicktime_glue.cpp.<br><br>Compile Error<br><br> error: 'NewGWorld' was not declared in this scope <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Captain Wicker (crazy hillbilly)</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> @CB:<br>Same here. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

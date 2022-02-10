@@ -1,0 +1,245 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Generators / yield</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Generators / yield</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Generators / yield</a><br><br>
+<a name="1214957"></a>
+
+<a name="1214959"></a>
+
+<a name="1214962"></a>
+
+<a name="1214970"></a>
+
+<a name="1215041"></a>
+
+<a name="1215044"></a>
+
+<a name="1215183"></a>
+
+<a name="1215185"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> More language extensions... this time, a <a href="http://en.wikipedia.org/wiki/Generator_%28computer_science%29" target="_blank">Generator</a> class.<br><br>generator.bmx:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+' Generator implementation for BlitzMax
+
+Import "generator.o"
+SuperStrict
+
+Type TGenerator Abstract
+	Field _frame:Byte Ptr, _ins:Byte Ptr, _st:Int
+	
+	Method Yield(val:Object) Final
+		GEN_Yield2 _frame, Varptr _ins, val
+	End Method
+	Method Done() Final
+		_st = 0
+	End Method
+	Method Resume:Object() Final
+		If _st = -1 Or _ins = Byte Ptr(0)
+			_st = 1
+			GEN_CalleeSave _frame ; Return Run()	'It is IMPERATIVE that nothing come between these two commands - sensitive to register allocation
+		Else
+			Return GEN_Resume(_frame, _ins)
+		EndIf
+	End Method
+	Method Reset() Final
+		_st = -1
+	End Method
+	Method Run:Object() Abstract
+	
+	Method New()
+		_frame = MemAlloc(256)	'Technically not safe but I think it's enough (better than BRL.Reflection can manage)
+		_st = -1 ; _ins = Byte Ptr(0)
+	End Method
+	Method Delete()
+		MemFree _frame
+	End Method
+	Method ObjectEnumerator:TGeneratorEnumerator() Final
+		Local e:TGeneratorEnumerator = New TGeneratorEnumerator ; e.this = Self ; Return e
+	End Method
+End Type
+
+Type TGeneratorEnumerator Final
+	Field this:TGenerator
+	Method HasNext:Int() Final
+		Return this._st &lt;&gt; 0
+	End Method
+	Method NextObject:Object() Final
+		Return this.Resume()
+	End Method
+End Type
+
+Private
+Extern
+Function GEN_Yield2(fr:Byte Ptr, ins:Byte Ptr, val:Object) = "GENERATOR_Yield2"
+Function GEN_Resume:Object(fr:Byte Ptr, ins:Byte Ptr) = "GENERATOR_Resume"
+Function GEN_CalleeSave(fr:Byte Ptr) = "GENERATOR_CalleeSave"
+'Function bbRefMethodPtr:Byte Ptr(o:Object, i:Int)	'Reminder: may want to use this to bolster CalleeSave
+End Extern
+
+Global _gen:Int = _init()
+Function _init:Int()
+?Not x86
+	RuntimeError "TGenerator does not support non-x86 platforms"
+?
+	Return 0
+End Function
+Public
+</textarea><br><br>generator.S (compile with 'gcc -m32 -c generator.S' to get generator.o):<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+#if defined(__WIN32__) || defined(__APPLE__)
+# define FUNC(s) _##s
+#else
+# define FUNC(s) s
+#endif
+
+.text
+.globl FUNC(GENERATOR_Yield2)
+.globl FUNC(GENERATOR_Resume)
+.globl FUNC(GENERATOR_CalleeSave)
+
+// Also unwinds the frame of the wrapping BM func
+FUNC(GENERATOR_Yield2):  //(void * frame, void ** ins, void * val)
+        // Save the return pointer
+	mov 4(%ebp), %eax
+        mov 8(%esp), %edx
+	mov %eax, (%edx)
+        // Save the gen's callee-save registers
+        mov 4(%esp), %edx
+        mov %ebx, (%edx)
+        mov %esi, 4(%edx)
+        mov %edi, 8(%edx)
+        // Restore the local callee-save registers
+        mov 12(%edx), %ebx
+        mov 16(%edx), %esi
+        mov 20(%edx), %edi
+        add $24, %edx
+        // Save the yield value
+        mov 12(%esp), %eax
+        mov %eax, (%edx)  // Not keeping this
+        // Pop the call to the Yield wrapper
+        mov %ebp, %esp
+        pop %ebp
+        // Put the yield value in the now-redundant arg slots
+        mov (%edx), %eax
+        mov %eax, -4(%esp)
+        // Save the stack frame
+	mov %ebp, %ecx
+        sub %esp, %ecx
+        mov %ecx, (%edx)    // Save the frame size
+        cmp $0, %ecx
+        je _end_y
+        add $4, %edx
+        mov %esp, %ecx
+    _top_y:
+        mov (%ecx), %eax
+        mov %eax, (%edx)
+        add $4, %ecx
+        add $4, %edx
+        cmp %ebp, %ecx
+        jne _top_y
+    _end_y:
+        // Return the Yield value
+        mov -4(%esp), %eax
+        mov %ebp, %esp  // return *from caller*
+        pop %ebp
+	ret
+
+FUNC(GENERATOR_CalleeSave): //(void * frame)
+        mov 4(%esp), %edx
+        // Save local callee-save registers
+        mov %ebx, 12(%edx)
+        mov %esi, 16(%edx)
+        mov %edi, 20(%edx)
+        ret
+
+FUNC(GENERATOR_Resume):  //(void * frame, void ** ins)
+        mov 4(%esp), %edx
+        push %ebp
+        mov %esp, %ebp
+        // Save local callee-save registers
+        mov %ebx, 12(%edx)
+        mov %esi, 16(%edx)
+        mov %edi, 20(%edx)
+        // Restore the gen's callee-save registers
+        mov (%edx), %ebx
+        mov 4(%edx), %esi
+        mov 8(%edx), %edi
+        add $24, %edx
+        // Restore the stack frame pointers
+        mov %ebp, %esp
+        sub (%edx), %esp
+        // Restore the stack frame content
+        mov (%edx), %eax
+        cmp $0, %eax
+        je _end_r
+        add $4, %edx
+        mov %esp, %ecx
+    _top_r:
+        mov (%edx), %eax
+        mov %eax, (%ecx)
+        add $4, %ecx
+        add $4, %edx
+        cmp %ebp, %ecx
+        jne _top_r
+    _end_r:
+        mov 12(%ebp), %eax  // Return to saved instruction
+        jmp *%eax
+        //
+</textarea><br><br><br>And an simple (worthless) example similar to the Python one on the wiki:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import "generator.bmx"
+SuperStrict
+
+Type Count Extends TGenerator
+	Function From:TGenerator(n:Int)
+		Local g:Count = New Count ; g.n = n ; Return g
+	End Function
+	
+	Field n:Int
+	Method Run:Object()
+	'	Print "starting run"
+		Local x:Int = n		'Notice how we're not updating the field within the loop
+		Repeat
+		'	Print "loop top"
+			Yield String(x)
+		'	Print "restored"
+			x :+ 1
+		Forever
+	End Method
+End Type
+
+
+Print "~nLooping:"
+For Local i:String = EachIn Count.From(10)
+'	Print "enum loop top"
+	Print i
+'	Print "enum loop bottom"
+	If Int(i) &gt; 15 Then Exit
+Next
+
+Print "~nManual resumption:"
+Local g:TGenerator = Count.From(5)
+Print g.Resume().ToString()
+Print g.Resume().ToString()
+Print g.Resume().ToString()
+
+Print "~ndone."
+</textarea><br><br>Uncomment the Print lines to see weird control flow in action.<br><br>It struck me after beginning this that for all practical purposes, an ObjectEnumerator <i>is</i> a generator anyway, it just doesn't make the Yield command explicit... well, this offers an explicit Yield command that can express slightly more unreadable logic.<br><br>The example should be pretty straightforward, but anyway - to implement your own generator function, subclass TGenerator and give it a Run() method; return objects via Yield. The Run() method acts as the body of the generator function. Do <b>not</b> invoke Run() directly - it will probably crash your program if you do.<br><br>Assuming you're using the generator in a For-EachIn loop, the generator will continue to return objects and resume execution after Yield until either the loop kills it (with Exit, as usual), or the generator calls Done (which will tell the loop that there are no more values). If you're not using a loop (?), you can resume the generator (or start it for the first time) with Resume. The generator can also have its position reset with Reset, causing it to forget where it Yielded from and roll from the top on the next run. (Reset does not affect anything else, e.g. object fields.)<br><br>The Count.From function and the parameter field .n in the example are not integral to generators, and you can use this sort of thing, or not, as you like.<br><br><br>Minimally tested on OSX only so far. <br><br></td></tr></table><br>
+<a name="1215074"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Who was John Galt?</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> What's the point of this? Serious question not a troll. What sort of thing is it used for? <br><br></td></tr></table><br>
+<a name="1215078"></a>
+
+<a name="1215079"></a>
+
+<a name="1215080"></a>
+
+<a name="1215081"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Two parts to answering that.<br><br>Firstly, the technical functionality that this adds is a "Yield" keyword (I've implemented it as a method, but you should think of it as a keyword). "Yield" (in the context of generators) is like "Return" except it remembers where you Yielded from, and the function can be resumed immediately afterwards. (Coroutine yield is more complicated... and not relevant here.) So if you yield in the middle of a loop, you can resume the function and continue the rest of the loop and iterate again. (If I got this right, it should record the state of all the local variables too, minimizing the need for instance fields as locals.)<br><br>Secondly, the concept: what generators are usually <i>for</i> is supplying objects to a consumer - such as a loop body, shown here. The conceptual difference between an enumerator and a generator is that an enumerator, as we usually see in BlitzMax, takes objects from an existing collection; a generator is normally <i>lazy</i>, that is, it creates the stream of objects on-demand (as shown in the example with an infinite list of numbers). A generator is thus more general than an enumerator: it can handle infinite sequences (obviously can't be created in advance), or it can specialize each instance in response to something that happens in between (cooperative tasks), such as perhaps the loop body providing feedback ("no! you're doin' it wrong!").<br><br>The Yield command makes it easier to express the production of objects in terms of a <i>stream</i>, instead of as a sequence: you can write you object production as a single loop, and it looks like a production loop is passing things "up" to a function (when in fact the loop is being paused and the objects are being passed down to the consumer). That way you can have separate but interleaved producer/consumer loops. (You could envisage this in terms of two threads, except each one has to pause the other while it does its thing then hand back control, so it only needs one OS thread.)<br><br>Mechanically speaking there's nothing to stop you using ObjectEnumerator to create lazy streams, as I mentioned in the OP; but it's a little less expressive as the enumerator is always locked into looking like a higher level that has to "return" complete objects. With generators you're able to write object production as a loop, which <i>may</i> come closer to what you actually want to express by making it look like a production stream.<br><br><br>If that didn't make sense (which it probably didn't), the best I can suggest is to look at the wiki articles for <a href="http://en.wikipedia.org/wiki/Generator_%28computer_science%29" target="_blank">Generator</a> and <a href="http://en.wikipedia.org/wiki/Coroutine" target="_blank">Coroutine</a>, and maybe find some Python tutorials on its version of this. <br><br></td></tr></table><br>
+<a name="1215154"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Who was John Galt?</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks Yasha for the detailed explanation. I'm leaving it to sink in for a bit, then I'll be taking a look at those links. <br><br></td></tr></table><br>
+<a name="1215184"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm ashamed to admit that there was a really stupid mistake in this, which I think has now been fixed - it didn't actually save the state of all local variables (which I didn't notice because the example used a field - now it uses a local to demonstrate the ...uh, point). Worse, it corrupted others in the rest of the program! (Basically I had forgotten entirely about the existence of callee-save registers.)<br><br>Please copy the code again if you grabbed the initial version. <br><br></td></tr></table><br>
+<a name="1215200"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> I had to wait for the explanation too - so thanks @ John for asking.<br><br>@do not run "run()" directly ... what about naming such functions "_Run" so people knowing this convention know what it means without BlitzMax having the private-functionality.<br><br><br>@functionality<br>I can think of thingies like the generator doing "BeforeRun" and then "Run" so things can be done hidden/automagically.<br>May save Code when extending objects, overriding functions/methods which need then "super.methodname()" within to call the original function.<br><br>Other ideas how this little pearl could be used?<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1215222"></a>
+
+<a name="1215223"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> 'BeforeRun'? I don't follow.... This doesn't provide any obvious means to handle "silent extension" (AKA "advice"), at least not that I can see. That would be a useful feature but I don't see the connection to generators.<br><br>I was going to try to make an Aspects module next, though, if that interests you. <br><br></td></tr></table><br>
+<a name="1215230"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> "BeforeRun" ...<br><br>Something in the likes of:<br><br>for local obj:TMyObjects = eachin generator.getEach()<br> obj.save()<br>next<br><br>now that getEach calls obj.BeforeSave() before it returns the object to the for loop. So that "BeforeSave" does not get called in TMyObjects.Save() (which could be extended multiple times without calling "super.save()" in the overriden save()-function.<br><br><br>Now I feel kind of dumb :D<br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

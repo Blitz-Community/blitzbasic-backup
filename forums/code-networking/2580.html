@@ -1,0 +1,552 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Netwerks</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Enet-based networking module, language=bmx, category=Networking'><meta name='author' content='JoshK'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=4>Networking</a>/Netwerks</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2580.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Netwerks by JoshK</td><td align="right">2009 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Enet-based networking module </td></tr><tr ><td class="cell"><pre class="code">Rem
+bbdoc: Leadwerks.Netwerks
+EndRem
+Module leadwerks.netwerks
+
+SuperStrict
+
+Import pub.enet
+Import brl.map
+Import brl.eventqueue
+Import brl.socket
+Import brl.bankstream
+Import brl.linkedlist
+Import "server.bmx"
+
+Const EVENT_CONNECT:Int=ENET_EVENT_TYPE_CONNECT
+Const EVENT_DISCONNECT:Int=ENET_EVENT_TYPE_DISCONNECT
+Const EVENT_PACKETRECEIVE:Int=ENET_EVENT_TYPE_RECEIVE
+
+Const PACKET_RELIABLE:Int=ENET_PACKET_FLAG_RELIABLE
+Const PACKET_SEQUENCED:Int=2
+
+Private
+Const ENET_PACKET_FLAG_UNSEQUENCED:Int=2
+Public
+
+Rem
+bbdoc:A host is a local network connection.
+EndRem
+Type THost
+	
+	Field ip:Int
+	Field port:Int
+	Field enethost:Byte Ptr
+	Field peers:TList=New TList
+	Field server:TServer
+	Field serverupdatefrequency:Int=4*1000*60' 4 minutes (server removes after five)
+	Field serverupdatetime:Int
+	
+	Method Delete()
+		enet_host_destroy(enethost)
+		peers.clear()
+	EndMethod
+	
+	Rem
+	bbdoc:Connects to a peer
+	EndRem
+	Method Connect:TPeer(ip:Int,port:Int)
+		Const channels:Int=32
+		Local addr:Byte Ptr
+		Local peer:TPeer
+		peer=New TPeer
+		peer.ip=ip'HostIp(ip)
+		peer.port=port
+		addr=enet_address_create(peer.ip,port)
+		peer.enetpeer=enet_host_connect(enethost,addr,channels)
+		enet_address_destroy addr
+		If peer.enetpeer=Null Return Null
+		peer.link=peers.addlast(peer)
+		Return peer
+	EndMethod
+
+	Method FindPeerByEnetPeer:TPeer(enetpeer:Byte Ptr)
+		Local peer:TPeer
+		For peer=EachIn peers
+			If peer.enetpeer=enetpeer Return peer
+		Next
+		RuntimeError "Can't find peer."
+	EndMethod
+	
+	Method FindPeerByIPAndPort:TPeer(ip:Int,port:Int,enetpeer:Byte Ptr)
+		Local peer:TPeer
+		For peer=EachIn peers
+			If peer.ip=ip And peer.port=port
+				peer.enetpeer=enetpeer
+				Return peer
+			EndIf
+		Next
+		peer=New TPeer
+		peer.link=peers.addlast(peer)
+		peer.ip=ip
+		peer.port=port
+		peer.enetpeer=enetpeer
+		Return peer
+	EndMethod
+
+	Rem
+	bbdoc:Disconnects from a peer
+	EndRem
+	Method Disconnect(peer:TPeer,force:Int=False)
+		If force
+			enet_peer_reset(peer.enetpeer)
+			peer.link.remove()
+		Else
+			enet_peer_disconnect(peer.enetpeer)
+		EndIf
+		peer.connected=False
+	EndMethod
+
+	Rem
+	bbdoc:Sends a packet to all connected peers.
+	EndRem
+	Method BroadcastPacket(packet:TPacket,channel:Int=0,flags:Int=PACKET_SEQUENCED)
+		Local enetpacket:Byte Ptr
+		Local enetflags:Int=0
+		If (PACKET_RELIABLE &amp; flags) enetflags:|ENET_PACKET_FLAG_RELIABLE
+		If Not (PACKET_SEQUENCED &amp; flags) enetflags:|ENET_PACKET_FLAG_UNSEQUENCED
+		enetpacket=enet_packet_create(packet._bank.buf(),packet._bank.size(),flags)
+		enet_host_broadcast(enethost,channel,enetpacket)
+	EndMethod
+	
+	Rem
+	bbdoc:Sends a packet to a peer.  If the send was successful, True is returned.
+	EndRem
+	Method SendPacket:Int(peer:TPeer,packet:TPacket,channel:Int=0,flags:Int=PACKET_SEQUENCED)
+		Local enetpacket:Byte Ptr
+		Local enetflags:Int=0
+		If (PACKET_RELIABLE &amp; flags) enetflags:|ENET_PACKET_FLAG_RELIABLE
+		If Not (PACKET_SEQUENCED &amp; flags) enetflags:|ENET_PACKET_FLAG_UNSEQUENCED
+		enetpacket=enet_packet_create(packet._bank.buf(),packet._bank.size(),flags)
+		Return enet_peer_send(peer.enetpeer,channel,enetpacket)=0
+	EndMethod
+	
+	Rem
+	bbdoc:Waits for a network event.
+	EndRem
+	Method WaitEvent:TEvent(timeout:Int=1000)
+		If server
+			If MilliSecs()-serverupdatetime&gt;serverupdatefrequency
+				server.refresh()
+			EndIf
+		EndIf
+		Local ev:ENetEvent=New ENetEvent
+		If enet_host_service(enethost,ev,timeout)
+			Select ev.event
+				
+				Case ENET_EVENT_TYPE_CONNECT
+					Local peer:TPeer
+					Local ip:Int,port:Int
+					ip=enet_peer_ip(ev.peer)
+					port=enet_peer_port(ev.peer)
+					peer=FindPeerByIPAndPort(ip,port,ev.peer)
+					Return CreateEvent(EVENT_CONNECT,peer)
+					
+				Case ENET_EVENT_TYPE_DISCONNECT
+					Local ip:Int,port:Int
+					Local peer:TPeer
+					peer=FindPeerByEnetPeer(ev.peer)
+					peer.link.remove()
+					Return CreateEvent(EVENT_DISCONNECT,peer)
+				
+				Case ENET_EVENT_TYPE_RECEIVE
+					Local peer:TPeer
+					Local packet:TPacket=New TPacket
+					peer=FindPeerByEnetPeer(ev.peer)
+					packet.writebytes(enet_packet_data(ev.packet),enet_packet_size(ev.packet))
+					packet.seek(0)
+					enet_packet_destroy(ev.packet)
+					Return CreateEvent(EVENT_PACKETRECEIVE,peer,ev.channel,0,0,0,packet)
+				
+			EndSelect
+		EndIf
+	EndMethod
+	
+	Method Publish:Int(url:String,name:String="",game:String="")
+		server=TServer.Create(url,name,game)
+		serverupdatetime=MilliSecs()
+		If server Return True Else Return False
+	EndMethod
+	
+	Rem
+	bbdoc:Creates a new host.
+	EndRem
+	Function Create:THost(ip:Int=0,port:Int=7777,players:Int=32,flags:Int=0)
+		Local host:THost
+		Local addr:Byte Ptr
+		host=New THost
+		If ip
+			host.ip=ip'HostIp(ip)
+		Else
+			host.ip=ENET_HOST_ANY
+		EndIf
+		host.port=port
+		If port&lt;&gt;0 Or host.ip&lt;&gt;ENET_HOST_ANY addr=enet_address_create(host.ip,port)
+		host.enethost=enet_host_create(addr,players,0,0)
+		If port enet_address_destroy addr
+		If Not host.enethost Return Null		
+		Return host
+	EndFunction
+	
+EndType
+
+Rem
+bbdoc:A peer is a remote network connection.
+EndRem
+Type TPeer
+	
+	Field link:TLink
+	Field ip:Int
+	Field port:Int
+	Field enetpeer:Byte Ptr
+	Field userdata:Object
+	Field connected:Int=True
+	
+	Rem
+	Method Compare:Int(o:Object)
+		Local peer:TPeer=TPeer(o)
+		If peer.ip&gt;ip Return 1
+		If peer.ip&lt;ip Return -1
+		If peer.port&gt;port Return 1
+		If peer.port&lt;port Return -1
+		Return 0
+	EndMethod
+	EndRem
+	
+EndType
+
+
+'Error in enet module
+Private
+
+Function enet_host_port:Int( peer:Byte Ptr  )
+	Local ip:Int=(Int Ptr peer)[1]
+	Local port:Int=(Short Ptr peer)[4]
+	?LittleEndian
+	ip=(ip Shr 24) | (ip Shr 8 &amp; $ff00) | (ip Shl 8 &amp; $ff0000) | (ip Shl 24)
+	?
+	Return port
+EndFunction
+
+Function enet_host_ip:Int( peer:Byte Ptr  )
+	Local ip:Int=(Int Ptr peer)[1]
+	Local port:Int=(Short Ptr peer)[4]
+	?LittleEndian
+	ip=(ip Shr 24) | (ip Shr 8 &amp; $ff00) | (ip Shl 8 &amp; $ff0000) | (ip Shl 24)
+	?
+	Return ip
+EndFunction
+
+Function enet_peer_port:Int( peer:Byte Ptr  )
+	Local ip:Int=(Int Ptr peer)[3]
+	Local port:Int=(Short Ptr peer)[8]
+	?LittleEndian
+	ip=(ip Shr 24) | (ip Shr 8 &amp; $ff00) | (ip Shl 8 &amp; $ff0000) | (ip Shl 24)
+	?
+	Return port
+EndFunction
+
+Function enet_peer_ip:Int( peer:Byte Ptr  )
+	Local ip:Int=(Int Ptr peer)[3]
+	Local port:Int=(Short Ptr peer)[8]
+	?LittleEndian
+	ip=(ip Shr 24) | (ip Shr 8 &amp; $ff00) | (ip Shl 8 &amp; $ff0000) | (ip Shl 24)
+	?
+	Return ip
+EndFunction
+
+Public
+
+Rem
+bbdoc:Packets are chunks of data that hosts can be sent to and received from peers.  The TPacket class is an extension of the bankstream class, so packets can be written to and read from.
+EndRem
+Type TPacket Extends TBankStream
+	
+	Method New()
+		_bank=New TBank
+	EndMethod
+	
+EndType
+
+Rem
+bbdoc:Creates a new host.
+EndRem
+Function CreateHost:THost(ip:Int=0,port:Int=7777,players:Int=32)
+	Return THost.Create(ip,port,players)
+EndFunction
+
+Rem
+bbdoc:Connects a host to a peer.
+EndRem
+Function ConnectHost:TPeer(host:THost,ip:Int,port:Int)
+	Return host.connect(ip,port)
+EndFunction
+
+Rem
+bbdoc:Returns the ip of a host.
+EndRem
+Function GetHostIP:Int(host:THost)
+	Return host.ip
+EndFunction
+
+Rem
+bbdoc:Returns the port of a host.
+EndRem
+Function GetHostPort:Int(host:THost)
+	Return host.port
+EndFunction
+
+Rem
+bbdoc:Returns the ip address of a peer.
+EndRem
+Function GetPeerIP:Int(peer:TPeer)
+	Return peer.ip
+EndFunction
+
+Rem
+bbdoc:Returns the port of a peer.
+EndRem
+Function GetPeerPort:Int(peer:TPeer)
+	Return peer.port
+EndFunction
+
+Rem
+bbdoc:Disconnects from a peer.
+EndRem
+Function DisconnectHost(host:THost,peer:TPeer,force:Int=False)
+	host.disconnect(peer,force)
+EndFunction
+
+Rem
+bbdoc:Sends a packet to a peer.  If the send was successful, True is returned.
+EndRem
+Function SendPacket:Int(host:THost,peer:TPeer,packet:TPacket,channel:Int=0,flags:Int=PACKET_SEQUENCED)
+	Return host.SendPacket(peer,packet,channel,flags)
+EndFunction
+
+Rem
+bbdoc:Sends a packet to a peer.  If the send was successful, True is returned.
+EndRem
+Function BroadcastPacket(host:THost,packet:TPacket,channel:Int=0,flags:Int=PACKET_SEQUENCED)
+	host.BroadcastPacket(packet,channel,flags)
+EndFunction
+
+Rem
+bbdoc:Waits for an event.
+EndRem
+Function WaitNetwork:TEvent(host:THost,timeout:Int=1000)
+	Return host.WaitEvent(timeout)
+EndFunction
+
+Rem
+bbdoc:Creates a new packet.
+EndRem
+Function CreatePacket:TPacket()
+	Return New TPacket
+EndFunction
+
+Rem
+bbdoc:Publishes a host online
+EndRem
+Function PublishHost:Int(host:THost,url:String,name:String,game:String="")
+	Return host.publish(url,name,game)
+EndFunction</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Server.bmx:<br><pre class=code>SuperStrict
+
+Import brl.stream
+Import brl.socket
+Import brl.httpstream
+
+Type TServer
+	
+	Field url:String
+	
+	Method Delete()
+		Local stream:TStream
+		If url
+			stream=OpenStream(url+"?action=removeserver")
+			If stream stream.close()
+		EndIf
+	EndMethod
+	
+	Method Refresh:Int()
+		Local stream:TStream
+		stream=OpenStream(url+"?action=refreshserver")
+		If Not stream Return False
+		stream.close()
+		Return True	
+	EndMethod
+	
+	Function Create:TServer(url:String,name$="",game$="")
+		Local server:TServer=New TServer
+		Local stream:TStream
+		stream=OpenStream(url+"?action=addserver&amp;gamename="+game+"&amp;servername="+name)
+		If Not stream Return Null
+		server.url=url
+		While Not stream.Eof()
+			If stream.ReadLine().Trim()
+				stream.close()
+				Return Null
+			EndIf
+		Wend
+		stream.close()
+		Return server
+	EndFunction
+	
+	Function Request:String[](url:String,game:String="")
+		Local stream:TStream
+		Local s$,sarr$[],n:Int
+		stream=OpenStream(url+"?action=listservers&amp;gamename="+game)
+		If Not stream Return Null
+		While Not stream.Eof()
+			s=ReadLine(stream)
+			If s.Trim().length&gt;0
+				sarr=sarr[..sarr.length+1]
+				sarr[sarr.length-1]=s.Trim()
+				Local sa:String[]=sarr[sarr.length-1].split("|")
+				Local name:String=sa[0]
+				sarr[sarr.length-1]=HostIp(name)+"|"+sarr[sarr.length-1]
+			EndIf
+		Wend
+		stream.close()
+		Return sarr
+	EndFunction
+	
+EndType
+
+Rem
+bbdoc:Requests a list of available servers
+EndRem
+Function RequestServers:String[](url:String,game:String="")
+	Return TServer.Request(url,game)
+EndFunction</pre> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Gameserver.php:<br><pre class=code>&lt;?
+
+	// Master Server
+	// Copyright 2008 Binary Phoenix
+
+	// This script is pretty simple, it allows you to pass an argument to this file that
+	// specifies what statistic you want. Normally this will be a request to get all
+	// servers running for a given game.
+	
+	// MySql DB Structure;
+	//
+	//  - servers (table)
+	//		- ID, int, auto_increment, primary key
+	//		- IP, tinytext
+	//		- Name, text
+	//		- TimeoutTimer, int
+	//		- GameName, text
+	
+	// Arguments;
+	//
+	//		- action : This specifies the action to preform, it can be any of the following;
+	//			- listservers  :  This will cause the script to emit a list of currently
+	//							 running servers. This must be used with the gameid argument
+	//							 to specify what game the servers must be running.
+	//			- addserver    : This will add the current ip to the server list. This must be 
+	//							 used with the gameid argument to specify what game the server is be running.
+	//			- removeserver : This will remove the current ip from the server list. 
+	//			- refreshserver: Resets the servers timeout timer so that its not removed from
+	//							 the server list.
+	//
+	//		- gamename 		: This is used by several actions to decide what game the servers it 
+	//				   		  is dealing with should be running.
+	//		- servername 	: This is used when adding a server to the list. It just contains
+	//					   	  a name based description of the server.
+	//		- ip			: Returns the current ip address.
+	//			
+	
+	// Errors;
+	//	
+	//		The server can return certain error strings depending on the situation, what follows
+	//		is a list of them;
+	//
+	//		- "error 1" : This is a mysql error. Its usually temporary.
+	//		- "error 2" : Argument missing. This occurs when the request url dosen't 
+	//					  contain an required argument.
+
+	// This variable stores how long it takes for a server to timeout.
+	$timeoutDelay = 300; // 5 minutes (in seconds).
+	
+	// Connect to the database.
+	$connection = mysql_connect("database", "username", "password") or die("error 1");
+	mysql_select_db("username") or die("error 1");
+
+	// Make sure we have been given an action.
+	if (isset($_GET['action']))
+	{
+		// Process the action.
+		switch ($_GET['action'])
+		{
+			case 'ip':
+			
+				die($_SERVER['REMOTE_ADDR']);
+				break;
+
+		
+			case 'listservers':
+				
+				// Check correct arguments have been passed.
+				if (!isset($_GET['gamename'])) die("error 2");
+				
+				// Get required arguemnts and clean them up.
+				$gamename = $_GET['gamename'];
+			
+				// Kill off any servers that haven't refreshed themselfs in a long time.
+				mysql_query("DELETE FROM servers WHERE TimeoutTimer &lt;= " . time());
+				
+				// Grab server list.
+				$result = mysql_query("SELECT * FROM servers WHERE GameName='" . mysql_escape_string($gamename) . "'");
+
+				if ($result)
+				{
+					// Emit all the servers.
+					while ($row = mysql_fetch_assoc($result)) 
+					{
+						echo $row['IP'] . '|' . $row['Name'] . "\n";
+					}
+				}
+				
+				break;
+				
+			case 'addserver':
+				
+				// Check correct arguments have been passed.
+				if (!isset($_GET['gamename'])) die("error 2");
+				if (!isset($_GET['servername'])) die("error 2");
+				
+				// Get required arguemnts and clean them up.
+				$gamename = $_GET['gamename'];
+				$serverName = $_GET['servername'];
+				
+				// Remove any old servers with the same ip and name.
+				mysql_query("DELETE FROM servers WHERE IP='" . mysql_escape_string($_SERVER['REMOTE_ADDR']) . "' and Name='" . mysql_escape_string($serverName) ."' and GameName='" . mysql_escape_string($gamename) . "'");
+				
+				// Insert it into the database.
+				mysql_query("INSERT INTO servers(IP, Name, TimeoutTimer, GameName) VALUES('" . mysql_escape_string($_SERVER['REMOTE_ADDR']) . "','" . mysql_escape_string($serverName) . "'," . (time() + $timeoutDelay) . ",'" . mysql_escape_string($gamename) . "')");
+
+				break;
+				
+			case 'removeserver':
+			
+				// Remove this server based on its ip.
+				mysql_query("DELETE FROM servers WHERE IP='" . mysql_escape_string($_SERVER['REMOTE_ADDR']) . "'");
+			
+				break;
+
+			case 'refreshserver':
+			
+				// Refersh the servers timeout timer.
+				mysql_query("UPDATE servers SET TimeoutTimer='" . (time() + $timeoutDelay) . "' WHERE IP='" . mysql_escape_string($_SERVER['REMOTE_ADDR']) . "'");
+			
+				break;
+		}
+	}
+	else
+	{
+		die("error 2");
+	}
+
+	// Close database connection.
+	mysql_close($connection);
+
+?&gt;</pre> <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

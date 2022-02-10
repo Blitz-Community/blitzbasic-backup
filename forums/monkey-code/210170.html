@@ -1,0 +1,1028 @@
+<!DOCTYPE html><html lang="en" ><head ><title >GIF Loader</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >GIF Loader</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >GIF Loader</a><br><br>
+<a name="2111944"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >CopperCircle</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi, here is a .gif loader written in pure MonkeyX, it needs more optimisation and is slow loading large gifs on Android...!<br><br><a href="https://github.com/CopperCircle/GIF-Loader" target="_blank">https://github.com/CopperCircle/GIF-Loader</a> <br><br></td></tr></table><br>
+<a name="2111950"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> That's very nice! <br><br></td></tr></table><br>
+<a name="2111955"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Beaker</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice. What is the major bottleneck do you think? <br><br></td></tr></table><br>
+<a name="2111956"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >CopperCircle</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Processing the binary is slow, I am not sure what would be the best way to improve it. <br><br></td></tr></table><br>
+<a name="2111957"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've had a tinker and got a bit of a speed-up. It's about ten times faster on my Android phone than it it was. The major chunk left is in all the data copying for the decompression tables and some GC activity that'd probably need a more significant rewrite to tackle. Here's the altered gifreader file. <br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import brl
+Import mojo
+
+Const CC:= 100000000
+Const EOI:= 200000000
+
+Class GifReader
+  
+	Field gifDataStream:DataStream
+	Field gif:Gif
+	Field frame:Frame 'Temporary frame
+	Field numberOfFrames:Int
+	Field tempGraphicControl:GraphicControlExtension 'Temporary
+	Field i:Int 'Temporary
+	Field j:Int 'Temporary
+	Field loaded:= False
+  
+	'-------------GIF Header-------------
+	'Header Block
+	Field Header_type:String
+	Field Header_version:String
+	Field Header_width:Int
+	Field Header_height:Int
+	'Logical Screen Descriptor
+	Field Header_hasGlobalColorTable:Bool
+	Field Header_colorResolution:Int 'TODO
+	Field Header_sort:Bool
+	Field Header_sizeGCT:Int 'Size of global color table
+	Field Header_backgroundColorIndex:Int
+	Field Header_pixelAspectRatio:Int
+	'Global Color Table
+	Field Header_GCT:Int[] 'Global color table
+  
+	'-------------Player Stuff-------------
+	Field updates:=0
+	Field actualFrameIndex:=0
+	Field actualFrame:Frame
+	Field previousFrames:= New Stack&lt;Frame&gt;
+  
+	Public 'Public Methods
+  
+	Method New()
+	End
+  
+	Method LoadGif:Int(fileName:String)
+    
+		'-------------GIF Header-------------
+		'Load File
+		gifDataStream = New DataStream("monkey://data/" + fileName, False)
+		gif = New Gif()
+    
+		'Header Block
+		Header_type = gifDataStream.ReadString(3)
+		Header_version = gifDataStream.ReadString(3)
+		Header_width = gifDataStream.ReadUInt(2)
+		Header_height = gifDataStream.ReadUInt(2)
+    
+		'Logical Screen Descriptor
+		Local Header_packedField := HexToBin(DecToHex(gifDataStream.ReadByte()))
+		If Header_packedField[..1] = 1
+			Header_hasGlobalColorTable = True
+		Else
+			Header_hasGlobalColorTable = False
+		Endif
+		Header_colorResolution = Int(Header_packedField[1..4])
+		If Header_packedField[4..5] = 1
+			Header_sort = True
+		Else
+			Header_sort = False
+		Endif
+		Header_sizeGCT = Pow(2,1+BinToInt(Header_packedField[5..8]))
+		Header_backgroundColorIndex = gifDataStream.ReadUInt(1)
+		Header_pixelAspectRatio = (gifDataStream.ReadUInt(1) + 15) / 64
+    
+		'Global Color Table
+		If Header_hasGlobalColorTable = True
+			Header_GCT = New Int[Header_sizeGCT]
+			For i=0 Until Header_sizeGCT
+				Header_GCT[i]=argb(gifDataStream.ReadUInt(1),gifDataStream.ReadUInt(1),gifDataStream.ReadUInt(1))
+			Next
+		Endif
+    
+    
+		'Frame Loop
+		FrameLoop()
+
+	End
+  
+	Method GetNumberOfFrames:Int()
+		Return numberOfFrames
+	End
+  
+	Method GetComments:Stack&lt;String&gt;()
+		Return gif.Ext_Comment_Comments
+	End
+  
+	Method Draw:Void(x:Int, y:Int, rotation:Float=0.0, scaleX:Float=1.0, scaleY:Float=1.0, frame:Int=-1)
+		If loaded = False Or frame &lt; -1 Or frame &gt; numberOfFrames
+			Return
+		Elseif frame = -1
+			updates +=1
+			PushMatrix()
+      
+			Translate(x,y)
+			Scale(scaleX,scaleY)
+			Translate(-x,-y)
+      
+			Translate(x+Header_width/2,y+Header_height/2)
+			Rotate(rotation)
+			Translate(-(x+Header_width/2),-(y+Header_height/2))
+      
+			'Draw previousFrames if have
+			For i = 0 To previousFrames.Length-1
+				'DrawImage(previousFrames.Get(i).img, (x/scaleX)+previousFrames.Get(i).left, (y/scaleY)+previousFrames.Get(i).top)
+				DrawImage(previousFrames.Get(i).img, (x+(previousFrames.Get(i).width/2)+previousFrames.Get(i).left),(y+(previousFrames.Get(i).height/2)+previousFrames.Get(i).top))
+			Next
+			'Draw actual Frame
+			'DrawImage(actualFrame.img, (x/scaleX)+actualFrame.left, (y/scaleY)+actualFrame.top)
+			DrawImage(actualFrame.img, x+(actualFrame.width/2)+actualFrame.left,y+(actualFrame.height/2)+actualFrame.top)
+  
+			'Check if should change frame
+      
+			PopMatrix()
+      
+			If updates = actualFrame.graphicControlExtension.delayTime
+				updates = 0
+				'Is last frame?
+				If actualFrameIndex &lt; numberOfFrames-1
+					'No
+					'Should add to previous frames?
+					If actualFrame.graphicControlExtension.disposalMethod = 1
+						previousFrames.Push(actualFrame)
+					Endif
+					actualFrameIndex += 1
+				Else
+					'Yes
+					previousFrames.Clear
+					actualFrameIndex = 0
+				Endif
+				'Update actual frame
+				actualFrame = gif.frames.Get(actualFrameIndex)
+			Endif
+		Else
+			DrawSetFrame(x,y,rotation,scaleX,scaleY,frame)
+		Endif
+	End
+  
+	Private 'Private Methods
+  
+	Method DrawSetFrame:Void(x:Int, y:Int, rotation:Float, scaleX:Float, scaleY:Float, frame:Int)
+    
+		PushMatrix()
+      
+		Translate(x,y)
+		Scale(scaleX,scaleY)
+		Translate(-x,-y)
+    
+		Translate(x+Header_width/2,y+Header_height/2)
+		Rotate(rotation)
+		Translate(-(x+Header_width/2),-(y+Header_height/2))
+    
+		If actualFrameIndex = frame
+			'Draw previousFrames if have
+			For i = 0 To previousFrames.Length-1
+				DrawImage(previousFrames.Get(i).img, (x+(previousFrames.Get(i).width/2)+previousFrames.Get(i).left),(y+(previousFrames.Get(i).height/2)+previousFrames.Get(i).top))
+			Next
+			'Draw actual Frame
+			DrawImage(actualFrame.img, x+(actualFrame.width/2)+actualFrame.left,y+(actualFrame.height/2)+actualFrame.top)
+		Else
+			For i = 0 Until frame
+				actualFrame = gif.frames.Get(i)
+				actualFrameIndex +=1
+				If actualFrame.graphicControlExtension.disposalMethod = 1
+					previousFrames.Push(actualFrame)
+				Endif
+			Next
+			actualFrameIndex = frame
+			actualFrame = gif.frames.Get(frame)
+		Endif
+	End
+  
+	Method FrameLoop:Void()
+		If gifDataStream.ReadByte() = 59 '3B
+			Print "&gt;&gt; Loaded &lt;&lt;"
+			loaded = True
+			numberOfFrames = gif.frames.Length
+			actualFrame = gif.frames.Get(0)
+		Else
+			gifDataStream.SetPointer(gifDataStream.GetPointer-1)
+			If isApplicationExtension()
+				ApplicationExtension()
+				FrameLoop()
+			Elseif isCommentExtension()
+				CommentExtension()
+				FrameLoop()
+			Elseif isGraphicControlExtension()
+				GraphicsControlExtension()
+				FrameLoop()
+			Elseif isPlainTextExtension()
+				PlainTextExtension()
+				FrameLoop()
+			Elseif IsImageDescriptor()
+				'Create new Frame
+				frame=New Frame(tempGraphicControl)
+				tempGraphicControl = Null
+				gif.AddFrame(frame)
+        
+				ReadImageDescriptor()
+				If isLocalColorTable() Then LocalColorTable()
+				ImageData()
+				FrameLoop()
+			Endif
+		Endif
+	End
+  
+	'GetCode Variables
+	Field latestByte:Int = 0
+	Field latestBitIndex:Int
+	Field subBlockSize:Int
+  
+	Field blockMask:Int[] = [0,1,3,7,15,31,63,127,255,511,1023]
+	
+	Method GetCode:Int ()
+		
+		Local code:Int
+		Local i:Int = 0
+	
+		While i &lt; codeSize
+		
+			Local bitsToCopy:Int = Min((codeSize-i),(8-latestBitIndex))
+			
+			code |= ((latestByte Shr latestBitIndex) &amp; ( blockMask[bitsToCopy] ))  Shl i
+		
+			latestBitIndex += bitsToCopy
+			i += bitsToCopy
+			
+			If latestBitIndex = 8
+
+				latestByte = gifDataStream.ReadByte
+				latestBitIndex = 0
+				subBlockSize -= 1
+				If subBlockSize = 0
+					subBlockSize = gifDataStream.ReadUInt(1)
+				Endif
+				If subBlockSize = -1
+					gifDataStream.SetPointer(gifDataStream.GetPointer-1)
+				Endif
+			Endif
+	
+		End
+		
+		Return code
+	End
+  
+	'ImageData Variables
+	Field pixelsArray:Int[]
+	Field pixelsArrayPointer:Int
+	Field codeSize:Int
+	Field codeTable:Int[][]
+	Field codeTablePointer:Int
+	
+	Method ImageData:Void()
+    
+		Local prevCode:Int
+		Local code:Int
+	
+		frame.LZW_MinimumCodeSize=gifDataStream.ReadUInt(1)+1
+
+		'Initialize pixel Array
+		If( Not pixelsArray Or frame.width * frame.height &gt; pixelsArray.Length )
+			pixelsArray = New Int[frame.width*frame.height]
+		End
+		pixelsArrayPointer=0
+    
+		'Initialize code size
+		codeSize = frame.LZW_MinimumCodeSize
+    
+		'Initialize code streamer
+		subBlockSize = gifDataStream.ReadUInt(1)
+		latestByte = gifDataStream.ReadByte
+		
+		subBlockSize -=1
+		latestBitIndex = 0
+		
+		'Initialize code table
+		If frame.hasLCT = True
+			codeTable = InitCodeTable(frame.LCT, frame.sizeLCT, frame.graphicControlExtension.transparentColor, frame.graphicControlExtension.transparentColorIndex)
+		Else
+			codeTable = InitCodeTable(Header_GCT, Header_sizeGCT, frame.graphicControlExtension.transparentColor, frame.graphicControlExtension.transparentColorIndex)
+		End
+    
+		'Check if first value is equal to "Clear code"(CC)
+		If codeTable[GetCode()][0] &lt;&gt; CC
+			Print "ERROR: First code isn't the Clear code"
+		End
+    
+		'Get first code
+		code = GetCode()
+		prevCode = code
+		pixelsArray[pixelsArrayPointer] = codeTable[code][0]
+		pixelsArrayPointer += 1
+        
+		While True
+      
+			'Update code
+			code = GetCode()
+			
+			'Is code in code table?			
+			If code &lt; codeTablePointer
+				'Yes
+				
+				Local firstCodeValue:Int = codeTable[code][0]
+				
+				'Is End of Information (EOI)
+				If firstCodeValue = EOI Then Exit
+        
+				'Is Clear Code (CC)
+				If firstCodeValue = CC
+					'Reset code size
+					codeSize = frame.LZW_MinimumCodeSize
+		
+					'ReInit code table
+					If frame.hasLCT = True
+						codeTable = InitCodeTable(frame.LCT, frame.sizeLCT, frame.graphicControlExtension.transparentColor, frame.graphicControlExtension.transparentColorIndex)
+					Else
+						codeTable = InitCodeTable(Header_GCT, Header_sizeGCT, frame.graphicControlExtension.transparentColor, frame.graphicControlExtension.transparentColorIndex)
+					Endif
+		
+					'Update old code
+					prevCode = GetCode()
+          
+					'Add to pixel stack
+					pixelsArray[pixelsArrayPointer] = codeTable[prevCode][0]
+					pixelsArrayPointer+=1
+					
+				Else
+					'Add to pixel stack
+					Local codeLen:Int = codeTable[code].Length
+					For i = 0 Until codeLen
+						pixelsArray[pixelsArrayPointer] = codeTable[code][i]
+						pixelsArrayPointer += 1
+					End
+					
+					'Add to code table
+					codeLen = codeTable[prevCode].Length
+					
+					Local newEntry:Int[] = New Int[codeLen+1]
+					
+					For i = 0 Until codeLen
+						newEntry[i] = codeTable[prevCode][i]
+					End					
+					
+					newEntry[codeLen] = firstCodeValue
+					codeTable[codeTablePointer] = newEntry
+					codeTablePointer += 1
+					prevCode = code
+				End
+			Else
+				'No
+				'Add to pixel stack
+				Local prevEntry:Int[] = codeTable[prevCode] 
+				Local k:Int = prevEntry[0]
+				Local codeLen:Int = prevEntry.Length
+				Local newEntry:Int[] = New Int[codeLen+1]
+				
+				For i = 0 Until codeLen
+					newEntry[i] = prevEntry[i]
+					pixelsArray[pixelsArrayPointer] = prevEntry[i]
+					pixelsArrayPointer += 1
+				End
+				
+				pixelsArray[pixelsArrayPointer] = k
+				pixelsArrayPointer += 1
+				newEntry[codeLen] = k
+								
+				'Add to code table
+				prevCode = codeTablePointer
+				codeTable[codeTablePointer] = newEntry
+				codeTablePointer += 1
+				
+			End
+
+			If codeTablePointer = BinValues[codeSize] And codeSize &lt; 12 
+				codeSize += 1
+			End
+
+		End
+              
+		'Create the image
+		frame.img = CreateImage(frame.width,frame.height)
+		frame.img.WritePixels(pixelsArray,0,0,frame.width,frame.height)
+		frame.img.SetHandle(frame.img.Width/2,frame.img.Height/2)
+    
+		'pixelsArray=[]
+	End
+  
+	Method isLocalColorTable:Bool()
+		If frame.hasLCT
+			Return True
+		Else
+			Return False
+		Endif
+	End
+ 
+	Method LocalColorTable:Void()
+		frame.LCT = New Int[frame.sizeLCT]
+		For i = 0 Until frame.sizeLCT
+			frame.LCT[i]=argb(gifDataStream.ReadUInt(1),gifDataStream.ReadUInt(1),gifDataStream.ReadUInt(1))
+		Next
+	End
+  
+	Method IsImageDescriptor:Bool()
+		Local pointer:=gifDataStream.GetPointer
+		If gifDataStream.ReadByte() = 44 '2C
+			Return True
+		Else
+			gifDataStream.SetPointer(pointer)
+			Return False
+		Endif
+	End
+  
+	Method ReadImageDescriptor:Void()
+		frame.left = gifDataStream.ReadUInt(2)
+		frame.top = gifDataStream.ReadUInt(2)
+		frame.width = gifDataStream.ReadUInt(2)
+		frame.height = gifDataStream.ReadUInt(2)
+		Local packedField := HexToBin(DecToHex(gifDataStream.ReadByte()))
+		If packedField &lt;&gt; "00000000"
+			If packedField[..1] = 1 Then frame.hasLCT = True
+			If packedField[1..2] = 1 Then frame.interlace = True
+			If packedField[2..3] = 1 Then frame.sort = True
+			frame.sizeLCT = Pow(2,1+BinToInt(packedField[5..8]))
+		Endif
+	End
+  
+	Method isGraphicControlExtension:Bool()
+		Local pointer:=gifDataStream.GetPointer
+		If gifDataStream.ReadByte() = 33 And gifDataStream.ReadByte() = -7
+			Return True
+		Else
+			gifDataStream.SetPointer(pointer)
+			Return False
+		Endif
+	End
+  
+	Method GraphicsControlExtension:Void()
+		gifDataStream.ReadByte() 'Skip Byte size
+		tempGraphicControl = New GraphicControlExtension()
+		Local packedField := HexToBin(DecToHex(gifDataStream.ReadByte()))
+		tempGraphicControl.disposalMethod = BinToInt(packedField[3..6])
+		If packedField[6..7] = 1
+			tempGraphicControl.userInput = True
+		Else
+			tempGraphicControl.userInput = False
+		Endif
+		If packedField[7..8] = 1
+			tempGraphicControl.transparentColor = True
+		Else
+			tempGraphicControl.transparentColor = False
+		Endif
+		If UpdateRate &lt;&gt; 0
+			tempGraphicControl.delayTime = UpdateRate*(gifDataStream.ReadUInt(2)/100.0)
+		Else
+			Print "ERROR: Please set the UpdateRate"
+		Endif
+		tempGraphicControl.transparentColorIndex = gifDataStream.ReadUInt(1)
+		If gifDataStream.ReadByte() &lt;&gt; 0 Then Print "ERROR: Graphics Control Extension Problem"
+	End
+  
+	Method isPlainTextExtension:Bool()
+		Local pointer:=gifDataStream.GetPointer
+		If gifDataStream.ReadByte() = 33 And gifDataStream.ReadByte() = 1
+			Return True
+		Else
+			gifDataStream.SetPointer(pointer)
+			Return False
+		Endif
+	End
+
+	Method PlainTextExtension:Void()
+		gifDataStream.SetPointer(gifDataStream.GetPointer()+ BinToInt(HexToBin(gifDataStream.ReadByte())) ) 'TODO - I'm skipping for now
+		While gifDataStream.ReadByte() &lt;&gt; 0
+		Wend
+	End
+  
+	Method isApplicationExtension:Bool()
+		Local pointer:=gifDataStream.GetPointer
+		If gifDataStream.ReadByte() = 33 And gifDataStream.ReadByte() = -1
+			Return True
+		Else
+			gifDataStream.SetPointer(pointer)
+			Return False
+		Endif
+	End
+  
+	Method ApplicationExtension:Void()
+		gif.Ext_Application = True
+		If gifDataStream.ReadByte &lt;&gt; 11 Then Print "ERROR: Application Extension Problem"
+		gif.Ext_Application_Identifier = gifDataStream.ReadString(8)
+		gif.Ext_Application_Code = gifDataStream.ReadString(3)
+		While BinToInt(HexToBin(gifDataStream.ReadByte())) &lt;&gt; 0
+			gifDataStream.SetPointer(gifDataStream.GetPointer-1)
+			gifDataStream.SetPointer(gifDataStream.GetPointer()+ BinToInt(HexToBin(gifDataStream.ReadByte()))) 'TODO - I'm skipping for now
+		Wend
+		If gifDataStream.ReadByte() &lt;&gt; 0 Then Print "ERROR: Application Extension Problem"
+	End
+ 
+	Method isCommentExtension:Bool()
+		Local pointer:=gifDataStream.GetPointer
+		If gifDataStream.ReadByte() = 33 And gifDataStream.ReadByte() = -2
+			Return True
+		Else
+			gifDataStream.SetPointer(pointer)
+			Return False
+		Endif
+	End
+  
+	Method CommentExtension:Void()
+		gif.Ext_Comment = True
+		gif.Ext_Comment_Comments = New Stack&lt;String&gt;
+		While BinToInt(HexToBin(gifDataStream.ReadByte())) &lt;&gt; 0
+			gifDataStream.SetPointer(gifDataStream.GetPointer-1)
+			gif.Ext_Comment_Comments.Push(gifDataStream.ReadString(gifDataStream.ReadByte()))
+		Wend
+	End
+  
+	Method GetFirstIndex:String(indexes:Int[])
+		Local result:String
+		For i = 0 Until indexes.Length
+			If indexes[i] = " " Then Exit
+			result += indexes[i]
+		End
+		Return result
+	End
+ 
+	Method InitCodeTable:Int[][](colorTable:Int[], size:Int, transparentColor:Bool, transparentColorIndex:Int)
+		
+		If Not codeTable
+			codeTable = New Int[4096][]
+		End
+				
+		For Local i:Int = 0 Until size
+			Local color:Int[] = New Int[1]
+			If transparentColor = False
+				color[0] = colorTable[i]
+			Else
+				If transparentColorIndex &lt;&gt; i
+					color[0] = colorTable[i]
+				Else
+					color[0] = argb(0,0,0,0)'Transparent color
+				End
+			End
+			codeTable[i] = color
+		End
+		
+		codeTablePointer = size
+		
+		'Add Clear Code
+		codeTable[codeTablePointer] = [CC]
+		codeTablePointer += 1
+		
+		'Add End of Information code
+		codeTable[codeTablePointer] = [EOI]
+		codeTablePointer += 1
+    
+		Return codeTable
+	End
+ 
+End
+
+Class Gif
+	'------ApplicationExtension------
+	Field Ext_Application:=False
+	Field Ext_Application_Identifier:String
+	Field Ext_Application_Code:String
+
+	'------CommentExtension------
+	Field Ext_Comment:=False
+	Field Ext_Comment_Comments:Stack&lt;String&gt;
+  
+	'------Frames------
+	Field frames:Stack&lt;Frame&gt;
+  
+	Method New()
+		frames = New Stack&lt;Frame&gt;
+	End
+  
+	Method AddFrame:Void(frame:Frame)
+		frames.Push(frame)
+	End
+End
+
+Class Frame
+	'-----Image Descriptor-----
+	Field left:Int
+	Field top:Int
+	Field width:Int
+	Field height:Int
+	Field hasLCT:=False 'Has Local Color Table?
+	Field interlace:=False
+	Field sort:=False
+	Field sizeLCT:=0 'Size of Local Color Table
+  
+	'-----Graphic Control Extension-----
+	Field graphicControlExtension:GraphicControlExtension
+  
+	'-----Local Color Table-----
+	Field LCT:Int[] 'Local color table
+  
+	'-----Image Data-----
+	Field LZW_MinimumCodeSize:Int
+  
+	'Image
+	Field img:Image
+  
+	Method New(graphicControlExtension:GraphicControlExtension)
+		Self.graphicControlExtension = graphicControlExtension
+	End
+  
+End
+
+Class GraphicControlExtension
+	Field disposalMethod:Int
+	Field userInput:Bool
+	Field transparentColor:Bool
+	Field delayTime:Float
+	Field transparentColorIndex:Int
+  
+	Method New()
+	End
+End
+
+'------------------------ TODO --------------------------------
+'Help functions and methods, I should organize this
+
+Function argb:Int(r:Int, g:Int, b:Int ,alpha:Int=255)
+	Return (alpha Shl 24) | (r Shl 16) | (g Shl 8) | b
+End
+
+Function DecToHex:String(dec:Int)
+	'Local r%=dec, s%, p%=32, n:Int[p/4+1]
+	Local r%=dec, s%, p%=8, n:Int[p/4+1]
+
+	While (p&gt;0)
+		
+		s = (r&amp;$f)+48
+		If s&gt;57 Then s+=7
+		
+		p-=4
+		n[p Shr 2] = s
+		r = r Shr 4
+		 
+	Wend
+  
+	Return String.FromChars(n)
+End
+
+Function HexToBin:String(hex:String)
+	Local bin:String
+	For Local i:=0 Until hex.Length
+		Select hex[i..i+1]
+			Case "0"; bin += "0000"
+			Case "1"; bin += "0001"
+			Case "2"; bin += "0010"
+			Case "3"; bin += "0011"
+			Case "4"; bin += "0100"
+			Case "5"; bin += "0101"
+			Case "6"; bin += "0110"
+			Case "7"; bin += "0111"
+			Case "8"; bin += "1000"
+			Case "9"; bin += "1001"
+			Case "A"; bin += "1010"
+			Case "B"; bin += "1011"
+			Case "C"; bin += "1100"
+			Case "D"; bin += "1101"
+			Case "E"; bin += "1110"
+			Case "F"; bin += "1111"
+		End
+	Next
+	Return bin
+End
+
+Function HexToBin_Array:Int[](hex:String)
+	Local bin:= New Int[hex.Length*4]
+	Local binPointer:=0
+	For Local i:=0 Until hex.Length
+		Select hex[i..i+1]
+			Case "0"; bin[binPointer]=0; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=0; binPointer+=1;'0000
+			Case "1"; bin[binPointer]=0; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=1; binPointer+=1;'0001
+			Case "2"; bin[binPointer]=0; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=0; binPointer+=1;'0010
+			Case "3"; bin[binPointer]=0; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=1; binPointer+=1;'0011
+			Case "4"; bin[binPointer]=0; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=0; binPointer+=1;'0100
+			Case "5"; bin[binPointer]=0; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=1; binPointer+=1;'0101
+			Case "6"; bin[binPointer]=0; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=0; binPointer+=1;'0110
+			Case "7"; bin[binPointer]=0; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=1; binPointer+=1;'0111
+			Case "8"; bin[binPointer]=1; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=0; binPointer+=1;'1000
+			Case "9"; bin[binPointer]=1; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=1; binPointer+=1;'1001
+			Case "A"; bin[binPointer]=1; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=0; binPointer+=1;'1010
+			Case "B"; bin[binPointer]=1; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=1; binPointer+=1;'1011
+			Case "C"; bin[binPointer]=1; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=0; binPointer+=1;'1100
+			Case "D"; bin[binPointer]=1; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=0; binPointer+=1;bin[binPointer]=1; binPointer+=1;'1101
+			Case "E"; bin[binPointer]=1; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=0; binPointer+=1;'1110
+			Case "F"; bin[binPointer]=1; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=1; binPointer+=1;bin[binPointer]=1; binPointer+=1;'1111
+		End
+	Next
+	Return bin
+End
+
+Global BinValues:Int[] = [1,2,4,8,16,32,64,128,256,512,1024,2048,4096,8192,16384,32768]
+
+Function BinToInt:Int(bin:String)
+	Local dec:Int
+	For Local i:int = 0 Until bin.Length
+		dec += Int(bin[bin.Length - i - 1 .. bin.Length - i]) * BinValues[i] 'Pow(2, i)
+	Next
+	Return dec
+End
+
+
+Function BinToInt:Int(bin:Int[])
+	Local dec:Int
+	For Local i:int = 0 Until 12
+		dec += bin[11 - i] * BinValues[i] 'Pow(2, i)
+	Next
+	Return dec
+End
+
+Function DecToBin:Int[](dec:Int)
+	Local result:Int
+	Local multiplier:Int
+	Local residue:Int
+	Local resultArr:Int[]=[0,0,0,0,0,0,0,0]
+	Local resultArrPointer:Int
+	multiplier = 1
+	While (dec &gt; 0)
+		residue = dec Mod 2
+		result = result + residue * multiplier
+		dec = dec / 2
+		multiplier = multiplier * 10
+	Wend
+	resultArrPointer = 7
+	While result &gt; 0
+		resultArr[resultArrPointer]=result Mod 10
+		result/=10
+		resultArrPointer-=1
+	Wend
+	Return resultArr
+End Function
+
+Class DataStream
+	'Byte = 8 Bits
+	'U = Unsigned (i.e. ReadUInt = ReadUnsignedInt)
+	'ReadInt(ByteCount) - I type Int and mean number - by using adjusting 'ByteCount' it can technically be a byte(1), short(2) or Long(4) etc
+	Field Buffer:DataBuffer
+	Field Pointer
+	Field BigEndian:Bool
+	
+	'Create New Datastream
+	Method New(Path:String, BigEndianFormat:Bool = True)
+		Buffer = DataBuffer.Load(Path)
+		Pointer = 0
+		BigEndian = BigEndianFormat
+	End Method
+	
+	'Sets the Datastream pointer location (offset from strat of file in bytes)
+	Method SetPointer(Offset)
+		Pointer = Offset
+	End Method
+	
+	'Sets the Datastream pointer location (offset from strat of file in bytes)
+	Method GetPointer()
+		Return Pointer
+	End Method
+	
+	'Read Methods
+	Method ReadInt(ByteCount)
+		Pointer = Pointer + ByteCount
+		If Not BigEndian Then Return CalculateBits(ChangeEndian(BytesToArr(Pointer - ByteCount, ByteCount)))
+		Return CalculateBits(BytesToArr(Pointer - ByteCount, ByteCount))
+	End Method
+	
+	Method ReadUInt(ByteCount)
+		Pointer = Pointer + ByteCount
+		If Not BigEndian Then Return CalculateUBits(ChangeEndian(BytesToArr(Pointer - ByteCount, ByteCount)))
+		Return CalculateUBits(BytesToArr(Pointer - ByteCount, ByteCount))
+	End Method
+	
+	Method ReadFixed32:Float()
+		Return Float(ReadInt(2) + "." + ReadInt(2))
+	End Method
+	
+	Method ReadString:String(ByteCount)
+		Pointer = Pointer + ByteCount
+		Return Buffer.PeekString(Pointer - ByteCount, ByteCount)
+	End Method
+    
+	Method ReadByte:Int()
+		Pointer += 1
+		Return Buffer.PeekByte(Pointer - 1)
+	End Method
+	
+	Method ReadBits:Int[] (ByteCount)
+		Local Str:Int[] = BytesToArr(Pointer, ByteCount)
+		Pointer = Pointer + ByteCount
+		If Not BigEndian Then Str = ChangeEndian(Str)
+		Local temp
+		For Local i = 0 Until Str.Length / 2
+			temp = Str[i]
+			Str[i] = Str[Str.Length - i - 1]
+			Str[Str.Length - i - 1] = temp
+		Next
+		Return Str
+	End Method
+	
+	'Peek Methods
+	Method PeekInt(ByteCount, Address)
+		If Not BigEndian Then Return CalculateBits(ChangeEndian(BytesToArr(Address, ByteCount)))
+		Return CalculateBits(BytesToArr(Address, ByteCount))
+	End Method
+	Method PeekUInt(ByteCount, Address)
+		If Not BigEndian Then CalculateUBits(ChangeEndian(BytesToArr(Address, ByteCount)))
+		Return CalculateUBits(BytesToArr(Address, ByteCount))
+	End Method
+	Method PeekFixed32:Float(Address)
+		Return Float(PeekInt(2, Address) + "." + PeekInt(2, Address + 2))
+	End Method
+	Method PeekString:String(ByteCount, Address)
+		Return Buffer.PeekString(Address, ByteCount)
+	End Method
+	Method PeekBits:Int[] (ByteCount, Address)
+		Local Str:Int[] = BytesToArr(Address, ByteCount)
+		If Not BigEndian Then Str = ChangeEndian(Str)
+		'reverse str
+		Local temp
+		For Local i = 0 Until Str.Length / 2
+			temp = Str[i]
+			Str[i] = Str[Str.Length - i - 1]
+			Str[Str.Length - i - 1] = temp
+		Next
+		Return Str
+	End Method
+	
+	'Converts Bit array to String - Helpfull for debug
+	Function ToString:String(Bits:Int[])
+		Local Rtn:String
+		For Local i = 0 To Bits.Length - 1
+			Rtn = Rtn + Bits[i]
+		Next
+		Return Rtn
+	End Function
+	
+	Function ChangeEndian:Int[] (BitString:Int[])
+		If BitString.Length &lt; 16 Then Return BitString
+		Local t
+		For Local b = 0 To(BitString.Length - 1) / 2 Step 8
+			For Local i = 0 To 7
+				t = BitString[b + i]
+				BitString[b + i] = BitString[BitString.Length - 8 - b + i]
+				BitString[BitString.Length - 8 - b + i] = t
+			Next
+		Next
+		Return BitString
+	End Function
+	Method BytesToArr:Int[] (Address, Count)
+		Local Str:Int[Count * 8], Counter = 0
+		For Local i = 0 To Count - 1
+			Local Byt:Int[] = ByteToArr(Address + i)
+			For Local c = 0 To 7
+				Str[Counter] = Byt[c]
+				Counter = Counter + 1
+			Next
+		Next
+		Return Str
+	End Method
+	Method ByteToArr:Int[] (Address)
+		Local I:Int = Buffer.PeekByte(Address)
+		Local Str:Int[8]
+		'If I = Positive
+		If I &gt; - 1 Then
+			'Create Bits
+			Local D = 128, Counter = 0
+			While I &gt; 0
+				If I &gt;= D Then
+					Str[Counter] = 1
+					I = I - D
+				Else
+					Str[Counter] = 0
+				End If
+				D = D / 2
+				Counter = Counter + 1
+			Wend
+			'Pad Out
+			While Counter &lt; 8
+				Str[Counter] = 0
+				Counter = Counter + 1
+			Wend
+			Return Str
+		End If
+		
+		'If I = Negative
+
+		I = I * -1
+		'Create Bits (and Flip)
+		Local D = 128, Counter = 0
+		While I &gt; 0
+			If I &gt;= D Then
+				Str[Counter] = 1
+				I = I - D
+			Else
+				Str[Counter] = 0
+			End If
+			D = D / 2
+			Counter = Counter + 1
+		Wend
+		'Pad Out
+		While Str.Length &lt; 8
+			Str[Counter] = 0
+			Counter = Counter + 1
+		Wend
+		'Flip
+		For Local i = 7 To 0 Step - 1
+			If Str[i] = 0 Then
+				Str[i] = 1
+			Else
+				Str[i] = 0
+			End If
+		Next
+		'Add 1
+		For Local i = 7 To 0 Step - 1
+			If Str[i] = 0 Then
+				Str[i] = 1
+				Exit
+			Else
+				Str[i] = 0
+			End If
+		Next
+		Return Str
+	End Method
+
+	Function CalculateUBits(BitString:Int[])
+		Local Rtn:Int, D:Int = 1
+		For Local i =  BitString.Length - 1 To 0 Step -1
+			If BitString[i] = 1 Then
+				Rtn = Rtn + D
+			End If
+			D = D * 2
+		Next
+		Return Rtn
+	End Function
+	Function CalculateBits(BitString:Int[])
+		'If Positive
+		If BitString[0] = 0 Then
+			Local Rtn:Int, D:Int = 1
+			For Local i = BitString.Length - 1 To 0 Step - 1
+				If BitString[i] = 1 Then
+					Rtn = Rtn + D
+				End If
+				D = D * 2
+			Next
+			Return Rtn
+		End If
+		
+		'===If Negative
+		'Flip Bits and into array
+		For Local i = 0 To BitString.Length - 1
+			If BitString[i] = 0 Then
+				BitString[i] = 1
+			Else
+				BitString[i] = 0
+			End If
+		Next
+		'Add 1
+		For Local i = BitString.Length - 1 To 0 Step - 1
+			If BitString[i] = 0 Then
+				BitString[i] = 1
+				Exit
+			Else
+				BitString[i] = 0
+			End If
+		Next
+		'Add Up
+		Local Rtn:Int, D:Int = 1
+		For Local i = BitString.Length - 1 To 0 Step - 1
+			If BitString[i] = 1 Then
+				Rtn = Rtn + D
+			End If
+			D = D * 2
+		Next
+		Return Rtn*-1
+		
+	End Function
+	
+End Class
+
+</textarea> <br><br></td></tr></table><br>
+<a name="2112003"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >CopperCircle</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks muddy_shoes :) <br><br></td></tr></table><br>
+<a name="2112163"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've been working on this a bit more. I noticed that it was pretty much unusable for large GIFs on anything with memory limitations as it decoded the whole GIF. To improve matters, I've made some further changes:<br><br>* On loading it now just processes all the header information and stores indices to the encoded image data.<br>* On playback it decodes only the required frames and decodes to a "canvas" array of ints, which is then written in one pass to a single image for rendering.<br>* The decoder now uses a one dimensional array for the decode table values with two arrays for indices and entry lengths to avoid all the array construction involved in the array of arrays solution.<br><br>I'm still working on it, both to try and improve the speed further and to sort out a more usable API/generally tidy it up, but if you're using the code you had you might want to take a look at my fork to see if the changes help you out, particularly on Android. Loading is under half a second on my phone for even the largest example GIFs you had and they play back fully, if a bit slowly. <a href="https://github.com/ootsby/GIF-Loader" target="_blank">https://github.com/ootsby/GIF-Loader</a><br><br>Edit: It's worth noting that a fair chunk of the remaining Android performance issues are down to the terrible texture binding performance of the standard mojo code that's been known about for years. <br><br></td></tr></table><br>
+<a name="2112162"></a>
+
+<a name="2112155"></a>
+
+<a name="2112154"></a>
+
+<a name="2112153"></a>
+
+<a name="2112152"></a>
+
+<a name="2112279"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >CopperCircle</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> That's a great improvement! I the android binding performance is increased changing line 118 in mojo.android.java from Bind() to Bind2().<br>Thanks. <br><br></td></tr></table><br>
+<a name="2112280"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yeah, there's also a simple two-line drop-in in the original Bind that improves matters. Just flagging that the standard distributed code is a problem for this application.<br><br>I was thinking of writing up an optimisation/refactoring case-study blog post or two based on this. Would you mind? <br><br></td></tr></table><br>
+<a name="2112293"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >CopperCircle</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> No go ahead, I am always happy to build something in Monkey as a proof of concept and it is great when others get involved and improve it. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

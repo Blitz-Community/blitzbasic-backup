@@ -1,0 +1,1585 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Shadow Experiment</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Encode XYZ in VertexColor, language=bb, category=3D Graphics - Effects'><meta name='author' content='jfk EO-11110'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=11>3D Graphics - Effects</a>/Shadow Experiment</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2792.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Shadow Experiment by jfk EO-11110</td><td align="right">2010 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> As suggested by Yasha I store this Shadow experiment here. What is it?<br>Use XYZ as VertexColor. Each Pixel of a Render will now allow to determine its position in 3D space.<br>Take a render from both, eye and light point of view. The eye render tells us, what point in space can bee seen at all. The light render will tell us which of those the eye can see can also bee seen by the light. Only these points are considered "lit and relevant to the eye". They are then projected to 2D and painted to a texture that can be used as screen overlay, or as perspective mapping.<br>The default setting is ising some tricks to fight artefacts, but to see it in plain vanilla ICU mode use these settings:<br><br>Global look_w=128<br>Global look_h=96<br>Global icu2rel=1<br>Global sshr=0<br>Global blurmode=0<br><br>it runs pretty fast this way, but most of the points are missed due to low sampling rate etc, as you'll see. </td></tr><tr ><td class="cell"><pre class="code">; Experimantal Shadow Technic: determine visibility by 2 ICU colormaps. VertexColor
+; is used to encode 8 Bit 3D coordinates in each rendered pixel.
+; all colors that are visible from within both renders  (eye +light perspectives)
+; will be lit point in space.
+
+; Heavy rounding error artefacts and sampling problems due to low resolution.
+
+; hit space to see the color space renders etc.
+
+; Note: since it is using Vertices, it may not work with animated B3D again! grrr!
+
+; NOTE: userlibs required!  In kernel32.decls you need this:
+
+
+;.lib "kernel32.dll" 
+;RtlMoveMemory2%(Destination*,Source,Length) : "RtlMoveMemory"
+
+
+;of course without semicolons
+
+
+
+
+Graphics3D 800,600,32,2
+
+SetBuffer BackBuffer()
+WBuffer 1
+
+
+AmbientLight 20,20,20
+
+
+Global demo_mode
+Global wire
+
+Global nshades#=768
+Global fogrange#=20.0 ; this will also be the max range of the projected light!
+Global f_divider#=256.0/fogrange#
+
+Global PhotoCamZoom#=1.0
+
+Global look_w=128 ;512 ;128;256 ; texturemap width (attention: max=graphicswidth/icu2rel !) Note: needs to be in 4:3 ratio with look_h ! Needs to be power of 2, eg 64,128,256...
+Global look_h=96  ;384 ;96 ;192
+Global icu2rel=2 ;oversampling (1 to 4): render from light view will be N times bigger for higher precision (eg look_w=256 and icu2rel=2, render will be 512x384)
+Global sshr=2; (0,1,2,3) additional bitshift oversampling (shr N)
+Global blurmode=1 ;(0/1) initially define if blur by multi quad overlay (slow)
+blur#=0.014
+
+
+Dim icu1#(look_w,look_h,2)
+Dim icu2#(look_w,look_h,2)
+Dim PhotonCache(look_w,look_h)
+Global RGB_2_XYZ=CreateBank(256*256*256)
+
+;create screen overlay quad
+Global ol_quad=CreateMesh()
+surf=CreateSurface(ol_quad)
+v0=AddVertex(surf,-1,-1,0)
+VertexTexCoords(surf,v0,0,   1   ,0 ,0)
+v1=AddVertex(surf, 1,-1,0)
+VertexTexCoords(surf,v1,1   ,1   ,0 ,0)
+v2=AddVertex(surf, 1, 1,0)
+VertexTexCoords(surf,v2,1   ,0   ,0 ,0)
+v3=AddVertex(surf,-1, 1,0)
+VertexTexCoords(surf,v3,0   ,0   ,0 ,0)
+
+tr=AddTriangle(surf,v0,v1,v2)
+tr=AddTriangle(surf,v0,v2,v3)
+
+Global ol_quadtex=CreateTexture(look_w,look_w,0)
+Global ol_quadtex_yo=Floor(look_w-look_h)/2.0
+TextureBlend ol_quadtex,2
+EntityFX ol_quad,17
+EntityBlend ol_quad,1  ;3;3
+EntityTexture ol_quad,ol_quadtex,0,0
+
+q_al#=0.1 ; alpha of shadow overlay
+If blurmode=0 Then Goto noblur
+q_al#=0.01
+
+TranslateEntity ol_quad,-blur#,-blur#,0
+EntityAlpha ol_quad,q_al#
+
+q2=CopyEntity(ol_quad,ol_quad)
+TranslateEntity q2,blur*2.0,0,0
+
+q3=CopyEntity(ol_quad,ol_quad)
+TranslateEntity q3,blur*2.0,blur*2.0,0
+
+q4=CopyEntity(ol_quad,ol_quad)
+TranslateEntity q4,0,blur*2.0,0
+
+EntityAlpha q2,q_al#
+EntityAlpha q3,q_al#
+EntityAlpha q4,q_al#
+
+.noblur
+
+
+EntityAlpha ol_quad,q_al#
+
+HideEntity ol_quad
+
+
+
+
+
+; simple scene...
+Global camera=CreateCamera()
+CameraRange camera,0.5,100
+EntityParent ol_quad,camera
+TranslateEntity ol_quad,0,0,1.0
+Global scene_center=CreatePivot()
+maincam_targetpiv=CreatePivot()
+
+
+light=CreateLight(3) ; position and angle of this light will be used for the light mesh projection
+test_range#=16.7
+LightRange light,test_range# ; actually this may be very low, we don't want it to enlight things in the shade
+PositionEntity light,0,-2,7 ; note, this important position for the system
+PointEntity light,scene_center
+
+Global light_cube=CreateCone(12,1,light)
+RotateMesh light_cube,-90,0,0
+ScaleEntity light_cube,0.2,0.2,0.1
+EntityFX light_cube,1
+;EntityAlpha light_cube,0.3
+EntityColor light_cube,255,255,0
+
+
+
+Global PhotonCamPiv=CreatePivot()
+Global PhotonCam=CreateCamera(PhotonCamPiv)
+CameraProjMode PhotonCam,0
+Global helper=CreatePivot()
+
+
+; simple test textures
+Global walltex=CreateTexture(256,256)
+Color 120,120,80
+Rect 0,0,256,256,1
+For i=0 To 20000
+ r=Rand(10,40)
+ Color 120+r,120+r,80+r
+ rx=Rand(256)
+ ry=Rand(256)
+ Plot rx,ry
+
+ r=-r
+ If ry0 Then r=0
+ Color 120+r,120+r,80+r
+ Plot rx,ry-1
+ Plot rx-1,ry-1
+ Plot rx+1,ry-1
+Next
+
+For j=0 To 255 Step 32
+ For i=0 To 300 Step 64
+  jo=-(Floor(j/32) And 1)*32
+  Color 40,40,20
+  Rect jo+i,j+1,63,31,0
+  Color 180,180,150
+  Rect jo+i+1,j,63,31,0
+ Next
+Next
+
+CopyRect 0,0,256,256,0,0,BackBuffer(),TextureBuffer(walltex)
+
+Global white =CreateTexture(16,16)
+Color 255,255,255
+Rect 0,0,16,16,1
+CopyRect 0,0,16,16,0,0,BackBuffer(),TextureBuffer(white)
+
+
+
+CameraProjMode camera,1
+CameraProjMode PhotonCam,0
+
+
+; world design...
+; init entity iteration------------------------
+Global Cycle_bank=CreateBank(16)
+Const  Cycle_NextEntity=4
+Const  Cycle_LastEntity=8
+Global Cycle_FirstEntity=CreatePivot()
+Global Cycle_CurrentEntityPointer=Cycle_FirstEntity
+;----------------------------------------------------
+
+; from here on, created entities can be parsed with MoreEntities function.
+dis#=10
+For i=0 To 30
+ c=CreateCube()
+ PositionEntity c,Rnd(-10,10),Rnd(-6,-4),Rnd(-10,10)
+ RotateEntity c,0,Rand(360),0
+ ScaleEntity c,3,1,3
+ EntityPickMode c,2
+ EntityTexture c,walltex
+Next
+
+w1=CreateCube() ;walls
+ScaleEntity w1,10,10,1
+TranslateEntity w1,0,0,10
+EntityTexture w1,walltex
+
+w2=CreateCube()
+ScaleEntity w2,10,10,1
+TranslateEntity w2,0,0,-10
+EntityTexture w2,walltex
+
+w3=CreateCube()
+ScaleEntity w3,1,10,10
+TranslateEntity w3,10,0,0
+EntityTexture w3,walltex
+
+w4=CreateCube()
+ScaleEntity w4,1,10,10
+TranslateEntity w4,-10,0,0
+EntityTexture w4,walltex
+
+w5=CreateCube() ; ceil
+ScaleEntity w5,10,1,10
+TranslateEntity w5,0,10,0
+EntityTexture w5,walltex
+
+col=CreateCylinder()
+ScaleEntity col,0.5,10,0.5
+TranslateEntity col,-5,0,-5
+EntityTexture col,walltex
+
+col=CreateCylinder()
+ScaleEntity col,0.5,10,0.5
+TranslateEntity col,0,0,-5
+EntityTexture col,walltex
+
+
+npc=CreateSphere(20)
+EntityTexture npc,walltex
+ScaleEntity npc,2,5,2
+
+
+EntityFX npc,1
+
+npc_x#=-5
+
+
+
+Global Cycle_EndMarker=CreatePivot()
+
+
+
+
+Type e_vert
+Field x#
+Field y#
+Field z#
+Field depth#
+Field ent
+Field sur
+Field ind
+Field red#
+Field green#
+Field blue#
+Field alpha#
+End Type
+
+
+
+Type rem_mat
+ Field index
+End Type
+
+
+
+
+
+
+ft=MilliSecs()
+MoveMouse GraphicsWidth()/1.8,GraphicsHeight()/2.0
+
+Color 255,0,0
+a#=50 
+While KeyHit(1)=0 ; MMMMMMMMMMMMMMMMMMMMMMMMMMMMM MAINLOOP MMMMMMMMMMMMMMMMMMMMMMMMMMMMMM
+ npc_x#=npc_x+.1
+ If npc_x&gt;12 Then npc_x=-12
+ PositionEntity npc,npc_x,0,0
+ TurnEntity npc,1,2,3
+ If KeyDown(200)
+  test_range#=test_range#*1.1
+  If test_range#&gt;20 Then test_range#=20
+  LightRange light, test_range#
+ EndIf
+ If KeyDown(208)
+  test_range#=test_range#*0.9
+  If test_range#&lt;0.1 Then test_range#=0.1
+  LightRange light, test_range#
+ EndIf
+
+;  a#=a#+2
+ If KeyDown(203)
+  a#=a#+2
+ EndIf
+ If KeyDown(205)
+  a#=a#-2
+ EndIf
+ If KeyHit(17) Then 
+  wire =wire Xor 1
+  If wire=0 Then WireFrame 0
+ EndIf
+ If KeyHit(57) Then
+  demo_mode=demo_mode+1
+  If demo_mode&gt;3 Then demo_mode=0
+ EndIf
+; PositionEntity light,( (GraphicsWidth()/2)-MouseX() )/40.0,((GraphicsHeight()/2)-MouseY())/40.0,7 ; note, this important position for the system
+ PositionEntity light, Sin( ((GraphicsWidth()/2)-MouseX())/2 )*7.5, ((GraphicsHeight()/2)-MouseY())/40.0, Cos(((GraphicsWidth()/2)-MouseX())/2 )*7.5 ; note, this important position for the system
+ PointEntity light,scene_center
+ If a#&gt;359 Then a#=0
+ If a#&lt;0 Then a#=359
+ PositionEntity camera,Sin(a#)*dis,0,Cos(a#)*dis
+ PointEntity camera,maincam_targetpiv
+
+ UpdateWorld()
+ LetThereBeLight(light)
+
+ If wire&lt;&gt;0 Then Wireframe 1
+ RenderWorld()
+ If wire&lt;&gt;0 Then WireFrame 0
+
+
+ Color 255,0,0
+ Text 250,0,"Tris:"+TrisRendered()
+ Text 150,0,"FPS:"+1000/ft
+ Text 350,0,"left,right, up, down,w,space,mouse"
+ Text 150,16,"DXlight range:"+test_range+" Eye :"+a
+ If demo_mode=0 Then Flip 0; to hide the color space maps
+ ms=MilliSecs()
+ ft=ms-ms2
+ ms2=ms
+Wend
+
+End
+;-----------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+Function LetThereBeLight(l)
+
+;erase some arrays
+ For y=0 To look_h-1
+  For x=0 To look_w-1
+    PhotonCache(x,y)=0
+  Next
+ Next
+
+ HideEntity light_cube
+ CameraProjMode camera,0
+ CameraProjMode PhotonCam,1
+ CameraFogMode PhotonCam,0
+ CameraFogRange PhotonCam,0,fogrange#*2.0
+ CameraViewport(PhotonCam,0,0,look_w,look_h)
+ CameraZoom PhotonCam,PhotoCamZoom#
+ PositionEntity PhotonCam,EntityX(camera,1),EntityY(camera,1),EntityZ(camera,1),1
+ RotateEntity PhotonCam,EntityPitch(camera,1),EntityYaw(camera,1),EntityRoll(camera,1),1
+ CameraRange PhotonCam,0.01,100
+ HideEntity ol_quad
+
+
+; coloring world (RGB-encode vertices locations)
+ While MoreEntities()
+  e=NextEntity()
+  If EntityClass$(e)="Mesh"
+   For su=1 To CountSurfaces(e)
+    surf=GetSurface(e,su)
+    For v=0 To CountVertices(surf)-1
+     enti.e_vert = New e_vert
+        enti\ent=e
+        enti\sur=surf
+        enti\ind=v
+        enti\red#=VertexRed(surf,v)
+        enti\green#=VertexGreen(surf,v)
+        enti\blue#=VertexBlue(surf,v)
+        enti\alpha#=VertexAlpha#(surf,v)
+
+       TFormPoint VertexX(surf,v),VertexY(surf,v),VertexZ(surf,v),e,0
+       dis__x#=TFormedX()+10.0
+       dis__y#=TFormedY()+10.0
+       dis__z#=TFormedZ()+10.0
+
+       bri__x#=255.0-(255.0 / fogrange#) * dis__x#
+       If bri__x#&lt;0 Then bri__x#=0
+       If bri__x#&gt;255 Then bri__x#=255
+
+       bri__y#=255.0-(255.0 / fogrange#) * dis__y#
+       If bri__y#&lt;0 Then bri__y#=0
+       If bri__y#&gt;255 Then bri__y#=255
+
+       bri__z#=255.0-(255.0 / fogrange#) * dis__z#
+       If bri__z#&lt;0 Then bri__z#=0
+       If bri__z#&gt;255 Then bri__z#=255
+       VertexColor surf, v, bri__x#, bri__y#, bri__z#,1.0 
+    Next
+   Next
+
+   EntityFX e,2 Or 1;4
+   EntityColor e,255,255,255
+   EntityTexture e,white
+  EndIf
+ Wend
+
+
+; render color space from player perspective
+ RenderWorld()
+
+ LockBuffer BackBuffer()
+ For y=0 To look_h-1
+  For x=0 To look_w-1
+   rgb=ReadPixelFast(x,y) And $ffffff
+   ; store texel world coords (rgb encoded)
+   icu1#(x,y,0)=(255-(rgb And $FF0000) Shr 16) 
+   icu1#(x,y,1)=(255-(rgb And $FF00) Shr 8) 
+   icu1#(x,y,2)=(255-rgb And $FF) ;/f_divider#
+  Next
+ Next
+ UnlockBuffer BackBuffer()
+
+ If demo_mode=1 Then  Flip 0 ; too see color space from eye
+
+
+
+;render color space from lights point of view
+
+ PositionEntity PhotonCam,EntityX(l),EntityY(l),EntityZ(l),1
+ RotateEntity PhotonCam,EntityPitch(l),EntityYaw(l),EntityRoll(l),1
+ CameraViewport(PhotonCam,0,0,look_w*icu2rel,look_h*icu2rel) ; allow higher precision
+
+ RenderWorld()
+
+ LockBuffer BackBuffer()
+ For y=0 To look_h*icu2rel-1
+  For x=0 To look_w*icu2rel-1
+   x2=x/icu2rel
+   y2=y/icu2rel
+   rgb=ReadPixelFast(x,y) And $ffffff
+   icu2#(x2,y2,0)=(255-(rgb And $FF0000) Shr 16) 
+   icu2#(x2,y2,1)=(255-(rgb And $FF00) Shr 8) 
+   icu2#(x2,y2,2)=(255-rgb And $FF) 
+   ; store flag in rgb encoded array index (reverse lookup table), and allow oversampling by bitshifting
+    rr.rem_mat = New rem_mat ; will have to erase this matrix point later, so store its bank index
+    rr\index=((icu2#(x2,y2,0)Shr sshr)Shl 16)Or((icu2#(x2,y2,1)Shr sshr)Shl 8)Or((icu2#(x2,y2,2)Shr sshr))
+    PokeByte RGB_2_XYZ,rr\index ,1
+  Next
+ Next
+ UnlockBuffer BackBuffer()
+
+
+ CameraViewport(PhotonCam,0,0,look_w,look_h) 
+ PositionEntity PhotonCam,EntityX(camera,1),EntityY(camera,1),EntityZ(camera,1),1
+ RotateEntity PhotonCam,EntityPitch(camera,1),EntityYaw(camera,1),EntityRoll(camera,1),1
+
+; The following is calculating the visability of each shadow overlay texel
+; set a shadow texels only if it was seen on both color space renders (point that can be seen from the eye and from the light as well)
+
+ For y=0 To look_h-1
+  For x=0 To look_w-1
+   p=PeekByte( RGB_2_XYZ, ((icu1#(x,y,0)Shr sshr)Shl 16)+((icu1#(x,y,1)Shr sshr)Shl 8)+((icu1#(x,y,2)Shr sshr))  )
+   If p=1
+    CameraProject PhotonCam, icu1#(x,y,0)/f_divider#-10.0,icu1#(x,y,1)/f_divider#-10.0,icu1#(x,y,2)/f_divider# -10.0
+    xx=ProjectedX#()
+    yy=ProjectedY#()
+    If (xx&gt;=0) And (yy&gt;=0) And (xx&lt;look_w) And (yy&lt;look_h) Then
+     PhotonCache(xx,yy)=1 ; will later write this pixel
+    EndIf
+   EndIf
+  Next
+ Next
+
+
+
+; clean up matrix changes
+ For rr.rem_mat = Each rem_mat
+  PokeByte RGB_2_XYZ,rr\index,0
+ Next
+ For rr.rem_mat = Each rem_mat
+  Delete rr
+ Next
+
+
+
+
+;; artefacts filter attempt....fill single isolated shadow texels
+; For y=1 To look_h-2
+;  For x=1 To look_w-2
+;   If (PhotonCache(x,y)=0) And (PhotonCache(x-1,y)=1) And (PhotonCache(x,y-1)=1) And (PhotonCache(x+1,y)=1) And (PhotonCache(x,y+1)=1) Then
+;    PhotonCache(x,y)=1
+;   EndIf
+;  Next
+; Next
+
+
+If demo_mode=2 Then Flip 0; to see color space from light
+
+
+
+; finally write the texels to the screen
+ Color 0,0,0
+ Rect 0,0,look_w,look_h,1
+
+ LockBuffer()
+ For y=0 To look_h-1
+  For x=0 To look_w-1
+   If PhotonCache(x,y)&lt;&gt;0 Then
+    WritePixelFast x,y,$ffffff
+   EndIf
+  Next
+ Next
+ UnlockBuffer()
+ CopyRect 0,0,look_w,look_h,0,ol_quadtex_yo,BackBuffer(), TextureBuffer(ol_quadtex)
+
+
+
+ For enti.e_vert = Each e_vert ; restore original vertex colors of scene
+     VertexColor enti\sur,enti\ind,enti\red#,enti\green#,enti\blue#,enti\alpha#
+ Next
+ For enti.e_vert = Each e_vert ; free types
+    Delete enti
+ Next
+
+;
+
+
+If demo_mode=3 Then Flip 0; to see shadow mapping
+
+ While MoreEntities()
+  ; this is where we set the scene objects back to their original state, FX etc. wise.
+  ; (in this demo the orig settings are not known, there for just zeroing FX)
+  e= NextEntity()
+  If EntityClass$(e)="Mesh"
+   EntityFX e,0
+   EntityColor e,255,255,255
+   EntityTexture e,walltex
+  EndIf
+ Wend
+
+ CameraProjMode camera,1
+ CameraProjMode PhotonCam,0
+ ShowEntity ol_quad
+ ShowEntity light_cube
+
+End Function
+
+
+
+
+; NOTE: userlibs required!  In kernel32.decls you need this:
+
+
+;.lib "kernel32.dll" 
+;RtlMoveMemory2%(Destination*,Source,Length) : "RtlMoveMemory"
+
+
+;of course without semicolons
+
+
+
+
+
+
+Function MoreEntities() ; iterate all world content entities
+ RtlMoveMemory2(Cycle_bank,Cycle_CurrentEntityPointer+Cycle_NextEntity,4)
+ If PeekInt(Cycle_bank,0)&lt;&gt;Cycle_EndMarker
+  Return True
+ Else
+  Cycle_CurrentEntityPointer=Cycle_FirstEntity
+ EndIf
+End Function
+
+
+Function NextEntity()
+ Local entity
+ RtlMoveMemory2(Cycle_bank,Cycle_CurrentEntityPointer+Cycle_NextEntity,4)
+ entity=PeekInt(Cycle_bank,0)
+ Cycle_CurrentEntityPointer = entity
+ Return entity
+End Function
+
+
+Function EntityExists(entity)
+ While MoreEntities()
+  If NextEntity()=entity Then Return True
+ Wend
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_PJ_</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> It's actually a little slow on my machine, giving around 11 fps<br>BUT<br>It's really quite good effect-wise. the variation in depth of the shadows especially.<br><br>I noticewd the shadow of the weird elliptical thing becomes quite blocky as it's projected. I wonder if, taking this as an 'unavoidable' apparition, whether it may be possible to both make the process smoother and quicker by some method of interpolating between edges? <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Warner</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> Geez, it looks rather well, runs @7fps here. It is a nice effect. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> I think this really is one of my absolute favourite B3D samples (I get 16FPS on a 2GHz T2500/Geforce 7600). And it's got that cool software-renderer feel to it (actually a software renderer might work better since you'd have access to the Z-buffer - this needs research...).<br><br>I'm going to use something like this in a project... even if I have to come up with a whole new projece idea just to have an excuse. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> I'm getting about 10 FPS but it's a really cool demo and it doesn't actually feel like it's running that slow. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ClayPigeon</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> Excellent! I'm getting up to 23 FPS on my low-end laptop! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nate the Great</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> not really sure whats wrong with b3d... I put the 2 lines of code into notepad and saved ans kernel32.decels in the b3d userlibs folder and then i opened b3d fresh and copy pasted this in and when i run it says it cant find that function it uses from kernel32.decls... I havent used b3d in forever did I miss something?<br><br>nevermind... spelled the name wrong<br><br>edit.. nope that wasnt it... do I need to do more? <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> u need to un semi-colon the kernel32 commands <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nate the Great</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> I did rez haha I mean is there anything else i need to do besides what it says? <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> Idk, let me find out :) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> Yes &amp; No. Yes, because I had to rename RTL_MoveMemory2% to api_RTL_MoveMemory2%. Other than that, and changing the code to match the name of the RTL function, No :)<br><br>Here's the code: <br><br>Shadows.bb: <br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Graphics3D 800,600,32,2
+
+SetBuffer BackBuffer()
+WBuffer 1
+
+
+AmbientLight 20,20,20
+
+
+Global demo_mode
+Global wire
+
+Global nshades#=768
+Global fogrange#=20.0 ; this will also be the max range of the projected light!
+Global f_divider#=256.0/fogrange#
+
+Global PhotoCamZoom#=1.0
+
+Global look_w=128 ;512 ;128;256 ; texturemap width (attention: max=graphicswidth/icu2rel !) Note: needs to be in 4:3 ratio with look_h ! Needs to be power of 2, eg 64,128,256...
+Global look_h=96  ;384 ;96 ;192
+Global icu2rel=2 ;oversampling (1 to 4): render from light view will be N times bigger for higher precision (eg look_w=256 and icu2rel=2, render will be 512x384)
+Global sshr=2; (0,1,2,3) additional bitshift oversampling (shr N)
+Global blurmode=1 ;(0/1) initially define if blur by multi quad overlay (slow)
+blur#=0.014
+
+
+Dim icu1#(look_w,look_h,2)
+Dim icu2#(look_w,look_h,2)
+Dim PhotonCache(look_w,look_h)
+Global RGB_2_XYZ=CreateBank(256*256*256)
+
+;create screen overlay quad
+Global ol_quad=CreateMesh()
+surf=CreateSurface(ol_quad)
+v0=AddVertex(surf,-1,-1,0)
+VertexTexCoords(surf,v0,0,   1   ,0 ,0)
+v1=AddVertex(surf, 1,-1,0)
+VertexTexCoords(surf,v1,1   ,1   ,0 ,0)
+v2=AddVertex(surf, 1, 1,0)
+VertexTexCoords(surf,v2,1   ,0   ,0 ,0)
+v3=AddVertex(surf,-1, 1,0)
+VertexTexCoords(surf,v3,0   ,0   ,0 ,0)
+
+tr=AddTriangle(surf,v0,v1,v2)
+tr=AddTriangle(surf,v0,v2,v3)
+
+Global ol_quadtex=CreateTexture(look_w,look_w,0)
+Global ol_quadtex_yo=Floor(look_w-look_h)/2.0
+TextureBlend ol_quadtex,2
+EntityFX ol_quad,17
+EntityBlend ol_quad,1  ;3;3
+EntityTexture ol_quad,ol_quadtex,0,0
+
+q_al#=0.1 ; alpha of shadow overlay
+If blurmode=0 Then Goto noblur
+q_al#=0.01
+
+TranslateEntity ol_quad,-blur#,-blur#,0
+EntityAlpha ol_quad,q_al#
+
+q2=CopyEntity(ol_quad,ol_quad)
+TranslateEntity q2,blur*2.0,0,0
+
+q3=CopyEntity(ol_quad,ol_quad)
+TranslateEntity q3,blur*2.0,blur*2.0,0
+
+q4=CopyEntity(ol_quad,ol_quad)
+TranslateEntity q4,0,blur*2.0,0
+
+EntityAlpha q2,q_al#
+EntityAlpha q3,q_al#
+EntityAlpha q4,q_al#
+
+.noblur
+
+
+EntityAlpha ol_quad,q_al#
+
+HideEntity ol_quad
+
+
+
+
+
+; simple scene...
+Global camera=CreateCamera()
+CameraRange camera,0.5,100
+EntityParent ol_quad,camera
+TranslateEntity ol_quad,0,0,1.0
+Global scene_center=CreatePivot()
+maincam_targetpiv=CreatePivot()
+
+
+light=CreateLight(3) ; position and angle of this light will be used for the light mesh projection
+test_range#=16.7
+LightRange light,test_range# ; actually this may be very low, we don't want it to enlight things in the shade
+PositionEntity light,0,-2,7 ; note, this important position for the system
+PointEntity light,scene_center
+
+Global light_cube=CreateCone(12,1,light)
+RotateMesh light_cube,-90,0,0
+ScaleEntity light_cube,0.2,0.2,0.1
+EntityFX light_cube,1
+;EntityAlpha light_cube,0.3
+EntityColor light_cube,255,255,0
+
+
+
+Global PhotonCamPiv=CreatePivot()
+Global PhotonCam=CreateCamera(PhotonCamPiv)
+CameraProjMode PhotonCam,0
+Global helper=CreatePivot()
+
+
+; simple test textures
+Global walltex=CreateTexture(256,256)
+Color 120,120,80
+Rect 0,0,256,256,1
+For i=0 To 20000
+ r=Rand(10,40)
+ Color 120+r,120+r,80+r
+ rx=Rand(256)
+ ry=Rand(256)
+ Plot rx,ry
+
+ r=-r
+ If ry0 Then r=0
+ Color 120+r,120+r,80+r
+ Plot rx,ry-1
+ Plot rx-1,ry-1
+ Plot rx+1,ry-1
+Next
+
+For j=0 To 255 Step 32
+ For i=0 To 300 Step 64
+  jo=-(Floor(j/32) And 1)*32
+  Color 40,40,20
+  Rect jo+i,j+1,63,31,0
+  Color 180,180,150
+  Rect jo+i+1,j,63,31,0
+ Next
+Next
+
+CopyRect 0,0,256,256,0,0,BackBuffer(),TextureBuffer(walltex)
+
+Global white =CreateTexture(16,16)
+Color 255,255,255
+Rect 0,0,16,16,1
+CopyRect 0,0,16,16,0,0,BackBuffer(),TextureBuffer(white)
+
+
+
+CameraProjMode camera,1
+CameraProjMode PhotonCam,0
+
+
+; world design...
+; init entity iteration------------------------
+Global Cycle_bank=CreateBank(16)
+Const  Cycle_NextEntity=4
+Const  Cycle_LastEntity=8
+Global Cycle_FirstEntity=CreatePivot()
+Global Cycle_CurrentEntityPointer=Cycle_FirstEntity
+;----------------------------------------------------
+
+; from here on, created entities can be parsed with MoreEntities function.
+dis#=10
+For i=0 To 30
+ c=CreateCube()
+ PositionEntity c,Rnd(-10,10),Rnd(-6,-4),Rnd(-10,10)
+ RotateEntity c,0,Rand(360),0
+ ScaleEntity c,3,1,3
+ EntityPickMode c,2
+ EntityTexture c,walltex
+Next
+
+w1=CreateCube() ;walls
+ScaleEntity w1,10,10,1
+TranslateEntity w1,0,0,10
+EntityTexture w1,walltex
+
+w2=CreateCube()
+ScaleEntity w2,10,10,1
+TranslateEntity w2,0,0,-10
+EntityTexture w2,walltex
+
+w3=CreateCube()
+ScaleEntity w3,1,10,10
+TranslateEntity w3,10,0,0
+EntityTexture w3,walltex
+
+w4=CreateCube()
+ScaleEntity w4,1,10,10
+TranslateEntity w4,-10,0,0
+EntityTexture w4,walltex
+
+w5=CreateCube() ; ceil
+ScaleEntity w5,10,1,10
+TranslateEntity w5,0,10,0
+EntityTexture w5,walltex
+
+col=CreateCylinder()
+ScaleEntity col,0.5,10,0.5
+TranslateEntity col,-5,0,-5
+EntityTexture col,walltex
+
+col=CreateCylinder()
+ScaleEntity col,0.5,10,0.5
+TranslateEntity col,0,0,-5
+EntityTexture col,walltex
+
+
+npc=CreateSphere(20)
+EntityTexture npc,walltex
+ScaleEntity npc,2,5,2
+
+
+EntityFX npc,1
+
+npc_x#=-5
+
+
+
+Global Cycle_EndMarker=CreatePivot()
+
+
+
+
+Type e_vert
+Field x#
+Field y#
+Field z#
+Field depth#
+Field ent
+Field sur
+Field ind
+Field red#
+Field green#
+Field blue#
+Field alpha#
+End Type
+
+
+
+Type rem_mat
+ Field index
+End Type
+
+
+
+
+
+
+ft=MilliSecs()
+MoveMouse GraphicsWidth()/1.8,GraphicsHeight()/2.0
+
+Color 255,0,0
+a#=50 
+While KeyHit(1)=0 ; MMMMMMMMMMMMMMMMMMMMMMMMMMMMM MAINLOOP MMMMMMMMMMMMMMMMMMMMMMMMMMMMMM
+ npc_x#=npc_x+.1
+ If npc_x&gt;12 Then npc_x=-12
+ PositionEntity npc,npc_x,0,0
+ TurnEntity npc,1,2,3
+ If KeyDown(200)
+  test_range#=test_range#*1.1
+  If test_range#&gt;20 Then test_range#=20
+  LightRange light, test_range#
+ EndIf
+ If KeyDown(208)
+  test_range#=test_range#*0.9
+  If test_range#&lt;0.1 Then test_range#=0.1
+  LightRange light, test_range#
+ EndIf
+
+;  a#=a#+2
+ If KeyDown(203)
+  a#=a#+2
+ EndIf
+ If KeyDown(205)
+  a#=a#-2
+ EndIf
+ If KeyHit(17) Then 
+  wire =wire Xor 1
+  If wire=0 Then Wireframe 0
+ EndIf
+ If KeyHit(57) Then
+  demo_mode=demo_mode+1
+  If demo_mode&gt;3 Then demo_mode=0
+ EndIf
+; PositionEntity light,( (GraphicsWidth()/2)-MouseX() )/40.0,((GraphicsHeight()/2)-MouseY())/40.0,7 ; note, this important position for the system
+ PositionEntity light, Sin( ((GraphicsWidth()/2)-MouseX())/2 )*7.5, ((GraphicsHeight()/2)-MouseY())/40.0, Cos(((GraphicsWidth()/2)-MouseX())/2 )*7.5 ; note, this important position for the system
+ PointEntity light,scene_center
+ If a#&gt;359 Then a#=0
+ If a#&lt;0 Then a#=359
+ PositionEntity camera,Sin(a#)*dis,0,Cos(a#)*dis
+ PointEntity camera,maincam_targetpiv
+
+ UpdateWorld()
+ LetThereBeLight(light)
+
+ If wire&lt;&gt;0 Then Wireframe 1
+ RenderWorld()
+ If wire&lt;&gt;0 Then Wireframe 0
+
+
+ Color 255,0,0
+ Text 250,0,"Tris:"+TrisRendered()
+ Text 150,0,"FPS:"+1000/ft
+ Text 350,0,"left,right, up, down,w,space,mouse"
+ Text 150,16,"DXlight range:"+test_range+" Eye :"+a
+ If demo_mode=0 Then Flip 0; to hide the color space maps
+ ms=MilliSecs()
+ ft=ms-ms2
+ ms2=ms
+Wend
+
+End
+;-----------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+Function LetThereBeLight(l)
+
+;erase some arrays
+ For y=0 To look_h-1
+  For x=0 To look_w-1
+    PhotonCache(x,y)=0
+  Next
+ Next
+
+ HideEntity light_cube
+ CameraProjMode camera,0
+ CameraProjMode PhotonCam,1
+ CameraFogMode PhotonCam,0
+ CameraFogRange PhotonCam,0,fogrange#*2.0
+ CameraViewport(PhotonCam,0,0,look_w,look_h)
+ CameraZoom PhotonCam,PhotoCamZoom#
+ PositionEntity PhotonCam,EntityX(camera,1),EntityY(camera,1),EntityZ(camera,1),1
+ RotateEntity PhotonCam,EntityPitch(camera,1),EntityYaw(camera,1),EntityRoll(camera,1),1
+ CameraRange PhotonCam,0.01,100
+ HideEntity ol_quad
+
+
+; coloring world (RGB-encode vertices locations)
+ While MoreEntities()
+  e=NextEntity()
+  If EntityClass$(e)="Mesh"
+   For su=1 To CountSurfaces(e)
+    surf=GetSurface(e,su)
+    For v=0 To CountVertices(surf)-1
+     enti.e_vert = New e_vert
+        enti\ent=e
+        enti\sur=surf
+        enti\ind=v
+        enti\red#=VertexRed(surf,v)
+        enti\green#=VertexGreen(surf,v)
+        enti\blue#=VertexBlue(surf,v)
+        enti\alpha#=VertexAlpha#(surf,v)
+
+       TFormPoint VertexX(surf,v),VertexY(surf,v),VertexZ(surf,v),e,0
+       dis__x#=TFormedX()+10.0
+       dis__y#=TFormedY()+10.0
+       dis__z#=TFormedZ()+10.0
+
+       bri__x#=255.0-(255.0 / fogrange#) * dis__x#
+       If bri__x#&lt;0 Then bri__x#=0
+       If bri__x#&gt;255 Then bri__x#=255
+
+       bri__y#=255.0-(255.0 / fogrange#) * dis__y#
+       If bri__y#&lt;0 Then bri__y#=0
+       If bri__y#&gt;255 Then bri__y#=255
+
+       bri__z#=255.0-(255.0 / fogrange#) * dis__z#
+       If bri__z#&lt;0 Then bri__z#=0
+       If bri__z#&gt;255 Then bri__z#=255
+       VertexColor surf, v, bri__x#, bri__y#, bri__z#,1.0 
+    Next
+   Next
+
+   EntityFX e,2 Or 1;4
+   EntityColor e,255,255,255
+   EntityTexture e,white
+  EndIf
+ Wend
+
+
+; render color space from player perspective
+ RenderWorld()
+
+ LockBuffer BackBuffer()
+ For y=0 To look_h-1
+  For x=0 To look_w-1
+   rgb=ReadPixelFast(x,y) And $ffffff
+   ; store texel world coords (rgb encoded)
+   icu1#(x,y,0)=(255-(rgb And $FF0000) Shr 16) 
+   icu1#(x,y,1)=(255-(rgb And $FF00) Shr 8) 
+   icu1#(x,y,2)=(255-rgb And $FF) ;/f_divider#
+  Next
+ Next
+ UnlockBuffer BackBuffer()
+
+ If demo_mode=1 Then  Flip 0 ; too see color space from eye
+
+
+
+;render color space from lights point of view
+
+ PositionEntity PhotonCam,EntityX(l),EntityY(l),EntityZ(l),1
+ RotateEntity PhotonCam,EntityPitch(l),EntityYaw(l),EntityRoll(l),1
+ CameraViewport(PhotonCam,0,0,look_w*icu2rel,look_h*icu2rel) ; allow higher precision
+
+ RenderWorld()
+
+ LockBuffer BackBuffer()
+ For y=0 To look_h*icu2rel-1
+  For x=0 To look_w*icu2rel-1
+   x2=x/icu2rel
+   y2=y/icu2rel
+   rgb=ReadPixelFast(x,y) And $ffffff
+   icu2#(x2,y2,0)=(255-(rgb And $FF0000) Shr 16) 
+   icu2#(x2,y2,1)=(255-(rgb And $FF00) Shr 8) 
+   icu2#(x2,y2,2)=(255-rgb And $FF) 
+   ; store flag in rgb encoded array index (reverse lookup table), and allow oversampling by bitshifting
+    rr.rem_mat = New rem_mat ; will have to erase this matrix point later, so store its bank index
+    rr\index=((icu2#(x2,y2,0)Shr sshr)Shl 16)Or((icu2#(x2,y2,1)Shr sshr)Shl 8)Or((icu2#(x2,y2,2)Shr sshr))
+    PokeByte RGB_2_XYZ,rr\index ,1
+  Next
+ Next
+ UnlockBuffer BackBuffer()
+
+
+ CameraViewport(PhotonCam,0,0,look_w,look_h) 
+ PositionEntity PhotonCam,EntityX(camera,1),EntityY(camera,1),EntityZ(camera,1),1
+ RotateEntity PhotonCam,EntityPitch(camera,1),EntityYaw(camera,1),EntityRoll(camera,1),1
+
+; The following is calculating the visability of each shadow overlay texel
+; set a shadow texels only if it was seen on both color space renders (point that can be seen from the eye and from the light as well)
+
+ For y=0 To look_h-1
+  For x=0 To look_w-1
+   p=PeekByte( RGB_2_XYZ, ((icu1#(x,y,0)Shr sshr)Shl 16)+((icu1#(x,y,1)Shr sshr)Shl 8)+((icu1#(x,y,2)Shr sshr))  )
+   If p=1
+    CameraProject PhotonCam, icu1#(x,y,0)/f_divider#-10.0,icu1#(x,y,1)/f_divider#-10.0,icu1#(x,y,2)/f_divider# -10.0
+    xx=ProjectedX#()
+    yy=ProjectedY#()
+    If (xx&gt;=0) And (yy&gt;=0) And (xx&lt;look_w) And (yy&lt;look_h) Then
+     PhotonCache(xx,yy)=1 ; will later write this pixel
+    EndIf
+   EndIf
+  Next
+ Next
+
+
+
+; clean up matrix changes
+ For rr.rem_mat = Each rem_mat
+  PokeByte RGB_2_XYZ,rr\index,0
+ Next
+ For rr.rem_mat = Each rem_mat
+  Delete rr
+ Next
+
+
+
+
+;; artefacts filter attempt....fill single isolated shadow texels
+; For y=1 To look_h-2
+;  For x=1 To look_w-2
+;   If (PhotonCache(x,y)=0) And (PhotonCache(x-1,y)=1) And (PhotonCache(x,y-1)=1) And (PhotonCache(x+1,y)=1) And (PhotonCache(x,y+1)=1) Then
+;    PhotonCache(x,y)=1
+;   EndIf
+;  Next
+; Next
+
+
+If demo_mode=2 Then Flip 0; to see color space from light
+
+
+
+; finally write the texels to the screen
+ Color 0,0,0
+ Rect 0,0,look_w,look_h,1
+
+ LockBuffer()
+ For y=0 To look_h-1
+  For x=0 To look_w-1
+   If PhotonCache(x,y)&lt;&gt;0 Then
+    WritePixelFast x,y,$ffffff
+   EndIf
+  Next
+ Next
+ UnlockBuffer()
+ CopyRect 0,0,look_w,look_h,0,ol_quadtex_yo,BackBuffer(), TextureBuffer(ol_quadtex)
+
+
+
+ For enti.e_vert = Each e_vert ; restore original vertex colors of scene
+     VertexColor enti\sur,enti\ind,enti\red#,enti\green#,enti\blue#,enti\alpha#
+ Next
+ For enti.e_vert = Each e_vert ; free types
+    Delete enti
+ Next
+
+;
+
+
+If demo_mode=3 Then Flip 0; to see shadow mapping
+
+ While MoreEntities()
+  ; this is where we set the scene objects back to their original state, FX etc. wise.
+  ; (in this demo the orig settings are not known, there for just zeroing FX)
+  e= NextEntity()
+  If EntityClass$(e)="Mesh"
+   EntityFX e,0
+   EntityColor e,255,255,255
+   EntityTexture e,walltex
+  EndIf
+ Wend
+
+ CameraProjMode camera,1
+ CameraProjMode PhotonCam,0
+ ShowEntity ol_quad
+ ShowEntity light_cube
+
+End Function
+
+
+
+
+; NOTE: userlibs required!  In kernel32.decls you need this:
+
+
+;.lib "kernel32.dll" 
+;RtlMoveMemory2%(Destination*,Source,Length) : "RtlMoveMemory"
+
+
+;of course without semicolons
+
+
+
+
+
+
+Function MoreEntities() ; iterate all world content entities
+ api_RtlMoveMemory2(Cycle_bank,Cycle_CurrentEntityPointer+Cycle_NextEntity,4)
+ If PeekInt(Cycle_bank,0)&lt;&gt;Cycle_EndMarker
+  Return True
+ Else
+  Cycle_CurrentEntityPointer=Cycle_FirstEntity
+ EndIf
+End Function
+
+
+Function NextEntity()
+ Local entity
+ api_RtlMoveMemory2(Cycle_bank,Cycle_CurrentEntityPointer+Cycle_NextEntity,4)
+ entity=PeekInt(Cycle_bank,0)
+ Cycle_CurrentEntityPointer = entity
+ Return entity
+End Function
+
+
+Function EntityExists(entity)
+ While MoreEntities()
+  If NextEntity()=entity Then Return True
+ Wend
+End Function</textarea><br><br>And here's pretty much EVERY k32 function I could find INCLUDING "api_RTL_MoveMemory2%: <br><br>kernel32.decls: <br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">.lib "kernel32.dll"
+
+GlobalMemoryStatus(buffer*)
+
+ptr_helper__%(a*,b%,c%):"MulDiv"
+
+apiRtlMoveMemory(Destination*,Source,Length):"RtlMoveMemory"
+apiRtlMoveMemory2(Destination,Source*,Length):"RtlMoveMemory"
+
+api_RtlMoveMemory2%(Destination*,Source,Length) : "RtlMoveMemory"
+
+api_AddAtom% (lpString$) : "AddAtomA"
+api_AllocConsole% () : "AllocConsole"
+api_BackupRead% (hFile%, lpBuffer%, nNumberOfBytesToRead%, lpNumberOfBytesRead%, bAbort%, bProcessSecurity%, lpContext*) : "BackupRead"
+api_BackupSeek% (hFile%, dwLowBytesToSeek%, dwHighBytesToSeek%, lpdwLowByteSeeked%, lpdwHighByteSeeked%, lpContext%) : "BackupSeek"
+api_BackupWrite% (hFile%, lpBuffer%, nNumberOfBytesToWrite%, lpNumberOfBytesWritten%, bAbort%, bProcessSecurity%, lpContext%) : "BackupWrite"
+api_Beep% (dwFreq%, dwDuration%) : "Beep"
+api_BeginUpdateResource% (pFileName$, bDeleteExistingResources%) : "BeginUpdateResourceA"
+api_BuildCommDCB% (lpDef$, lpDCB*) : "BuildCommDCBA"
+api_BuildCommDCBAndTimeouts% (lpDef$, lpDCB*, lpCommTimeouts*) : "BuildCommDCBAndTimeoutsA"
+api_CallNamedPipe% (lpNamedPipeName$, lpInBuffer*, nInBufferSize%, lpOutBuffer*, nOutBufferSize%, lpBytesRead%, nTimeOut%) : "CallNamedPipeA"
+api_ClearCommBreak% (nCid%) : "ClearCommBreak"
+api_ClearCommError% (hFile%, lpErrors%, lpStat*) : "ClearCommError"
+api_CloseHandle% (hObject%) : "CloseHandle"
+api_CommConfigDialog% (lpszName$, hWnd%, lpCC*) : "CommConfigDialogA"
+api_CompareFileTime% (lpFileTime1*, lpFileTime2*) : "CompareFileTime"
+api_CompareString% (Locale%, dwCmpFlags%, lpString1$, cchCount1%, lpString2$, cchCount2%) : "CompareStringA"
+api_ConnectNamedPipe% (hNamedPipe%, lpOverlapped*) : "ConnectNamedPipe"
+api_ContinueDebugEvent% (dwProcessId%, dwThreadId%, dwContinueStatus%) : "ContinueDebugEvent"
+api_ConvertDefaultLocale% (Locale%) : "ConvertDefaultLocale"
+api_CopyFile% (lpExistingFileName$, lpNewFileName$, bFailIfExists%) : "CopyFileA"
+api_CreateConsoleScreenBuffer% (dwDesiredAccess%, dwShareMode%, lpSecurityAttributes*, dwFlags%, lpScreenBufferData*) : "CreateConsoleScreenBuffer"
+api_CreateDirectory% (lpPathName$, lpSecurityAttributes*) : "CreateDirectoryA"
+api_CreateDirectoryEx% (lpTemplateDirectory$, lpNewDirectory$, lpSecurityAttributes*) : "CreateDirectoryExA"
+api_CreateEvent% (lpEventAttributes*, bManualReset%, bInitialState%, lpName$) : "CreateEventA"
+api_CreateFile% (lpFileName$, dwDesiredAccess%, dwShareMode%, lpSecurityAttributes*, dwCreationDisposition%, dwFlagsAndAttributes%, hTemplateFile%) : "CreateFileA"
+api_CreateFileMapping% (hFile%, lpFileMappigAttributes*, flProtect%, dwMaximumSizeHigh%, dwMaximumSizeLow%, lpName$) : "CreateFileMappingA"
+api_CreateIoCompletionPort% (FileHandle%, ExistingCompletionPort%, CompletionKey%, NumberOfConcurrentThreads%) : "CreateIoCompletionPort"
+api_CreateMailslot% (lpName$, nMaxMessageSize%, lReadTimeout%, lpSecurityAttributes*) : "CreateMailslotA"
+api_CreateMutex% (lpMutexAttributes*, bInitialOwner%, lpName$) : "CreateMutexA"
+api_CreateNamedPipe% (lpName$, dwOpenMode%, dwPipeMode%, nMaxInstances%, nOutBufferSize%, nInBufferSize%, nDefaultTimeOut%, lpSecurityAttributes*) : "CreateNamedPipeA"
+api_CreatePipe% (phReadPipe%, phWritePipe%, lpPipeAttributes*, nSize%) : "CreatePipe"
+api_CreateProcess% (lpApplicationName$, lpCommandLine$, lpProcessAttributes*, lpThreadAttributes*, bInheritHandles%, dwCreationFlags%, lpEnvironment*, lpCurrentDriectory$, lpStartupInfo*, lpProcessInformation*) : "CreateProcessA"
+api_CreateProcessAsUser% (hToken%, lpApplicationName$, lpCommandLine$, lpProcessAttributes*, lpThreadAttributes*, bInheritHandles%, dwCreationFlags%, lpEnvironment$, lpCurrentDirectory$, lpStartupInfo*, lpProcessInformation*) : "CreateProcessAsUserA"
+api_CreateRemoteThread% (hProcess%, lpThreadAttributes*, dwStackSize%, lpStartAddress%, lpParameter*, dwCreationFlags%, lpThreadId%) : "CreateRemoteThread"
+api_CreateSemaphore% (lpSemaphoreAttributes*, lInitialCount%, lMaximumCount%, lpName$) : "CreateSemaphoreA"
+api_CreateTapePartition% (hDevice%, dwPartitionMethod%, dwCount%, dwSize%) : "CreateTapePartition"
+api_CreateThread% (lpThreadAttributes*, dwStackSize%, lpStartAddress%, lpParameter*, dwCreationFlags%, lpThreadId%) : "CreateThread"
+api_DebugActiveProcess% (dwProcessId%) : "DebugActiveProcess"
+api_DebugBreak () : "DebugBreak"
+api_DefineDosDevice% (dwFlags%, lpDeviceName$, lpTargetPath$) : "DefineDosDeviceA"
+api_DeleteAtom% (nAtom%) : "DeleteAtom"
+api_DeleteCriticalSection (lpCriticalSection*) : "DeleteCriticalSection"
+api_DeleteFile% (lpFileName$) : "DeleteFileA"
+api_DeviceIoControl% (hDevice%, dwIoControlCode%, lpInBuffer*, nInBufferSize%, lpOutBuffer*, nOutBufferSize%, lpBytesReturned%, lpOverlapped*) : "DeviceIoControl"
+api_DisableThreadLibraryCalls% (hLibModule%) : "DisableThreadLibraryCalls"
+api_DisconnectNamedPipe% (hNamedPipe%) : "DisconnectNamedPipe"
+api_DosDateTimeToFileTime% (wFatDate%, wFatTime%, lpFileTime*) : "DosDateTimeToFileTime"
+api_DuplicateHandle% (hSourceProcessHandle%, hSourceHandle%, hTargetProcessHandle%, lpTargetHandle%, dwDesiredAccess%, bInheritHandle%, dwOptions%) : "DuplicateHandle"
+api_EndUpdateResource% (hUpdate%, fDiscard%) : "EndUpdateResourceA"
+api_EnterCriticalSection (lpCriticalSection*) : "EnterCriticalSection"
+api_EnumCalendarInfo% (lpCalInfoEnumProc%, Locale%, Calendar%, CalType%) : "EnumCalendarInfoA"
+api_EnumDateFormats% (lpDateFmtEnumProc%, Locale%, dwFlags%) : "EnumDateFormats"
+api_EnumResourceLanguages% (hModule%, lpType$, lpName$, lpEnumFunc%, lParam%) : "EnumResourceLanguagesA"
+api_EnumResourceNames% (hModule%, lpType$, lpEnumFunc%, lParam%) : "EnumResourceNamesA"
+api_EnumResourceTypes% (hModule%, lpEnumFunc%, lParam%) : "EnumResourceTypesA"
+api_EnumSystemCodePages% (lpCodePageEnumProc%, dwFlags%) : "EnumSystemCodePages"
+api_EnumSystemLocales% (lpLocaleEnumProc%, dwFlags%) : "EnumSystemLocales"
+api_EnumTimeFormats% (lpTimeFmtEnumProc%, Locale%, dwFlags%) : "EnumTimeFormats"
+api_EraseTape% (hDevice%, dwEraseType%, bimmediate%) : "EraseTape"
+api_EscapeCommFunction% (nCid%, nFunc%) : "EscapeCommFunction"
+api_ExitProcess (uExitCode%) : "ExitProcess"
+api_ExitThread (dwExitCode%) : "ExitThread"
+api_ExpandEnvironmentStrings% (lpSrc$, lpDst$, nSize%) : "ExpandEnvironmentStringsA"
+api_FatalAppExit (uAction%, lpMessageText$) : "FatalAppExitA"
+api_FatalExit (code%) : "FatalExit"
+api_FileTimeToDosDateTime% (lpFileTime*, lpFatDate%, lpFatTime%) : "FileTimeToDosDateTime"
+api_FileTimeToLocalFileTime% (lpFileTime*, lpLocalFileTime*) : "FileTimeToLocalFileTime"
+api_FileTimeToSystemTime% (lpFileTime*, lpSystemTime*) : "FileTimeToSystemTime"
+api_FillConsoleOutputAttribute% (hConsoleOutput%, wAttribute%, nLength%, dwWriteCoord*, lpNumberOfAttrsWritten%) : "FillConsoleOutputAttribute"
+api_FillConsoleOutputCharacter% (hConsoleOutput%, cCharacter%, nLength%, dwWriteCoord*, lpNumberOfCharsWritten%) : "FillConsoleOutputCharacterA"
+api_FindAtom% (lpString$) : "FindAtomA"
+api_FindClose% (hFindFile%) : "FindClose"
+api_FindCloseChangeNotification% (hChangeHandle%) : "FindCloseChangeNotification"
+api_FindFirstChangeNotification% (lpPathName$, bWatchSubtree%, dwNotifyFilter%) : "FindFirstChangeNotificationA"
+api_FindFirstFile% (lpFileName$, lpFindFileData*) : "FindFirstFileA"
+api_FindNextChangeNotification% (hChangeHandle%) : "FindNextChangeNotification"
+api_FindNextFile% (hFindFile%, lpFindFileData*) : "FindNextFileA"
+api_FindResource% (hInstance%, lpName$, lpType$) : "FindResourceA"
+api_FindResourceEx% (hModule%, lpType$, lpName$, wLanguage%) : "FindResourceExA"
+api_FlushConsoleInputBuffer% (hConsoleInput%) : "FlushConsoleInputBuffer"
+api_FlushFileBuffers% (hFile%) : "FlushFileBuffers"
+api_FlushInstructionCache% (hProcess%, lpBaseAddress*, dwSize%) : "FlushInstructionCache"
+api_FlushViewOfFile% (lpBaseAddress*, dwNumberOfBytesToFlush%) : "FlushViewOfFile"
+api_FoldString% (dwMapFlags%, lpSrcStr$, cchSrc%, lpDestStr$, cchDest%) : "FoldStringA"
+api_FormatMessage% (dwFlags%, lpSource*, dwMessageId%, dwLanguageId%, lpBuffer$, nSize%, Arguments%) : "FormatMessageA"
+api_FreeConsole% () : "FreeConsole"
+api_FreeEnvironmentStrings% (lpsz$) : "FreeEnvironmentStringsA"
+api_FreeLibrary% (hLibModule%) : "FreeLibrary"
+api_FreeLibraryAndExitThread (hLibModule%, dwExitCode%) : "FreeLibraryAndExitThread"
+api_FreeResource% (hResData%) : "FreeResource"
+api_GenerateConsoleCtrlEvent% (dwCtrlEvent%, dwProcessGroupId%) : "GenerateConsoleCtrlEvent"
+api_GetACP% () : "GetACP"
+api_GetAtomName% (nAtom%, lpBuffer$, nSize%) : "GetAtomNameA"
+api_GetBinaryType% (lpApplicationName$, lpBinaryType%) : "GetBinaryTypeA"
+api_GetCommandLine$ () : "GetCommandLineA"
+api_GetCommConfig% (hCommDev%, lpCC*, lpdwSize%) : "GetCommConfig"
+api_GetCommMask% (hFile%, lpEvtMask%) : "GetCommMask"
+api_GetCommModemStatus% (hFile%, lpModemStat%) : "GetCommModemStatus"
+api_GetCommProperties% (hFile%, lpCommProp*) : "GetCommProperties"
+api_GetCommState% (nCid%, lpDCB*) : "GetCommState"
+api_GetCommTimeouts% (hFile%, lpCommTimeouts*) : "GetCommTimeouts"
+api_GetCompressedFileSize% (lpFileName$, lpFileSizeHigh%) : "GetCompressedFileSizeA"
+api_GetComputerName% (lpBuffer$, nSize%) : "GetComputerNameA"
+api_GetConsoleCP% () : "GetConsoleCP"
+api_GetConsoleCursorInfo% (hConsoleOutput%, lpConsoleCursorInfo*) : "GetConsoleCursorInfo"
+api_GetConsoleMode% (hConsoleHandle%, lpMode%) : "GetConsoleMode"
+api_GetConsoleOutputCP% () : "GetConsoleOutputCP"
+api_GetConsoleScreenBufferInfo% (hConsoleOutput%, lpConsoleScreenBufferInfo*) : "GetConsoleScreenBufferInfo"
+api_GetConsoleTitle% (lpConsoleTitle$, nSize%) : "GetConsoleTitleA"
+api_GetCPInfo% (CodePage%, lpCPInfo*) : "GetCPInfo"
+api_GetCurrencyFormat% (Locale%, dwFlags%, lpValue$, lpFormat*, lpCurrencyStr$, cchCurrency%) : "GetCurrencyFormatA"
+api_GetCurrentDirectory% (nBufferLength%, lpBuffer$) : "GetCurrentDirectory"
+api_GetCurrentProcess% () : "GetCurrentProcess"
+api_GetCurrentProcessId% () : "GetCurrentProcessId"
+api_GetCurrentThread% () : "GetCurrentThread"
+api_GetCurrentThreadId% () : "GetCurrentThreadId"
+api_GetDateFormat% (Locale%, dwFlags%, lpDate*, lpFormat$, lpDateStr$, cchDate%) : "GetDateFormatA"
+api_GetDefaultCommConfig% (lpszName$, lpCC*, lpdwSize%) : "GetDefaultCommConfigA"
+api_GetDiskFreeSpace% (lpRootPathName$, lpSectorsPerCluster%, lpBytesPerSector%, lpNumberOfFreeClusters%, lpTtoalNumberOfClusters%) : "GetDiskFreeSpaceA"
+api_GetDriveType% (nDrive$) : "GetDriveTypeA"
+api_GetEnvironmentStrings$ () : "GetEnvironmentStringsA"
+api_GetEnvironmentVariable% (lpName$, lpBuffer$, nSize%) : "GetEnvironmentVariableA"
+api_GetExitCodeProcess% (hProcess%, lpExitCode%) : "GetExitCodeProcess"
+api_GetExitCodeThread% (hThread%, lpExitCode%) : "GetExitCodeThread"
+api_GetFileAttributes% (lpFileName$) : "GetFileAttributesA"
+api_GetFileInformationByHandle% (hFile%, lpFileInformation*) : "GetFileInformationByHandle"
+api_GetFileSize% (hFile%, lpFileSizeHigh%) : "GetFileSize"
+api_GetFileTime% (hFile%, lpCreationTime*, lpLastAccessTime*, lpLastWriteTime*) : "GetFileTime"
+api_GetFileType% (hFile%) : "GetFileType"
+api_GetFullPathName% (lpFileName$, nBufferLength%, lpBuffer$, lpFilePart$) : "GetFullPathNameA"
+api_GetHandleInformation% (hObject%, lpdwFlags%) : "GetHandleInformation"
+api_GetLastError% () : "GetLastError"
+api_GetLocaleInfo% (Locale%, LCType%, lpLCData$, cchData%) : "GetLocaleInfoA"
+api_GetLocalTime (lpSystemTime*) : "GetLocalTime"
+api_GetLogicalDrives% () : "GetLogicalDrives"
+api_GetLogicalDriveStrings% (nBufferLength%, lpBuffer$) : "GetLogicalDriveStringsA"
+api_GetMailslotInfo% (hMailslot%, lpMaxMessageSize%, lpNextSize%, lpMessageCount%, lpReadTimeout%) : "GetMailslotInfo"
+api_GetModuleFileName% (hModule%, lpFileName$, nSize%) : "GetModuleFileNameA"
+api_GetModuleHandle% (lpModuleName$) : "GetModuleHandleA"
+api_GetNamedPipeHandleState% (hNamedPipe%, lpState%, lpCurInstances%, lpMaxCollectionCount%, lpCollectDataTimeout%, lpUserName$, nMaxUserNameSize%) : "GetNamedPipeHandleStateA"
+api_GetNamedPipeInfo% (hNamedPipe%, lpFlags%, lpOutBufferSize%, lpInBufferSize%, lpMaxInstances%) : "GetNamedPipeInfo"
+api_GetNumberFormat% (Locale%, dwFlags%, lpValue$, lpFormat*, lpNumberStr$, cchNumber%) : "GetNumberFormatA"
+api_GetNumberOfConsoleInputEvents% (hConsoleInput%, lpNumberOfEvents%) : "GetNumberOfConsoleInputEvents"
+api_GetNumberOfConsoleMouseButtons% (lpNumberOfMouseButtons%) : "GetNumberOfConsoleMouseButtons"
+api_GetOEMCP% () : "GetOEMCP"
+api_GetOverlappedResult% (hFile%, lpOverlapped*, lpNumberOfBytesTransferred%, bWait%) : "GetOverlappedResult"
+api_GetPriorityClass% (hProcess%) : "GetPriorityClass"
+api_GetPrivateProfileInt% (lpApplicationName$, lpKeyName$, nDefault%, lpFileName$) : "GetPrivateProfileIntA"
+api_GetPrivateProfileSection% (lpAppName$, lpReturnedString$, nSize%, lpFileName$) : "GetPrivateProfileSectionA"
+api_GetPrivateProfileString% (lpApplicationName$, lpKeyName*, lpDefault$, lpReturnedString$, nSize%, lpFileName$) : "GetPrivateProfileStringA"
+api_GetProcAddress% (hModule%, lpProcName$) : "GetProcAddress"
+api_GetProcessAffinityMask% (hProcess%, lpProcessAffinityMask%, SystemAffinityMask%) : "GetProcessAffinityMask"
+api_GetProcessHeap% () : "GetProcessHeap"
+api_GetProcessHeaps% (NumberOfHeaps%, ProcessHeaps%) : "GetProcessHeaps"
+api_GetProcessShutdownParameters% (lpdwLevel%, lpdwFlags%) : "GetProcessShutdownParameters"
+api_GetProcessTimes% (hProcess%, lpCreationTime*, lpExitTime*, lpKernelTime*, lpUserTime*) : "GetProcessTimes"
+api_GetProcessWorkingSetSize% (hProcess%, lpMinimumWorkingSetSize%, lpMaximumWorkingSetSize%) : "GetProcessWorkingSetSize"
+api_GetProfileInt% (lpAppName$, lpKeyName$, nDefault%) : "GetProfileIntA"
+api_GetProfileSection% (lpAppName$, lpReturnedString$, nSize%) : "GetProfileSectionA"
+api_GetProfileString% (lpAppName$, lpKeyName$, lpDefault$, lpReturnedString$, nSize%) : "GetProfileStringA"
+api_GetQueuedCompletionStatus% (CompletionPort%, lpNumberOfBytesTransferred%, lpCompletionKey%, lpOverlapped%, dwMilliseconds%) : "GetQueuedCompletionStatus"
+api_GetShortPathName% (lpszLongPath$, lpszShortPath$, cchBuffer%) : "GetShortPathName"
+api_GetStartupInfo (lpStartupInfo*) : "GetStartupInfoA"
+api_GetStdHandle% (nStdHandle%) : "GetStdHandle"
+api_GetStringTypeA% (lcid%, dwInfoType%, lpSrcStr$, cchSrc%, lpCharType%) : "GetStringTypeA"
+api_GetStringTypeEx% (Locale%, dwInfoType%, lpSrcStr$, cchSrc%, lpCharType%) : "GetStringTypeExA"
+api_GetStringTypeW% (dwInfoType%, lpSrcStr$, cchSrc%, lpCharType%) : "GetStringTypeW"
+api_GetSystemDefaultLangID% () : "GetSystemDefaultLangID"
+api_GetSystemDefaultLCID% () : "GetSystemDefaultLCID"
+api_GetSystemDirectory% (lpBuffer$, nSize%) : "GetSystemDirectoryA"
+api_GetSystemInfo (lpSystemInfo*) : "GetSystemInfo"
+api_GetSystemPowerStatus% (lpSystemPowerStatus*) : "GetSystemPowerStatus"
+api_GetSystemTime (lpSystemTime*) : "GetSystemTime"
+api_GetSystemTimeAdjustment% (lpTimeAdjustment%, lpTimeIncrement%, lpTimeAdjustmentDisabled%) : "GetSystemTimeAdjustment"
+api_GetTapeParameters% (hDevice%, dwOperation%, lpdwSize%, lpTapeInformation*) : "GetTapeParameters"
+api_GetTapePosition% (hDevice%, dwPositionType%, lpdwPartition%, lpdwOffsetLow%, lpdwOffsetHigh%) : "GetTapePosition"
+api_GetTapeStatus% (hDevice%) : "GetTapeStatus"
+api_GetTempFileName% (lpszPath$, lpPrefixString$, wUnique%, lpTempFileName$) : "GetTempFileNameA"
+api_GetTempPath% (nBufferLength%, lpBuffer$) : "GetTempPathA"
+api_GetThreadContext% (hThread%, lpContext*) : "GetThreadContext"
+api_GetThreadLocale% () : "GetThreadLocale"
+api_GetThreadPriority% (hThread%) : "GetThreadPriority"
+api_GetThreadSelectorEntry% (hThread%, dwSelector%, lpSelectorEntry*) : "GetThreadSelectorEntry"
+api_GetThreadTimes% (hThread%, lpCreationTime*, lpExitTime*, lpKernelTime*, lpUserTime*) : "GetThreadTimes"
+api_GetTickCount% () : "GetTickCount"
+api_GetTimeFormat% (Locale%, dwFlags%, lpTime*, lpFormat$, lpTimeStr$, cchTime%) : "GetTimeFormatA"
+api_GetTimeZoneInformation% (lpTimeZoneInformation*) : "GetTimeZoneInformation"
+api_GetUserDefaultLangID% () : "GetUserDefaultLangID"
+api_GetUserDefaultLCID% () : "GetUserDefaultLCID"
+api_GetVersion% () : "GetVersion"
+api_GetVersionEx% (lpVersionInformation*) : "GetVersionExA"
+api_GetVolumeInformation% (lpRootPathName$, lpVolumeNameBuffer$, nVolumeNameSize%, lpVolumeSerialNumber%, lpMaximumComponentLength%, lpFileSystemFlags%, lpFileSystemNameBuffer$, nFileSystemNameSize%) : "GetVolumeInformationA"
+api_GetWindowsDirectory% (lpBuffer$, nSize%) : "GetWindowsDirectoryA"
+api_GlobalAddAtom% (lpString$) : "GlobalAddAtomA"
+api_GlobalAlloc% (wFlags%, dwBytes%) : "GlobalAlloc"
+api_GlobalCompact% (dwMinFree%) : "GlobalCompact"
+api_GlobalDeleteAtom% (nAtom%) : "GlobalDeleteAtom"
+api_GlobalFindAtom% (lpString$) : "GlobalFindAtomA"
+api_GlobalFix (hMem%) : "GlobalFix"
+api_GlobalFlags% (hMem%) : "GlobalFlags"
+api_GlobalFree% (hMem%) : "GlobalFree"
+api_GlobalGetAtomName% (nAtom%, lpBuffer$, nSize%) : "GlobalGetAtomNameA"
+api_GlobalHandle% (wMem*) : "GlobalHandle"
+api_GlobalLock% (hMem%) : "GlobalLock"
+api_GlobalMemoryStatus (lpBuffer*) : "GlobalMemoryStatus"
+api_GlobalReAlloc% (hMem%, dwBytes%, wFlags%) : "GlobalReAlloc"
+api_GlobalSize% (hMem%) : "GlobalSize"
+api_GlobalUnfix (hMem%) : "GlobalUnfix"
+api_GlobalUnlock% (hMem%) : "GlobalUnlock"
+api_GlobalUnWire% (hMem%) : "GlobalUnWire"
+api_GlobalWire% (hMem%) : "GlobalWire"
+api_HeapAlloc% (hHeap%, dwFlags%, dwBytes%) : "HeapAlloc"
+api_HeapCompact% (hHeap%, dwFlags%) : "HeapCompact"
+api_HeapCreate% (flOptions%, dwInitialSize%, dwMaximumSize%) : "HeapCreate"
+api_HeapDestroy% (hHeap%) : "HeapDestroy"
+api_HeapFree% (hHeap%, dwFlags%, lpMem*) : "HeapFree"
+api_HeapLock% (hHeap%) : "HeapLock"
+api_HeapReAlloc% (hHeap%, dwFlags%, lpMem*, dwBytes%) : "HeapReAlloc"
+api_HeapSize% (hHeap%, dwFlags%, lpMem*) : "HeapSize"
+api_HeapUnlock% (hHeap%) : "HeapUnlock"
+api_HeapValidate% (hHeap%, dwFlags%, lpMem*) : "HeapValidate"
+api_hread% (hFile%, lpBuffer*, lBytes%) : "_hread"
+api_hwrite% (hFile%, lpBuffer$, lBytes%) : "_hwrite"
+api_ImpersonateLoggedOnUser% (hToken%) : "ImpersonateLoggedOnUser"
+api_InitAtomTable% (nSize%) : "InitAtomTable"
+api_InitializeCriticalSection (lpCriticalSection*) : "InitializeCriticalSection"
+api_InterlockedDecrement% (lpAddend%) : "InterlockedDecrement"
+api_InterlockedExchange% (Target%, Value%) : "InterlockedExchange"
+api_InterlockedIncrement% (lpAddend%) : "InterlockedIncrement"
+api_IsBadCodePtr% (lpfn%) : "IsBadCodePtr"
+api_IsBadHugeReadPtr% (lp*, ucb%) : "IsBadHugeReadPtr"
+api_IsBadHugeWritePtr% (lp*, ucb%) : "IsBadHugeWritePtr"
+api_IsBadReadPtr% (lp*, ucb%) : "IsBadReadPtr"
+api_IsBadStringPtr% (lpsz$, ucchMax%) : "IsBadStringPtrA"
+api_IsBadWritePtr% (lp*, ucb%) : "IsBadWritePtr"
+api_IsDBCSLeadByte% (TestChar%) : "IsDBCSLeadByte"
+api_IsValidCodePage% (CodePage%) : "IsValidCodePage"
+api_IsValidLocale% (Locale%, dwFlags%) : "IsValidLocale"
+api_lclose% (hFile%) : "_lclose"
+api_LCMapString% (Locale%, dwMapFlags%, lpSrcStr$, cchSrc%, lpDestStr$, cchDest%) : "LCMapStringA"
+api_lcreat% (lpPathName$, iAttribute%) : "_lcreat"
+api_LeaveCriticalSection (lpCriticalSection*) : "LeaveCriticalSection"
+api_llseek% (hFile%, lOffset%, iOrigin%) : "_llseek"
+api_LoadLibrary% (lpLibFileName$) : "LoadLibraryA"
+api_LoadLibraryEx% (lpLibFileName$, hFile%, dwFlags%) : "LoadLibraryExA"
+api_LoadModule% (lpModuleName$, lpParameterBlock*) : "LoadModule"
+api_LoadResource% (hInstance%, hResInfo%) : "LoadResource"
+api_LocalAlloc% (wFlags%, wBytes%) : "LocalAlloc"
+api_LocalCompact% (uMinFree%) : "LocalCompact"
+api_LocalFileTimeToFileTime% (lpLocalFileTime*, lpFileTime*) : "LocalFileTimeToFileTime"
+api_LocalFlags% (hMem%) : "LocalFlags"
+api_LocalFree% (hMem%) : "LocalFree"
+api_LocalHandle% (wMem*) : "LocalHandle"
+api_LocalLock% (hMem%) : "LocalLock"
+api_LocalReAlloc% (hMem%, wBytes%, wFlags%) : "LocalReAlloc"
+api_LocalShrink% (hMem%, cbNewSize%) : "LocalShrink"
+api_LocalSize% (hMem%) : "LocalSize"
+api_LocalUnlock% (hMem%) : "LocalUnlock"
+api_LockFile% (hFile%, dwFileOffsetLow%, dwFileOffsetHigh%, nNumberOfBytesToLockLow%, nNumberOfBytesToLockHigh%) : "LockFile"
+api_LockFileEx% (hFile%, dwFlags%, dwReserved%, nNumberOfBytesToLockLow%, nNumberOfBytesToLockHigh%, lpOverlapped*) : "LockFileEx"
+api_LockResource% (hResData%) : "LockResource"
+api_lopen% (lpPathName$, iReadWrite%) : "_lopen"
+api_lread% (hFile%, lpBuffer*, wBytes%) : "_lread"
+api_lstrcat% (lpString1$, lpString2$) : "lstrcatA"
+api_lstrcmp% (lpString1$, lpString2$) : "lstrcmpA"
+api_lstrcmpi% (lpString1$, lpString2$) : "lstrcmpiA"
+api_lstrcpy% (lpString1$, lpString2$) : "lstrcpyA"
+api_lstrcpyn% (lpString1$, lpString2$, iMaxLength%) : "lstrcpynA"
+api_lstrlen% (lpString$) : "lstrlenA"
+api_lwrite% (hFile%, lpBuffer$, wBytes%) : "_lwrite"
+api_MapViewOfFile% (hFileMappingObject%, dwDesiredAccess%, dwFileOffsetHigh%, dwFileOffsetLow%, dwNumberOfBytesToMap%) : "MapViewOfFile"
+api_MapViewOfFileEx% (hFileMappingObject%, dwDesiredAccess%, dwFileOffsetHigh%, dwFileOffsetLow%, dwNumberOfBytesToMap%, lpBaseAddress*) : "MapViewOfFileEx"
+api_MoveFile% (lpExistingFileName$, lpNewFileName$) : "MoveFileA"
+api_MoveFileEx% (lpExistingFileName$, lpNewFileName$, dwFlags%) : "MoveFileExA"
+api_MulDiv% (nNumber%, nNumerator%, nDenominator%) : "MulDiv"
+api_MultiByteToWideChar% (CodePage%, dwFlags%, lpMultiByteStr$, cchMultiByte%, lpWideCharStr$, cchWideChar%) : "MultiByteToWideChar"
+api_OpenEvent% (dwDesiredAccess%, bInheritHandle%, lpName$) : "OpenEventA"
+api_OpenFile% (lpFileName$, lpReOpenBuff*, wStyle%) : "OpenFile"
+api_OpenFileMapping% (dwDesiredAccess%, bInheritHandle%, lpName$) : "OpenFileMappingA"
+api_OpenMutex% (dwDesiredAccess%, bInheritHandle%, lpName$) : "OpenMutexA"
+api_OpenProcess% (dwDesiredAccess%, bInheritHandle%, dwProcessId%) : "OpenProcess"
+api_OpenSemaphore% (dwDesiredAccess%, bInheritHandle%, lpName$) : "OpenSemaphoreA"
+api_OutputDebugString (lpOutputString$) : "OutputDebugStringA"
+api_PeekNamedPipe% (hNamedPipe%, lpBuffer*, nBufferSize%, lpBytesRead%, lpTotalBytesAvail%, lpBytesLeftThisMessage%) : "PeekNamedPipe"
+api_PrepareTape% (hDevice%, dwOperation%, bimmediate%) : "PrepareTape"
+api_PulseEvent% (hEvent%) : "PulseEvent"
+api_PurgeComm% (hFile%, dwFlags%) : "PurgeComm"
+api_QueryDosDevice% (lpDeviceName$, lpTargetPath$, ucchMax%) : "QueryDosDeviceA"
+api_QueryPerformanceCounter% (lpPerformanceCount*) : "QueryPerformanceCounter"
+api_QueryPerformanceFrequency% (lpFrequency*) : "QueryPerformanceFrequency"
+api_RaiseException (dwExceptionCode%, dwExceptionFlags%, nNumberOfArguments%, lpArguments%) : "RaiseException"
+api_ReadConsole% (hConsoleInput%, lpBuffer*, nNumberOfCharsToRead%, lpNumberOfCharsRead%, lpReserved*) : "ReadConsoleA"
+api_ReadConsoleOutput% (hConsoleOutput%, lpBuffer*, dwBufferSize*, dwBufferCoord*, lpReadRegion*) : "ReadConsoleOutputA"
+api_ReadConsoleOutputAttribute% (hConsoleOutput%, lpAttribute%, nLength%, dwReadCoord*, lpNumberOfAttrsRead%) : "ReadConsoleOutputAttribute"
+api_ReadConsoleOutputCharacter% (hConsoleOutput%, lpCharacter$, nLength%, dwReadCoord*, lpNumberOfCharsRead%) : "ReadConsoleOutputCharacterA"
+api_ReadFile% (hFile%, lpBuffer*, nNumberOfBytesToRead%, lpNumberOfBytesRead%, lpOverlapped*) : "ReadFile"
+api_ReadFileEx% (hFile%, lpBuffer*, nNumberOfBytesToRead%, lpOverlapped*, lpCompletionRoutine%) : "ReadFileEx"
+api_ReadProcessMemory% (hProcess%, lpBaseAddress*, lpBuffer*, nSize%, lpNumberOfBytesWritten%) : "ReadProcessMemory"
+api_ReleaseMutex% (hMutex%) : "ReleaseMutex"
+api_ReleaseSemaphore% (hSemaphore%, lReleaseCount%, lpPreviousCount%) : "ReleaseSemaphore"
+api_RemoveDirectory% (lpPathName$) : "RemoveDirectoryA"
+api_ResetEvent% (hEvent%) : "ResetEvent"
+api_ResumeThread% (hThread%) : "ResumeThread"
+api_ScrollConsoleScreenBuffer% (hConsoleOutput%, lpScrollRectangle*, lpClipRectangle*, dwDestinationOrigin*, lpFill*) : "ScrollConsoleScreenBufferA"
+api_SearchPath% (lpPath$, lpFileName$, lpExtension$, nBufferLength%, lpBuffer$, lpFilePart$) : "SearchPathA"
+api_SetCommBreak% (nCid%) : "SetCommBreak"
+api_SetCommConfig% (hCommDev%, lpCC*, dwSize%) : "SetCommConfig"
+api_SetCommMask% (hFile%, dwEvtMask%) : "SetCommMask"
+api_SetCommState% (hCommDev%, lpDCB*) : "SetCommState"
+api_SetCommTimeouts% (hFile%, lpCommTimeouts*) : "SetCommTimeouts"
+api_SetComputerName% (lpComputerName$) : "SetComputerNameA"
+api_SetConsoleActiveScreenBuffer% (hConsoleOutput%) : "SetConsoleActiveScreenBuffer"
+api_SetConsoleCP% (wCodePageID%) : "SetConsoleCP"
+api_SetConsoleCtrlHandler% (HandlerRoutine%, Add%) : "SetConsoleCtrlHandler"
+api_SetConsoleCursorInfo% (hConsoleOutput%, lpConsoleCursorInfo*) : "SetConsoleCursorInfo"
+api_SetConsoleCursorPosition% (hConsoleOutput%, dwCursorPosition*) : "SetConsoleCursorPosition"
+api_SetConsoleMode% (hConsoleHandle%, dwMode%) : "SetConsoleMode"
+api_SetConsoleOutputCP% (wCodePageID%) : "SetConsoleOutputCP"
+api_SetConsoleScreenBufferSize% (hConsoleOutput%, dwSize*) : "SetConsoleScreenBufferSize"
+api_SetConsoleTextAttribute% (hConsoleOutput%, wAttributes%) : "SetConsoleTextAttribute"
+api_SetConsoleTitle% (lpConsoleTitle$) : "SetConsoleTitleA"
+api_SetConsoleWindowInfo% (hConsoleOutput%, bAbsolute%, lpConsoleWindow*) : "SetConsoleWindowInfo"
+api_SetCurrentDirectory% (lpPathName$) : "SetCurrentDirectoryA"
+api_SetDefaultCommConfig% (lpszName$, lpCC*, dwSize%) : "SetDefaultCommConfigA"
+api_SetEndOfFile% (hFile%) : "SetEndOfFile"
+api_SetEnvironmentVariable% (lpName$, lpValue$) : "SetEnvironmentVariableA"
+api_SetErrorMode% (wMode%) : "SetErrorMode"
+api_SetEvent% (hEvent%) : "SetEvent"
+api_SetFileApisToANSI () : "SetFileApisToANSI"
+api_SetFileApisToOEM () : "SetFileApisToOEM"
+api_SetFileAttributes% (lpFileName$, dwFileAttributes%) : "SetFileAttributesA"
+api_SetFilePointer% (hFile%, lDistanceToMove%, lpDistanceToMoveHigh%, dwMoveMethod%) : "SetFilePointer"
+api_SetFileTime% (hFile%, lpCreationTime*, lpLastAccessTime*, lpLastWriteTime*) : "SetFileTime"
+api_SetHandleCount% (wNumber%) : "SetHandleCount"
+api_SetHandleInformation% (hObject%, dwMask%, dwFlags%) : "SetHandleInformation"
+api_SetLastError (dwErrCode%) : "SetLastError"
+api_SetLocaleInfo% (Locale%, LCType%, lpLCData$) : "SetLocaleInfoA"
+api_SetLocalTime% (lpSystemTime*) : "SetLocalTime"
+api_SetMailslotInfo% (hMailslot%, lReadTimeout%) : "SetMailslotInfo"
+api_SetNamedPipeHandleState% (hNamedPipe%, lpMode%, lpMaxCollectionCount%, lpCollectDataTimeout%) : "SetNamedPipeHandleState"
+api_SetPriorityClass% (hProcess%, dwPriorityClass%) : "SetPriorityClass"
+api_SetProcessShutdownParameters% (dwLevel%, dwFlags%) : "SetProcessShutdownParameters"
+api_SetProcessWorkingSetSize% (hProcess%, dwMinimumWorkingSetSize%, dwMaximumWorkingSetSize%) : "SetProcessWorkingSetSize"
+api_SetStdHandle% (nStdHandle%, nHandle%) : "SetStdHandle"
+api_SetSystemPowerState% (fSuspend%, fForce%) : "SetSystemPowerState"
+api_SetSystemTime% (lpSystemTime*) : "SetSystemTime"
+api_SetSystemTimeAdjustment% (dwTimeAdjustment%, bTimeAdjustmentDisabled%) : "SetSystemTimeAdjustment"
+api_SetTapeParameters% (hDevice%, dwOperation%, lpTapeInformation*) : "SetTapeParameters"
+api_SetTapePosition% (hDevice%, dwPositionMethod%, dwPartition%, dwOffsetLow%, dwOffsetHigh%, bimmediate%) : "SetTapePosition"
+api_SetThreadAffinityMask% (hThread%, dwThreadAffinityMask%) : "SetThreadAffinityMask"
+api_SetThreadContext% (hThread%, lpContext*) : "SetThreadContext"
+api_SetThreadLocale% (Locale%) : "SetThreadLocale"
+api_SetThreadPriority% (hThread%, nPriority%) : "SetThreadPriority"
+api_SetTimeZoneInformation% (lpTimeZoneInformation*) : "SetTimeZoneInformation"
+api_SetUnhandledExceptionFilter% (lpTopLevelExceptionFilter%) : "SetUnhandledExceptionFilter"
+api_SetupComm% (hFile%, dwInQueue%, dwOutQueue%) : "SetupComm"
+api_SetVolumeLabel% (lpRootPathName$, lpVolumeName$) : "SetVolumeLabelA"
+api_SizeofResource% (hInstance%, hResInfo%) : "SizeofResource"
+api_Sleep (dwMilliseconds%) : "Sleep"
+api_SleepEx% (dwMilliseconds%, bAlertable%) : "SleepEx"
+api_SuspendThread% (hThread%) : "SuspendThread"
+api_SystemTimeToFileTime% (lpSystemTime*, lpFileTime*) : "SystemTimeToFileTime"
+api_SystemTimeToTzSpecificLocalTime% (lpTimeZoneInformation*, lpUniversalTime*, lpLocalTime*) : "SystemTimeToTzSpecificLocalTime"
+api_TerminateProcess% (hProcess%, uExitCode%) : "TerminateProcess"
+api_TerminateThread% (hThread%, dwExitCode%) : "TerminateThread"
+api_TlsAlloc% () : "TlsAlloc"
+api_TlsFree% (dwTlsIndex%) : "TlsFree"
+api_TlsGetValue% (dwTlsIndex%) : "TlsGetValue"
+api_TlsSetValue% (dwTlsIndex%, lpTlsValue*) : "TlsSetValue"
+api_TransactNamedPipe% (hNamedPipe%, lpInBuffer*, nInBufferSize%, lpOutBuffer*, nOutBufferSize%, lpBytesRead%, lpOverlapped*) : "TransactNamedPipe"
+api_TransmitCommChar% (nCid%, cChar%) : "TransmitCommChar"
+api_UnhandledExceptionFilter% (ExceptionInfo*) : "UnhandledExceptionFilter"
+api_UnlockFile% (hFile%, dwFileOffsetLow%, dwFileOffsetHigh%, nNumberOfBytesToUnlockLow%, nNumberOfBytesToUnlockHigh%) : "UnlockFile"
+api_UnlockFileEx% (hFile%, dwReserved%, nNumberOfBytesToUnlockLow%, nNumberOfBytesToUnlockHigh%, lpOverlapped*) : "UnlockFileEx"
+api_UnmapViewOfFile% (lpBaseAddress*) : "UnmapViewOfFile"
+api_UpdateResource% (hUpdate%, lpType$, lpName$, wLanguage%, lpData*, cbData%) : "UpdateResourceA"
+api_VerLanguageName% (wLang%, szLang$, nSize%) : "VerLanguageNameA"
+api_VirtualAlloc% (lpAddress*, dwSize%, flAllocationType%, flProtect%) : "VirtualAlloc"
+api_VirtualFree% (lpAddress*, dwSize%, dwFreeType%) : "VirtualFree"
+api_VirtualLock% (lpAddress*, dwSize%) : "VirtualLock"
+api_VirtualProtect% (lpAddress*, dwSize%, flNewProtect%, lpflOldProtect%) : "VirtualProtect"
+api_VirtualProtectEx% (hProcess%, lpAddress*, dwSize%, flNewProtect%, lpflOldProtect%) : "VirtualProtectEx"
+api_VirtualQuery% (lpAddress*, lpBuffer*, dwLength%) : "VirtualQuery"
+api_VirtualQueryEx% (hProcess%, lpAddress*, lpBuffer*, dwLength%) : "VirtualQueryEx"
+api_VirtualUnlock% (lpAddress*, dwSize%) : "VirtualUnlock"
+api_WaitCommEvent% (hFile%, lpEvtMask%, lpOverlapped*) : "WaitCommEvent"
+api_WaitForMultipleObjects% (nCount%, lpHandles%, bWaitAll%, dwMilliseconds%) : "WaitForMultipleObjects"
+api_WaitForMultipleObjectsEx% (nCount%, lpHandles%, bWaitAll%, dwMilliseconds%, bAlertable%) : "WaitForMultipleObjectsEx"
+api_WaitForSingleObject% (hHandle%, dwMilliseconds%) : "WaitForSingleObject"
+api_WaitForSingleObjectEx% (hHandle%, dwMilliseconds%, bAlertable%) : "WaitForSingleObjectEx"
+api_WaitNamedPipe% (lpNamedPipeName$, nTimeOut%) : "WaitNamedPipeA"
+api_WideCharToMultiByte% (CodePage%, dwFlags%, lpWideCharStr$, cchWideChar%, lpMultiByteStr$, cchMultiByte%, lpDefaultChar$, lpUsedDefaultChar%) : "WideCharToMultiByte"
+api_WinExec% (lpCmdLine$, nCmdShow%) : "WinExec"
+api_WriteConsole% (hConsoleOutput%, lpBuffer*, nNumberOfCharsToWrite%, lpNumberOfCharsWritten%, lpReserved*) : "WriteConsoleA"
+api_WriteConsoleOutput% (hConsoleOutput%, lpBuffer*, dwBufferSize*, dwBufferCoord*, lpWriteRegion*) : "WriteConsoleOutputA"
+api_WriteConsoleOutputAttribute% (hConsoleOutput%, lpAttribute%, nLength%, dwWriteCoord*, lpNumberOfAttrsWritten%) : "WriteConsoleOutputAttribute"
+api_WriteConsoleOutputCharacter% (hConsoleOutput%, lpCharacter$, nLength%, dwWriteCoord*, lpNumberOfCharsWritten%) : "WriteConsoleOutputCharacterA"
+api_WriteFile% (hFile%, lpBuffer*, nNumberOfBytesToWrite%, lpNumberOfBytesWritten%, lpOverlapped*) : "WriteFile"
+api_WriteFileEx% (hFile%, lpBuffer*, nNumberOfBytesToWrite%, lpOverlapped*, lpCompletionRoutine%) : "WriteFileEx"
+api_WritePrivateProfileSection% (lpAppName$, lpString$, lpFileName$) : "WritePrivateProfileSectionA"
+api_WritePrivateProfileString% (lpApplicationName$, lpKeyName*, lpString*, lpFileName$) : "WritePrivateProfileStringA"
+api_WriteProcessMemory% (hProcess%, lpBaseAddress*, lpBuffer*, nSize%, lpNumberOfBytesWritten%) : "WriteProcessMemory"
+api_WriteProfileSection% (lpAppName$, lpString$) : "WriteProfileSectionA"
+api_WriteProfileString% (lpszSection$, lpszKeyName$, lpszString$) : "WriteProfileStringA"
+api_WriteTapemark% (hDevice%, dwTapemarkType%, dwTapemarkCount%, bimmediate%) : "WriteTapemark"</textarea> <br><br>Sorry for the delay, been busy :) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JBR</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> Nice, but it starts of at 8fps and then slows to 3fps.<br><br>This is on a 2.8GHz i7. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

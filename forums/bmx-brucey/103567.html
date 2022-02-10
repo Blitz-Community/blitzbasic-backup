@@ -1,0 +1,426 @@
+<!DOCTYPE html><html lang="en" ><head ><title >BaH.Serial -- detecting disconnection?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >BaH.Serial -- detecting disconnection?</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=124" >Brucey's Modules</a>/<a href="#bottom" >BaH.Serial -- detecting disconnection?</a><br><br>
+<a name="1248078"></a>
+
+<a name="1248079"></a>
+
+<a name="1248080"></a>
+
+<a name="1248081"></a>
+
+<a name="1248082"></a>
+
+<a name="1248083"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi all,<br><br>I'm using BaH.Serial to control an Arduino LoLShield via the standard USB connection, as shown <a href="/codearcs.php?code=3158" target="_blank">here</a> in a Windows-based CPU monitor. (See video in thread for coolness!)<br><br>I just successfully added code to repeatedly attempt serial connection if the Arduino isn't yet plugged in, but can't figure out how to handle unplugging the thing!<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+SuperStrict
+
+Import BaH.Serial
+
+Extern "win32"
+	Function GetSystemTimes (lpIdleTime:Byte Ptr, lpKernelTime:Byte Ptr, lpUserTime:Byte Ptr)
+End Extern
+
+Type Win32FileTime
+	Field lo:Int
+	Field hi:Int
+End Type
+
+Type CPUMonitor
+
+	' References...
+	
+	' <a href="http://www.codeproject.com/Articles/9113/Get-CPU-Usage-with-GetSystemTimes" target="_blank">http://www.codeproject.com/Articles/9113/Get-CPU-Usage-with-GetSystemTimes</a>
+	' <a href="http://www.purebasic.fr/english/viewtopic.php?t=26200&amp;start=3" target="_blank">http://www.purebasic.fr/english/viewtopic.php?t=26200&amp;start=3</a>
+	' <a href="http://msdn.microsoft.com/en-us/library/windows/desktop/ms724400%28v=vs.85%29.aspx" target="_blank">http://msdn.microsoft.com/en-us/library/windows/desktop/ms724400%28v=vs.85%29.aspx</a>
+
+	Const SAMPLES:Int = 3
+	Field cpu_sample:Int[SAMPLES]
+	
+	Field idle:Win32FileTime = New Win32FileTime
+	Field kern:Win32FileTime = New Win32FileTime
+	Field user:Win32FileTime = New Win32FileTime
+	
+	Field last_idle:Win32FileTime = New Win32FileTime
+	Field last_kern:Win32FileTime = New Win32FileTime
+	Field last_user:Win32FileTime = New Win32FileTime
+
+	' Pass False for realtime value, though result will fluctuate a lot more...
+
+	Method Usage:Int (average:Int = True)
+	
+		GetSystemTimes idle, kern, user
+		
+		' Apparently only need the 'low' part of the FILETIME structure...
+		
+		Local idl:Int = idle.lo - last_idle.lo
+		Local krn:Int = kern.lo - last_kern.lo
+		Local usr:Int = user.lo - last_user.lo
+	
+		last_idle.lo = idle.lo
+		last_kern.lo = kern.lo
+		last_user.lo = user.lo
+	
+		Local sys:Int = krn + usr
+		
+		Local cpu:Int
+		
+		If sys
+			cpu = Int ((sys - idl) * 100 / sys)
+		Else
+			cpu = 0
+		EndIf
+	
+		If average
+		
+			Local avg_cpu:Int = 0
+			
+			For Local loop:Int = 0 Until SAMPLES - 1
+				cpu_sample[loop] = cpu_sample[loop + 1]
+				'Print "cpu_sample[" + loop + "] = " + cpu_sample[loop]
+				avg_cpu = avg_cpu + cpu_sample[loop]
+			Next
+			
+			cpu_sample[SAMPLES - 1] = cpu
+		
+			avg_cpu = avg_cpu + cpu_sample[SAMPLES - 1]
+			
+			avg_cpu = avg_cpu / SAMPLES
+			
+			' Must sample more than once per second! Values of 1000 or more below return false results.
+			' Don't know why...
+		
+			If avg_cpu &lt; 0 Then avg_cpu = 0
+			
+			Return avg_cpu
+			
+		Else
+		
+			If cpu &lt; 0 Then cpu = 0
+			
+			Return cpu
+			
+		EndIf
+		
+	End Method
+	
+End Type
+
+Local cpu:CPUMonitor = New CPUMonitor
+
+Local serial:TSerial
+
+Repeat
+
+	Try
+	
+		serial = New TSerial.Create ("COM3")
+		
+	Catch obj:TSerialException
+
+		Local error:String = obj.ToString ()
+		
+		Local cutoff:Int = Instr (error, ", file ")
+		If cutoff Then error = error[.. cutoff - 1]
+
+		Print "~q" + error + "~q"
+		
+	End Try
+
+	If serial Then Print "OK, connected!"; Exit
+	
+	Print "Trying again..."
+	
+	Delay 1000
+	
+Forever
+
+Local data:Byte[1024]
+
+Local cpubyte:Byte
+
+Repeat
+
+	cpubyte = Byte (cpu.Usage (True))
+
+	' *************************************************
+	' Crash if unplugged!
+	' *************************************************
+	
+	Try
+		If serial
+			serial.write Varptr cpubyte, 1
+		Else
+			Print "Nuh-uh!"
+		EndIf
+	Catch obj:TSerialException
+		Print "Disconnected! " + obj.ToString ()
+	End Try
+
+	' *************************************************
+
+	Delay 500
+
+Until KeyHit (KEY_ESCAPE)
+
+End
+</textarea><br><br>The key section is highlighted with "****" near the end of the code. Is there any way to handle this safely?<br><br>This is typical output from first plugging in to unplugging:<br><br><pre class=code>
+Executing:whatsthepcduino.exe
+
+"IO Exception: Specified port, COM3, does not exist."
+Trying again...
+"IO Exception: Specified port, COM3, does not exist."
+Trying again...
+"IO Exception: Specified port, COM3, does not exist."
+Trying again...
+"IO Exception: Specified port, COM3, does not exist."
+Trying again...
+
+OK, connected!
+
+    [Displays ongoing CPU usage on LoLShield... and now we unplug... ]
+
+This application has requested the Runtime to terminate it in an unusual way.
+Please contact the application's support team for more information.
+
+terminate called after throwing an instance of 'serial::IOException'
+  what():  IO Exception: Error while writing to the serial port: 5, file D:/DevTools/Blitz/BlitzMax/mod/bah.mod/serial.mod/serial/src/impl/win.cc, line 314.
+
+Process complete
+</pre><br><br>I've tried changing the obj:TSerialException to obj:IOException, based on the above output, but it gives the same error. Also tried obj:TPortNotOpenedException and tried checking if serial:TSerial is null (don't think this is expected to work), all to no avail.<br><br>As you can probably tell, I'm new to this! <br><br></td></tr></table><br>
+<a name="1248104"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> terminate called after throwing an instance of ... <br></div><br>Generally when you see this, it means the C++ is raising an exception that I have not caught and Thrown as a BlitzMax exception... :-/<br><br>Apologies. I should have a fix for you this evening sometime. <br><br></td></tr></table><br>
+<a name="1248169"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cheers, Brucey... no rush, probably won't get to test until Saturday now, anyway -- but I'll report ASAP once it's available! <br><br></td></tr></table><br>
+<a name="1250138"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi Brucey,<br><br>Only just noticed you'd updated this -- many thanks!<br><br>I've found that I can now detect a disconnection of the device without crashing -- woo! -- but I'm wondering if something's wrong still, or if I'm doing something wrong.<br><br>New code:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+SuperStrict
+
+Import BaH.Serial
+
+Extern "win32"
+	Function GetSystemTimes (lpIdleTime:Byte Ptr, lpKernelTime:Byte Ptr, lpUserTime:Byte Ptr)
+End Extern
+
+Type Win32FileTime
+	Field lo:Int
+	Field hi:Int
+End Type
+
+Type CPUMonitor
+
+	' References...
+	
+	' <a href="http://www.codeproject.com/Articles/9113/Get-CPU-Usage-with-GetSystemTimes" target="_blank">http://www.codeproject.com/Articles/9113/Get-CPU-Usage-with-GetSystemTimes</a>
+	' <a href="http://www.purebasic.fr/english/viewtopic.php?t=26200&amp;start=3" target="_blank">http://www.purebasic.fr/english/viewtopic.php?t=26200&amp;start=3</a>
+	' <a href="http://msdn.microsoft.com/en-us/library/windows/desktop/ms724400%28v=vs.85%29.aspx" target="_blank">http://msdn.microsoft.com/en-us/library/windows/desktop/ms724400%28v=vs.85%29.aspx</a>
+
+	Const SAMPLES:Int = 3
+	Field cpu_sample:Int[SAMPLES]
+	
+	Field idle:Win32FileTime = New Win32FileTime
+	Field kern:Win32FileTime = New Win32FileTime
+	Field user:Win32FileTime = New Win32FileTime
+	
+	Field last_idle:Win32FileTime = New Win32FileTime
+	Field last_kern:Win32FileTime = New Win32FileTime
+	Field last_user:Win32FileTime = New Win32FileTime
+
+	' Pass False for realtime value, though result will fluctuate a lot more...
+
+	Method Usage:Int (average:Int = True)
+	
+		GetSystemTimes idle, kern, user
+		
+		' Apparently only need the 'low' part of the FILETIME structure...
+		
+		Local idl:Int = idle.lo - last_idle.lo
+		Local krn:Int = kern.lo - last_kern.lo
+		Local usr:Int = user.lo - last_user.lo
+	
+		last_idle.lo = idle.lo
+		last_kern.lo = kern.lo
+		last_user.lo = user.lo
+	
+		Local sys:Int = krn + usr
+		
+		Local cpu:Int
+		
+		If sys
+			cpu = Int ((sys - idl) * 100 / sys)
+		Else
+			cpu = 0
+		EndIf
+	
+		If average
+		
+			Local avg_cpu:Int = 0
+			
+			For Local loop:Int = 0 Until SAMPLES - 1
+				cpu_sample[loop] = cpu_sample[loop + 1]
+				'Print "cpu_sample[" + loop + "] = " + cpu_sample[loop]
+				avg_cpu = avg_cpu + cpu_sample[loop]
+			Next
+			
+			cpu_sample[SAMPLES - 1] = cpu
+		
+			avg_cpu = avg_cpu + cpu_sample[SAMPLES - 1]
+			
+			avg_cpu = avg_cpu / SAMPLES
+			
+			' Must sample more than once per second! Values of 1000 or more below return false results.
+			' Don't know why...
+		
+			If avg_cpu &lt; 0 Then avg_cpu = 0
+			
+			Return avg_cpu
+			
+		Else
+		
+			If cpu &lt; 0 Then cpu = 0
+			
+			Return cpu
+			
+		EndIf
+		
+	End Method
+	
+End Type
+
+Local cpu:CPUMonitor = New CPUMonitor
+
+' Connect! -------------------------------------------------------
+
+Function SerialConnect:TSerial (timeout:Int = 0, wait:Int = 1000)
+
+'	Local test:TList = TSerial.listPorts () ' Nada!
+'	
+'	For Local port:String = EachIn test
+'		Print port
+'	Next
+'	
+'	End
+	
+	Local serial:TSerial
+	
+	Local begin:Int = MilliSecs ()
+	
+	Repeat
+	
+		Try
+		
+			serial = New TSerial.Create ("COM3")
+
+		Catch obj:TSerialException
+	
+			Local error:String = obj.ToString ()
+			
+			Local cutoff:Int = Instr (error, ", file ")
+			If cutoff Then error = error[.. cutoff - 1]
+	
+			Print "~q" + error + "~q"
+			
+		End Try
+	
+		If serial Then Print "OK, connected!"; Exit
+		
+		If timeout
+			If MilliSecs () =&gt; begin + timeout Then Exit
+		EndIf
+		
+		Print "Trying again..."
+		
+		Delay wait
+		
+	Forever
+
+	Return serial
+		
+End Function
+
+' ----------------------------------------------------------------
+
+Local data:Byte[1024]
+
+Local cpubyte:Byte
+
+Local serial:TSerial = SerialConnect ()
+
+If serial = Null Then Print "No serial!"; End
+
+Repeat
+
+	cpubyte = Byte (cpu.Usage (True))
+
+	' Crash if unplugged!
+	
+	Try
+		serial.write Varptr cpubyte, 1
+		
+	Catch obj:TSerialException
+	'Catch obj:TIOException
+	
+		Print "Disconnected! " + obj.ToString ()
+		Print "Lost connection! Trying again..."
+
+		serial = SerialConnect ()
+		
+		If serial = Null Then Print "NULL" Else Print "GOT SERIAL"
+		
+	End Try
+
+	Delay 1000
+
+Until KeyHit (KEY_ESCAPE)
+
+End
+</textarea><br><br>So... I have a SerialConnect function that just tries to repeatedly open the port and eventually returns a TSerial once the device is plugged in.<br><br>This works fine, then I disconnect the device (Arduino), detect the drop, plug in again, then attempt to reconnect, like so:<br><br><pre class=code>
+	Try
+		serial.write Varptr cpubyte, 1
+		
+	Catch obj:TSerialException
+	'Catch obj:TIOException
+	
+		Print "Disconnected! " + obj.ToString ()
+		Print "Lost connection! Trying again..."
+
+		serial = SerialConnect ()
+		
+		If serial = Null Then Print "NULL" Else Print "GOT SERIAL"
+		
+	End Try
+</pre><br><br>So... disconnected, then I try to get a new handle from SerialConnect, which just keeps checking until plugged in again.<br><br>However, once disconnected, I can't re-open the port ("COM3"). I've tried calling serial.Close after disconnection (the handle is non-Null still), but to no avail, so I'm wondering if maybe the library ought to be doing something to free the port up after a disconnection, if that's even possible?<br><br>Even if I restart the program, I get told COM3 isn't found -- have to unplug it and plug in again.<br><br>I was hoping it would be possible to pick up the connection again while the program's running... would you expect that to be do-able without having to end the program and unplug/re-plug the device again?<br><br>Typical session goes like this:<br><br><pre class=code>
+Building whatsthepcduino
+Executing:whatsthepcduino.debug.exe
+
+"IO Exception: Specified port, COM3, does not exist."
+Trying again...
+
+	[... until plugged in... ]
+
+OK, connected!
+
+	[Working away, now unplug device... ]
+
+Disconnected! IO Exception: Error while writing to the serial port: 5, file I:/Development/DevTools/Blitz/BlitzMax/mod/bah.mod/serial.mod/serial/src/impl/win.cc, line 314.
+Lost connection! Trying again...
+
+	[Fine... however, on re-plugging in... ]
+
+"IO Exception: Specified port, COM3, does not exist."
+Trying again...
+"IO Exception: Specified port, COM3, does not exist."
+Trying again...
+"IO Exception: Specified port, COM3, does not exist."
+Trying again...
+"IO Exception: Specified port, COM3, does not exist."
+Trying again...
+
+Process terminated
+</pre> <br><br></td></tr></table><br>
+<a name="1250139"></a>
+
+<a name="1250141"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Also, I'm not really clear on which exception I should be checking for at each stage (detecting initial connection versus disconnection), TSerialException or TIOException (or TPortNotOpenedException?!) -- what's the actual difference between these?<br><br>EDIT: Just tried catching TPortNotOpenedException at disconnection stage, but that actually crashes it.<br><br>Oh, one last thing! I can't get listPorts to return anything, whether I have the device connected or not. (Ignore: found listPorts is Linux only!) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

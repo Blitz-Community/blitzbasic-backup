@@ -1,0 +1,432 @@
+<!DOCTYPE html><html lang="en" ><head ><title >BlitzGet MaxDeluxe</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Update to BlitzGet Deluxe for BlitzMax, language=bmx, category=Networking'><meta name='author' content='BlitzSupport'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=4>Networking</a>/BlitzGet MaxDeluxe</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2566.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzGet MaxDeluxe by BlitzSupport</td><td align="right">2009 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This is just a BlitzMax implementation of an old file downloader for Blitz2D/3D:<br><br><a href="/codearcs/codearcs.php?code=24" >BlitzGet Deluxe</a><br><br>I've cleaned things up and included support for redirected URLs. This hasn't been heavily tested, but seems to work fine for standard HTTP downloads, files that aren't found and files that are redirected to new URLs.<br><br>(I've really only done this so I can get on with writing a multithreaded file downloader for BlitzMax testing purposes.) </td></tr><tr ><td class="cell"><pre class="code">' SuperStrict
+
+Function BlitzGet:Int (url:String, savepath:String, savefile:String)
+
+	If Not url Then Return False
+	
+	Local success:Int = False	' File downloaded OK...
+	Local done:Int = False		' Exit download loop (for retries, etc)...
+	
+	Local host:String
+	Local file:String
+
+	Local bytestoread:Int
+	Local date:String
+	Local server:String
+	Local contenttype:String
+	Local location:String
+	Local pos:Int
+
+	Print ""
+	Print "Downloading..."
+	Print ""
+	
+	Repeat
+	
+		If Left (url, 7) = "http://"
+			url= Right (url, Len (url) - 7)
+		EndIf
+		
+		Local slash:Int = Instr (url, "/")
+	
+		If slash
+			host = Left (url, slash - 1)
+			file = Right (url, Len (url) - slash + 1)
+		Else
+			host = url
+			file = "/"
+		EndIf
+
+		If Right (savepath, 1) &lt;&gt; "\" And Right (savepath, 1) &lt;&gt; "/" Then savepath = savepath + "\"
+	
+		If savefile = ""
+		
+			If file = "/"
+				savefile = "Unknown file.txt"
+			Else
+			
+				Local findslash:Int
+				Local testforslash:String
+				
+				For findslash = Len (file) To 1 Step - 1
+					testforslash = Mid (file, findslash, 1)
+					If testforslash = "/"
+						savefile = Right (file, Len (file) - findslash)
+						Exit
+					EndIf
+				Next
+				
+				If savefile = "" Then savefile = "Unknown file.txt"
+				
+			EndIf
+			
+		EndIf
+
+		Local http:TSocket = CreateTCPSocket ()
+		
+		If http
+		
+			If ConnectSocket (http, HostIp (host), 80)
+				
+				Local www:TStream = CreateSocketStream (http)
+				
+				WriteLine www, "GET " + file + " HTTP/1.1" ' "GET /" gets default page...
+				WriteLine www, "Host: " + host
+				WriteLine www, "User-Agent: BlitzGet Deluxe"
+				WriteLine www, "Accept: */*"
+				WriteLine www, ""
+	
+				Local response:String = ReadLine (www)
+		
+				Print "Server response: " + response
+				
+				Local replycode:String
+				
+				If Left (response, 5) = "HTTP/"
+					pos = Instr (response, " ")
+					replycode = Mid (response, pos + 1, 3)
+				EndIf
+	
+				Local header:String
+	
+				Repeat
+			
+					header = ReadLine (www)
+			
+					Local reply:String = ""
+	
+					pos = Instr (header, ": ")
+	
+					If pos
+						reply = Left (header, pos + 1)
+					EndIf
+			
+					Select Lower (reply)
+						Case "content-length: "
+							bytestoread = Int (Right (header, Len (header) - Len (reply)))
+						Case "location: "
+							location = Right (header, Len (header) - Len (reply))
+					End Select
+	
+					If header Then Print header ' Skip blank line (if header = "" then nothing is printed)...
+									
+				Until header$ = "" Or (Eof (www))
+	
+				Select replycode$
+		
+					Case "200" ' File found...
+		
+						Print "Downloading file..."
+						
+						Local save:TStream = WriteFile (savepath + savefile)
+	
+						If save
+					
+							Local readwebfile:Int
+
+							' Crude download routine!
+							
+							CopyBytes www, save, bytestoread
+					
+							CloseFile save
+							
+							' Fully downloaded, ie. same size?
+							
+							If FileSize (savepath + savefile) = bytestoread
+								success = True
+							EndIf
+							
+							done = True
+						
+						Else
+							Print "Failed to create local file!"
+						EndIf
+	
+					Case "404" ' File Not found...
+					
+						Print "File not found"
+						done = True
+					
+					Case "301" ' File permanently moved...
+					
+						url = location
+
+					Case "302" ' File temporarily moved...
+			
+						url = location
+		
+					Case "303" ' File moved...
+		
+						url = location
+		
+					Case "307" ' Naughty...
+		
+						url = location
+						
+				End Select
+	
+			EndIf
+			
+			CloseSocket http
+			
+		EndIf
+
+		' If 'done' is still false, go back to the start with new URL (from '30*' responses)...
+		
+	Until done
+		
+	Return success
+	
+End Function
+
+' This URL has worked for years...
+
+Local download:String = "http://www.google.com/images/title_homepage4.gif"			' Google homepage logo
+
+' Test error 404, file not found...
+' download:String	 = "http://www.hi-toro.com/mp3/diffusion.mp3"					' Old music (now gone)...
+
+' Test error 303, file moved example (works as of 28 Aug 2009)...
+' download:String = "http://www.rentnet.com/" ' Redirects to http://www.move.com/apartments/main.aspx
+
+Local download_path:String = CurrentDir ()
+
+If BlitzGet (download, download_path, "")
+	Print ""
+	Print "File downloaded successfully! Check " + download_path
+Else
+	Print ""
+	Print "Download failed!"
+EndIf</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ferret</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Thx, just what i was looking for ;) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nate the Great</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> well this is pretty old but I modified it so if you multithread it you can keep track of large files in the process of downloading by using the bytestotal and bytesdone vars... they are passed to the function with var written after them so the vairable is passed and not just the value so in the main thread you can monitor the progress and possibly display a progress bar recieved from the thread...<br><br>edit: here is an example of this progress bar in action even if its a bit hacky because I know very little about all the features of threads... (multithreaded mode!)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">' SuperStrict
+
+Function BlitzGet:Int (url:String, savepath:String, savefile:String, bytesdone:Long Var, bytestotal:Long Var)
+
+	If Not url Then Return False
+	
+	Local success:Int = False	' File downloaded OK...
+	Local done:Int = False		' Exit download loop (for retries, etc)...
+	
+	Local host:String
+	Local file:String
+
+	Local bytestoread:Int
+	Local date:String
+	Local server:String
+	Local contenttype:String
+	Local location:String
+	Local pos:Int
+
+	Print ""
+	Print "Downloading..."
+	Print ""
+	
+	Repeat
+	
+		If Left (url, 7) = "http://"
+			url= Right (url, Len (url) - 7)
+		EndIf
+		
+		Local slash:Int = Instr (url, "/")
+	
+		If slash
+			host = Left (url, slash - 1)
+			file = Right (url, Len (url) - slash + 1)
+		Else
+			host = url
+			file = "/"
+		EndIf
+
+		If Right (savepath, 1) &lt;&gt; "\" And Right (savepath, 1) &lt;&gt; "/" Then savepath = savepath + "\"
+	
+		If savefile = ""
+		
+			If file = "/"
+				savefile = "Unknown file.txt"
+			Else
+			
+				Local findslash:Int
+				Local testforslash:String
+				
+				For findslash = Len (file) To 1 Step - 1
+					testforslash = Mid (file, findslash, 1)
+					If testforslash = "/"
+						savefile = Right (file, Len (file) - findslash)
+						Exit
+					EndIf
+				Next
+				
+				If savefile = "" Then savefile = "Unknown file.txt"
+				
+			EndIf
+			
+		EndIf
+
+		Local http:TSocket = CreateTCPSocket ()
+		
+		If http
+		
+			If ConnectSocket (http, HostIp (host), 80)
+				
+				Local www:TStream = CreateSocketStream (http)
+				
+				WriteLine www, "GET " + file + " HTTP/1.1" ' "GET /" gets default page...
+				WriteLine www, "Host: " + host
+				WriteLine www, "User-Agent: BlitzGet Deluxe"
+				WriteLine www, "Accept: */*"
+				WriteLine www, ""
+	
+				Local response:String = ReadLine (www)
+		
+				Print "Server response: " + response
+				
+				Local replycode:String
+				
+				If Left (response, 5) = "HTTP/"
+					pos = Instr (response, " ")
+					replycode = Mid (response, pos + 1, 3)
+				EndIf
+	
+				Local header:String
+	
+				Repeat
+			
+					header = ReadLine (www)
+			
+					Local reply:String = ""
+	
+					pos = Instr (header, ": ")
+	
+					If pos
+						reply = Left (header, pos + 1)
+					EndIf
+			
+					Select Lower (reply)
+						Case "content-length: "
+							bytestoread = Int (Right (header, Len (header) - Len (reply)))
+						Case "location: "
+							location = Right (header, Len (header) - Len (reply))
+					End Select
+	
+					If header Then Print header ' Skip blank line (if header = "" then nothing is printed)...
+									
+				Until header$ = "" Or (Eof (www))
+	
+				Select replycode$
+		
+					Case "200" ' File found...
+		
+						Print "Downloading file..."
+						
+						Local save:TStream = WriteFile (savepath + savefile)
+	
+						If save
+					
+							Local readwebfile:Int
+
+							' Crude download routine!
+							bytestotal = bytestoread
+							
+							
+							Local cnt:Long = 0
+							Local btmp:Byte = 0
+							For cnt = 0 To bytestoread-1
+								btmp = ReadByte(www)
+								WriteByte(save,btmp)
+								bytesdone = cnt+1
+							Next
+							'CopyBytes www, save, bytestoread
+							CloseFile save
+							
+							' Fully downloaded, ie. same size?
+							If FileSize (savepath + savefile) = bytestoread
+								success = True
+							EndIf
+							
+							done = True
+						
+						Else
+							Print "Failed to create local file!"
+						EndIf
+	
+					Case "404" ' File Not found...
+					
+						Print "File not found"
+						done = True
+					
+					Case "301" ' File permanently moved...
+					
+						url = location
+
+					Case "302" ' File temporarily moved...
+			
+						url = location
+		
+					Case "303" ' File moved...
+		
+						url = location
+		
+					Case "307" ' Naughty...
+		
+						url = location
+						
+				End Select
+	
+			EndIf
+			
+			CloseSocket http
+			
+		EndIf
+
+		' If 'done' is still false, go back to the start with new URL (from '30*' responses)...
+		
+	Until done
+		
+	Return success
+	
+End Function
+
+Graphics 400,20,0,60
+
+Global bt:Long	'bytes total
+Global bd:Long	'bytes done
+
+Local drawthread:TThread = CreateThread(MyDLThread,"bla")
+
+Repeat
+Until bt &gt; 0
+
+While bd &lt; bt
+	Cls
+	DrawRect 1,1,(Float(bd)/Float(bt))*400.0,20
+	Flip
+Wend
+
+
+WaitKey()
+End
+
+Function MyDLThread:Object(ob:Object)
+	
+	' This URL has worked for years...
+	
+	Local download:String = "http://www.lunaroutpost.com/gallery/earth/images/bluemarble2k_big.jpg"			' Google homepage logo
+	
+	' Test error 404, file not found...
+	' download:String	 = "http://www.hi-toro.com/mp3/diffusion.mp3"					' Old music (now gone)...
+	
+	' Test error 303, file moved example (works as of 28 Aug 2009)...
+	' download:String = "http://www.rentnet.com/" ' Redirects to <a href="http://www.move.com/apartments/main.aspx" target="_blank">http://www.move.com/apartments/main.aspx</a>
+	
+	Local download_path:String = CurrentDir ()
+	
+	
+	If BlitzGet (download, download_path, "", bd, bt)
+		Print ""
+		Print "File downloaded successfully! Check " + download_path
+	Else
+		Print ""
+		Print "Download failed!"
+	EndIf
+	
+End Function
+</textarea> <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

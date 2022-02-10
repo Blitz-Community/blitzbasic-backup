@@ -1,0 +1,257 @@
+<!DOCTYPE html><html lang="en" ><head ><title >SSE Speed test</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >SSE Speed test</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >SSE Speed test</a><br><br>
+<a name="865731"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DStastny</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I have been working on ways to improve performance of vector/matrix operations without having to resort to inline coding of the functions.<br><br>I have seen/written the various other libraries written in BMax but have been unhappy with the overall performance with pure max generated code.<br><br>Soo I started experimenting with implementing my own Objects in pure C code.  It has also opened up the ability to utilize SSE extensions intrinsics exposed by GCC.<br><br>So I wrote a simple test BlitzMax Module in C that exposes the TVector3 object.  This is a Max object but written in C.  It uses some C compiler tricks to maximize performance. No StackFrames in particular when dealing with straight x87 FPU code.  I pretty much lost this gain when I implmented the next part but the code is on par if not bit better than straight bmx code but not much.<br><br>The big gain comes from this..<br><br>There is also a global switch that when enabled the vector math is done via SSE extentions(havent figured out how I want to implement SSE detection)..  On my Dual Core I am seeing speed up 30-33%.  I am bit worried on inconsistent timing but is stable on my dual core machine.  <br><br><br>(Win32 test)<br><a href="http://smokenmirrors.com/Downloads/test.zip" target="_blank">http://smokenmirrors.com/Downloads/test.zip</a><br><br>BMX code so you can see whats going on.  Just simple adds two vectors in loop and times them.<br><br>TVector which is coded in max with similar logic to a TVector3 which is coded in C.<br><br>Unlike many of the other libraries the approach of this library is that a Vector is not immutable.  ie. Operations dont make new Vector Objects they Operate on the object.  The reason for this approach vs. other is to avoid random invokation of garbage collection or memory allocations.  It requires more thought and planing when using but it will create a much more consistent frame when dealing with large amounts of objects and extensive amounts of math since you need to be careful of allocations. This also applies for none GC languages when using heap based objects.<br><br>This sample is test for me to see some metrics on various machines before I spend much time coding out the more important usage of this which is to get SSE enabled Matrix functions as well as vector normalization.<br><br>This is coded currently to only work on PentiumIV(AMD?) or better due to switches and way I am currently building the module with but should eventually be able to be done so that it will automatically scale on X86 Processers as well as be cross compilable to PowerPC(does anyone use these)<br><br>Any test results/success or failure with machine specs would be appreciatd. Worst it should do is crash with illegal op code if SSE intructions are invoked on invalid platform.<br><br>Thanks<br>Doug<br><br><br><br><pre class=code>
+SuperStrict
+Framework brl.StandardIO
+Import dbs.vector
+
+Extern "win32"
+	Function QueryPerformanceFrequency(LARGE_INTEGER:Long Var)
+	Function QueryPerformanceCounter(LARGE_INTEGER:Long Var)
+EndExtern
+
+
+Global freq : Long
+Global startcount : Long 
+Global stopcount : Long 
+QueryPerformanceFrequency(freq)
+
+Function StartTimer()
+	QueryPerformanceCounter(startcount)
+End Function
+Function StopTimer:Double()
+    QueryPerformanceCounter(stopcount)
+    Return Double(stopcount-startcount)/(Double(freq)/1000)
+End Function
+
+
+
+
+Type TVector
+	Field X:Float
+	Field Y:Float
+	Field Z:Float
+	
+	Method ToString:String()
+		Return "x="+X+ " y="+Y+" z="+Z
+	End Method	
+	
+	Method Add:TVector(v1:TVector, v2:TVector)
+		X=V1.X+V2.X
+		Y=V1.Y+V2.Y
+		Z=V1.Z+V2.Z	
+		Return Self			
+	End Method
+End Type
+
+Const MAXLOOP:Int= 200000000
+
+Function TestCObject(sse:Int)
+	EnableSSE(sse)
+	Print ""
+	If sse 
+		Print("C Vector SSE Enabled")
+	Else
+		Print("C Vector SSE Disabled")
+	End If
+		
+	Local v1:TVector3 = New TVector3
+	v1.X=1
+	v1.Y=2
+	v1.Z=3
+	Local v2:TVector3 = New TVector3
+	v2.X=4
+	v2.Y=5
+	v2.Z=6
+	Local v3:TVector3 = New TVector3
+
+
+	StartTimer()
+	For Local i:Int=0 To MAXLOOP
+		v3.Add(v1,v2)
+	Next
+	Local secs:Double = StopTimer()
+	Print  "x="+v3.X+ " y="+v3.Y+" z="+v3.Z
+	Print "C Code Time ="+secs +"ms"
+	Print "Ops ="+(MaxLoop)/secs +" per ms"
+	Print ""
+End Function
+
+Function TestBMaxObject()
+    Print ""
+    Print("BMX test Object")
+	Local vv1:TVector = New TVector
+	vv1.X=1
+	vv1.Y=2
+	vv1.Z=3
+	Local vv2:TVector = New TVector
+	vv2.X=4
+	vv2.Y=5
+	vv2.Z=6
+	Local vv3:TVector = New TVector
+    StartTimer()
+	For Local i:Int=0 To MAXLOOP
+		vv3.Add(vv1,vv2)
+	Next
+	Local secs:Double = StopTimer()
+	Print  "x="+vv3.X+ " y="+vv3.Y+" z="+vv3.Z
+	Print "BMX Time="+secs +"ms"
+	Print "Ops ="+(MaxLoop)/secs +" per ms"
+	Print ""
+End Function
+
+Print "Starting Tests"
+TestCObject(False)
+TestBMaxObject()
+TestCObject(True)
+Input("Press Enter to Exit")
+
+</pre> <br><br></td></tr></table><br>
+<a name="865738"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Interesting.  I think SSE is that thing Intel was bugging me about supporting.<br><br>I would be very interested in this if you could develop a full library to replace my vector and maybe matrix functions in the maths code I posted, based on Mark's code.  For something as specialized and frequently used as vector maths, it makes sense.<br><br>AMD 3800+ single core:<br><pre class=code>Starting Tests
+
+C Vector SSE Disabled
+x=5.00000000 y=7.00000000 z=9.00000000
+C Code Time =1350.0266095271886ms
+Ops =148145.22809298162 per ms
+
+
+BMX test Object
+x=5.00000000 y=7.00000000 z=9.00000000
+BMX Time=1678.5524417209449ms
+Ops =119150.28391662815 per ms
+
+
+C Vector SSE Enabled
+x=5.00000000 y=7.00000000 z=9.00000000
+C Code Time =1282.3249882317446ms
+Ops =155966.70254066325 per ms
+
+Press Enter to Exit</pre> <br><br></td></tr></table><br>
+<a name="865859"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dreamora</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> use GCC -O3 already does a fairly well job for vectorization. modify BMK to use it and a higher march than P1 (which is the reason its so slow, it opts for totally unrealistic and off reality processor behavior) and you should easily be able to top those benchmarks. The parallelization with P3 upwards goes that far that it starts to use more than one core for example when doing pure maths and the like. <br><br></td></tr></table><br>
+<a name="865911"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Is there any way to set up this parameters on the BMK compiler? <br><br></td></tr></table><br>
+<a name="865921"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>
+Starting Tests
+
+C Vector SSE Disabled
+x=5.00000000 y=7.00000000 z=9.00000000
+C Code Time =1475.9208223391520ms
+Ops =135508.62415710400 per ms
+
+
+BMX test Object
+x=5.00000000 y=7.00000000 z=9.00000000
+BMX Time=1836.8745189681929ms
+Ops =108880.60013611805 per ms
+
+
+C Vector SSE Enabled
+x=5.00000000 y=7.00000000 z=9.00000000
+C Code Time =1408.1261724604663ms
+Ops =142032.72683337267 per ms
+
+Press Enter to Exit
+</pre><br><br><div class="quote"> <br>Is there any way to set up this parameters on the BMK compiler?<br> <br></div><br>Good question. <br><br></td></tr></table><br>
+<a name="865922"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >slenkar</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>Starting Tests
+
+C Vector SSE Disabled
+x=5.00000000 y=7.00000000 z=9.00000000
+C Code Time =3249.6968190091197ms
+Ops =61544.202779194318 per ms
+
+
+BMX test Object
+x=5.00000000 y=7.00000000 z=9.00000000
+BMX Time=3108.4587566296832ms
+Ops =64340.567354623068 per ms
+
+
+C Vector SSE Enabled
+x=5.00000000 y=7.00000000 z=9.00000000
+C Code Time =2759.5233472410600ms
+Ops =72476.284790254707 per ms
+
+Press Enter to Exit</pre><br><br>I did this test on a PC that is about 6 years old, so I dunno if it has SSE.<br><br>Strangely the BMX code was faster than plain C <br><br></td></tr></table><br>
+<a name="865952"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Perturbatio</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>
+Starting Tests
+
+C Vector SSE Disabled
+x=5.00000000 y=7.00000000 z=9.00000000
+C Code Time =1245.1944639952001ms
+Ops =160617.48247603112 per ms
+
+
+BMX test Object
+x=5.00000000 y=7.00000000 z=9.00000000
+BMX Time=1555.7853588557232ms
+Ops =128552.43743076459 per ms
+
+
+C Vector SSE Enabled
+x=5.00000000 y=7.00000000 z=9.00000000
+C Code Time =1205.9277411761991ms
+Ops =165847.41620167924 per ms
+
+Press Enter to Exit
+</pre> <br><br></td></tr></table><br>
+<a name="865975"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jsp</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>
+Starting Tests
+
+C Vector SSE Disabled
+x=5.00000000 y=7.00000000 z=9.00000000
+C Code Time =1919.9758628540778ms
+Ops =104167.97620710527 per ms
+
+
+BMX test Object
+x=5.00000000 y=7.00000000 z=9.00000000
+BMX Time=1922.8306949626278ms
+Ops =104013.31772160377 per ms
+
+
+C Vector SSE Enabled
+x=5.00000000 y=7.00000000 z=9.00000000
+C Code Time =1590.0347669885418ms
+Ops =125783.41313806080 per ms
+
+Press Enter To Exit
+</pre><br>Intel(R) Pentium(R) M processor 1.73GHz, 1528MB RAM<br>Mobile Intel(R) 915GM/GMS,910GML Express <br><br></td></tr></table><br>
+<a name="865996"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DStastny</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Jermey what CPU is on that machine and speed?<br><br>That is strange,  I suspect problem is QueryPerformanceCounter acting wonky. It has history of problems on some BIOSes and CPU's.<br><br>If you run multiple test is results inconsistent. <br><br></td></tr></table><br>
+<a name="866002"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DStastny</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Dremora and others concerning the -O3 vs -Os(blitz default).<br><br>That flag is GCC optimization level has nothing do do with generation of SSE vs x87 Floating point code.  Now -O3 is much faster at expense of -Os which is optimize for size.<br><br>I am controlling all optimizations of C code outside of BMK although I have modified my version of BMK allow setting modules to set the -Ox as a flag.  Currentl with Bruceys changes the -Os is set as last option so it overrides any changes via Bruceys settings.  <br><br>Just setting -O3 in BMK should produce better C comipled code it has no impact on BCC generated code as that is straight ASM output.  Although when you turn up optimizations sometimes the compiler will toast your code.  I assume Mark is erroring on side of caution with debugging C problems caused by compiler optimizations screwing it up.  But if you have a specific module and test the heck out of your functions go for -O3.<br><br>There is also BCC_OPTS envoriment variable that you can set that will control all C code generation outside of the MODULEINFO changes.  This is global but not so good would be better if there was something settable via a config file but it works. There are global Link Options you can set too.<br><br><br>@Dremora to turn on SSE you need to set -march=PentiumIII or Better as well -mfpmath=SSE. <br><br>This does not mean it will use SSE it will try, 3.4 is not so good and all my research indicates use intrinics.<br><br>That works better for what I am attempting.<br><br>Know in my case I am trying to generate code that falls back to straight Pentium x87 math in case SSE is not enabled.  <br><br>For that you need to use intrinsics.<br><br>You really need to test stuff out and read the generated ASM output to understand what flags are doing to your code other than what you think its doing.<br><br>I have spent two weeks fliping the flags and examing the ASM generated.  GCC -S instead of -c or objdump if you want to see what is actually if you dont want ASM listing.<br>  <br>Doug <br><br></td></tr></table><br>
+<a name="866004"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DStastny</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Josh - I have looked at Mark/your implmenetation.  I am not sure that the benifits would be readily visible since it implmented as immutable object which means it would spend unfixe amounts of time in GC memory manager.  My goal is to ensure all memory allocations are controled by programmer.  I will see about extending the example to show you the difference and to see for my self how bad the overhead of the the GC is.  This is no different than calling malloc.  Creation of object is going to be significantly slower in all cases.  But the match would be as fast as possible :)<br><br>Other thing I have been thinking about,  I am pretty sure that code is basis for BlitzMax are the Matrix Operations code to DX9 or real math as in OpenGL.  Now for me I want DirectX Matrixs but thought a good libary could do transformations.  I know Ogre does all math as real math and transforms in the driver level by doing the transpostion.<br><br><br>Doug <br><br></td></tr></table><br>
+<a name="866025"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >slenkar</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> its an intel celeron 2GHZ <br><br></td></tr></table><br>
+<a name="866033"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DStastny</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Jeremy Interesting.<br><br>I didnt even know Celerons supported SSE.  I will have to look up its specs.  I think I have idea though on the speed difference.<br><br>The ASM for both the BMax Vector and my Plain C Vector are the same there is one substantal difference.  To handle the SSE intstructions my underlying data structures to handle both the SSE code and x87 code had to do some memory alignment adjustments to make the data for the vector be aligned on a 16byte boundry.  I suspect with that and the size and limitations of the caching mechnisms in the Celeron architecture are cause of cache misses which are causing the additional overhead with the C Based structures.<br><br>Hmmm interesting...<br>Thanks for feedback<br>Doug <br><br></td></tr></table><br>
+<a name="866034"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DStastny</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> FYI thanks to all for feedback.  It is very interesting to see how this piece of code runs on various CPUs.<br><br>Its seems that the no stack frames has huge boost on AMD although the SSE implementations are up to par as Intel although still faster than x87<br><br>Doug <br><br></td></tr></table><br>
+<a name="866037"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >REDi</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>
+C Vector SSE Disabled
+x=5.00000000 y=7.00000000 z=9.00000000
+C Code Time =2200.1195682691514ms
+Ops =90904.150340038716 per ms
+
+
+BMX test Object
+x=5.00000000 y=7.00000000 z=9.00000000
+BMX Time=2438.5532239432664ms
+Ops =82015.843671679089 per ms
+
+
+C Vector SSE Enabled
+x=5.00000000 y=7.00000000 z=9.00000000
+C Code Time =2142.3499355364997ms
+Ops =93355.430260236564 per ms
+</pre> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

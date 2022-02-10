@@ -1,0 +1,102 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Semiautomatic reference counting</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Objective-C 1.0 style memory management for B3D (needs FastPointer), language=bb, category=Miscellaneous'><meta name='author' content='Yasha'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=9>Miscellaneous</a>/Semiautomatic reference counting</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2978.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Semiautomatic reference counting by Yasha</td><td align="right">2012 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This short and relatively simple snippet implements Objective-C 1.0 style memory management in Blitz3D. It requires the <a href="http://www.fastlibs.com/index.php" target="_blank">free FastPointer DLL by Mikhail Vostrikov</a>.<br><br><br>This style of memory management is based on "reference counting". It's a manual version of the same concept behind what powers the BlitzMax garbage collector. There are three main elements to it:<br><br>1) When an object is assigned to an ownership slot (put in a variable of known extent, or given to another object), it is <i>retained</i>. This increments its reference count. (As with the BlitzMax garbage collector, be aware of the circular-reference bug: in this implementation, you can actually make circular references, but you are expected to know which object is the "owner" and which is subordinate to it; the latter shouldn't retain its "owner".)<br><br>2) When an object leaves an ownership slot - its variable goes out of scope or is overwritten, its owning object is deleted - it is <i>released</i>. This decrements its reference count. If the reference count goes below 1, it is deleted. (Objects have a starting reference count of zero, so you can choose whether to retain or autorelease them.)<br><br>3) For temporary objects, remembering to do this is often a bit too much hassle. An object can instead be <i>autoreleased</i>, making it owned by an "autorelease pool". When the pool is cleared, all objects owned by it are released (so they can still have more formal owners), and the pool itself is deleted. Pools live on a global stack - in this case just a B3D typelist - so you can create and autorelease a bunch of temporaries in a function with some fast inner loop, and clear the whole pool after the function returns.<br><br><br>Unfortunately for B3D-ers, this sort of memory management is heavily reliant on <i>polymorphism</i>: in order to be useful, autorelease pools must contain objects of more than one type, and call the right free functions on them when done. Implementing polymorphism in B3D is certainly possible, but it requires a lot of Select dispatch structures with Object/Handle, and for the user to modify the code of the release function when they define new types, which is a) a pain and b) a potential source of bugs. So in this implementation I have gone for the function-pointer approach instead: every RC object stores the free-function required, and that function is called on it when it is to be deleted.<br><br>The included example shows how to set up a type to use reference counting. Just copy the function pointer line exactly and it will work fine (uncomment the DebugLog lines to see notifications when things happen). Notice that:<br><br>-- a reference counted type must have a RefCounted field: initialize this using NewRefCounted, with the destructor function pointer, and the TypePointer of your object<br>-- Retain, Release and AutoRelease are technically called on this field<br>-- your type's Free function does not need to clear the RefCounted field, leave that to the library<br>-- the type must have a dedicated destructor function whose pointer we can take and store<br>-- Having a dedicated constructor is good practice for wrapping all this up (and maybe adding an automatic AutoRelease command for small types that are always used as temporaries)<br><br>This implementation ought to work OK (it relies on nasty hacks, as all FastPointer code does, but B3D's implementation is pretty stable by now), but it might give some peace of mind to replace it with a "pure" version using Object/Handle and a Select dispatcher once the program is completed (plus it's one less DLL dependency). Implementing that should be an easy exercise for the interested reader, especially once they've understood this system fully. </td></tr><tr ><td class="cell"><pre class="code">; Retain/release/autorelease style memory management
+; Requires FastPointer
+
+Type RefCounted
+	Field rc, free, obj
+End Type
+
+Type AutoReleasePool
+	Field objs, count, capacity
+End Type
+
+
+Const AUTORELEASE_POOL_START = 1024, RELEASABLE_OFFSET = 20
+
+
+Function Retain(this.RefCounted)
+	this\rc = this\rc + 1
+End Function
+
+Function Release(this.RefCounted)
+	DebugLog "Called Release on 0x" + Hex(this\obj) + " with refcount " + Hex(this\rc)
+	this\rc = this\rc - 1
+	If this\rc &lt; 1 Then CallFunctionVarInt this\free, this\obj : Delete this
+End Function
+
+Function AutoRelease(this.RefCounted)
+	Local p.AutoReleasePool = Last AutoReleasePool
+	If p\count = p\capacity Then p\capacity = p\capacity * 2 : ResizeBank p\objs, p\capacity * 4
+	PokeInt p\objs, p\count * 4, TypePointer(this) - RELEASABLE_OFFSET
+	DebugLog "Autoreleased 0x" + Hex(this\obj)
+	p\count = p\count + 1 : Retain this
+End Function
+
+Function NewRefCounted.RefCounted(free, obj)
+	Local rc.RefCounted = New RefCounted
+	rc\free = free : rc\obj = obj - RELEASABLE_OFFSET
+	Return rc
+End Function
+
+Function NewAutoReleasePool.AutoReleasePool(capacity = AUTORELEASE_POOL_START)
+	Local p.AutoReleasePool = New AutoReleasePool
+	p\objs = CreateBank(capacity * 4)
+	p\capacity = capacity
+	Return p
+End Function
+
+Function ClearAutoReleasePool(p.AutoReleasePool)
+	Local r.RefCounted, rPtr = FunctionPointer() : Goto skip : Release r
+	.skip
+	Local o : For o = 0 To p\count - 1
+		CallFunctionVarInt rPtr, PeekInt(p\objs, o * 4)
+	Next
+	FreeBank p\objs : Delete p
+End Function
+
+
+;==============================================================================
+; Example
+;==============================================================================
+
+
+Type Foo
+	Field rc.RefCounted
+	Field a, b#, c$
+End Type
+
+Function NewFoo.Foo(a_, b_#, c_$)
+	Local f.Foo = New Foo
+	f\a = a_ : f\b = b_ : f\c = c_
+	
+	Local freePtr = FunctionPointer() : Goto skip : FreeFoo f
+	.skip
+	
+	f\rc = NewRefCounted(freePtr, TypePointer(f))
+	DebugLog "Created new Foo at 0x" + Hex(TypePointer(f))
+	Return f
+End Function
+
+Function FreeFoo(this.Foo)
+	DebugLog "Ran FreeFoo on 0x" + Hex(TypePointer(this))
+	;...
+	Delete this
+End Function
+
+Graphics 800, 400, 32, 6
+Local p.AutoReleasePool = NewAutoReleasePool()
+
+Local i : For i = 1 To 10
+	Local f.Foo = NewFoo(1, 2.0, "three")
+	AutoRelease f\rc
+	If i &gt; 4 Then Retain f\rc
+Next
+
+ClearAutoReleasePool p
+
+
+WaitKey
+End
+
+
+;~IDEal Editor Parameters:
+;~C#Blitz3D</pre></td></tr></table><br><a name="comments">Comments</a><br><br>None.<br><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

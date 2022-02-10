@@ -1,0 +1,87 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Programmer error: Field/Type fatality</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Programmer error: Field/Type fatality</h1><a href="forums.php" >Archives Forums</a>/<a href="topics.php?forum=105" >BlitzMax Bug Reports</a>/<a href="#bottom" >Programmer error: Field/Type fatality</a><br><br>
+<a name="1101582"></a>
+
+<a name="1101583"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I just screwed up and inadvertantly tried to call New with a field's name instead of its type, and it killed MaxIDE (though that usually doesn't happen). However, you do always get an "EXCEPTION_ACCESS_VIOLATION" even with the debugger on:<br><br><pre class=code>
+
+' Max...
+
+Type Other
+	Field myfield:Int
+End Type
+
+Type Test
+	
+	Field bg:Other
+	
+	Method Tester ()
+		bg = New bg ' Should have typed Other!
+	End Method
+	
+End Type
+
+t:Test = New Test
+t.Tester
+</pre><br><br>For what it's worth, Monkey catches it!<br><br><pre class=code>
+
+' Monkey...
+
+Class Other
+	Field myfield:Int
+End
+
+Class Test
+	
+	Field bg:Other
+	
+	Method Tester ()
+		bg = New bg ' Should have typed Other!
+	End Method
+	
+End
+
+Function Main ()
+	Local t:Test = New Test
+	t.Tester
+End
+</pre><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1103427"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >kfprimm</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> <textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Type Test
+	Field value
+	
+	Method Print()
+		brl.standardio.Print "TEST! value = "+value
+	End Method
+End Type
+
+Local t1:Test = New Test
+t1.value = 4
+Local t2:Test = New t1
+
+t1.Print()
+t2.Print()
+</textarea><br><br>Take a look at that! Looks like it's creating a duplicate of that type. And because bg is null, it is erroring out.<br><br>Also, if you call 'New Null' the compile errors with 'Subexpression for 'New' must be a user defined type or object.<br><br>Seems like this (syntactically) proper behavior. But it looks like the debug runtime isn't throwing a proper exception. <br><br></td></tr></table><br>
+<a name="1103428"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >kfprimm</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> To fix the problem:<br><br>In brl.mod/brl.blitz/blitz_object.c, replace<br><pre class=code>
+BBObject *bbObjectNew( BBClass *clas ){
+	int flags=( clas-&gt;dtor!=bbObjectDtor ) ? BBGC_FINALIZE : 0;
+	BBObject *o=(BBObject*)bbGCAllocObject( clas-&gt;instance_size,clas,flags );
+	clas-&gt;ctor( o );
+	return o;
+}
+</pre><br><br>with,<br><pre class=code>
+BBObject *bbObjectNew( BBClass *clas ){
+	if (clas == 0)
+		return &amp;bbNullObject;
+	int flags=( clas-&gt;dtor!=bbObjectDtor ) ? BBGC_FINALIZE : 0;
+	BBObject *o=(BBObject*)bbGCAllocObject( clas-&gt;instance_size,clas,flags );
+	clas-&gt;ctor( o );
+	return o;
+}
+</pre> <br><br></td></tr></table><br>
+<a name="1109716"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Czar Flavius</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> I think you can use New on an existing object, which will create an object of that type. It depends whether it should create the exact type of the variable, or find it out dynamically (so it could create an extended type of a base type field). <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

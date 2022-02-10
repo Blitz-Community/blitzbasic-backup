@@ -1,0 +1,219 @@
+<!DOCTYPE html><html lang="en" ><head ><title >TCP Server crashing</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >TCP Server crashing</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=507" >Monkey Programming</a>/<a href="#bottom" >TCP Server crashing</a><br><br>
+<a name="2091514"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kaltern</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi folks.  I have what seems to be a working TCP server for my needs, however every time the client disconnects, it causes the server to crash with no error.  Could someone take a look and see what might be causing it?<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import mojo
+Import questions
+Import brl
+Import sql
+
+Global _GameNumber:Int
+Global _qcount:Int = 0
+Global _ques:String[50]
+
+Class TcpServer Implements IOnAcceptComplete
+
+	Method New(port:Int)
+	
+		_socket=New Socket( "server" )
+		If Not _socket.Bind( "",port ) Error "Bind failed"
+		_socket.AcceptAsync( Self )
+	End
+
+	Private
+
+	Field _socket:Socket
+
+	Method OnAcceptComplete:Void(socket:Socket, source:Socket)
+		
+		If Not socket Error "Accept error"
+		Local client:= New TcpServerClient(socket)
+		_socket.AcceptAsync( Self )
+	End
+End
+
+Class TcpServerClient Implements IOnSendComplete, IOnReceiveComplete
+
+	Method New(socket:Socket)
+	
+		_socket=socket
+		_socket.ReceiveAsync _data,0,_data.Length,Self
+	End
+
+	Private
+	
+	Field _socket:Socket
+	Field _data:=New DataBuffer( 1024 )
+	Field _command:String
+	
+	Method OnReceiveComplete:Void(data:DataBuffer, offset:Int, count:Int, source:Socket)
+	
+		If count = 0
+			If _socket.IsConnected Then _socket.Close()
+			Return
+		EndIf
+		
+		_command = data.PeekString(offset, count)	
+		Local _cmd:String[] = _command.Split("|")
+		
+		If _cmd.Length &lt;&gt; 1 Then
+		
+			Local _ClientID:String = _cmd[0]
+			
+			' Client Requests go here.
+			Select _cmd[1]
+			
+			Case "*"
+				'Start new Game.  Assign new game ID to current client ID
+				_GameNumber = _GameNumber + 1
+				_qcount = 0
+				
+				SendServerMessage("%", _GameNumber)
+								
+			Case "!"
+			
+				'Send questions here
+				
+				For _qcount = 0 To 10
+				
+					_ques[_qcount] = ReadQuestion() ' This is a call to a separate module which is working fine.
+					
+					For Local t:Int = 0 To _qcount - 1
+						If _ques[t].Compare(_ques[_qcount]) = 0 Then
+							_qcount = _qcount - 1
+							Exit
+						End If
+					Next
+					
+				Next ' Get questions
+				
+				_qcount = 0
+				
+				SendServerMessage("@", _ques[_qcount]) ' Send First question
+				_qcount = _qcount + 1
+				
+			Case "@"
+				SendServerMessage("@", _ques[_qcount]) ' Send next question
+				_qcount = _qcount + 1
+			
+			Case "QUIT"
+				If _socket.IsConnected Then
+					_socket.Close()
+				EndIf
+			End
+			
+		EndIf
+	
+	End
+	
+	Method OnSendComplete:Void(data:DataBuffer, offset:Int, count:Int, source:Socket)
+		
+		If _socket.IsConnected Then
+			_socket.ReceiveAsync _data, 0, _data.Length, Self
+		Else
+			Error "Stream Error"
+		EndIf
+	End
+	
+	Method SendServerMessage:Void(_type:String, _string:String)
+	
+		Local n:= _data.PokeString(0, _type + "|" + _string)
+		
+		If _socket.IsConnected Then
+			_socket.SendAsync _data, 0, n, Self
+		Else
+			Error "Stream Error"
+		EndIf
+	End
+	
+End
+</textarea><br><br>At present this server can accept multiple connections, but is not yet designed to actually service them all. <br><br></td></tr></table><br>
+<a name="2091521"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nikoniko</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Tested your (a bit modificated) code - no crashes with 2 clients (telnet) on GLFW target (WinXP). <br><br></td></tr></table><br>
+<a name="2091523"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kaltern</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> hmm this is very odd.  I tried using a packet sender and had no crashing either, so I can only surmise it's something to do with the game client code.  Any idea what could possibly cause the server to crash - unhandled data packets perhaps? <br><br></td></tr></table><br>
+<a name="2091524"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kaltern</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is the relevant client code:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Method OnCreate()
+	
+		SendServerMessage("#" + ID(EMAIL) + "|Info:Initialising game")
+...
+End
+
+	Method SendMore:Void()
+			
+		If _strs.IsEmpty
+			_socket.Close()
+			Return
+		EndIf
+				
+		Local n:= _data.PokeString(0, _strs.RemoveFirst())
+		_socket.SendAsync _data, 0, n, Self
+	
+	End
+
+	Method OnConnectComplete:Void( connected:Bool,source:Socket )
+		If Not connected Error "Error connecting"
+		SendMore()
+	End
+
+	Method OnSendComplete:Void( data:DataBuffer,offset:Int,count:Int,source:Socket )
+			
+		If _socket.IsConnected Then _socket.ReceiveAsync _data, 0, _data.Length, Self
+		 
+	End
+
+	Method OnReceiveComplete:Void(data:DataBuffer, offset:Int, count:Int, source:Socket)
+	
+		Local _recv:String[] = data.PeekString(offset, count).Split("|")
+		
+		If _recv.Length = 1 Then
+			'SendMore()
+			Return
+		End If
+	
+		Select _recv[0]
+			Case "%"
+				_GameID = _recv[1]
+				'SendMore()
+			Case "@"
+				ReadQuestion(_recv[1])
+			End
+	End
+	
+	Method SendServerMessage:Void(_string:String)
+		
+		_socket = New Socket("stream")
+		_socket.ConnectAsync("localhost", 12344, Self)
+		_strs.AddLast = _string
+		
+	End
+</textarea> <br><br></td></tr></table><br>
+<a name="2091527"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nikoniko</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> No idea, I got a freezing only sometimes. <br>Try to logging your data before crashes. <br><br></td></tr></table><br>
+<a name="2091529"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kaltern</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> There is nothing showing that explains it, but I have discovered that if I make one single connection within my game client, and then close it after send/receiving one single packet, and then ExitApp, that DOES seem to work.<br><br>If I close a socket, does this actually release that socket or is it just closed in a virtual sense? <br><br></td></tr></table><br>
+<a name="2091533"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kaltern</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> I just did a debug trace when closed the client, and the server is crashing in app.monkey, on Method UpdateGame, _app.OnUpdate.<br><br>Only thing in my server in OnUpdate is UpdateAsyncEvents. <br><br></td></tr></table><br>
+<a name="2091534"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kaltern</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> And VS Debugger seems to be showing this as the main error:<br><br>Unhandled exception at 0x770223A1 (ntdll.dll) in MonkeyGame.exe: 0xC0000005: Access violation reading location 0x00000000. <br><br></td></tr></table><br>
+<a name="2091559"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nikoniko</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> It means server tries to operate with not existing socket (if exclude system failure). Check your server/client logic again.<br>Do you turn off auto suspend for server and client?<br>#MOJO_AUTO_SUSPEND_ENABLED=False <br><br></td></tr></table><br>
+<a name="2091560"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kaltern</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes, I turn that off for both server and client.<br><br>That kinda makes sense - I'm probably going to rewrite the server using UDP as I think it might serve my needs better, and will probably avoid this sort of issue.<br><br>Thanks for the help :D <br><br></td></tr></table><br>
+<a name="2091569"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nikoniko</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> <b>Kaltern wrote:</b><br><div class="quote"> I'm probably going to rewrite the server using UDP  <br></div><br><br><strike>UDP is one way protocol so you need make a server and client parts in the server and in the client for two way communication.</strike><br><br>Ops. it's not correct, of course. <br><br></td></tr></table><br>
+<a name="2091561"></a>
+
+<a name="2091563"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Soap</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> What's your OS and firewall setup? Win 7 firewall can cause crashy behavior in some software on occasion. <br><br></td></tr></table><br>
+<a name="2091565"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nikoniko</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> try to call socket.close() in the OnClose()  method on the client side. <br><br></td></tr></table><br>
+<a name="2091566"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kaltern</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yeah tried that, no change at all.   I've switched to a UDP server, using Mark's basecode again, and that seems to be working fine.  I assume there won't be an issue with multiple client addresses using his code?  <br><br>While I understand the one way thing, I have it running without needing to set up a server on the client side - that is, I can send/receive messages without any issues... <br><br>Oh, using Win 8.1 with Bitdefender firewall (turned on and off) - no change with the TCP code - I'm pretty sure it's my fault - like I said, UDP is working with no crashes so far. <br><br></td></tr></table><br>
+<a name="2091572"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nikoniko</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> Monkey's socket implementation (GLFW/IOS/C++) has no code for fix this issue. Monkey application doesn't process FIN/RST answer (client socket destroyed) from a remote host. <br><br></td></tr></table><br>
+<a name="2091666"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Reaper</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> Havent yet tried to chase this bug down, exact same issue in the code I am using on TCP for multiplayer client-server game.<br><br>As far as I can see its simply that UpdateAsyncEvents is still trying to send information to the closed socket, so if I went to a stage of the game ie the main menu where it wasnt<br>sending much info then exited the clients 1st (in the OnClose I was closing the socket) it would close fine 90% of the time with no crashes.<br><br>From this Im assuming its simply a matter of timing, so when the client needs to close if it 1st sends some bytes of info to the server to say its logging off, then have the server send<br>a logoff acknowledgement and cease transmitting any info before the socket is closed.<br><br>As said I havent yet tried to implement this but Im sure this is the cause of the crashes <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

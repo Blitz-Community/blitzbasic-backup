@@ -1,0 +1,371 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Resource Manager</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Resource Manager</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >Resource Manager</a><br><br>
+<a name="2010532"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >clevijoki</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> So I have made a resource manager for my game I think will work out pretty good.  My full code relies on random mojo additions I have done, but here is a quick and dirty version of it.  It provides an optimal way to load assets between levels, only loading the difference, and not causing a memory spike.  It also provides an elegant loading screen solution that has a loading progress bar.  It also provides a way to cache recently loaded assets and unload them if you are low on memory.<br><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+import mojo.graphics
+import mojo.audio
+
+private
+
+' all loaded assets
+global GLoadedImages:StringMap&lt;Image&gt; = new StringMap&lt;Image&gt;
+global GLoadedSounds:StringMap&lt;Sound&gt; = new StringMap&lt;Sound&gt;
+
+' set management
+global GSetsToLoad:List&lt;ResourceSet&gt; = new List&lt;ResourceSet&gt;
+global GUnusedSets:List&lt;ResourceSet&gt; = new List&lt;ResourceSet&gt;
+global GLoadedSets:List&lt;ResourceSet&gt; = new List&lt;ResourceSet&gt;
+
+' just store the paths of things to load
+global GImagesToLoad:StringList = new StringList
+global GSoundsToLoad:StringList = new StringList
+global GItemsToLoad:Int = 0
+
+public
+
+class ResourceRef&lt;_T&gt;
+
+  method new( path:String )
+    _path = path
+  end method
+
+  method get:_T()
+    return _resource
+  end method
+
+private
+
+  method ClearReference:void()
+    _resource = null
+  end method
+
+  Field _resource:_T
+  Field _path:String
+
+end class
+
+class ImageRef extends ResourceRef&lt;Image&gt;
+  method new( path:String )
+    super.new(path)
+  end method
+
+private
+
+  method HookupAlreadyLoaded:void()
+    if _resource = null then
+      _resource = GLoadedImages.Get(_path)	  
+    end if
+  end method
+
+  method GatherUnloaded:void()
+    if _resource = null then
+	  for local path:String = eachin GImagesToLoad
+	  	if path = _path then
+		  return
+		end if
+	  next
+      GImagesToLoad.AddLast( _path )
+    end if
+  end method
+
+  method RebuildLoadedMap:void()
+    if _resource &lt;&gt; null then
+      GLoadedImages.Set( _resource )
+    end if
+  end method
+
+end class
+
+class SoundRef extends ResourceRef&lt;Sound&gt;
+  method new( path:String )
+    super.new(path)
+  end method
+
+private
+
+  method HookupAlreadyLoaded:void()
+    if _resource = null then
+      _resource = GLoadedSounds.Get(_path)
+    end if
+  end method
+
+  method GatherUnloaded:void()
+    if _resource = null then
+	  for local path:String = eachin GSoundsToLoad
+	  	if path = _path then
+		  return
+		end if
+	  next
+	  GSoundsToLoad.AddLast(_path)
+    end if
+  end method
+
+  method RebuildLoadedMap:void()
+    if _resource &lt;&gt; null then
+      GLoadedSounds.Set( _resource )
+    end if
+  end method
+
+end class
+
+class ResourceSet
+
+  method AddImage:ImageRef( path:String )
+    local result:ImageRef = new ImageRef( path )
+    _images.AddLast( result )
+    return result
+  end method
+
+  method AddSound:SoundRef( path:String )
+    local result:SoundRef = new SoundRef( path )
+    _sounds.AddLast( result )
+    return result
+  end method
+
+
+private
+  method HookupAlreadyLoaded:void()
+    for local imgRef:ImageRef = eachin _images
+      imgRef.HookupAlreadyLoaded()
+    next
+
+    for local soundRef:SoundRef = eachin _sounds
+      soundRef.HookupAlreadyLoaded()
+    next
+  end method
+
+  method GatherUnloaded:void()
+    for local imgRef:ImageRef = eachin _images
+      imgRef.GatherUnloaded()
+    next
+
+    for local soundRef:SoundRef = eachin _sounds
+      soundRef.GatherUnloaded()
+    next
+  end method
+
+  method RebuildLoadedMaps:void()
+    for local imgRef:ImageRef = eachin _images
+      imgRef.RebuildLoadedMap()
+    next
+
+    for local soundRef:SoundRef = eachin _sounds
+      soundRef.RebuildLoadedMap()
+    next
+  end method
+
+  method ClearReferences:void()
+    for local imgRef:ImageRef = eachin _images
+      imgRef.ClearReference()
+    next
+
+    for local soundRef:SoundRef = eachin _sounds
+      soundRef.ClearReference()
+    next
+  end method
+
+  Field _images:List&lt;ImageRef&gt; = new List&lt;ImageRef&gt;
+  Field _sounds:List&lt;SoundRef&gt; = new List&lt;SoundRef&gt;
+
+end class
+
+function LoadSet:void( set:ResourceSet )
+  if GItemsToLoad &lt;&gt; 0 then return
+
+  ' ensure this set is only in one list, if it's not loaded add it to GSetsToLoad  
+  for local item:ResourceSet = eachin GLoadedSets
+    if item = set then return
+  next
+  
+  for local item:ResourceSet = eachin GUnusedSets
+    if item = set then 
+      GUnusedSets.RemoveEach( set )
+      GLoadedSets.AddLast( set )
+      return
+    end if
+  next
+
+  for local item:ResourceSet = eachin GSetsToLoad
+    if item = set then return
+  next
+
+  GSetsToLoad.AddLast( set )
+end function
+
+function UnloadSet:void( set:ResourceSet )
+  if GItemsToLoad &lt;&gt; 0 then return
+
+  local isLoaded:bool = false
+  for local item:ResourceSet = eachin GLoadedSets
+    if item = set then 
+      isLoaded = true
+    end if
+  next
+
+  if not isLoaded then
+    for local item:ResourceSet = eachin GSetsToLoad
+      if item = set then
+        GSetsToLoad.RemoveEach( set )
+        GUnusedSets.AddLast( set )
+        return
+      end if
+    next
+
+    ' do nothing
+  else
+    GUnusedSets.AddLast( set )
+  end if
+
+end function
+
+function GetLoadPercentage:Float()
+  if GItemsToLoad &gt; 0 then
+    return Float(GItemsToLoad-GImagesToLoad.Count()+GSoundsToLoad.Count())/Float(GItemsToLoad)
+  else
+    return 1
+  end if
+end function
+
+function UpdateLoading:bool()
+  ' part 1: build list of items to load if necessary
+  if GItemsToLoad = 0 and GSetsToLoad.Count() &gt; 0 then
+    Print("Begin loading")
+    for local set:ResourceSet = eachin GSetsToLoad
+      set.HookupAlreadyLoaded()
+    next
+
+    for local set:ResourceSet = eachin GSetsToLoad
+      set.GatherUnloaded()
+    next
+    GItemsToLoad = GSoundsToLoad.Count() + GImagesToLoad.Count()
+  end if
+
+  ' part 2: load one resource each frame
+  if GImagesToLoad.Count() &gt; 0 then
+    local path:String = GImagesToLoad.RemoveLast()
+	local img:Image = LoadImage(path)
+	
+	if img &lt;&gt; null then
+	  Print("Loaded " + path)
+      GLoadedImages.Set( path, img )
+	else
+	  Print("Problem loading " + path)
+	end if
+    return true
+  end if
+
+  if GSoundsToLoad.Count() &gt; 0 then
+    local path:String = GSoundsToLoad.RemoveLast()
+	local sound:Sound = LoadSound( path )
+	
+	if sound &lt;&gt; null then
+	  Print("Loaded " + path)
+      GLoadedSounds.Set( path, sound )
+	else
+	  Print("Problem loading " + path)
+	end if
+    return true
+  end if
+
+  ' part 3: finalize loading
+  if GSetsToLoad.Count() &gt; 0 then
+    Print("Finalizing loading")
+    for local set:ResourceSet = eachin GSetsToLoad
+      set.HookupAlreadyLoaded()
+      GLoadedSets.AddLast( set )
+    next
+
+    GSetsToLoad.Clear()
+    GItemsToLoad = 0
+  end if
+
+  return false ' we loaded nothing, update our game as normal
+end function
+
+  ' this is the 'intelligent cache' part.  If you detect that you are low on memory (you would have to add this to mojo) then you call this:
+function CleanupUnusedMemory:void()
+  for local set:ResourceSet = eachin GSetsToLoad
+    set.HookupAlreadyLoaded()
+  next
+
+  for local set:ResourceSet = eachin GUnusedSets
+    set.ClearReferences()
+  next
+
+  GLoadedImages.Clear()
+  GLoadedSounds.Clear()
+  GUnusedSets.Clear()
+
+  ' trigger a garbage collect here
+
+  for local set:ResourceSet = eachin GSetsToLoad
+    set.RebuildLoadedMaps()
+  next
+
+  for local set:ResourceSet = eachin GLoadedSets
+    set.RebuildLoadedMaps()
+  next
+  
+end function
+
+</textarea><br><br>Now in your game code you would have to define a resource set like this:<br><br><pre class=code>
+import mojo.app
+import mojo.graphics
+import resources ' the file from above
+
+class MenuResourceSet extends ResourceSet
+  field buttonImage:ImageRef
+  field fontImage:ImageRef
+
+  method new()
+    buttonImage = AddImage("button.png")
+    fontImage = AddImage("font.png")
+  end method
+end class
+
+global MenuResources:MenuResourceSet = new MenuResourceSet 
+
+class MyApp extends App
+  method OnCreate()
+    LoadSet( MenuResources )
+    SetUpdateRate(2)
+  end method
+
+  method OnRender()
+    Cls(0,0,0)
+    if UpdateLoading() then
+      DrawText("Loading..." + Int(100*GetLoadPercentage()), 0, 0)
+    else
+	  if MenuResources.buttonImage.get() &lt;&gt; null then
+        DrawImage( MenuResources.buttonImage.get(), 0, 0 )
+	  end if
+    end if
+  end method
+end class
+
+Function Main:Int()
+	New MyApp()
+End Function
+
+</pre><br><br>You can create lists of objects we want loaded at any given time, i'm just using pre-defined global ones for now.  Instead of referencing Image or Sound objects, you reference MenuImages.buttonImage, and you call MenuImages.buttonImage.get() to get the real reference to it.  You can have multiple sets that all reference the same resources, and you can dynamically create these resource sets from a level by just calling add* for everything it will not matter.<br><br>Now you have a function that you call at the start of your render loop, UpdateLoading.  If it returns true then you render your loading screen with the GetLoadPercentage.  If it returns false then you update your game as normal.  I am doing all of my game update in the render loop with delta times, not the update, because it uses less resources and makes sense for me.  You could set a boolean to tell your update loop you are loading and to abort however. <br><br></td></tr></table><br>
+<a name="2010529"></a>
+
+<a name="2010528"></a>
+
+<a name="2010527"></a>
+
+<a name="2010526"></a>
+
+<a name="2010525"></a>
+
+<a name="2010524"></a>
+
+<a name="2010523"></a>
+
+<a name="2010521"></a>
+
+<a name="2010520"></a>
+
+<a name="2023330"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Richard</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cool thank you for this <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

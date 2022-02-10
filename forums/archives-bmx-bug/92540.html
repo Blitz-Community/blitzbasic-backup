@@ -1,0 +1,501 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Linux Sound - Alsa</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Linux Sound - Alsa</h1><a href="forums.php" >Archives Forums</a>/<a href="topics.php?forum=105" >BlitzMax Bug Reports</a>/<a href="#bottom" >Linux Sound - Alsa</a><br><br>
+<a name="1054879"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ingenius</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>In the last version of ubuntu, the OSS support is missing, I have tried to modify freeaudio.mod to support ALSA without results.<br><br>Does anyone have the same problem ? <br><br>Regards<br>Inge <br><br></td></tr></table><br>
+<a name="1054882"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jkrankie</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yep, it's pretty annoying. One of the users in my forum reckons this script works for him with Irukandji (one of my games):<br><br>sh -c "&lt;path to Irukandji&gt; &amp;&amp; padsp ./Irukandji"<br><br>It's basically running the game with padsp.<br><br>Cheers<br>Charlie <br><br></td></tr></table><br>
+<a name="1054885"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ingenius</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes, I did work with aoss ( ALSA wrapper for OSS applications ) , but I have a delay in sound which is annoying. <br><br></td></tr></table><br>
+<a name="1055333"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ingenius</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've done, BlitzMax working with alsa support. In a few minutes I will send the modifications.<br><br>We need test it thoroughly to see that everything works fine. <br><br></td></tr></table><br>
+<a name="1055336"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ingenius</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok <br><br>Path - mod/pub.mod/freeaudio.mod<br><br>alsadevice.cpp<br><pre class=code>
+// alsadevice.cpp
+
+#ifdef __linux
+
+#include "freeaudio.h"
+
+#include &lt;sys/ioctl.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;fcntl.h&gt;
+#include &lt;sys/soundcard.h&gt;
+#include &lt;pthread.h&gt;
+
+#include &lt;alsa/asoundlib.h&gt;
+#include &lt;alsa/pcm.h&gt;
+
+extern "C" audiodevice *OpenALSADevice();
+
+void *alsaaudiothread(void *dev);
+
+#define LINUXFRAG 2048
+
+struct alsaaudio:audiodevice{
+	pthread_t	audiothread;
+	int			threadid;
+	int			running,playing;
+	short		*buffer;
+	int			buffersize;	//in bytes
+	
+	int reset(){
+		running=1;
+		playing=0;
+		mix=new mixer(LINUXFRAG);
+		mix-&gt;freq=44100;
+		mix-&gt;channels=2;
+		buffer=new short[LINUXFRAG];
+		buffersize=LINUXFRAG*2;
+		pthread_attr_t	attr;
+		pthread_attr_init(&amp;attr);
+		threadid=pthread_create(&amp;audiothread,&amp;attr,alsaaudiothread,(void*)this);	
+		return 0;
+	}
+	
+	int close(){	
+		int		timeout;
+		running=0;
+		timeout=5;
+		while (timeout-- &amp;&amp; playing) sleep(1);
+		return 0;
+	}
+};
+
+
+void *alsaaudiothread(void *v){
+	int						policy;
+	sched_param		sched;	
+	int						err;
+	alsaaudio 		*dev;
+	
+	pthread_getschedparam(pthread_self(),&amp;policy,&amp;sched);
+	sched.sched_priority++;//policy=SCHED_RR;
+	pthread_setschedparam(pthread_self(),policy,&amp;sched);	
+	dev=(alsaaudio*)v;
+
+	unsigned int val;
+	snd_pcm_t *fd;
+	snd_pcm_uframes_t periodsize;
+	snd_pcm_hw_params_t *hwparams;
+	snd_pcm_hw_params_alloca(&amp;hwparams);
+	int output_rate;
+	int channels;
+	int fragment_size;
+	int fragment_count;
+
+	err=snd_pcm_open(&amp;fd, strdup("default"), SND_PCM_STREAM_PLAYBACK, 0);
+	if (err&lt;0) return 0;
+
+	fragment_size=LINUXFRAG;  //overall buffer size
+	fragment_count=2; //2 - 16 fragment count - 2 minimum, the lower it is potentially the lower the latency
+
+//configure device
+	if (snd_pcm_hw_params_any(fd, hwparams) &lt; 0) {
+		//printf("linuxaudio failed at params any\n");
+		return 0;
+	}	
+	if (snd_pcm_hw_params_set_access(fd, hwparams,SND_PCM_ACCESS_RW_INTERLEAVED) &lt; 0) {
+		//printf("linuxaudio failed at set access\n");
+		return 0;
+	}	
+	
+	if (snd_pcm_hw_params_set_format(fd, hwparams,SND_PCM_FORMAT_S16_LE) &lt; 0) {
+		//printf("linuxaudio failed at set format\n");
+		return 0;
+	}
+	val = 44100;
+	if (snd_pcm_hw_params_set_rate_near(fd, hwparams,&amp;val, 0) &lt; 0) {
+		// Try 48KHZ too 
+		//printf("linuxaudio - %d HZ not available, trying 48000HZ\n", output_rate);
+		val = 48000;
+		if (snd_pcm_hw_params_set_rate_near(fd, hwparams,&amp;val, 0) &lt; 0) {
+			//printf("linuxaudio failed at setting output rate (%d)\n", output_rate);
+			return 0;
+		}
+		dev-&gt;mix-&gt;freq=val;		
+	}
+	channels=2;
+	if (snd_pcm_hw_params_set_channels(fd, hwparams, channels) &lt; 0) {
+		//printf("linuxaudio failed at set channels (%d)\n", channels);
+		return 0;
+	}
+	periodsize = (fragment_size) / 4; // bytes -&gt; frames for 16-bit,stereo - should be a minimum of 512
+	if (snd_pcm_hw_params_set_period_size_near(fd, hwparams,&amp;periodsize, 0) &lt; 0) {
+		//printf("linuxaudio failed at set period size (%d)\n", (int)periodsize);			
+		return 0;
+	}
+	val = fragment_count;
+	if (snd_pcm_hw_params_set_periods_near(fd, hwparams,&amp;val, 0) &lt; 0) {
+		//printf("linuxaudio failed at set periods (%d)\n", val);			
+		//should attempt a one by one period increase up to 16?
+		return 0;
+	}
+	if (snd_pcm_hw_params(fd, hwparams) &lt; 0) {
+		//printf("linuxaudio failed at installing hw params\n");
+		return 0;
+	}
+	//loop while playing sound
+	dev-&gt;playing=1;
+	while (dev-&gt;playing)
+	{
+		dev-&gt;mix-&gt;mix16(dev-&gt;buffer);
+		if ((snd_pcm_writei (fd, dev-&gt;buffer,LINUXFRAG/2)) &lt; 0) {	//Half buffer for two channels?
+			//printf ("linuxaudio warning: buffer underrun occurred\n");
+			if (snd_pcm_prepare(fd) &lt; 0) {
+				//printf ("linuxaudio failed at preparing pcm\n");
+				dev-&gt;playing=0; //die gracefully
+			}
+		}	
+	}
+	snd_pcm_drop(fd);
+	snd_pcm_close (fd);
+	return 0;
+}
+
+audiodevice *OpenALSADevice(){
+	return new alsaaudio();
+}
+
+#endif
+</pre><br>freeaudio.bmx<br><pre class=code>
+Module Pub.FreeAudio
+
+ModuleInfo "Version: 1.22"
+ModuleInfo "Author: Simon Armstrong"
+ModuleInfo "License: Public Domain"
+ModuleInfo "Copyright: Blitz Research Ltd"
+ModuleInfo "Modserver: BRL"
+
+ModuleInfo "History: 1.22 Release"
+ModuleInfo "History: Fixed leak with sound recycling"
+ModuleInfo "History: 1.21 Release"
+ModuleInfo "History: Fixed reference counting for brl.freeaudioaudio"
+ModuleInfo "History: 1.20 Release"
+ModuleInfo "History: Removed duplication of sample memory"
+ModuleInfo "History: 1.19 Release"
+ModuleInfo "History: Added DirectSound mode"
+ModuleInfo "History: 1.18 Release"
+ModuleInfo "History: added fa_ChannelPosition for live sample generation"
+ModuleInfo "History: 1.17 Release"
+ModuleInfo "History: added check for windows playback position overflow"
+ModuleInfo "History: 1.15 Release"
+ModuleInfo "History: added low latency windows98 fix"
+ModuleInfo "History: 1.14 Release"
+ModuleInfo "History: fixed 1.13 recycling of stopped channels fix"
+ModuleInfo "History: 1.13 Release"
+ModuleInfo "History: fixed recycling of stopped channels"
+ModuleInfo "History: 1.12 Release"
+ModuleInfo "History: Uses linear interpolation for improved fidelity at low rates"
+ModuleInfo "History: 1.11 Release"
+ModuleInfo "History: Fixed freepool sounds Not resetting parameters - thanks To Fetze"
+ModuleInfo "History: 1.10 Release"
+ModuleInfo "History: Added ALSA support for Linux courtesy Craig Kiesau"
+ModuleInfo "History: 1.09 Release"
+ModuleInfo "History: Improved channel playback timing"
+ModuleInfo "History: 1.08 Release"
+ModuleInfo "History: Fixed memory leak in fa_FreeSound()"
+ModuleInfo "History: 1.07 Release"
+ModuleInfo "History: Removed output transitions for queued/paused sounds"
+ModuleInfo "History: 1.06 Release"
+ModuleInfo "History: Windows device error now silently fails"
+ModuleInfo "History: 1.05 Release"
+ModuleInfo "History: Linux version now opens audio device on second thread"
+ModuleInfo "History: 1.04 Release"
+ModuleInfo "History: Removed Linux debug output"
+
+Import "freeaudio.cpp"
+Import "freeaudioglue.cpp"
+
+?Win32
+Import "dsounddevice.cpp"
+Import "mmdevice.cpp"
+Extern "C"
+Function OpenMultiMediaDevice()
+Function OpenDirectSoundDevice()
+End Extern
+?MacOS
+Import "-framework AudioUnit"
+Import "-framework AudioToolbox"
+Import "coreaudiodevice.cpp"
+Extern
+Function OpenCoreAudioDevice()
+End Extern
+?Linux
+Import "-lasound"
+Import "alsadevice.cpp"
+Import "ossdevice.cpp"
+Extern "C"
+Function OpenOSSDevice()
+Function OpenALSADevice()
+End Extern
+?
+
+Extern
+
+Const FA_CHANNELSTATUS_FREE=0
+Const FA_CHANNELSTATUS_STOPPED=1
+Const FA_CHANNELSTATUS_SINGLESHOT=2
+Const FA_CHANNELSTATUS_LOOPING=4
+Const FA_CHANNELSTATUS_STREAMING=8
+Const FA_CHANNELSTATUS_PAUSED=16
+
+Function fa_Reset( audiodevice )
+Function fa_Close()
+Function fa_CreateSound( length,bits,channels,hertz,samples:Byte Ptr=Null,looping=False )
+Function fa_WriteSound( sound,samples:Byte Ptr,length ) 'length really neceesary?
+Function fa_FreeSound( sound )
+Function fa_AllocChannel()
+Function fa_FreeChannel( channel )
+Function fa_PlaySound( sound,paused_flag,channel )
+
+Function fa_StopChannel( channel )
+Function fa_ChannelStatus( channel )
+Function fa_ChannelPosition( channel )
+
+Function fa_SetChannelPaused( channel,paused )
+Function fa_SetChannelVolume( channel,volume# )
+Function fa_SetChannelRate( channel,pitch# )
+Function fa_SetChannelPan( channel,pan# )
+Function fa_SetChannelDepth( channel,depth# )
+
+End Extern
+
+Function fa_Init( deviceid )
+	Local device
+?Win32
+	If deviceid
+		device=OpenDirectSoundDevice()
+	Else
+		device=OpenMultiMediaDevice()
+	EndIf
+?Linux
+	Select deviceid
+		Case 0
+			device=OpenOSSDevice()
+		Case 1
+			device=OpenALSADevice()
+	EndSelect
+?MacOS
+	device=OpenCoreAudioDevice()
+?
+	Local res=-1
+	If device res=fa_Reset(device)
+	Return res
+End Function	
+
+</pre><br><br>Path - mod/brl.mod/freeaudioaudio.mod<br><br>freeaudioaudio.bmx<br><pre class=code>
+Strict
+Rem
+bbdoc: Audio/FreeAudio audio
+about:
+The FreeAudio audio module provides FreeAudio drivers for use with the #audio module.
+End Rem
+Module BRL.FreeAudioAudio
+
+ModuleInfo "Version: 1.13"
+ModuleInfo "Author: Mark Sibly"
+ModuleInfo "License: Blitz Shared Source Code"
+ModuleInfo "Copyright: Blitz Research Ltd"
+ModuleInfo "Modserver: BRL"
+
+ModuleInfo "History: 1.13 Release"
+ModuleInfo "History: Fixed bug in FreeChannel Playing()"
+ModuleInfo "History: 1.12 Release"
+ModuleInfo "History: Added call to fa_FreeChannel to TFreeAudioChannel destructor"
+ModuleInfo "History: 1.11 Release"
+ModuleInfo "History: Nudge"
+ModuleInfo "History: 1.10 Release"
+ModuleInfo "History: Bumped"
+ModuleInfo "History: 1.08 Release"
+ModuleInfo "History: Added src sample reference to TFreeAudioSound"
+ModuleInfo "History: Channel playing now returns sample playback position"
+ModuleInfo "History: 1.07 Release"
+ModuleInfo "History: Added DirectSound driver"
+ModuleInfo "History: 1.06 Release"
+ModuleInfo "History: Added Method TFreeAudioChannel.Position"
+ModuleInfo "History: 1.05 Release"
+ModuleInfo "History: Mono and 8 bit sample support added"
+
+Import BRL.Audio
+Import Pub.FreeAudio
+Import Pub.DirectX
+
+Private
+
+Const CLOG=False
+
+Public
+
+Type TFreeAudioSound Extends TSound
+
+	Field fa_sound
+	
+	Method Delete()
+		fa_FreeSound fa_sound
+		If CLOG WriteStdout "Deleted FreeAudio sound "+fa_sound+"~n"
+	End Method
+
+	Method Play:TFreeAudioChannel( alloced_channel:TChannel )
+		Local channel:TFreeAudioChannel,fa_channel
+		If alloced_channel
+			channel=TFreeAudioChannel( alloced_channel )
+			If Not channel Return
+			fa_channel=channel.fa_channel
+		EndIf		
+		fa_channel=fa_PlaySound(fa_sound,False,fa_channel)
+		If Not fa_channel Return
+		If channel And channel.fa_channel=fa_channel Return channel
+		Return TFreeAudioChannel.CreateWithChannel( fa_channel )
+	End Method
+	
+	Method Cue:TFreeAudioChannel( alloced_channel:TChannel )
+		Local channel:TFreeAudioChannel,fa_channel
+		If alloced_channel
+			channel=TFreeAudioChannel( alloced_channel )
+			If Not channel Return
+			fa_channel=channel.fa_channel
+		EndIf
+		fa_channel=fa_PlaySound( fa_sound,True,fa_channel )
+		If Not fa_channel Return
+		If channel And channel.fa_channel=fa_channel Return channel
+		Return TFreeAudioChannel.CreateWithChannel( fa_channel )
+	End Method
+
+	Function CreateWithSound:TFreeAudioSound( fa_sound,src:TAudioSample )
+		Local t:TFreeAudioSound=New TFreeAudioSound
+		t.fa_sound=fa_sound
+'		t.src=src
+		Return t
+	End Function
+	
+End Type
+
+Type TFreeAudioChannel Extends TChannel
+
+	Field fa_channel
+	
+	Method Delete()
+		If fa_channel fa_FreeChannel fa_channel
+	End Method
+
+	Method Stop()
+		fa_StopChannel fa_channel
+		fa_channel=0
+	End Method
+	
+	Method SetPaused( paused )
+		fa_SetChannelPaused fa_channel,paused
+	End Method
+	
+	Method SetVolume( volume# )
+		fa_SetChannelVolume fa_channel,volume
+	End Method
+	
+	Method SetPan( pan# )
+		fa_SetChannelPan fa_channel,pan
+	End Method
+	
+	Method SetDepth( depth# )
+		fa_SetChannelDepth fa_channel,depth
+	End Method
+	
+	Method SetRate( rate# )
+		fa_SetChannelRate fa_channel,rate
+	End Method
+	
+	Method Playing()
+		Local status=fa_ChannelStatus( fa_channel ) 
+		If status=FA_CHANNELSTATUS_FREE Return False
+		If status&amp;FA_CHANNELSTATUS_STOPPED Return False
+		If status&amp;FA_CHANNELSTATUS_PAUSED Return False
+		Return True
+	End Method
+	
+	Method Position()
+		Return fa_ChannelPosition( fa_channel )
+	End Method
+	
+	Function CreateWithChannel:TFreeAudioChannel( fa_channel )
+		Local t:TFreeAudioChannel=New TFreeAudioChannel
+		t.fa_channel=fa_channel
+		Return t
+	End Function
+	
+End Type
+
+Type TFreeAudioAudioDriver Extends TAudioDriver
+
+	Method Name$()
+		Return _name
+	End Method
+	
+	Method Startup()
+		If _mode&lt;&gt;-1 Return fa_Init( _mode )&lt;&gt;-1
+		If fa_Init( 0 )&lt;&gt;-1 Return True
+?Win32
+		Return fa_Init( 1 )&lt;&gt;-1
+?
+	End Method
+	
+	Method Shutdown()
+		fa_Close
+	End Method
+
+	Method CreateSound:TFreeAudioSound( sample:TAudioSample,flags )
+		Local channels,bits
+
+		Select sample.format
+?BigEndian
+		Case SF_MONO16LE
+			sample=sample.Convert(SF_MONO16BE)
+		Case SF_STEREO16LE
+			sample=sample.Convert(SF_STEREO16BE)
+?LittleEndian
+		Case SF_MONO16BE
+			sample=sample.Convert(SF_MONO16LE)
+		Case SF_STEREO16BE
+			sample=sample.Convert(SF_STEREO16LE)
+?
+		End Select
+		Local loop_flag
+		If (flags &amp; 1) loop_flag=-1
+		channels=ChannelsPerSample[sample.format]
+		If Not channels Return
+		bits=8*BytesPerSample[sample.format]/channels
+		Local fa_sound=fa_CreateSound( sample.length,bits,channels,sample.hertz,sample.samples,loop_flag )
+		If CLOG WriteStdout "Generated FreeAudio sound "+fa_sound+"~n"
+		Return TFreeAudioSound.CreateWithSound( fa_sound,sample )
+	End Method
+	
+	Method AllocChannel:TFreeAudioChannel()
+		Local fa_channel=fa_AllocChannel()
+		If fa_channel Return TFreeAudioChannel.CreateWithChannel( fa_channel )
+	End Method
+		
+	Function Create:TFreeAudioAudioDriver( name$,mode )
+		Local t:TFreeAudioAudioDriver=New TFreeAudioAudioDriver
+		t._name=name
+		t._mode=mode
+		Return t
+	End Function
+	
+	Field _name$,_mode
+	
+End Type
+
+?Win32
+If DirectSoundCreate TFreeAudioAudioDriver.Create "FreeAudio DirectSound",1
+TFreeAudioAudioDriver.Create "FreeAudio Multimedia",0
+?MacOS
+TFreeAudioAudioDriver.Create "FreeAudio CoreAudio",0
+?Linux
+' TFreeAudioAudioDriver.Create "FreeAudio OpenSound System",0
+TFreeAudioAudioDriver.Create "FreeAudio ALSA System",1
+?
+TFreeAudioAudioDriver.Create "FreeAudio",-1
+</pre> <br><br></td></tr></table><br>
+<a name="1055406"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jkrankie</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cool! I'll try to get a chance to look at this over the weekend.<br><br>What exactly were the changes?<br><br>Cheers<br>Charlie <br><br></td></tr></table><br>
+<a name="1067514"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >oddchild</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> I have tried this and numerous other posts but still do not have sound with any of my blitzmax applications. I have ubuntu 10.10. <br><br>Maybe it is this computer? I had another computer with Ubuntu installed, and it worked fine. When I switched computers, it stopped working. I have tried installing all the packages, and this mod. Any other ideas? <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

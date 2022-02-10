@@ -1,0 +1,203 @@
+<!DOCTYPE html><html lang="en" ><head ><title >SMTP client functions (no authorization)</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >SMTP client functions (no authorization)</h1><a href="forums.php" >Community Forums</a>/<a href="topics.php?forum=61" >Showcase</a>/<a href="#bottom" >SMTP client functions (no authorization)</a><br><br>
+<a name="756250"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've created some SMTP client functions. It works fine, but it doesn't support authorization at the moment and i don't have any SMTP servers either where i could authorize myself, so could anybody help me on that part.<br><br>Usage example:<br><pre class=code>
+SMTPStream% = SMTPConnect("smtp.some-server.com", "username", "password")
+SMTPSendHeader(SMTPStream%, "mail@...", "rcpt@...", "Mail subject")
+WriteLine SMTPStream%, "This is the message"
+SMTPEndMail(SMTPStream%)
+</pre><br><br>Functions:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Global SMTPError$ = ""
+
+Function SMTPConnect%(server$, username$ = "", password$ = "", port% = 25)
+	Local stream% = OpenTCPStream(server$, port%)
+	Local AUTH_type% = 0 ; 1 - LOGIN, 2 - PLAIN, 3 - DIGEST-MD5, 4 - CRAM-MD5
+	
+	If stream%
+		While Not Eof(stream%)
+			If Not msg$ = ""
+				DebugLog "SMTP&gt;&gt;&gt;" + msg$
+				WriteLine stream%, msg$
+			EndIf
+			
+			If ReadAvail(stream%)
+				txt$ = ReadLine$(stream%): DebugLog "SMTP&lt;&lt;&lt;" + txt$
+				code$ = Left$(txt$, 3)
+				cmd$ = Mid(txt$, 5)
+				value$ = Sector(cmd$, " ", 1, True)
+				cmd$ = Sector(cmd$, " ", 0)
+			Else
+				txt$ = "": code$ = "": cmd$ = "": value$ = ""
+			EndIf
+			
+			msg$ = ""
+			Select code$
+				Case "220"
+					msg$ = "EHLO " + server$
+				Case "250"
+					; COMMAND
+					Select cmd$
+						Case "AUTH"
+							; SET AUTH type
+							If Instr(value$, "PLAIN") Then AUTH_type% = 2
+							If Instr(value$, "DIGEST-MD5") Then AUTH_type% = 3
+							If Instr(value$, "CRAM-MD5") Then AUTH_type% = 4
+							If Instr(value$, "LOGIN") Then AUTH_type% = 1
+							
+							Select AUTH_type%
+								Case 1
+									msg$ = "AUTH LOGIN"
+								Case 2
+									msg$ = "AUTH PLAIN " + base64_enc$(username$ + Chr(0) + username$ + Chr(0) + password$)
+								Case 3
+									msg$ = "AUTH DIGEST-MD5"
+								Case 4
+									msg$ = "AUTH CRAM-MD5"
+							End Select
+						Case "8BITMIME" ; No AUTH type
+							If AUTH_type% = 0 Then Return stream%
+					End Select
+				Case "334" ; AUTH type ok
+					Select AUTH_type%
+						Case 1 ; LOGIN
+							Select cmd$
+								Case "VXNlcm5hbWU6" ; Username
+									msg$ = base64_enc$(username$)
+								Case "UGFzc3dvcmQ6" ; Password
+									msg$ = base64_enc$(password$)
+							End Select
+						Case 3 ; DIGEST-MD5
+						Case 4 ; CRAM-MD5
+					End Select
+				Case "535", "501" ; Authorization failed
+					SMTPError$ = Mid(txt$, 5)
+					
+					CloseTCPStream stream%
+					Return False
+				Case "235" ; Authorized
+					If AUTH_type% = 0 Then Return stream%
+			End Select
+		Wend
+		
+		Return stream%
+	EndIf
+End Function
+
+Function SMTPSendHeader(stream%, from$, rcpt$, subject$)
+	Local index% = 0, msg$
+	
+	msg$ = "MAIL FROM:&lt;" + from$ + "&gt;"
+	While Not Eof(stream%)
+		If ReadAvail(stream%)
+			txt$ = ReadLine$(stream%): DebugLog "SMTP&lt;&lt;&lt;" + txt$
+			code$ = Left$(txt$, 3)
+			cmd$ = Mid(txt$, 5)
+		Else
+			code$ = "": cmd$ = ""
+		EndIf
+		
+		If Not msg$ = ""
+			DebugLog "SMTP&gt;&gt;&gt;" + msg$
+			WriteLine stream%, msg$
+		EndIf
+		
+		msg$ = ""
+		Select code$
+			Case ""
+			Case "250"
+				index% = index% + 1
+				Select index%
+					Case 1
+						msg$ = "RCPT TO:&lt;" + rcpt$ + "&gt;"
+					Case 2
+						msg$ = "DATA"
+					Case 3
+				End Select
+			Case "354"
+				msg$ = "Subject: " + subject$
+				DebugLog "SMTP&gt;&gt;&gt;" + msg$
+				WriteLine stream%, msg$ + Chr(13) + Chr(10)
+				Return True
+			Default
+				SMTPError$ = Mid(txt$, 5)
+				Return False
+		End Select
+	Wend
+End Function
+
+Function SMTPEndMail(stream%)
+	WriteLine stream%, "."
+	WriteLine stream%, "QUIT"
+	CloseTCPStream stream%
+End Function
+
+Function SMTPLastError$()
+	Return SMTPError$
+End Function
+
+Function base64_enc$(inp$)
+	Local b64_enc$ = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	Local nl$ = Chr$(13) + Chr$(10)
+	Local out$, trp$, char, i = 1
+		
+	Repeat
+		trp$ = Mid$(inp$, i, 3)
+	
+		Select Len(trp$)
+			Case 3
+				out$ = out$ + Mid$(b64_enc$, (Asc(Mid$(trp$, 1, 1)) Shr 2) + 1, 1)
+				out$ = out$ + Mid$(b64_enc$, (((Asc(Mid$(trp$, 1, 1)) Shl 4) Or (Asc(Mid$(trp$, 2, 1)) Shr 4)) And $3f) + 1, 1)
+				out$ = out$ + Mid$(b64_enc$, (((Asc(Mid$(trp$, 2, 1)) Shl 2) Or (Asc(Mid$(trp$, 3, 1)) Shr 6)) And $3f) + 1, 1)
+				out$ = out$ + Mid$(b64_enc$, (Asc(Mid$(trp$, 3, 1)) And $3f) + 1, 1)
+			Case 2
+				out$ = out$ + Mid$(b64_enc$, (Asc(Mid$(trp$, 1, 1)) Shr 2) + 1, 1)
+				out$ = out$ + Mid$(b64_enc$, (((Asc(Mid$(trp$, 1, 1)) Shl 4) Or (Asc(Mid$(trp$, 2, 1)) Shr 4)) And $3f) + 1, 1)
+				out$ = out$ + Mid$(b64_enc$, ((Asc(Mid$(trp$, 2, 1)) Shl 2) And $3f) + 1, 1)
+				out$ = out$ + "="
+			Case 1
+				out$ = out$ + Mid$(b64_enc$, (Asc(Mid$(trp$, 1, 1)) Shr 2) + 1, 1)
+				out$ = out$ + Mid$(b64_enc$, ((Asc(Mid$(trp$, 1, 1)) Shl 4) And $3f) + 1, 1)
+				out$ = out$ + "=="
+		End Select
+	
+		i = i + 3
+		char = char + 4
+		If char = 76
+			out$ = out$ + nl$
+			char = 0
+		EndIf
+	Until i &gt; Len(inp$)
+	If char And add_nl Then out$ = out$ + nl$
+	
+	Return out$
+End Function
+
+Function Sector$(txt$, separator$, sector%, toend% = False)
+	Local result$ = "", occ
+	For i = 1 To Len(txt$)
+		If Mid$(txt$, i, 1) = separator$
+			occ = occ + 1
+			If toend% And occ% &gt; sector% Then result$ = result$ + Mid$(txt$, i, 1)
+		Else
+			If occ =&gt; sector Then result$ = result$ + Mid$(txt$, i, 1)
+		EndIf
+		If Not toend% Then If occ &gt; sector Then Exit
+	Next
+	Return result$
+End Function
+</textarea> <br><br></td></tr></table><br>
+<a name="756312"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Xzider</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Function 'sector' not found <br><br></td></tr></table><br>
+<a name="756314"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sorry for that, added it. <br><br></td></tr></table><br>
+<a name="756590"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Xzider</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sounds cool, but I cant get it to connect to hotmail/yahoo <br><br></td></tr></table><br>
+<a name="756606"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Probably because it needs authorization, enable debugging. I'll try tu use it with my own account on hotmail. <br><br></td></tr></table><br>
+<a name="756625"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Paul "Taiphoz"</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> dont you guys have an ISP that provides e-mail ? if you do then smtp.yourISP.com<br><br>Most ISP's dont request any authentication for sending mail, they check your IP and Mac off of their list and then allow you to send/connect so it shouldnt be needed. Unless your trying to use a server thats not your ISP like yahoo or some other random server.<br><br>PS. this code could come in handy for making one of those E-Mail games where moves are made and sent via mail. <br><br></td></tr></table><br>
+<a name="756669"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yan</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Andres - Judging by some of your code, it would appear that you've already found <a href="/codearcs.php?code=1448" target="_blank"><b><u>this</u></b></a> (the authentication has been tested and works)??<br><br>@Xzider - Hotmail/Yahoo aren't SMTP servers, AFAIR they use the webDAV HTTP extension. <br><br></td></tr></table><br>
+<a name="756677"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Yavin, yes, like i said it works well, but i'd like the code to work with authorization too.<br><br>@Yan, Nope didin't found <a href="/codearcs.php?code=1448" target="_blank">that</a>. I read examples and reference from "googling".<br>I just added the authorization as I think it would work, but i haven't tested it. I've only got as far as it says "Authorization failed", but no "Authorization successfull" message yet. It seems that i don't need to create my own functions anymore, i'll just use your code :). Does your code support "Progressbar"? :P <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,929 @@
+<!DOCTYPE html><html lang="en" ><head ><title >3D Bezier Curve</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >3D Bezier Curve</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >3D Bezier Curve</a><br><br>
+<a name="390708"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ZombieWoof</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> edit: I've worked through the problems I originally posted about, and of course have some new ones :)<br><br>move the white points around (click and drag) and see if you can give me a hint why its doubling up the points when my code only creates 4<br><br><br>setcolor.bb:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Global SetColorTexture = LoadTexture("purewhite.png")
+Global SetColorBrush = CreateBrush(255,255,255)
+BrushAlpha SetColorBrush, 1
+BrushShininess SetColorBrush, 0
+BrushTexture SetColorBrush, SetColorTexture
+
+
+Function SetColor(mesh,r,g,b)
+	For k=1 To CountSurfaces(mesh)
+		PaintSurface(GetSurface(mesh,k), SetColorBrush)
+	Next
+	For k=1 To CountChildren(mesh)
+		SetColor(GetChild(mesh, k), r,g,b)
+	Next
+	EntityColor mesh, r,g,b
+End Function
+</textarea><br><br>bez.bb:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Type bez
+	Field x#, y#, z#	; point coords
+	Field pa#, ya#		; pitch and yaw of control vector
+	Field len#			; length of control vector
+	Field sec%			; sections to next point
+	Field pt			; point entity (sphere)
+	Field cyl			; control line (cylinder)
+	Field cp1, cp2		; fwd and back control points
+	Field piv			; pivot containing curve segments
+End Type
+
+Function BezierNew.bez(x#,y#,z#,pa#,ya#,Len#)
+	tmp.bez = New bez
+	tmp\x = x
+	tmp\y = y
+	tmp\z = z
+	tmp\pa = pa
+	tmp\ya = ya
+	tmp\Len = Len
+	tmp\pt = 0
+	tmp\cyl = 0
+	tmp\cp1 = 0
+	tmp\cp2 = 0
+	tmp\piv = 0
+	tmp\sec = 8
+	Return tmp;	
+End Function
+
+Function BezierAdd.bez(blist.bez, b.bez)
+	blist.bez = New bez
+	blist\x = b\x
+	blist\y = b\y
+	blist\z = b\z
+	blist\pa = b\pa
+	blist\ya = b\ya
+	blist\Len = b\Len
+	blist\sec = b\sec
+	Return blist
+End Function
+
+Function BezierInit()
+	spline.bez = Last bez
+	pt2.bez = spline.bez
+	If pt2\pt = 0 
+		BezierCreatePoint(pt2)
+	EndIf
+	For spline.bez = Each bez
+		pt1.bez = pt2.bez
+		pt2.bez = spline.bez
+		If pt2\pt = 0 
+			BezierCreatePoint(pt2)
+		EndIf
+		BezierUpdateSegment(pt1,pt2)
+	Next
+End Function
+
+Function IsBezierPoint(ent)
+	For spline.bez = Each bez
+		If spline\pt = ent Return True
+	Next
+	Return False
+End Function
+
+Function BezierListIndex(ent)
+	ndx = 0
+	For spline.bez = Each bez
+		If spline\pt = ent 
+			Return ndx
+		EndIf
+		If spline\cp1 = ent 
+			Return ndx
+		EndIf
+		If spline\cp2 = ent 
+			Return ndx
+		EndIf
+		ndx = ndx + 1
+	Next
+	Return -1
+End Function
+
+Function BezierControlIndex(ent)
+	For spline.bez = Each bez
+		If spline\cp1 = ent 
+			Return 1
+		EndIf
+		If spline\cp2 = ent 
+			Return 2
+		EndIf
+	Next
+	Return -1
+End Function
+
+Function BezierMovePoint(ndx, x#, y#, z#)
+	cnt = 0
+	spline.bez = Last bez
+	pre.bez = spline.bez
+	For spline.bez = Each bez
+		If cnt = ndx
+			; update point
+			spline\x = spline\x + x
+			spline\y = spline\y + y
+			spline\z = spline\z + z
+			BezierUpdatePoint(spline.bez)
+			cur.bez = spline.bez
+			spline = After spline
+			If spline = Null
+				spline.bez = First bez
+			EndIf
+			BezierUpdateSegment(pre, cur)
+			BezierUpdateSegment(cur, spline.bez)
+			Return
+		EndIf
+		pre.bez = spline.bez
+		cnt = cnt + 1
+	Next
+End Function
+
+Function BezierMoveControl(ndx, ctrl, x#, y#, z#)
+	cnt = 0
+	spline.bez = Last bez
+	pre.bez = spline.bez
+	For spline.bez = Each bez
+		If cnt = ndx
+			; update control
+			If ctrl = 1
+				; update cp1
+				x = x + EntityX(spline\cp1)
+				y = y + EntityY(spline\cp1)
+				z = z + EntityZ(spline\cp1)
+				MoveEntity(spline\cp1, x, y, z)
+				nx# = EntityX(spline\cp1)
+				ny# = EntityY(spline\cp1)
+				nz# = EntityZ(spline\cp1)
+				p# = VectorPitch(nx,ny,nz)
+				y# = VectorYaw(nx,ny,nz)
+				d# = Sqr(nx*nx + ny*ny + nz*nz)
+				spline\pa = p
+				spline\ya = y + 90.0
+				spline\Len = d
+			Else 
+				; update cp2
+				x = x + EntityX(spline\cp2)
+				y = y + EntityY(spline\cp2)
+				z = z + EntityZ(spline\cp2)
+				MoveEntity(spline\cp2, x, y, z)
+				nx# = -EntityX(spline\cp2)
+				ny# = -EntityY(spline\cp2)
+				nz# = -EntityZ(spline\cp2)
+				p# = VectorPitch(nx,ny,nz)
+				y# = VectorYaw(nx,ny,nz)
+				d# = Sqr(nx*nx + ny*ny + nz*nz)
+				spline\pa = p
+				spline\ya = y + 90.0
+				spline\Len = d
+			EndIf
+			BezierUpdatePoint(spline.bez)
+			cur.bez = spline.bez
+			spline = After spline
+			If spline = Null
+				spline.bez = First bez
+			EndIf
+			BezierUpdateSegment(pre, cur)
+			BezierUpdateSegment(cur, spline.bez)
+			Return
+		EndIf
+		pre.bez = spline.bez
+		cnt = cnt + 1
+	Next
+End Function
+
+Function BezierCreatePoint(pt.bez)
+	pt\pt = CreateSphere(8)
+	ScaleMesh(pt\pt,0.07,0.07,0.07)
+	EntityPickMode pt\pt, 2
+	
+	pt\cyl = CreateCylinder(8,1,pt\pt)
+	ScaleMesh(pt\cyl,0.02,1,0.02)
+
+	pt\cp1 = CreateSphere(8,pt\pt)
+	ScaleMesh(pt\cp1,0.05,0.05,0.05)
+	EntityPickMode pt\cp1, 2
+	pt\cp2 = CreateSphere(8,pt\pt)
+	ScaleMesh(pt\cp2,0.05,0.05,0.05)
+	EntityPickMode pt\cp2, 2
+
+	SetColor(pt\pt, 255, 255, 255)
+	SetColor(pt\cp1, 255, 255, 0)
+	SetColor(pt\cp2, 255, 0, 255)
+	SetColor(pt\cyl, 0, 255, 0)
+	EntityFX pt\pt,5
+	
+	pt\piv = CreatePivot(pt\pt)
+	For i=1 To pt\sec
+		sec = CreateCylinder(8,1,pt\piv)
+		SetColor(sec, 0, 0, 255)
+		ScaleMesh(sec,0.02,1,0.02)
+	Next
+
+	BezierUpdatePoint(pt)
+End Function
+
+Function BezierUpdatePoint(pt.bez)
+	RotateEntity(pt\cyl, pt\pa, pt\ya, 90)
+	ScaleEntity(pt\cyl,1,pt\Len/2.0,1)
+	cpz# = (pt\Len/2.0) * Sin(pt\ya) * Cos(pt\pa)
+	cpy# = (pt\Len/2.0) * Sin(pt\pa)
+	cpx# = (pt\Len/2.0) * Cos(pt\ya) * Cos(pt\pa)
+	PositionEntity(pt\cp1, cpx#, cpy#, cpz#)
+	PositionEntity(pt\cp2, -cpx#, -cpy#, -cpz#)
+	PositionEntity(pt\pt, pt\x, pt\y, pt\z)
+End Function
+
+Function BezierUpdateSegment(pt1.bez, pt2.bez)
+	
+	Local lx#, ly#, lz#			; last point coords
+	Local inc#, t#, sec%		; loop control
+	Local nt#, nt2#, nt3#		; precomputed (1-t) factors
+	Local t2#, t3#				; precomputed (t) factors
+	Local p1px#, p1py#, p1pz#	; pt1 x/y/z
+	Local p1cx#, p1cy#, p1cz#	; pt1 control x/y/z
+	Local p2px#, p2py#, p2pz#	; pt2 x/y/z
+	Local p2cx#, p2cy#, p2cz#	; pt2 control x/y/z
+	Local x#, y#, z#			; bezier results
+	Local dx#, dy#, dz#			; distance from last point to current
+	Local dist#					; distance vector magnitude
+	Local pit#, yaw#			; pitch and yaw of segment
+	Local px#, py#, pz#			; centerpoint of current segment
+	Local nx#, ny#, nz#			; center point relative to base point
+	
+	DebugLog ""
+	DebugLog "starting " + pt1\pt + " " + pt2\pt
+	
+	lx = pt1\x
+	ly = pt1\y
+	lz = pt1\z
+	
+	inc = 1.0 / pt1\sec
+	t = inc
+	sec = 1
+	While t&lt;=1.0
+		
+		nt = 1.0-t
+		nt2 = nt * nt
+		nt3 = nt2 * nt
+		t2 = t * t
+		t3 = t2 * t
+		
+		p1px = pt1\x
+		p1py = pt1\y
+		p1pz = pt1\z
+		p1cx = EntityX(pt1\cp1) + p1px
+		p1cy = EntityY(pt1\cp1) + p1py
+		p1cz = EntityZ(pt1\cp1) + p1pz
+		;DebugLog "Pt1(x,y,z) Pc1(x,y,z) = " +p1px+" "+p1py+" "+p1pz+"      "+p1cx+" "+p1cy+" "+p1cz
+
+		p2px = pt2\x
+		p2py = pt2\y
+		p2pz = pt2\z
+		p2cx = EntityX(pt2\cp2) + p2px
+		p2cy = EntityY(pt2\cp2) + p2py
+		p2cz = EntityZ(pt2\cp2) + p2pz
+		;DebugLog "Pt2(x,y,z) Pc2(x,y,z) = " +p2px+" "+p2py+" "+p2pz+"      "+p2cx+" "+p2cy+" "+p2cz
+
+		x = p1px*nt3 + 3.0*p1cx*nt2*t + 3.0*p2cx*nt*t2 + p2px*t3
+		y = p1py*nt3 + 3.0*p1cy*nt2*t + 3.0*p2cy*nt*t2 + p2py*t3
+		z = p1pz*nt3 + 3.0*p1cz*nt2*t + 3.0*p2cz*nt*t2 + p2pz*t3
+		;DebugLog "t x y z = " + t + "      " + x + " " + y + " " + z		
+		
+		dx = x - lx
+		dy = y - ly
+		dz = z - lz
+		
+		;DebugLog "dx dy dz = " + dx + " " + dy + " " + dz
+		
+		dist = Sqr(dx*dx + dy*dy + dz*dz)
+		
+		pit = VectorPitch(dx,dy,dz)
+		yaw = VectorYaw(dx,dy,dz)
+		
+		;DebugLog "dist / pitch / yaw = " + dist + " / " + pit + " / " + yaw
+
+		px = lx + dx/2.0
+		py = ly + dy/2.0
+		pz = lz + dz/2.0
+		
+		;DebugLog "px py pz = " + px + " " + py + " " + pz
+		
+		nx = px-p1px
+		ny = py-p1py
+		nz = pz-p1pz
+		
+		;DebugLog "sec / nx ny nz = " + sec + " / " + nx + " " + ny + " " + nz
+		
+		seg = GetChild(pt1\piv, sec)
+		PositionEntity(seg, nx, ny, nz)
+		ScaleEntity(seg, 1, dist/2.0, 1)
+		RotateEntity(seg, pit+90, yaw, 0)
+		
+		lx=x
+		ly=y
+		lz=z
+		
+		t = t + inc
+		sec = sec + 1
+		
+	Wend	
+
+End Function
+
+</textarea><br><br>bezier.bb:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;**************************************************
+;*     3D Bezier Spline by John Barrett 2004      *
+;**************************************************
+;*       Email: john@...         *
+;**************************************************
+;*    Based on Jeppe Nielson's 2D Bezier code     *
+;*       Based on Wedoe´s bezier function         *
+;**************************************************
+
+Graphics3D 800,600,16,2
+SetBuffer BackBuffer()
+
+; Setup the lighting...
+AmbientLight 255,255,255
+
+; CAMERA PIVOT
+Global camera_pivot= CreatePivot()
+EntityRadius camera_pivot,0.1
+
+; Setup the camera.
+Global camera = CreateCamera(camera_pivot)
+
+PositionEntity(camera_pivot, 0, 0, 0)
+PositionEntity(camera, 0, 10, 0)
+RotateEntity(camera, 90,0,0)
+
+Color 255, 255, 255
+
+Include "setcolor.bb"
+Include "bez.bb"
+
+Global spline.bez
+
+pt1.bez = BezierNew(0,0,-1,0,0,1.5)
+pt2.bez = BezierNew(1,0,0,0,90,1.5)
+pt3.bez = BezierNew(0,0,1,0,180,1.5)
+pt4.bez = BezierNew(-1,0,0,0,270,1.5)
+BezierAdd(spline,pt1)
+BezierAdd(spline,pt2)
+BezierAdd(spline,pt3)
+BezierAdd(spline,pt4)
+
+BezierInit()
+
+; mouse x to view translation matrix
+		mxtx = 1: mxty = 0: mxtz = 0
+; mouse y to view translation matrix
+		mytx = 0: myty = 0: mytz = -1
+
+curbpt = -1
+curcpt = -1
+
+Repeat
+	If KeyHit(33) ; f=front
+		PositionEntity(camera, 0, 0, -10)
+		RotateEntity(camera, 0,0,0)
+		mxtx = 1: mxty = 0: mxtz = 0
+		mytx = 0: myty = -1: mytz = 0
+	EndIf
+	If KeyHit(38) ; l=left
+		PositionEntity(camera, -10, 0, 0)
+		RotateEntity(camera, 0,270,0)
+		mxtx = 0: mxty = 0: mxtz = -1
+		mytx = 0: myty = -1: mytz = 0
+	EndIf
+	If KeyHit(19) ; r=right 
+		PositionEntity(camera, 10, 0, 0)
+		RotateEntity(camera, 0,90,0)
+		mxtx = 0: mxty = 0: mxtz = 1
+		mytx = 0: myty = -1: mytz = 0
+	EndIf
+	If KeyHit(20) ; t=top
+		PositionEntity(camera, 0, 10, 0)
+		RotateEntity(camera, 90,0,0)
+		mxtx = 1: mxty = 0: mxtz = 0
+		mytx = 0: myty = 0: mytz = -1
+	EndIf
+	
+	If MouseDown(1)
+		If curbpt = -1 And curcpt = -1
+			; find out what is being clicked
+			mx = MouseX()
+			my = MouseY()
+			ent = CameraPick(camera, mx, my)
+			ent = PickedEntity()
+			If ent &lt;&gt; 0
+				If IsBezierPoint(ent)
+					curbpt = BezierListIndex(ent)
+				Else
+					curbpt = BezierListindex(ent)
+					curcpt = BezierControlIndex(ent)
+				EndIf
+				; setup to track movement next frame
+				MouseXSpeed()
+				MouseYSpeed()
+			EndIf
+		Else
+			; move currently clicked entity
+			mx = MouseXSpeed()
+			my = MouseYSpeed()
+			tx = mxtx * mx + mytx * my
+			ty = mxty * mx + myty * my
+			tz = mxtz * mx + mytz * my
+			If curcpt = -1
+				; moving point
+				BezierMovePoint(curbpt, tx*0.025, ty*0.025, tz*0.025)
+			Else
+				; moving control
+				BezierMoveControl(curbpt, curcpt, tx*0.025, ty*0.025, tz*0.025)
+			EndIf
+		EndIf
+	Else
+		curbpt = -1
+		curcpt = -1
+	EndIf
+		
+	RenderWorld
+	Flip
+Until KeyDown(1)
+End
+</textarea> <br><br></td></tr></table><br>
+<a name="390775"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ZombieWoof</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> original post updated <br><br></td></tr></table><br>
+<a name="390967"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >LAB[au]</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> BezierNew and BezierAdd both create a new type instance, thus 4+4=8 bez instances<br><br>Or do I miss something?? <br><br></td></tr></table><br>
+<a name="391184"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ZombieWoof</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'll try that -- I thought that any variable declared as typed would be a seperate container of instances<br><br>&lt;some minutes later&gt; That got it -- and cleaned up the rest of the code to match<br><br>Here is the current version if you want to to take a peek:<br><br>setcolor.bb:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+time to add some gui to that empty area on the right, make this sucker do something :)
+Global SetColorTexture = LoadTexture("purewhite.png")
+Global SetColorBrush = CreateBrush(255,255,255)
+BrushAlpha SetColorBrush, 1
+BrushShininess SetColorBrush, 0
+BrushTexture SetColorBrush, SetColorTexture
+
+
+Function SetColor(mesh,r,g,b)
+	For k=1 To CountSurfaces(mesh)
+		PaintSurface(GetSurface(mesh,k), SetColorBrush)
+	Next
+	For k=1 To CountChildren(mesh)
+		SetColor(GetChild(mesh, k), r,g,b)
+	Next
+	EntityColor mesh, r,g,b
+End Function
+</textarea><br><br>bez.bb:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Type bez
+	Field x#, y#, z#	; point coords
+	Field sec%			; sections to next point
+	Field pt			; point entity (sphere)
+	Field cyl			; control line (cylinder)
+	Field cp1, cp2		; fwd and back control points
+	Field piv			; pivot containing curve segments
+End Type
+
+Global spline.bez
+
+Function BezierAdd.bez(x#, y#, z#, pa#, ya#, Len#, sec%)
+	spline.bez = New bez
+	spline\x = x
+	spline\y = y
+	spline\z = z
+	spline\sec = sec
+
+	; bezier point
+	spline\pt = CreateSphere(8)
+	ScaleMesh(spline\pt,0.07,0.07,0.07)
+	EntityPickMode spline\pt, 2
+	; control bar
+	spline\cyl = CreateCylinder(8,1,spline\pt)
+	ScaleMesh(spline\cyl,0.03,1,0.03)
+	; control points
+	spline\cp1 = CreateSphere(8,spline\pt)
+	ScaleMesh(spline\cp1,0.05,0.05,0.07)
+	EntityPickMode spline\cp1, 2
+	spline\cp2 = CreateSphere(8,spline\pt)
+	ScaleMesh(spline\cp2,0.05,0.05,0.07)
+	EntityPickMode spline\cp2, 2
+	; set colors
+	SetColor(spline\pt, 255, 255, 255)
+	SetColor(spline\cp1, 255, 255, 0)
+	SetColor(spline\cp2, 255, 0, 255)
+	SetColor(spline\cyl, 0, 255, 0)
+	EntityFX spline\pt,5
+	; alpha out control bar/points
+	EntityAlpha spline\cp1, 0
+	EntityAlpha spline\cp2, 0
+	EntityAlpha spline\cyl, 0
+	; create segments
+	spline\piv = CreatePivot(spline\pt)
+	For i=1 To spline\sec
+		sec = CreateCylinder(8,1,spline\piv)
+		SetColor(sec, 0, 0, 255)
+		ScaleMesh(sec,0.03,1,0.03)
+	Next
+	; update control points
+	cpz# = (Len/2.0) * Sin(ya) * Cos(pa)
+	cpy# = (Len/2.0) * Sin(pa)
+	cpx# = (Len/2.0) * Cos(ya) * Cos(pa)
+	PositionEntity(spline\cp1, cpx#, cpy#, cpz#)
+	PositionEntity(spline\cp2, -cpx#, -cpy#, -cpz#)
+	BezierUpdatePoint(spline.bez)
+End Function
+
+Function BezierInit()
+	spline.bez = Last bez
+	pt2.bez = spline.bez
+	For spline.bez = Each bez
+		pt1.bez = pt2.bez
+		pt2.bez = spline.bez
+		BezierUpdateSegment(pt1,pt2)
+	Next
+End Function
+
+Function BezierHideAll()
+	For spline.bez = Each bez
+		EntityAlpha spline\cp1, 0
+		EntityAlpha spline\cp2, 0
+		EntityAlpha spline\cyl, 0
+	Next
+End Function
+
+Function BezierShowControl(ndx)
+	cnt = 0
+	For spline.bez = Each bez
+		If cnt = ndx
+			EntityAlpha spline\cp1, 255
+			EntityAlpha spline\cp2, 255
+			EntityAlpha spline\cyl, 255
+			Return
+		EndIf
+		cnt = cnt + 1
+	Next
+End Function
+
+Function IsBezierPoint(ent)
+	For spline.bez = Each bez
+		If spline\pt = ent Return True
+	Next
+	Return False
+End Function
+
+Function BezierListIndex(ent)
+	ndx = 0
+	For spline.bez = Each bez
+		If spline\pt = ent 
+			Return ndx
+		EndIf
+		If spline\cp1 = ent 
+			Return ndx
+		EndIf
+		If spline\cp2 = ent 
+			Return ndx
+		EndIf
+		ndx = ndx + 1
+	Next
+	Return -1
+End Function
+
+Function BezierControlIndex(ent)
+	For spline.bez = Each bez
+		If spline\cp1 = ent 
+			Return 1
+		EndIf
+		If spline\cp2 = ent 
+			Return 2
+		EndIf
+	Next
+	Return -1
+End Function
+
+Function BezierMovePoint(ndx, x#, y#, z#)
+	cnt = 0
+	spline.bez = Last bez
+	pre.bez = spline.bez
+	For spline.bez = Each bez
+		If cnt = ndx
+			; update point
+			spline\x = spline\x + x
+			spline\y = spline\y + y
+			spline\z = spline\z + z
+			BezierUpdatePoint(spline.bez)
+			cur.bez = spline.bez
+			spline = After spline
+			If spline = Null
+				spline.bez = First bez
+			EndIf
+			BezierUpdateSegment(pre, cur)
+			BezierUpdateSegment(cur, spline.bez)
+			Return
+		EndIf
+		pre.bez = spline.bez
+		cnt = cnt + 1
+	Next
+End Function
+
+Function BezierMoveControl(ndx, ctrl, x#, y#, z#)
+	cnt = 0
+	spline.bez = Last bez
+	pre.bez = spline.bez
+	For spline.bez = Each bez
+		If cnt = ndx
+			; update control
+			If ctrl = 1
+				; update cp1
+				x = x + EntityX(spline\cp1)
+				y = y + EntityY(spline\cp1)
+				z = z + EntityZ(spline\cp1)
+				PositionEntity(spline\cp1, x, y, z)
+				PositionEntity(spline\cp2, -x, -y, -z)
+			Else 
+				; update cp2
+				x = x + EntityX(spline\cp2)
+				y = y + EntityY(spline\cp2)
+				z = z + EntityZ(spline\cp2)
+				PositionEntity(spline\cp2, x, y, z)
+				PositionEntity(spline\cp1, -x, -y, -z)
+			EndIf
+			BezierUpdatePoint(spline.bez)
+			cur.bez = spline.bez
+			spline = After spline
+			If spline = Null
+				spline.bez = First bez
+			EndIf
+			BezierUpdateSegment(pre, cur)
+			BezierUpdateSegment(cur, spline.bez)
+			Return
+		EndIf
+		pre.bez = spline.bez
+		cnt = cnt + 1
+	Next
+End Function
+
+Function BezierUpdatePoint(pt.bez)
+	nx# = EntityX(pt\cp1)
+	ny# = EntityY(pt\cp1)
+	nz# = EntityZ(pt\cp1)
+	pa# = VectorPitch(nx,ny,nz)
+	ya# = VectorYaw(nx,ny,nz)
+	d# = Sqr(nx*nx + ny*ny + nz*nz)
+	RotateEntity(pt\cyl, pa+90, ya, 0)
+	ScaleEntity(pt\cyl,1,d,1)
+	PositionEntity(pt\pt, pt\x, pt\y, pt\z)
+End Function
+
+Function BezierUpdateSegment(pt1.bez, pt2.bez)
+	
+	Local lx#, ly#, lz#			; last point coords
+	Local inc#, t#, sec%		; loop control
+	Local nt#, nt2#, nt3#		; precomputed (1-t) factors
+	Local t2#, t3#				; precomputed (t) factors
+	Local p1px#, p1py#, p1pz#	; pt1 x/y/z
+	Local p1cx#, p1cy#, p1cz#	; pt1 control x/y/z
+	Local p2px#, p2py#, p2pz#	; pt2 x/y/z
+	Local p2cx#, p2cy#, p2cz#	; pt2 control x/y/z
+	Local x#, y#, z#			; bezier results
+	Local dx#, dy#, dz#			; distance from last point to current
+	Local dist#					; distance vector magnitude
+	Local pit#, yaw#			; pitch and yaw of segment
+	Local px#, py#, pz#			; centerpoint of current segment
+	Local nx#, ny#, nz#			; center point relative to base point
+	
+	DebugLog ""
+	DebugLog "starting " + pt1\pt + " " + pt2\pt
+	
+	lx = pt1\x
+	ly = pt1\y
+	lz = pt1\z
+	
+	inc = 1.0 / pt1\sec
+	t = inc
+	sec = 1
+	While t&lt;=1.0
+		
+		nt = 1.0-t
+		nt2 = nt * nt
+		nt3 = nt2 * nt
+		t2 = t * t
+		t3 = t2 * t
+		
+		p1px = pt1\x
+		p1py = pt1\y
+		p1pz = pt1\z
+		p1cx = EntityX(pt1\cp1) + p1px
+		p1cy = EntityY(pt1\cp1) + p1py
+		p1cz = EntityZ(pt1\cp1) + p1pz
+		;DebugLog "Pt1(x,y,z) Pc1(x,y,z) = " +p1px+" "+p1py+" "+p1pz+"      "+p1cx+" "+p1cy+" "+p1cz
+
+		p2px = pt2\x
+		p2py = pt2\y
+		p2pz = pt2\z
+		p2cx = EntityX(pt2\cp2) + p2px
+		p2cy = EntityY(pt2\cp2) + p2py
+		p2cz = EntityZ(pt2\cp2) + p2pz
+		;DebugLog "Pt2(x,y,z) Pc2(x,y,z) = " +p2px+" "+p2py+" "+p2pz+"      "+p2cx+" "+p2cy+" "+p2cz
+
+		x = p1px*nt3 + 3.0*p1cx*nt2*t + 3.0*p2cx*nt*t2 + p2px*t3
+		y = p1py*nt3 + 3.0*p1cy*nt2*t + 3.0*p2cy*nt*t2 + p2py*t3
+		z = p1pz*nt3 + 3.0*p1cz*nt2*t + 3.0*p2cz*nt*t2 + p2pz*t3
+		;DebugLog "t x y z = " + t + "      " + x + " " + y + " " + z		
+		
+		dx = x - lx
+		dy = y - ly
+		dz = z - lz
+		
+		;DebugLog "dx dy dz = " + dx + " " + dy + " " + dz
+		
+		dist = Sqr(dx*dx + dy*dy + dz*dz)
+		
+		pit = VectorPitch(dx,dy,dz)
+		yaw = VectorYaw(dx,dy,dz)
+		
+		;DebugLog "dist / pitch / yaw = " + dist + " / " + pit + " / " + yaw
+
+		px = lx + dx/2.0
+		py = ly + dy/2.0
+		pz = lz + dz/2.0
+		
+		;DebugLog "px py pz = " + px + " " + py + " " + pz
+		
+		nx = px-p1px
+		ny = py-p1py
+		nz = pz-p1pz
+		
+		;DebugLog "sec / nx ny nz = " + sec + " / " + nx + " " + ny + " " + nz
+		
+		seg = GetChild(pt1\piv, sec)
+		PositionEntity(seg, nx, ny, nz)
+		ScaleEntity(seg, 1, dist/2.0, 1)
+		RotateEntity(seg, pit+90, yaw, 0)
+		
+		lx=x
+		ly=y
+		lz=z
+		
+		t = t + inc
+		sec = sec + 1
+		
+	Wend	
+
+End Function
+
+</textarea><br><br>bezier.bb<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;**************************************************
+;*     3D Bezier Spline by John Barrett 2004      *
+;**************************************************
+;*       Email: john@...         *
+;**************************************************
+;*    Based on Jeppe Nielson's 2D Bezier code     *
+;*       Based on Wedoe´s bezier function         *
+;**************************************************
+
+Graphics3D 800,600,16,2
+SetBuffer BackBuffer()
+
+; Setup the lighting...
+AmbientLight 255,255,255
+
+; CAMERA PIVOT
+Global camera_pivot= CreatePivot()
+EntityRadius camera_pivot,0.1
+
+; Setup the camera.
+Global camera = CreateCamera(camera_pivot)
+
+CameraViewport(camera, 300,300,300,300)
+PositionEntity(camera_pivot, 0, 0, 0)
+PositionEntity(camera, 0, 5, 0)
+RotateEntity(camera, 90,0,0)
+
+Global camera_t = CreateCamera()
+CameraViewport(camera_t, 0,0,300,300)
+CameraProjMode camera_t, 2
+CameraZoom camera_t, 0.25
+PositionEntity(camera_t, 0, 10, 0)
+RotateEntity(camera_t, 90,0,0)
+
+Global camera_l = CreateCamera()
+CameraViewport(camera_l, 300,0,300,300)
+CameraProjMode camera_l, 2
+CameraZoom camera_l, 0.25
+PositionEntity(camera_l, -10, 0, 0)
+RotateEntity(camera_l, 0,270,0)
+
+Global camera_f = CreateCamera()
+CameraViewport(camera_f, 0,300,300,300)
+CameraProjMode camera_f, 2
+CameraZoom camera_f, 0.25
+PositionEntity(camera_f, 0, 0, -10)
+RotateEntity(camera_f, 0,0,0)
+
+Color 255, 255, 255
+
+Include "setcolor.bb"
+Include "bez.bb"
+
+BezierAdd(0,0,-1,0,0,1.5,8)
+BezierAdd(1,0,0,0,90,1.5,8)
+BezierAdd(0,0,1,0,180,1.5,8)
+BezierAdd(-1,0,0,0,270,1.5,8)
+
+BezierInit()
+
+; mouse x to view translation matrix
+mxtx = 1: mxty = 0: mxtz = 0
+; mouse y to view translation matrix
+mytx = 0: myty = 0: mytz = -1
+
+cursel = -1
+curbpt = -1
+curcpt = -1
+rotate = -1
+Repeat
+	If MouseDown(1)
+		If rotate = 1
+			mx = MouseXSpeed() * 0.5 + EntityYaw(camera_pivot)
+			my = MouseYSpeed() * 0.5 + EntityPitch(camera_pivot)
+			RotateEntity camera_pivot, my, mx, 0
+		Else
+			If mx &gt; 300 And my &gt; 300 And mx &lt;= 600
+				rotate = 1
+				MouseXSpeed()
+				MouseYSpeed()
+			EndIf
+		EndIf
+		If rotate = -1 And curbpt = -1 And curcpt = -1
+			; find out what is being clicked
+			mx = MouseX()
+			my = MouseY()
+			If (mx &lt;= 600 And my &lt;= 300) Or (mx &lt;= 300 And my&lt;= 600)
+				cam = camera_t
+				mxtx = 1: mxty = 0: mxtz = 0
+				mytx = 0: myty = 0: mytz = -1
+				If mx &lt;= 300 And my &gt; 300
+					cam = camera_f
+					mxtx = 1: mxty = 0: mxtz = 0
+					mytx = 0: myty = -1: mytz = 0
+					my = my - 300
+				EndIf
+				If mx &gt; 300 And my &lt;= 300
+					cam = camera_l
+					mxtx = 0: mxty = 0: mxtz = -1
+					mytx = 0: myty = -1: mytz = 0
+					mx = mx - 300
+				EndIf
+				ent = CameraPick(cam, mx, my)
+				ent = PickedEntity()
+				If ent &lt;&gt; 0
+					If IsBezierPoint(ent)
+						curbpt = BezierListIndex(ent)
+					Else
+						curbpt = BezierListIndex(ent)
+						curcpt = BezierControlIndex(ent)
+					EndIf
+					; setup to track movement next frame
+					MouseXSpeed()
+					MouseYSpeed()
+					cursel = curbpt
+					BezierHideAll()
+					BezierShowControl(cursel)
+				EndIf
+			Else ; outside any viewport
+				curbpt = -1
+				curcpt = -1
+			End If
+		Else
+			; move currently clicked entity
+			mx = MouseXSpeed()
+			my = MouseYSpeed()
+			tx = mxtx * mx + mytx * my
+			ty = mxty * mx + myty * my
+			tz = mxtz * mx + mytz * my
+			If curcpt = -1
+				; moving point
+				BezierMovePoint(curbpt, tx*0.025, ty*0.025, tz*0.025)
+			Else
+				; moving control
+				BezierMoveControl(curbpt, curcpt, tx*0.025, ty*0.025, tz*0.025)
+			EndIf
+		EndIf
+	Else
+		rotate = -1
+		curbpt = -1
+		curcpt = -1
+	EndIf
+		
+	RenderWorld
+	
+	Line 0,300,600,300
+	Line 300,0,300,600
+	Line 600,0,600,600
+	
+	Flip
+Until KeyDown(1)
+End
+
+</textarea> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

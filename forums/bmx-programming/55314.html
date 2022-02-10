@@ -1,0 +1,607 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Verlet Physics</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Verlet Physics</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Verlet Physics</a><br><br>
+<a name="615768"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SSS</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey everyone! I posted this in the maxphysics thread. However, since I know a lot of you don't frequent it I'm posting it here aswell. Anyway, I've tried to design several physics systems ad-hoc before and they've failed in one way or another. This one seems to work at the moment and I'll be adding collisions and whatever else one adds to a physics system. Anyway, I used the advanced character physics article to write this. I hope you guys like what i've done so far. I definately plan on improving it. Anyone can use it in whatever you guys want (even though its still new and not so good.) I know that it's not such a large accomplishment but I have been trying to get this working for a while so I'm pretty happy with the results :D.<br><br>Here's the vector library on which the code runs:<br><pre class=code>
+Strict
+Import BRL.Basic
+Type TVector
+	'VARIABLES
+	Field _x:Double, _y:Double
+	
+	'METHODS
+	Method New()
+		_x = 0
+		_y = 0
+	End Method
+	
+	Method Set(x:Double,y:Double)
+		_x=x
+		_y=y
+	End Method
+	
+	Method Get(x:Double Var, y:Double Var)
+		x = _x
+		y = _y
+	End Method
+	
+	Method Multiply:TVector(factor:Double)
+		_x:*factor
+		_y:*factor
+		Return Self
+	End Method
+	
+	Method Add:TVector(v:TVector,bself=False)
+		If bself = False
+			Return TVector.Create(_x+v._x,_y+v._y)
+		Else
+			_x:+v._x
+			_y:+v._y
+			Return Self 
+		EndIf
+	End Method
+	
+	Method Subtract:TVector(v:TVector,bself=False)
+		If bself = False
+			Return TVector.Create(_x-v._x,_y-v._y)
+		Else
+			_x:-v._x
+			_y:-v._y
+			Return Self
+		EndIf
+	End Method
+	
+	Method Copy:TVector()
+		Return Create(_x,_y)
+	End Method
+	
+	Method DotProduct:Double(v:TVector)
+		Return _x*v._x+_y*v._y
+	End Method
+	
+	Method AngleBetween:Double(v:TVector)
+		Return ACos(DotProduct(v)/(Magnitude()*v.Magnitude()))
+	EndMethod
+	
+	Method SetAngle(angle:Double)
+		Local mag:Double = Magnitude()
+		_x = Cos(angle)*mag
+		_y = -Sin(angle)*mag
+	End Method
+	
+	Method GetAngle:Double()
+		Return ATan2(-_y,_x)
+	End Method
+	
+	Method SetMagnitude(mag:Double)
+		Normalise()
+		_x:*mag
+		_y:*mag
+	End Method
+	
+	Method Magnitude:Double()
+		Return Sqr(_x^2+_y^2)
+	End Method
+	
+	Method MagSquared:Double()
+		Return _x^2+_y^2
+	End Method
+	
+	Method Normalise:TVector(bself=True)
+		Local m:Double = Magnitude()
+		If bself = False
+			Return TVector.Create(_x/m,_y/m)
+		Else
+			_x:/m
+			_y:/m
+		EndIf
+	End Method
+
+	Method PrintVector()
+		Print "(" + _x + "," + _y + ")"
+	End Method
+	
+	Method Draw(xoff,yoff)
+		DrawLine xoff,yoff,xoff+_x,yoff+_y
+	End Method
+
+	'FUNCTIONS
+	Function Create:TVector(x:Double,y:Double)
+		Local o:TVector = New TVector
+		o._x=x
+		o._y=y
+		Return o
+	End Function
+	
+	Function FromTo:TVector(v1:TVector,v2:TVector)
+		Return Create(v2._x-v1._x,v2._y-v2._x)
+	End Function
+End Type
+</pre><br><br>Here's the actual system:<br><pre class=code>
+Strict
+Framework BRL.Max2D
+Import BRL.D3D7Max2D
+Import BRL.Basic
+Import BRL.System
+Import BRL.Timer
+Import BRL.LinkedList
+Import "vector.bmx"
+
+Type TParticle
+	Global list:TList
+	Global bHidden=False
+	
+	Field oldposition:TVector
+	Field position:TVector
+	Field acceleration:TVector
+	Field mass#
+	Field bLocked
+	
+	Method New()
+		If Not list Then list = CreateList()
+		ListAddLast(list,Self)
+		position = TVector.Create(0,0)
+		oldposition = TVector.Create(0,0)
+		acceleration = TVector.Create(0,0)
+		mass# = 1
+		bLocked = False
+	End Method
+	
+	Method Push(Fx#,Fy#)
+		acceleration.Add(TVector.Create(Fx/mass,Fy/mass),True)
+	End Method
+	
+	Method Update()
+		If bLocked = False Then VerletIntegrator()
+		acceleration.set(0,0)
+	End Method
+	
+	Method VerletIntegrator:TVector(update = True)
+		If update = True
+			Local p:TVector = position.Copy()
+			Local op:TVector = oldposition.Copy()
+			Local accel:TVector = acceleration.Copy()
+			p.Multiply(2-TPhysicsEngine.Resistance)
+			op.Multiply(1-TPhysicsEngine.Resistance)
+			p.Subtract(op,True)
+			accel.Multiply(TPhysicsEngine.DeltaTime()^2)
+			p.Add(accel,True)
+			oldposition = position.Copy()
+			position = p.Copy()
+			Return Null
+		Else
+			Local p:TVector = position.Copy()
+			Local op:TVector = oldposition.Copy()
+			Local accel:TVector = acceleration.Copy()
+			p.Multiply(2-TPhysicsEngine.Resistance)
+			p.Subtract(op.Multiply(1-TPhysicsEngine.Resistance),True)
+			p.Add(accel.Multiply(TPhysicsEngine.DeltaTime()^2))
+			Return p
+		EndIf
+	End Method
+	
+	Method Lock()
+		bLocked = True
+	End Method
+		
+	Method Unlock()
+		blocked = False
+	End Method
+	
+	Method GetVelocity:TVector()
+		Local v:TVector = VerletIntegrator(False).Subtract(oldposition)
+		v.Multiply(1/Float(2*TPhysicsEngine.DeltaTime()))
+		Return v
+	End Method
+	
+	Method SetPosition(x#,y#)
+		position._x=x
+		position._y=y
+		oldposition = position.Copy()
+	End Method
+	
+	Method GetMomentumX:Float()
+		Return GetVelocity()._x*mass
+	End Method
+	
+	Method GetMomentumY:Float()
+		Return GetVelocity()._y*mass
+	End Method
+	
+	Method Render()
+		DrawRect position._x-5,position._y-5,10,10
+	End Method
+	
+	Function Create:TParticle(x#,y#,mass#=1,vx#=0,vy#=0)
+		Local o:TParticle = New TParticle
+		o.SetPosition(x,y)
+		o.mass = mass
+		o.acceleration.set(vx,vy)
+		Return o
+	End Function
+	
+	Function DoFrame()
+		For Local o:TParticle = EachIn(list)
+			o.Update()
+			If bHidden = False Then o.Render()
+		Next
+	End Function
+End Type
+
+Type TConstraint
+	Global list:TList
+	Global bHidden=False
+
+	Field _distance:Float
+	Field _p1:TParticle = Null
+	Field _p2:TParticle = Null
+	
+	Method New()
+		If Not list Then list = CreateList()
+		list.addlast(Self)
+	EndMethod
+	
+	Method Update()
+		Local vdistance:TVector
+		Local ndistance#
+		Local difference#
+		Local invmass1# = 1.0/_p1.mass
+		Local invmass2# = 1.0/_p2.mass
+		
+		vdistance = _p1.position.Subtract(_p2.position)
+		ndistance = vdistance.Magnitude()
+		difference = (ndistance-_distance)/(ndistance*(invmass1+invmass2))
+		If _p1.bLocked = False
+			_p1.position._x=_p1.position._x-vdistance._x*invmass1*difference
+			_p1.position._y=_p1.position._y-vdistance._y*invmass1*difference
+		EndIf
+		If _p2.bLocked = False
+			_p2.position._x=_p2.position._x+vdistance._x*invmass2*difference
+			_p2.position._y=_p2.position._y+vdistance._y*invmass2*difference
+		EndIf
+	End Method
+	
+	Method Render()
+		DrawLine _p1.position._x,_p1.position._y,_p2.position._x,_p2.position._y
+	End Method	
+	
+	Function Create:TConstraint(p1:TParticle,p2:TParticle,dist:Float = 0)
+		Local c:TConstraint = New TConstraint
+		c._p1 = p1
+		c._p2 = p2
+		If dist = 0
+			c._distance = Sqr((p1.position._x-p2.position._x)^2+(p1.position._y-p2.position._y)^2)
+		Else
+			c._distance = dist
+		EndIf
+		Return c
+	End Function
+	
+	Function DoFrame()
+		For Local o:TConstraint = EachIn(list)
+			o.Update()
+			If bHidden = False Then o.Render()
+		Next
+	End Function
+End Type
+
+	
+	
+
+Type TPhysicsEngine
+	Global Gravity:Float = 0.0
+	Global Resistance:Float = 0.0
+	Global LastTime = 0
+	Global ThisTime = 0
+	
+	Function DoFrame()
+		If ThisTime = 0 And LastTime = 0
+			ThisTime = MilliSecs()
+			LastTime = MilliSecs()
+		EndIf
+		
+		ThisTime = MilliSecs()
+		If TParticle.list
+			For Local p:TParticle = EachIn(TParticle.list)
+				p.acceleration._y:+Gravity
+				p.Update()
+				p.Render()
+			Next
+		EndIf
+		
+		If TConstraint.list
+			For Local c:TConstraint = EachIn(TConstraint.list)
+				c.Render()
+				c.Update()
+			Next
+		EndIf
+		LastTime = ThisTime
+	End Function
+	
+	Function DeltaTime#()
+		Return Float(ThisTime-LastTime)/1000.0
+	End Function
+End Type
+</pre><br><br>And here's a small example:<br><pre class=code>
+Graphics 640,480,0
+
+Local p:TParticle = TParticle.Create(640/2,480/2)
+Local p2:TParticle = TParticle.Create(640/2,480/2+50)
+Local p3:TParticle = TParticle.Create(640/2,480/2+100)
+Local p4:TParticle = TParticle.Create(640/2,480/2+150)
+Local p5:TParticle = TParticle.Create(640/2,480/2+200)
+Local p6:TParticle = TParticle.Create(640/2-25,480/2+225)
+Local p7:TParticle = TParticle.Create(640/2+25,480/2+225)
+TConstraint.Create(p,p2)
+TConstraint.Create(p2,p3)
+TConstraint.Create(p3,p4)
+TConstraint.Create(p4,p5)
+TConstraint.Create(p5,p6)
+TConstraint.Create(p6,p7)
+TConstraint.Create(p5,p7)
+p.Lock()
+Local x# =640/2
+Local y# =480/2
+TPhysicsEngine.Gravity = 70
+TPhysicsEngine.Resistance = 0.005
+	
+While Not KeyDown(KEY_ESCAPE)
+	Cls
+	If MouseDown(1) Then p5.SetPosition(MouseX(),MouseY())
+	TPhysicsEngine.DoFrame()
+	Flip
+Wend
+</pre> <br><br></td></tr></table><br>
+<a name="615812"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Can you explain in simple terms what this is all about? <br><br></td></tr></table><br>
+<a name="615818"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SSS</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey, I'll do my best to explain.<br>It's the begining of a physics engine in two dimensions. It will eventually allow objects that react as they would in the real world. For the moment, it does a lot to that extent but is missing some features.<br><br>For example, you could make some boxes and shoot them and they'd bounce around realistically. (well no collision yet but you WOULD be able to :P). You could make chains or cloth that blows in the wind. You could make space ships that interact realistically.<br><br>The code is pretty simple at the moment (to use). It works using a combination of particles and constraints. Particles are points that have masses, velocities, accelerations and positions. Constraints keep particles a specific distance apart. So, if you wanted to create a very simple ship (triangular in shape) you could use the following code:<br><br><pre class=code>
+Graphics 640,480
+'creates particles at the positions (x,y)
+Local top:TParticle = TParticle.Create(640/2,480/2-10)
+Local Left:TParticle = TParticle.Create(640/2-10,480/2+10)
+Local Right:TParticle = TParticle.Create(640/2+10,480/2+10)
+
+'create constraints between the particles to maintain the shape
+TConstraint.Create(top,Left)
+TConstraint.Create(top,Right)
+TConstraint.Create(Left,Right)
+
+While Not KeyDown(KEY_ESCAPE)
+	Cls
+	'get a vector from the top vertex to the mouse
+	Local x# = MouseX()-top.position._x
+	Local y# = MouseY()-top.position._y
+	'normalise the vector
+	x = x/Sqr(x^2+y^2)
+	y = y/Sqr(x^2+y^2)
+	
+	'push the ship towards the mouse
+	top.Push(20*x,20*y)
+	
+	'process the frame
+	TPhysicsEngine.DoFrame()
+	'flip
+	Flip
+Wend
+</pre><br>(btw this is a terrible model... i just made it in two minutes as an example. It really doesnt show what this is capable of, only how it works.) <br><br></td></tr></table><br>
+<a name="615860"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looking good so far! <br><br></td></tr></table><br>
+<a name="615865"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >REDi</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Most impressive! <br><br></td></tr></table><br>
+<a name="615878"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >poopla</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> I added you to my hotmail SSS, perhaps integrating my collision routines into a unified physics system will be a good way to go, we can talk if/when you come online sometime ^_^. <br><br></td></tr></table><br>
+<a name="615891"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SSS</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for all the positive feedback! <br><br>Mike, I think that's a great idea as collision routines are something I dread. My hotmail address (for msn) is littleboy55  AT hotmail D0T com (i know, i know but i made it when i was ten.) If you'd like my e-mail it's: Sam D0T Schoenholz AT gmail DOT com.<br><br>Hope to hear from you soon. <br><br></td></tr></table><br>
+<a name="616054"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >smilertoo</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> you appear to have forgotten includes or something, the program does nothing for me.<br><br>ah, the problem is youve presented it as 3 files when the 3rd part should be included in the 2nd part. <br><br></td></tr></table><br>
+<a name="616504"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SSS</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey everyone,<br><br>I got angular constraints working (i think.. dunno exactly how their supposed to act.) The creation is through the function TAngularConstraint.Create(p1,p2,p3,angle) where p1 is the pivot and p2, and p3 are the two particles that you want to separate by a certain angle. The angle is only needed if you dont want them at their rest angle but some other artificial angle. Anyway, without further adue here is the code:<br><br><pre class=code>
+Type TAngularConstraint
+	Global list:TList
+
+	Field _angle:Float
+	Field _p1:TParticle = Null
+	Field _p2:TParticle = Null
+	Field _p3:TParticle = Null
+	
+	Method New()
+		If Not list Then list = CreateList()
+		list.addlast(Self)
+	EndMethod
+	
+	Method Update()
+		Local t1:TVector = _p3.Position.Subtract(_p1.Position)
+		Local t2:TVector = _p2.Position.Subtract(_p1.Position)
+
+		Local Angle:Double = t1.AngleBetween(t2)
+		
+		If Angle&lt;_angle
+			Local da:Double = (_angle-Angle)/(2*(1.0/_p2.mass+1.0/_p3.mass))
+			If t1.GetAngle()&gt;t2.GetAngle()
+				t1.SetAngle(t1.GetAngle() + da/_p3.mass)
+				t2.SetAngle(t2.GetAngle() - da/_p2.mass)
+			Else
+				t1.SetAngle(t1.GetAngle() - da/_p3.mass)
+				t2.SetAngle(t2.GetAngle() + da/_p2.mass)
+			EndIf
+			t1.Add(_p1.Position,True)
+			t2.Add(_p1.Position,True)
+			
+			If _p3.bLocked = False
+				_p3.Position = t1
+			EndIf
+			If _p2.bLocked = False
+				_p2.Position = t2
+			EndIf
+		EndIf
+	End Method
+	
+	Method CalculateAngle:Double()
+		Local t1:TVector = _p3.Position.Subtract(_p1.Position)
+		Local t2:TVector = _p2.Position.Subtract(_p1.Position)
+		
+		Return t1.AngleBetween(t2)
+	End Method 		
+	
+	Function Create:TAngularConstraint (p1:TParticle,p2:TParticle,p3:TParticle,angle:Float = 0)
+		Local c:TAngularConstraint = New TAngularConstraint
+		c._p1 = p1
+		c._p2 = p2
+		c._p3 = p3
+		If angle = 0
+			c._angle = c.CalculateAngle()
+		Else
+			c._angle = angle
+		EndIf
+		Return c
+	End Function
+	
+	Function DoFrame()
+		For Local o:TAngularConstraint = EachIn(list)
+			o.Update()
+		Next
+	End Function
+End Type
+</pre><br><br>and an example<br><pre class=code>
+Graphics 640,480,0
+Local p:TParticle = TParticle.Create(640/2,480/2)
+Local p2:TParticle = TParticle.Create(640/2+25,480/2+50)
+Local p3:TParticle = TParticle.Create(640/2-25,480/2+50)
+TConstraint.Create(p,p2)
+TConstraint.Create(p,p3)
+p2.mass = 2
+Local l:TAngularConstraint = TAngularConstraint.Create(p,p2,p3)
+p.Lock()
+Local x# =640/2
+Local y# =480/2
+TPhysicsEngine.Gravity = 70
+TPhysicsEngine.Resistance = 0.005
+	
+While Not KeyDown(KEY_ESCAPE)
+	Cls
+	DrawText l.CalculateAngle(),10,10
+	If MouseDown(1) Then p2.SetPosition(MouseX(),MouseY())
+	TPhysicsEngine.DoFrame()
+	Flip
+Wend
+</pre> <br><br></td></tr></table><br>
+<a name="618428"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SSS</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> UPDATE!!<br>I managed to add breakable constraints when there is to much tension. Once again, I didn't follow an article, just used my own knowledge so it might not be strictly 'correct'. Anyway, here's the code<br><pre class=code>
+Type TConstraint
+	Global list:TList
+	Global bHidden=False
+
+	Field _distance:Float
+	Field _stress:Float = 0
+	Field _p1:TParticle = Null
+	Field _p2:TParticle = Null
+	
+	Method New()
+		If Not list Then list = CreateList()
+		list.addlast(Self)
+	EndMethod
+	
+	Method Update()
+		Local vdistance:TVector
+		Local ndistance#
+		Local difference#
+		Local invmass1# = 1.0/_p1.mass
+		Local invmass2# = 1.0/_p2.mass
+		
+		vdistance = _p1.position.Subtract(_p2.position)
+		ndistance = vdistance.Magnitude()
+		difference = (ndistance-_distance)/(ndistance*(invmass1+invmass2))
+		
+		If _stress&gt;0
+			If Stress()&gt;_stress Then list.remove(Self)
+		EndIf		
+			
+		If _p1.bLocked = False
+			_p1.position._x=_p1.position._x-vdistance._x*invmass1*difference
+			_p1.position._y=_p1.position._y-vdistance._y*invmass1*difference
+		EndIf
+		If _p2.bLocked = False
+			_p2.position._x=_p2.position._x+vdistance._x*invmass2*difference
+			_p2.position._y=_p2.position._y+vdistance._y*invmass2*difference
+		EndIf
+	End Method
+	
+	Method Stress:Float()
+		Local tofrom:TVector = TVector.FromTo(_p1.position,_p2.position)
+		Local acceleration1:TVector = TVector.FromTo(_p1.oldposition,_p1.position)
+		Local acceleration2:TVector = TVector.FromTo(_p2.oldposition,_p2.position)
+		
+		acceleration1.Multiply(_p1.mass)
+		acceleration2.Multiply(_p2.mass)
+		
+		Local angle:Float = 180.0-acceleration1.AngleBetween(tofrom)
+		Local Force1:Float = acceleration1.Magnitude()*Cos(angle)
+		angle:Float = 180.0-acceleration2.AngleBetween(tofrom)
+		Local Force2:Float = acceleration2.Magnitude()*Cos(angle)
+		Force1:+Force2
+		Return Force1
+	End Method
+	
+	Method Breakable(stress:Float)
+		_stress = stress
+	End Method
+	
+	Method Unbreakable()
+		_stress = 0
+	End Method
+	
+	Method Render()
+		DrawLine _p1.position._x,_p1.position._y,_p2.position._x,_p2.position._y
+	End Method	
+	
+	Function Create:TConstraint(p1:TParticle,p2:TParticle,dist:Float = 0)
+		Local c:TConstraint = New TConstraint
+		c._p1 = p1
+		c._p2 = p2
+		If dist = 0
+			c._distance = Sqr((p1.position._x-p2.position._x)^2+(p1.position._y-p2.position._y)^2)
+		Else
+			c._distance = dist
+		EndIf
+		Return c
+	End Function
+	
+	Function DoFrame()
+		For Local o:TConstraint = EachIn(list)
+			o.Update()
+			If bHidden = False Then o.Render()
+		Next
+	End Function
+End Type
+</pre><br><br>Here's an example,<br><pre class=code>
+Graphics 640,480,0
+Local p:TParticle = TParticle.Create(640/2,480/2)
+Local p2:TParticle = TParticle.Create(640/2,480/2+50)
+Local p3:TParticle = TParticle.Create(640/2,480/2+100)
+Local p4:TParticle = TParticle.Create(640/2,480/2+150)
+Local p5:TParticle = TParticle.Create(640/2,480/2+200)
+Local p6:TParticle = TParticle.Create(640/2-25,480/2+225)
+Local p7:TParticle = TParticle.Create(640/2+25,480/2+225)
+TConstraint.Create(p,p2)
+Local c:TConstraint = TConstraint.Create(p2,p3)
+c.Breakable(7)
+TConstraint.Create(p3,p4)
+TConstraint.Create(p4,p5)
+TConstraint.Create(p5,p6)
+TConstraint.Create(p6,p7)
+TConstraint.Create(p5,p7)
+p.Lock()
+Local x# =640/2
+Local y# =480/2
+TPhysicsEngine.Gravity = 70
+TPhysicsEngine.Resistance = 0.005
+Local pu# = 0
+While Not KeyDown(KEY_ESCAPE)
+	Cls
+	If p5.position._y&gt;=300 Then p5.Push(pu,0)
+	If KeyDown(KEY_UP) Then pu#:-50
+	TPhysicsEngine.DoFrame()
+	Flip
+Wend
+</pre><br>hold the upkey to make the thing go around faster until it breaks. I think it's quite cool.<br><br>[edit] just replace the previous constraint code [/edit] <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

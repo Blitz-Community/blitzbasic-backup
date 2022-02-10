@@ -1,0 +1,121 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Working with unchangeable C structs</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Working with unchangeable C structs</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Working with unchangeable C structs</a><br><br>
+<a name="1025844"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >plash</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I have a C struct that I cannot change, and is used in many of the functions I'm wrapping (so using a custom struct and converting/passing it around in all of those functions would be more of a chore than the current solution).<br>I've noted that types inside extern blocks have a 4 byte header (as I'm sure normal types have as well). This isn't much of an obstacle if I was able to control the form of the C struct, but I cannot (it would be a matter of adding an int padding field to the top of the struct).<br><br>Soo, is there some black magic I can do to get around this limitation without resorting to making a function to get/set each field in the C struct?<br>(Mind ye, playing with the pointer of the first field is <i>not</i> ideal, as there are many fields in the C struct.)<br><br>Some code to play with:<br><pre class=code>
+' teststruct.bmx
+
+SuperStrict
+
+Framework brl.blitz
+Import brl.standardio
+
+Import "teststruct.c"
+
+Extern "C"
+	Type CTest
+		Field a:Int
+		Field b:Int
+	End Type
+	Function bmx_create_test:CTest(a:Int, b:Int)
+	Function bmx_delete_test(ts:CTest)
+End Extern
+
+Local ts:CTest = bmx_create_test(1, 100)
+' This should print something like this: "ts.a = 100, ts.b = 6357097" (offset by four bytes!)
+Print("ts.a = " + ts.a + ", ts.b = " + ts.b)
+bmx_delete_test(ts)</pre><br><pre class=code>
+// teststruct.c
+
+typedef struct s_test {
+	//int _padding;  // Comment this out to see how it should work (we cannot do this with the actual C struct)
+	int a;
+	int b;
+} test_t;
+
+extern test_t* bmx_create_test(int a, int b) {
+	test_t* ts = malloc(sizeof(test_t));
+	ts-&gt;a = a;
+	ts-&gt;b = b;
+	return ts;
+}
+
+extern void bmx_delete_test(test_t* ts) {
+	if (ts) {
+		free(ts);
+	}
+}</pre> <br><br></td></tr></table><br>
+<a name="1025852"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Tommo</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> You can use a bmax type, and send the pointer of first member to your C function.<br><br><pre class=code>
+Type CTest
+	Field a:Int
+	Field b:Int
+	Method pointer:Byte Ptr()
+		Return VarPtr a
+	End Method
+End Type
+
+Local test:CTest = New CTest
+somecfunction(test.pointer())
+</pre><br><br>If it's not performance critical, you can also copy the data from C struct into a bmax object, like:<br><pre class=code>
+SuperStrict
+
+Framework brl.blitz
+Import brl.standardio
+
+Import "teststruct.c"
+
+Extern "C"
+	Function bmx_create_test:Byte Ptr(a:Int, b:Int)
+	Function bmx_delete_test(ts:Byte Ptr)
+End Extern
+
+Type CTest
+	Field a:Int
+	Field b:Int
+	
+	Function FromCStruct:CTest(s:Byte Ptr)
+		Local t:CTest = New CTest
+		MemCopy(VarPtr t.a, s, SizeOf(CTest))
+		Return t
+	End Function
+	
+End Type
+
+Local cs:Byte Ptr = bmx_create_test(1, 100)	
+Local ts:CTest = CTest.FromCStruct(cs)
+
+Print("ts.a = " + ts.a + ", ts.b = " + ts.b)
+bmx_delete_test(cs)
+</pre> <br><br></td></tr></table><br>
+<a name="1025859"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >plash</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Unfortunately, neither of those will work in my situation.<br>For the first one, I'm receiving a pointer, the library creates it for me. For the second, I would be maintaining two pointers (you cannot pass CTest back to the C functions because it's not an extern type), and I would end up with double the memory usage. <br><br></td></tr></table><br>
+<a name="1025864"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Tommo</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>you cannot pass CTest back to the C functions because it's not an extern type<br> <br></div><br>You can directly pass pointer of CTest.a back, just like the first example.<br>Or you can copy data back to the C struct before sending it to your C function. <br><br></td></tr></table><br>
+<a name="1025868"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >plash</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> You can directly pass pointer of CTest.a back, just like the first example. <br></div>Except you would have to have multiple functions for different levels of pointers (there are several functions that take SomeStruct**, which, indeed, you can do easily with extern types [e.g. SomeStruct Ptr]).<br><br><div class="quote"> Or you can copy data back to the C struct before sending it to your C function. <br></div>Again, memory.<br><br>EDIT: I suppose I should say that I'm trying to do it with the regular extern types, as there are many advantages to doing so (see above).<br>I'm really surprised BlitzMax doesn't change the way extern types are managed. I'll continue to use the extern types with field get/set functions on the C side until I can find a way around the issue, whilst retaining the benefits of extern types. <br><br></td></tr></table><br>
+<a name="1025874"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Tommo</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>Again, memory.<br> <br></div><br>It depends on what kind of struct you are dealing with.<br>If you don't need to keep the reference, it would be fine to use a bmax object as temporary accessor.<br>Actually I don't use this method often in my wrappers. The C getter/setter pattern is more solid.<br>And I think "Extern Type" is kind of useless...<br>:( <br><br></td></tr></table><br>
+<a name="1025878"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >plash</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> I do need to keep the reference. In fact, I need the reference to all of the structs, otherwise I wouldn't be able to call any functions.<br><br>Anyhow, I was wrapping OpenCV, but it seems that they still haven't fixed the plethora of issues that plagued me back two years ago. Plenty of applications (tvtime, xawtv, vlc) all show my camera feeds just fine, but OpenCV segfaults after about four seconds. <br><br></td></tr></table><br>
+<a name="1025888"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Difference</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Bruceys OpenCV works fine for me, as shown in contourfinder.bmx example.<br><br>It's part of his ofx.mod available at <a href="http://code.google.com/p/maxmods/source/checkout" target="_blank">http://code.google.com/p/maxmods/source/checkout</a> <br><br></td></tr></table><br>
+<a name="1025916"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Otus</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Use an Extern type and wrappers that correct the pointer. (The +4B is for class virtual function list with C++ to make Methods work.)<br><br>Something like...<br><pre class=code>Extern
+  Type TBlah
+    Field a:int
+  End Type
+  Function create_blah:TBlah(a:int)
+  Function use_blah(b:TBlah)
+End Extern</pre><br><pre class=code>void *create_blah(int a)
+{
+  struct blah *b = real_create_blah(a);
+  return (void*)b-1;
+}
+
+void use_blah(void *b)
+{
+  real_use_blah( (struct blah*)(b+1) );
+}</pre> <br><br></td></tr></table><br>
+<a name="1025921"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >plash</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Bruceys OpenCV works fine for me, as shown in contourfinder.bmx example. <br></div>I know he has an OpenFrameworks module, and it did not compile the last time I tried it. I also wanted a module with just OpenCV. I know the segfault is not my fault because the same program in C also segfaults.<br><br>EDIT:<br><div class="quote"> The +4B is for class virtual function list with C++ to make Methods work. <br></div>I wish there was a way to turn that off. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,989 @@
+<!DOCTYPE html><html lang="en" ><head ><title >BlitzMax MPlayer mod and frontend</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >BlitzMax MPlayer mod and frontend</h1><a href="forums.php" >Community Forums</a>/<a href="topics.php?forum=61" >Showcase</a>/<a href="#bottom" >BlitzMax MPlayer mod and frontend</a><br><br>
+<a name="612916"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TeaVirus</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi!  I've been playing around with using MPlayer to display video in a Max GUI for a project I'm working on.  This mod and frontend for MPlayer are the result so far.  I don't want to mess around with the front end any more (mainly wrote it for testing) so I thought I'd post it in case anyone else is interested in playing around with it.  It will play pretty much any media file you can throw at it as well as streaming content.  Also, I haven't used anything Win32 specific so I think it should work on OSX and Linux provided the proper mplayer executable.  Here's the mod:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+Module video.mplayer
+
+Import BRL.Hook
+Import BRL.Stream
+
+Const MP_MSG_DONE:String="DONE"
+Const MP_MSG_POSITION:String="POSITION"
+Const MP_MSG_LENGTH:String="LENGTH"
+Const MP_MSG_SIZE:String="SIZE"
+Const MP_MSG_DEBUG:String="DEBUG"
+
+Type TMPlayer
+	Global mplayerpath:String="c:\mplayer\mplayer.exe"
+	Global HookID:Int=AllocHookId()
+
+	Field stream:TStream	
+
+	Field debugLvl:Byte=2
+	Field debugMsg:String
+
+	Field Filename:String
+	Field Demuxer:String
+	Field Video_Format:String
+	Field Video_Bitrate:Int
+	Field Video_Width:Int
+	Field Video_Height:Int
+	Field Video_FPS:Float
+	Field Video_Aspect:Float
+	Field Audio_Codec:String
+	Field Audio_Format:Int
+	Field Audio_Bitrate:Int
+	Field Audio_Rate:Int
+	Field Audio_NCH:Int
+	Field Length:Float
+
+	Field TimePos:Float
+
+	Function Create:TMPlayer(url:String, hwnd:Int, ovlcolor:String)
+		Local this:TMPlayer=New TMPlayer
+
+		Local cmd:String="execute::"+TMPlayer.mplayerpath
+		cmd:+ " -identify -slave -colorkey "+ovlcolor+" -wid "+hwnd
+		cmd:+ " ~q"+url+"~q"
+
+'		this.Debug("Command Line: "+cmd)
+
+		this.stream=OpenStream(cmd)
+
+		If this.stream Then Return this
+		
+		Return Null
+	End Function
+
+	Method Close()
+		WriteCommand("quit")
+		If stream Then stream.close()
+	End Method
+
+
+	Method Pause()
+		WriteCommand("pause")
+	End Method
+
+	Method Stop()
+		WriteCommand("seek 0 1")
+		WriteCommand("pause")
+	End Method
+
+	Method SetVolume(value:Int)
+		WriteCommand("volume "+value+" 1")
+	End Method
+
+	Method VolumeUp(amount:Int)
+		WriteCommand("volume +"+amount)
+	End Method
+
+	Method VolumeDown(amount:Int)
+		WriteCommand("volume -"+amount)
+	End Method
+
+
+	Method GetPosTime()
+		WriteCommand("get_time_pos")
+	End Method
+
+	Method SetPositionTime(time:Float)
+		WriteCommand("seek "+time+" 2")
+	End Method
+
+	Method SetPosition(val:Int)
+		WriteCommand("seek "+val+" 1")
+	End Method
+
+
+	Method SetOSD(val:Int)
+		WriteCommand("osd "+val)
+	End Method
+
+	Method PrintOSD(txt:String)
+		WriteCommand("osd_show_text "+txt)
+	End Method
+
+
+	Method Width:Int()
+		Return Video_Width
+	End Method
+	
+	Method Height:Int()
+		Return Video_Height
+	End Method
+
+
+	Method SetDebugLevel(val:Int=1)
+		debugLvl=val
+	End Method
+	
+	Method GetDebugMsg:String()
+		If debugMsg &lt;&gt; "" Then Return debugMsg
+		debugMsg=""
+	End Method
+
+	Method Update:Int()
+		If stream=Null Then Return 1
+
+		While StreamSize(stream)
+			Local line:String=ReadLine(stream)
+
+			If line[..10]="Exiting..."
+				CloseStream(stream)
+				stream=Null
+				RunHooks(HookID, MP_MSG_DONE)
+
+				Return 0
+			EndIf
+
+			Select line[..(line.find("_"))]
+				Case "ID"
+					Select line[..(line.find("="))]
+						Case "ID_FILENAME"
+							Filename=line[(line.find("=")+1)..]
+						Case "ID_DEMUXER"
+							Demuxer=line[(line.find("=")+1)..]
+						Case "ID_DEMUXER"
+							Demuxer=line[(line.find("=")+1)..]
+						Case "ID_VIDEO_FORMAT"
+							Video_Format=line[(line.find("=")+1)..]
+						Case "ID_VIDEO_BITRATE"
+							Video_Bitrate=Int(line[(line.find("=")+1)..])
+						Case "ID_VIDEO_WIDTH"
+							Video_Width=Int(line[(line.find("=")+1)..])
+							If Video_Height Then RunHooks(HookID, MP_MSG_SIZE)
+						Case "ID_VIDEO_HEIGHT"
+							Video_Height=Int(line[(line.find("=")+1)..])
+							If Video_Width Then RunHooks(HookID, MP_MSG_SIZE)
+						Case "ID_VIDEO_FPS"
+							Video_FPS=Float(line[(line.find("=")+1)..])
+						Case "ID_VIDEO_ASPECT"
+							Video_Aspect=Float(line[(line.find("=")+1)..])
+						Case "ID_AUDIO_CODEC"
+							Audio_Codec=line[(line.find("=")+1)..]
+						Case "ID_AUDIO_FORMAT"
+							Audio_Format=Int(line[(line.find("=")+1)..])
+						Case "ID_AUDIO_BITRATE"
+							Audio_Bitrate=Int(line[(line.find("=")+1)..])
+						Case "ID_AUDIO_RATE"
+							Audio_Rate=Int(line[(line.find("=")+1)..])
+						Case "ID_AUDIO_NCH"
+							Audio_NCH=Int(line[(line.find("=")+1)..])
+						Case "ID_LENGTH"
+							Length=Float(line[(line.find("=")+1)..])
+							RunHooks(HookID, MP_MSG_LENGTH)
+					End Select
+					Debug(line)
+
+				Case "ANS"
+					Select line[..(line.find("="))]
+						Case "ANS_TIME_POSITION"
+							TimePos=Float(line[(line.find("=")+1)..])
+							RunHooks(HookID, MP_MSG_POSITION)
+					End Select
+					Debug("Answer: "+line,2)
+					
+				Default
+					Debug(line)
+
+			End Select
+		Wend
+		
+		Return 0
+	End Method
+
+	Method WriteCommand:Int(cmd:String)
+		If stream=Null Then Return 1
+
+		For Local i:Int=0 Until cmd.Length
+			WriteByte(stream, cmd[i])
+		Next
+		WriteByte(stream, 10)
+		
+		Debug("Command: "+cmd,2)
+
+		Return 0
+	End Method
+
+	Method Debug(msg:String, level:Int=1)
+		If level &lt;= debugLvl
+'			Print(msg)
+			debugMsg=msg
+			RunHooks(HookID, MP_MSG_DEBUG)
+		EndIf
+	End Method
+End Type
+</textarea><br><br>Frontend:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+Framework BRL.EventQueue
+Import BRL.Win32MaxGUI
+Import BRL.Timer
+Import pub.processstream
+Import video.mplayer
+
+Local mp:TMaxPlayer=TMaxPlayer.Create()
+
+While mp.Update()
+	WaitEvent
+Wend
+
+End
+
+' File Menu
+Const MNU_PLYFILE:Int=1
+Const MNU_PLYURL:Int=2
+Const MNU_QUIT:Int=10
+
+' View Menu
+Const MNU_ORIG:Int=200
+Const MNU_2X:Int=210
+Const MNU_3X:Int=220
+Const MNU_FULL:Int=230
+
+' Options Menu
+Const MNU_SETTINGS:Int=300
+Const MNU_LOG:Int=310
+
+' Help Menu
+Const MNU_ABOUT:Int=400
+
+' OSD Menu
+Const MNU_OSD_OFF:Int=500
+Const MNU_OSD_LVL2:Int=510
+Const MNU_OSD_LVL3:Int=520
+
+' Play File Extensions
+Const PLAY_EXTENSIONS:String="Video Files:avi,mpg,mpeg,wmv,asf,wma,mov,mp4;All Files:*"
+
+Const MP_VOLRANGE:Int=15
+
+Type TMaxPlayer
+	Field mplayer:TMPlayer
+
+	Field win:TGadget
+	Field pnlVideo:TGadget
+	Field pnlControl:TGadget
+	Field pnlSlider:TGadget
+	Field pnlSliderBar:TGadget
+	Field btnPlay:TGadget
+	Field btnStop:TGadget
+	Field sldVolume:TGadget
+
+	Field winLog:TGadget
+	Field txaLog:TGadget
+
+	Field winURL:TGadget
+	Field txtURL:TGadget
+	Field btnURLOK:TGadget
+	Field btnURLCancel:TGadget
+
+	Field mnuFile:TGadget
+	Field mnuView:TGadget
+	Field mnuOptions:TGadget
+	Field mnuHelp:TGadget
+	Field mnuOSD:TGadget
+
+	Field symfont:TGuiFont
+
+	Field updateTimer:TTimer
+	Field positionTimer:TTimer
+
+	Field paused:Byte
+
+	Field sliding:Int
+	
+	Field videoLength:Float
+	Field videoPos:Float
+
+	Function Create:TMaxPlayer()
+		Local this:TMaxPlayer=New TMaxPlayer
+
+		TMPlayer.mplayerpath=CurrentDir()+"/mplayer.exe"
+		Print TMPlayer.mplayerpath
+		AddHook(TMPlayer.HookID, this.Hook, this)
+
+		this.symfont=LoadGuiFont("Webdings", 8)
+
+		this.updateTimer=CreateTimer(16)
+		this.positionTimer=CreateTimer(2)
+
+		this.win=CreateWindow("MaxPlayer", (ClientWidth(Desktop())-400)/2, (ClientHeight(Desktop())-300)/2, 400, 300, Null, WINDOW_TITLEBAR|WINDOW_RESIZABLE|WINDOW_MENU)
+		SetMinWindowSize(this.win, 180, 180)
+
+			this.mnuFile=CreateMenu("&amp;File", 0, WindowMenu(this.win))
+				CreateMenu("Play &amp;File", MNU_PLYFILE, this.mnuFile, KEY_F,MODIFIER_COMMAND)
+				CreateMenu("Play &amp;URL", MNU_PLYURL, this.mnuFile, KEY_U,MODIFIER_COMMAND)
+				CreateMenu("&amp;Quit", MNU_QUIT, this.mnuFile, KEY_Q, MODIFIER_COMMAND)
+
+			this.mnuView=CreateMenu("&amp;View", 0, WindowMenu(this.win))
+			DisableGadget(this.mnuView)
+				CreateMenu("&amp;Original Size", MNU_ORIG, this.mnuView, KEY_O,MODIFIER_COMMAND)
+				CreateMenu("&amp;2X Size", MNU_2X, this.mnuView,KEY_2, MODIFIER_COMMAND)
+				CreateMenu("&amp;3X Size", MNU_3X, this.mnuView,KEY_3, MODIFIER_COMMAND)
+				CreateMenu("Full &amp;Screen", MNU_FULL, this.mnuView, KEY_S,MODIFIER_COMMAND)
+
+				this.mnuOSD=CreateMenu("OSD Level", 0, this.mnuView)
+					CreateMenu("Off", MNU_OSD_OFF, this.mnuOSD)
+					CreateMenu("Time", MNU_OSD_LVL2, this.mnuOSD)
+					CreateMenu("Time/Total", MNU_OSD_LVL3, this.mnuOSD)
+
+			this.mnuOptions=CreateMenu("Options", 0, WindowMenu(this.win))
+				CreateMenu("Settings", MNU_SETTINGS, this.mnuOptions, KEY_T, MODIFIER_COMMAND)
+				CreateMenu("View &amp;Log", MNU_LOG, this.mnuOptions, KEY_L, MODIFIER_COMMAND)
+
+			this.mnuHelp=CreateMenu("Help", 0, WindowMenu(this.win))
+				CreateMenu("&amp;About", MNU_SETTINGS, this.mnuHelp, KEY_A, MODIFIER_COMMAND)
+
+			UpdateWindowMenu(this.win)
+
+			this.pnlVideo=CreatePanel(0, 0, ClientWidth(this.win), ClientHeight(this.win)-30, this.win)
+'			this.pnlVideo=CreateCanvas(0, 0, ClientWidth(this.win), ClientHeight(this.win)-32, this.win)
+			SetGadgetLayout(this.pnlVideo, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED)
+			SetPanelColor(this.pnlVideo, 10, 10, 10)
+'			SetGraphics(CanvasGraphics(this.pnlVideo))
+'			SetClsColor(10, 10, 10)
+
+			this.pnlControl=CreatePanel(0, ClientHeight(this.win)-30, ClientWidth(this.win), 30, this.win)
+			SetGadgetLayout(this.pnlControl, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_CENTERED, EDGE_ALIGNED)
+			SetPanelColor(this.pnlControl, 180, 180, 180)
+			DisableGadget(this.pnlControl)
+
+				this.btnPlay=CreateButton("P", 0, 0, 30, 30, this.pnlControl)
+				SetGadgetLayout(this.btnPlay, EDGE_ALIGNED, EDGE_CENTERED, EDGE_ALIGNED, EDGE_ALIGNED)
+				SetGadgetFont(this.btnPlay, this.symfont)
+				
+				this.btnStop=CreateButton("S", 30, 0, 30, 30, this.pnlControl)
+				SetGadgetLayout(this.btnSTOP, EDGE_ALIGNED, EDGE_CENTERED, EDGE_ALIGNED, EDGE_ALIGNED)
+				
+				this.pnlSlider=CreatePanel(62, 2, ClientWidth(this.win)-124, 26, this.pnlControl, PANEL_BORDER|PANEL_ACTIVE)
+				SetGadgetLayout(this.pnlSlider, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED)
+				SetPanelColor(this.pnlSlider, 0, 0, 0)
+
+					this.pnlSliderBar=CreatePanel(0, 0, 1, ClientHeight(this.pnlSlider), this.pnlSlider, PANEL_ACTIVE)
+					SetGadgetLayout(this.pnlSliderBar, EDGE_ALIGNED, EDGE_RELATIVE, EDGE_ALIGNED, EDGE_ALIGNED)
+					SetPanelColor(this.pnlSliderBar, 0, 255, 0)
+
+				this.sldVolume=CreateSlider(ClientWidth(this.win)-60, 0, 60, 30, this.pnlControl, SLIDER_HORIZONTAL|SLIDER_TRACKBAR)
+				SetGadgetLayout(this.sldVolume, EDGE_CENTERED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED)
+				SetSliderRange(this.sldVolume, 0, MP_VOLRANGE)
+				SetSliderValue(this.sldVolume, MP_VOLRANGE)
+				
+		this.winLog=CreateWindow("MPlayer Log", 0, 0, 500, 600, Null, WINDOW_TITLEBAR|WINDOW_RESIZABLE|WINDOW_HIDDEN)
+			this.txaLog=CreateTextArea(0, 0, ClientWidth(this.winLog), ClientHeight(this.winLog), this.winLog, TEXTAREA_READONLY)
+			SetGadgetLayout(this.txaLog, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED)
+
+		this.winURL=CreateWindow("Enter URL", (ClientWidth(Desktop())-500)/2, (ClientHeight(Desktop())-112)/2, 500, 112, Null, WINDOW_TITLEBAR|WINDOW_HIDDEN)
+			this.txtURL=CreateTextField(10, 10, ClientWidth(this.winURL)-20, 20, this.winURL)
+			this.btnURLOK=CreateButton("OK", 10, 42, 60, 30, this.winURL)
+			this.btnURLCancel=CreateButton("Cancel", ClientWidth(this.winURL)-70, 42, 60, 30, this.winURL)
+
+		Return this
+	End Function
+
+	Method Close()
+		If mplayer Then mplayer.Close()
+		mplayer=Null
+
+		SetSliderValue(sldVolume, MP_VOLRANGE)
+		DisableGadget(pnlControl)
+		DisableGadget(mnuView)
+		UpdateWindowMenu(win)
+		SetSlider(0)
+
+		Delay 300
+	End Method
+
+	Function Hook:Object(id:Int, data:Object, context:Object)
+		Local mp:TMaxPlayer=TMaxPlayer(context)
+	
+		Select String(data)
+			Case MP_MSG_DONE
+				mp.Close()
+			
+			Case MP_MSG_POSITION
+				mp.VideoPos=mp.mplayer.TimePos
+			
+			Case MP_MSG_LENGTH
+				mp.VideoLength=mp.mplayer.Length
+
+			Case MP_MSG_SIZE
+				mp.SetVideoSize()
+
+			Case MP_MSG_DEBUG
+				AddTextAreaText(mp.txaLog, mp.mplayer.GetDebugMsg()+"~n")
+
+		End Select
+
+		Return data
+	End Function
+
+	Method Update:Byte()
+'		Cls
+'		Flip
+		
+'		If CurrentEvent.ToString()[..5]&lt;&gt;"Timer" Then Print CurrentEvent.ToString()
+
+		Select EventID()
+			Case EVENT_WINDOWCLOSE
+				Select EventSource()
+					Case win
+						Close()
+						Return False
+					
+					Case winLog
+						HideGadget(winLog)
+						
+					Case winURL
+						SetGadgetText(txtURL,"")
+						HideGadget(winURL)
+						EnableGadget(win)
+						
+				End Select
+
+			Case EVENT_TIMERTICK
+				Select EventSource()
+					Case updateTimer
+						If mplayer Then mplayer.Update()
+					
+					Case positionTimer
+						If mplayer And Not paused And Not sliding
+							mplayer.GetPosTime()
+							SetSlider((videoPos*ClientWidth(pnlSlider))/videoLength)
+						EndIf
+
+				End Select
+
+			Case EVENT_GADGETACTION
+				Select EventSource()
+					Case btnPlay
+						If mplayer Then mplayer.Pause()
+						paused=Not paused
+
+					Case btnStop
+						If mplayer Then mplayer.Stop()
+						SetSlider(0)
+						paused=True							
+
+					Case sldVolume
+						Local val:Int=EventData()
+						If val Then val=(val*100)/MP_VOLRANGE
+						mplayer.SetVolume(val)
+
+					Case btnURLOK
+						HideGadget(winURL)
+						EnableGadget(win)
+
+						If mplayer Then Close()
+						PlayFile(TextFieldText(txtURL))
+						paused=False
+
+
+					Case btnURLCancel
+						SetGadgetText(txtURL,"")
+						HideGadget(winURL)
+						EnableGadget(win)
+
+				End Select
+
+			Case EVENT_MOUSEDOWN
+				Select EventSource()
+					Case pnlSlider, pnlSliderBar
+						sliding=True
+						SetSlider(EventX())
+
+				End Select
+
+			Case EVENT_MOUSEMOVE
+				Select EventSource()
+					Case pnlSlider, pnlSliderBar
+						If sliding Then SetSlider(EventX())
+								
+				End Select
+			
+			Case EVENT_MOUSEUP
+				Select EventSource()
+					Case pnlSlider, pnlSliderBar
+						mplayer.SetPosition((EventX()*100)/ClientWidth(pnlSlider))
+						sliding=False
+
+				End Select
+
+			Case EVENT_MENUACTION
+				Select EventData()
+					Case MNU_PLYFILE
+						If mplayer Then Close()
+						PlayFile(RequestFile("Select Media File", PLAY_EXTENSIONS))
+						paused=False
+
+					Case MNU_PLYURL
+						DisableGadget(win)
+						ShowGadget(winURL)
+
+					Case MNU_QUIT
+						Close()
+						Return False
+
+					Case MNU_ORIG
+						SetVideoSize()
+						mplayer.PrintOSD("Original Size")
+												
+					Case MNU_2X
+						SetVideoSize(2)
+						mplayer.PrintOSD("2X Size")
+
+					Case MNU_3X
+						SetVideoSize(3)
+						mplayer.PrintOSD("3X Size")
+
+					Case MNU_OSD_OFF
+						mplayer.SetOSD(1)
+
+					Case MNU_OSD_LVL2
+						mplayer.SetOSD(2)
+
+					Case MNU_OSD_LVL3
+						mplayer.SetOSD(3)
+
+					Case MNU_LOG
+						ShowGadget(winLog)
+					
+				End Select
+		End Select
+
+		Return True
+	End Method
+
+	Method SetSlider(val:Int)
+		If val &lt; 1 Then val=1
+		If val &gt; ClientWidth(pnlSlider) Then val=ClientWidth(pnlSlider)
+
+		Local x:Int=GadgetX(pnlSliderBar)
+		Local y:Int=GadgetY(pnlSliderBar)
+		Local height:Int=GadgetHeight(pnlSliderBar)
+		SetGadgetShape(pnlSliderBar, x, y, val, height)
+
+		videoPos=(val*videoLength)/ClientWidth(pnlSlider)
+	End Method
+
+	Method PlayFile(file:String)
+		MPlayer=TMPlayer.Create(file, QueryGadget(pnlVideo, QUERY_HWND), "0x0A0A0A")
+		If mplayer
+			mplayer.SetDebugLevel(1)
+			EnableGadget(pnlControl)
+			EnableGadget(mnuView)
+			UpdateWindowMenu(win)
+		Else
+			Notify("Unable to open file: "+file,True)
+		EndIf
+	End Method
+
+	Method SetVideoSize(size:Int=1)
+		Local width:Int=(mplayer.Width()*size)+(GadgetWidth(win)-ClientWidth(win))
+		Local height:Int=(mplayer.Height()*size)+(GadgetHeight(win)-ClientHeight(win))+GadgetHeight(pnlControl)
+		Local x:Int=(ClientWidth(Desktop())-width)/2
+		Local y:Int=(ClientHeight(Desktop())-height)/2
+
+		SetGadgetShape(win, x, y, width, height)
+	End Method
+End Type
+</textarea><br><br>There are a couple requirements to get it working.  You'll need Fabian's handy pub.ProcessStream mod available here:<br><a href="http://www.blitzmax.com/codearcs/codearcs.php?code=1558" target="_blank">http://www.blitzmax.com/codearcs/codearcs.php?code=1558</a><br><br>And, of course, you'll need MPlayer available here:<br><a href="http://ftp5.mplayerhq.hu/mplayer/releases/win32/" target="_blank">http://ftp5.mplayerhq.hu/mplayer/releases/win32/</a><br><br>Wherever you end up placing the MPlayer executable, make sure you also have the sub folder that contains it's config file and OSD font or it acts strangely. <br><br></td></tr></table><br>
+<a name="633528"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ozak</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Finally got around to playing around with this interesting piece of code :)<br><br>Had to add the following to keep it from crashing :)<br><br><pre class=code>
+If (mp.mplayer &lt;&gt; Null) Then
+
+AddTextAreaText(mp.txaLog, mp.mplayer.GetDebugMsg()+"~n")
+
+End If
+</pre><br><br>I do however have a small question.<br>If I don't touch the app, the movie plays fine but if I press anything in the window it completely freezes to the point of nothing in the window being updated.<br>I think the app might hang somewhere waiting for events or something but I haven't been able to locate it.<br><br>Would be cool if anyone could see what is wrong :)<br><br>Thanks in advance <br><br></td></tr></table><br>
+<a name="633650"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TeaVirus</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmmm..  The only time I remember seeing strangeness like that was when I removed the mplayer config file.  I'll take a look at this when I get home from work tonight and see if I can come up with anything. <br><br></td></tr></table><br>
+<a name="788363"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >LAB[au]</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> After some try-outs under Linux, this works partially for me. I can compile it, I can select a file, it plays but I have no image just sound and I can't use any of the buttons/menu. I found that the update method doesn't happen, it appears like mplayer would suspend Blitzmax execution. Anybody could point me to a possible direction for using mplayer with MaxGUI? <br><br></td></tr></table><br>
+<a name="788523"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >LAB[au]</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Tested it and it works fine on windows.<br><br>On linux I managed to have the Gui working, you have to call mplayer in "-slave -quiet" mode, still no picture but I am working on it ... <br><br></td></tr></table><br>
+<a name="789317"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bremer</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> So you are getting both sound and video embedded in the window on Windows?<br><br>I can only get the sound to work, there is no video. And I had to cut out everything except the function that starts the video to get it to work at all. It keept saying that the video file could not load. <br><br></td></tr></table><br>
+<a name="790018"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >LAB[au]</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Probably a problem with the codecs ... otherwise yes I have everything running fine on windows, on Linux not ... I found out that's because an incorrect window handle but I found no time to go further. <br><br></td></tr></table><br>
+<a name="790020"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >LAB[au]</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here is the code of the frontend... for windows. I did some changes but I don't remember where...<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+SuperStrict
+
+Framework BRL.EventQueue
+Import BRL.Win32MaxGUI
+Import BRL.Timer
+Import fmc.processstream
+Import video.mplayer
+
+Local mp:TMaxPlayer=TMaxPlayer.Create()
+
+While mp.Update()
+	WaitEvent
+Wend
+
+End
+
+' File Menu
+Const MNU_PLYFILE:Int=1
+Const MNU_PLYURL:Int=2
+Const MNU_QUIT:Int=10
+
+' View Menu
+Const MNU_ORIG:Int=200
+Const MNU_2X:Int=210
+Const MNU_3X:Int=220
+Const MNU_FULL:Int=230
+
+' Options Menu
+Const MNU_SETTINGS:Int=300
+Const MNU_LOG:Int=310
+
+' Help Menu
+Const MNU_ABOUT:Int=400
+
+' OSD Menu
+Const MNU_OSD_OFF:Int=500
+Const MNU_OSD_LVL2:Int=510
+Const MNU_OSD_LVL3:Int=520
+
+' Play File Extensions
+Const PLAY_EXTENSIONS:String="Video Files:avi,mpg,mpeg,wmv,asf,wma,mov,mp4;All Files:*"
+
+Const MP_VOLRANGE:Int=15
+
+Type TMaxPlayer
+	Field mplayer:TMPlayer
+
+	Field win:TGadget
+	Field pnlVideo:TGadget
+	Field pnlControl:TGadget
+	Field pnlSlider:TGadget
+	Field pnlSliderBar:TGadget
+	Field btnPlay:TGadget
+	Field btnStop:TGadget
+	Field sldVolume:TGadget
+
+	Field winLog:TGadget
+	Field txaLog:TGadget
+
+	Field winURL:TGadget
+	Field txtURL:TGadget
+	Field btnURLOK:TGadget
+	Field btnURLCancel:TGadget
+
+	Field mnuFile:TGadget
+	Field mnuView:TGadget
+	Field mnuOptions:TGadget
+	Field mnuHelp:TGadget
+	Field mnuOSD:TGadget
+
+	Field symfont:TGuiFont
+
+	Field updateTimer:TTimer
+	Field positionTimer:TTimer
+
+	Field paused:Byte
+
+	Field sliding:Int
+	
+	Field videoLength:Float
+	Field videoPos:Float
+
+	Function Create:TMaxPlayer()
+		Local this:TMaxPlayer=New TMaxPlayer
+
+		TMPlayer.mplayerpath=CurrentDir()+"/mplayer.exe"
+		Print TMPlayer.mplayerpath
+		AddHook(TMPlayer.HookID, this.Hook, this)
+
+		this.symfont=LoadGuiFont("Webdings", 8)
+
+		this.updateTimer=CreateTimer(16)
+		this.positionTimer=CreateTimer(2)
+
+		this.win=CreateWindow("This is MPlayer in a window JD", (ClientWidth(Desktop())-400)/2, (ClientHeight(Desktop())-300)/2, 400, 300, Null, WINDOW_TITLEBAR|WINDOW_RESIZABLE|WINDOW_MENU)
+		SetMinWindowSize(this.win, 180, 180)
+
+			this.mnuFile=CreateMenu("&amp;File", 0, WindowMenu(this.win))
+				CreateMenu("Play &amp;File", MNU_PLYFILE, this.mnuFile, KEY_F,MODIFIER_COMMAND)
+				CreateMenu("Play &amp;URL", MNU_PLYURL, this.mnuFile, KEY_U,MODIFIER_COMMAND)
+				CreateMenu("&amp;Quit", MNU_QUIT, this.mnuFile, KEY_Q, MODIFIER_COMMAND)
+
+			this.mnuView=CreateMenu("&amp;View", 0, WindowMenu(this.win))
+			DisableGadget(this.mnuView)
+				CreateMenu("&amp;Original Size", MNU_ORIG, this.mnuView, KEY_O,MODIFIER_COMMAND)
+				CreateMenu("&amp;2X Size", MNU_2X, this.mnuView,KEY_2, MODIFIER_COMMAND)
+				CreateMenu("&amp;3X Size", MNU_3X, this.mnuView,KEY_3, MODIFIER_COMMAND)
+				CreateMenu("Full &amp;Screen", MNU_FULL, this.mnuView, KEY_S,MODIFIER_COMMAND)
+
+				this.mnuOSD=CreateMenu("OSD Level", 0, this.mnuView)
+					CreateMenu("Off", MNU_OSD_OFF, this.mnuOSD)
+					CreateMenu("Time", MNU_OSD_LVL2, this.mnuOSD)
+					CreateMenu("Time/Total", MNU_OSD_LVL3, this.mnuOSD)
+
+			this.mnuOptions=CreateMenu("Options", 0, WindowMenu(this.win))
+				CreateMenu("Settings", MNU_SETTINGS, this.mnuOptions, KEY_T, MODIFIER_COMMAND)
+				CreateMenu("View &amp;Log", MNU_LOG, this.mnuOptions, KEY_L, MODIFIER_COMMAND)
+
+			this.mnuHelp=CreateMenu("Help", 0, WindowMenu(this.win))
+				CreateMenu("&amp;About", MNU_SETTINGS, this.mnuHelp, KEY_A, MODIFIER_COMMAND)
+
+			UpdateWindowMenu(this.win)
+
+			this.pnlVideo=CreatePanel(0, 0, ClientWidth(this.win), ClientHeight(this.win)-30, this.win)
+'			this.pnlVideo=CreateCanvas(0, 0, ClientWidth(this.win), ClientHeight(this.win)-32, this.win)
+			SetGadgetLayout(this.pnlVideo, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED)
+			SetPanelColor(this.pnlVideo, 10, 10, 10)
+'			SetGraphics(CanvasGraphics(this.pnlVideo))
+'			SetClsColor(10, 10, 10)
+
+			this.pnlControl=CreatePanel(0, ClientHeight(this.win)-30, ClientWidth(this.win), 30, this.win)
+			SetGadgetLayout(this.pnlControl, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_CENTERED, EDGE_ALIGNED)
+			SetPanelColor(this.pnlControl, 180, 180, 180)
+			DisableGadget(this.pnlControl)
+
+				this.btnPlay=CreateButton("P", 0, 0, 30, 30, this.pnlControl)
+				SetGadgetLayout(this.btnPlay, EDGE_ALIGNED, EDGE_CENTERED, EDGE_ALIGNED, EDGE_ALIGNED)
+				SetGadgetFont(this.btnPlay, this.symfont)
+				
+				this.btnStop=CreateButton("S", 30, 0, 30, 30, this.pnlControl)
+				SetGadgetLayout(this.btnSTOP, EDGE_ALIGNED, EDGE_CENTERED, EDGE_ALIGNED, EDGE_ALIGNED)
+				
+				this.pnlSlider=CreatePanel(62, 2, ClientWidth(this.win)-124, 26, this.pnlControl, PANEL_BORDER|PANEL_ACTIVE)
+				SetGadgetLayout(this.pnlSlider, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED)
+				SetPanelColor(this.pnlSlider, 0, 0, 0)
+
+					this.pnlSliderBar=CreatePanel(0, 0, 1, ClientHeight(this.pnlSlider), this.pnlSlider, PANEL_ACTIVE)
+					SetGadgetLayout(this.pnlSliderBar, EDGE_ALIGNED, EDGE_RELATIVE, EDGE_ALIGNED, EDGE_ALIGNED)
+					SetPanelColor(this.pnlSliderBar, 0, 255, 0)
+
+				this.sldVolume=CreateSlider(ClientWidth(this.win)-60, 0, 60, 30, this.pnlControl, SLIDER_HORIZONTAL|SLIDER_TRACKBAR)
+				SetGadgetLayout(this.sldVolume, EDGE_CENTERED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED)
+				SetSliderRange(this.sldVolume, 0, MP_VOLRANGE)
+				SetSliderValue(this.sldVolume, MP_VOLRANGE)
+				
+		this.winLog=CreateWindow("MPlayer Log", 0, 0, 500, 600, Null, WINDOW_TITLEBAR|WINDOW_RESIZABLE|WINDOW_HIDDEN)
+			this.txaLog=CreateTextArea(0, 0, ClientWidth(this.winLog), ClientHeight(this.winLog), this.winLog, TEXTAREA_READONLY)
+			SetGadgetLayout(this.txaLog, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED)
+
+		this.winURL=CreateWindow("Enter URL", (ClientWidth(Desktop())-500)/2, (ClientHeight(Desktop())-112)/2, 500, 112, Null, WINDOW_TITLEBAR|WINDOW_HIDDEN)
+			this.txtURL=CreateTextField(10, 10, ClientWidth(this.winURL)-20, 20, this.winURL)
+			this.btnURLOK=CreateButton("OK", 10, 42, 60, 30, this.winURL)
+			this.btnURLCancel=CreateButton("Cancel", ClientWidth(this.winURL)-70, 42, 60, 30, this.winURL)
+
+		Return this
+	End Function
+
+	Method Close()
+		If mplayer Then mplayer.Close()
+		mplayer=Null
+
+		SetSliderValue(sldVolume, MP_VOLRANGE)
+		DisableGadget(pnlControl)
+		DisableGadget(mnuView)
+		UpdateWindowMenu(win)
+		SetSlider(0)
+
+		Delay 300
+	End Method
+
+	Function Hook:Object(id:Int, data:Object, context:Object)
+		Local mp:TMaxPlayer=TMaxPlayer(context)
+	
+		Select String(data)
+			Case MP_MSG_DONE
+				mp.Close()
+			
+			Case MP_MSG_POSITION
+				mp.VideoPos=mp.mplayer.TimePos
+			
+			Case MP_MSG_LENGTH
+				mp.VideoLength=mp.mplayer.Length
+
+			Case MP_MSG_SIZE
+				mp.SetVideoSize()
+
+			Case MP_MSG_DEBUG
+				AddTextAreaText(mp.txaLog, mp.mplayer.GetDebugMsg()+"~n")
+
+		End Select
+
+		Return data
+	End Function
+
+	Method Update:Byte()
+'		Cls
+'		Flip
+		
+'		If CurrentEvent.ToString()[..5]&lt;&gt;"Timer" Then Print CurrentEvent.ToString()
+
+		Select EventID()
+			Case EVENT_WINDOWCLOSE
+				Select EventSource()
+					Case win
+						Close()
+						Return False
+					
+					Case winLog
+						HideGadget(winLog)
+						
+					Case winURL
+						SetGadgetText(txtURL,"")
+						HideGadget(winURL)
+						EnableGadget(win)
+						
+				End Select
+
+			Case EVENT_TIMERTICK
+				Select EventSource()
+					Case updateTimer
+						If mplayer Then mplayer.Update()
+					
+					Case positionTimer
+						If mplayer And Not paused And Not sliding
+							mplayer.GetPosTime()
+							SetSlider((videoPos*ClientWidth(pnlSlider))/videoLength)
+						EndIf
+
+				End Select
+
+			Case EVENT_GADGETACTION
+				Select EventSource()
+					Case btnPlay
+						If mplayer Then mplayer.Pause()
+						paused=Not paused
+
+					Case btnStop
+						If mplayer Then mplayer.Stop()
+						SetSlider(0)
+						paused=True							
+
+					Case sldVolume
+						Local val:Int=EventData()
+						If val Then val=(val*100)/MP_VOLRANGE
+						mplayer.SetVolume(val)
+
+					Case btnURLOK
+						HideGadget(winURL)
+						EnableGadget(win)
+
+						If mplayer Then Close()
+						PlayFile(TextFieldText(txtURL))
+						paused=False
+
+
+					Case btnURLCancel
+						SetGadgetText(txtURL,"")
+						HideGadget(winURL)
+						EnableGadget(win)
+
+				End Select
+
+			Case EVENT_MOUSEDOWN
+				Select EventSource()
+					Case pnlSlider, pnlSliderBar
+						sliding=True
+						SetSlider(EventX())
+
+				End Select
+
+			Case EVENT_MOUSEMOVE
+				Select EventSource()
+					Case pnlSlider, pnlSliderBar
+						If sliding Then SetSlider(EventX())
+								
+				End Select
+			
+			Case EVENT_MOUSEUP
+				Select EventSource()
+					Case pnlSlider, pnlSliderBar
+						mplayer.SetPosition((EventX()*100)/ClientWidth(pnlSlider))
+						sliding=False
+
+				End Select
+
+			Case EVENT_MENUACTION
+				Select EventData()
+					Case MNU_PLYFILE
+						If mplayer Then Close()
+						PlayFile(RequestFile("Select Media File", PLAY_EXTENSIONS))
+						paused=False
+
+					Case MNU_PLYURL
+						DisableGadget(win)
+						ShowGadget(winURL)
+
+					Case MNU_QUIT
+						Close()
+						Return False
+
+					Case MNU_ORIG
+						SetVideoSize()
+						mplayer.PrintOSD("Original Size")
+												
+					Case MNU_2X
+						SetVideoSize(2)
+						mplayer.PrintOSD("2X Size")
+
+					Case MNU_3X
+						SetVideoSize(3)
+						mplayer.PrintOSD("3X Size")
+
+					Case MNU_OSD_OFF
+						mplayer.SetOSD(1)
+
+					Case MNU_OSD_LVL2
+						mplayer.SetOSD(2)
+
+					Case MNU_OSD_LVL3
+						mplayer.SetOSD(3)
+
+					Case MNU_LOG
+						ShowGadget(winLog)
+					
+				End Select
+		End Select
+
+		Return True
+	End Method
+
+	Method SetSlider(val:Int)
+		If val &lt; 1 Then val=1
+		If val &gt; ClientWidth(pnlSlider) Then val=ClientWidth(pnlSlider)
+
+		Local x:Int=GadgetX(pnlSliderBar)
+		Local y:Int=GadgetY(pnlSliderBar)
+		Local height:Int=GadgetHeight(pnlSliderBar)
+		SetGadgetShape(pnlSliderBar, x, y, val, height)
+
+		videoPos=(val*videoLength)/ClientWidth(pnlSlider)
+	End Method
+
+	Method PlayFile(file:String)
+		MPlayer=TMPlayer.Create(file, QueryGadget(pnlVideo, QUERY_HWND), "0x0A0A0A")
+		If mplayer
+			mplayer.SetDebugLevel(1)
+			EnableGadget(pnlControl)
+			EnableGadget(mnuView)
+			UpdateWindowMenu(win)
+		Else
+			Notify("Unable to open file: "+file,True)
+		EndIf
+	End Method
+
+	Method SetVideoSize(size:Int=1)
+		Local width:Int=(mplayer.Width()*size)+(GadgetWidth(win)-ClientWidth(win))
+		Local height:Int=(mplayer.Height()*size)+(GadgetHeight(win)-ClientHeight(win))+GadgetHeight(pnlControl)
+		Local x:Int=(ClientWidth(Desktop())-width)/2
+		Local y:Int=(ClientHeight(Desktop())-height)/2
+
+		SetGadgetShape(win, x, y, width, height)
+	End Method
+End Type
+</textarea> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

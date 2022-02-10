@@ -1,0 +1,1038 @@
+<!DOCTYPE html><html lang="en" ><head ><title >VERLET INTEGRATION - couple of questions</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >VERLET INTEGRATION - couple of questions</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >VERLET INTEGRATION - couple of questions</a><br><br>
+<a name="483379"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Stevie G</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I think I've had a look at almost every verlet system available in the code archives and decided to have a go myself.<br>The basics are relatively straighforward and I've managed to successfully create a rigid body tank <br>moving over a custom terrain using blitz collisions applied to each particle.<br><br><pre class=code>
+1---2
+!\!/!
+!-0-!
+!/!\!
+4---3
+</pre><br><br>Using a dual analogue control system ( one for each track ) it was quite simple to apply forces to the particles, <br>representing the tracks which had collided with the terrain (1&amp;4)+(2&amp;3) to allow for both rotation and forward / backward movement.<br><br>What I really want to be able to do is create more of a rear wheel drive car.  I know I can apply a forward force to <br>the rear wheels for straight movement - I'm kind of stumped with the steering?!<br><br>Assuming the body is moving upwards, where particle 0 is the centre of the body, particle 1&amp;2 <br>represent the front wheels, 3&amp;4 represent the rear wheels and particles 5-8 form the top of the body.<br><br>Note that the front wheels can turn @ +-45 degrees, local to the body - how do I simulate the steering / assuming <br>the force is only coming from the rear wheels?  Assume I have to distribute the force applied to the rear wheels on to<br>the front somehow?  I also need to be able to turn the car realistically when no acceleration is being applied and avoid<br>hovercraft style movement - i.e. apply greater friction to the particles not moving in the forward direction?<br><br>I'm not asking for anyone to write this for me - I'm really looking for some pointers from those who have done <br>something similar and overcome the intial headaches - so any help is much appreciated.<br><br><br><br>Cheers<br>Stevie <br><br></td></tr></table><br>
+<a name="483438"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Techlord</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Stevie G <br> <br>I gave Verlet Integration a go a while back. It merged BVH Boneset, Verlets, and Springs into one system. However, I placed it back on the burner.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">;ANIMATE CLASS SPRINGLET + BVH STRUCTURE
+;verlet + spring physics model system merge with bvh
+Const SPRINGLING_MAX_CONSTRIANTS=128
+Const SPRINGLING_MAX_NEIGHBORS%=128
+Const SPRINGLING_MAX_SPRINGLETS%=128
+Const SPRINGLING_MAX_ANCHOR_SPRINGLETS%=128
+
+Global warpgravity.vector=vectorNew() ;global warp gravity
+Global springlettempvector.vector=vectorNew()
+Global springletpositionvector.vector=vectorNew()
+Global springletdeltavector.vector=vectorNew() ;springletdeltavector
+Global springletforcedirection.vector=vectorNew();
+Global springletaccumulator.vector=vectorNew();
+Global springletresultant.vector=vectorNew()
+
+;============================
+;BVHFRAMESET
+;============================
+Const BVHFRAMESET_MAX=256
+Dim bvhframesetID.bvhframeset(BVHFRAMESET_MAX)
+Global bvhframesetIndex.stack=stackCreateIndex(4,BVHFRAMESET_MAX,1)
+Type bvhframeset
+	Field id%
+	Field typeid%
+	Field time#
+	Field springlets%
+	Field frames%
+	Field springletpointer%
+	Field framepointer%
+	Field bank%
+End Type
+
+Function bvhframesetStart.bvhframeset(filename$="Default")
+	;load from config
+	bvhframesetopen(filename$)
+	;setup
+	For this.bvhframeset=Each bvhframeset
+	Next
+	Return First bvhframeset
+End Function
+
+Function bvhframesetStop()
+	For this.bvhframeset=Each bvhframeset
+		bvhframesetDelete(this)
+	Next
+End Function
+
+Function bvhframesetNew.bvhframeset()
+	this.bvhframeset=New bvhframeset
+	this\id%=0
+	this\typeid%=0
+	this\time#=0.0
+	this\springlets%=0
+	this\frames%=0
+	this\springletpointer%=0
+	this\framepointer%=0
+	this\bank%=0
+	this\id%=StackPop(bvhframesetIndex.stack,1)
+	bvhframesetID(this\id)=this
+	Return this
+End Function
+
+Function bvhframesetDelete(this.bvhframeset)
+	bvhframesetID(this\id)=Null
+	StackPush(bvhframesetIndex.stack,this\id%,1)
+	FreeBank this\bank%
+	this\time#=0.0
+	Delete this
+End Function
+
+Function bvhframesetManager()
+	For this.bvhframeset=Each bvhframeset
+	Next
+End Function
+
+Function bvhframesetRead.bvhframeset(file)
+	this.bvhframeset=New bvhframeset
+	this\id%=ReadInt(file)
+	this\typeid%=ReadInt(file)
+	this\time#=ReadFloat(file)
+	this\springlets%=ReadInt(file)
+	this\frames%=ReadInt(file)
+	this\springletpointer%=ReadInt(file)
+	this\framepointer%=ReadInt(file)
+	this\bank%=ReadInt(file)
+	Return this
+End Function
+
+Function bvhframesetWrite(file,this.bvhframeset)
+	WriteInt(file,this\id%)
+	WriteInt(file,this\typeid%)
+	WriteFloat(file,this\time#)
+	WriteInt(file,this\springlets%)
+	WriteInt(file,this\frames%)
+	WriteInt(file,this\springletpointer%)
+	WriteInt(file,this\framepointer%)
+	WriteInt(file,this\bank%)
+End Function
+
+Function bvhframesetSave(filename$="Default")
+	file=WriteFile(filename$+".bvhframeset")
+	For this.bvhframeset= Each bvhframeset
+		bvhframesetWrite(file,this)
+	Next
+	CloseFile(file)
+End Function
+
+Function bvhframesetOpen(filename$="Default")
+	file=ReadFile(filename+".bvhframeset")
+	Repeat
+		bvhframesetRead(file)
+	Until Eof(file)
+	CloseFile(file)
+End Function
+
+Function bvhframesetCopy.bvhframeset(this.bvhframeset)
+	copy.bvhframeset=New bvhframeset
+	copy\id%=this\id%
+	copy\typeid%=this\typeid%
+	copy\time#=this\time#
+	copy\springlets%=this\springlets%
+	copy\frames%=this\frames%
+	copy\springletpointer%=this\springletpointer%
+	copy\framepointer%=this\framepointer%
+	copy\bank%=this\bank%
+	Return copy
+End Function
+
+Function bvhframesetMimic(mimic.bvhframeset,this.bvhframeset)
+	mimic\id%=this\id%
+	mimic\typeid%=this\typeid%
+	mimic\time#=this\time#
+	mimic\springlets%=this\springlets%
+	mimic\frames%=this\frames%
+	mimic\springletpointer%=this\springletpointer%
+	mimic\framepointer%=this\framepointer%
+	mimic\bank%=this\bank%
+End Function
+
+Function bvhframesetCreate.bvhframeset(typeid%,time#,springlets%,frames%,springletpointer%,framepointer%,bank%)
+	this.bvhframeset=bvhframesetNew()
+	this\typeid%=typeid%
+	this\time#=time#
+	this\springlets%=springlets%
+	this\frames%=frames%
+	this\springletpointer%=springletpointer%
+	this\framepointer%=framepointer%
+	this\bank%=bank%
+	Return this
+End Function
+
+Function bvhFrameSetLoad.bvhFrameSet(filename$,typeid=0)
+	filename$=filename$+".bvh"
+	file%=ReadFile(filename$)
+	If file% ;File Exist then process else exit
+		this.bvhframeset=bvhframesetNew() ;create new BVH FrameSet
+		this\typeid%=typeid%
+		Repeat
+			Select Upper(parseword$(file%,33,125))
+				Case "ROOT","JOINT" 
+					this\springlets%=this\springlets%+1
+					;DebugLog parseword$(file%,33,125);name
+				Case "MOTION"
+						;FRAMES
+						If Upper(parseword$(file%,33,125))="FRAMES:" this\frames%=parseword$(file%,48,57)
+						;create bank
+						this\bank=CreateBank(((this\springlets%+1)*12)*this\frames%)
+						;FRAME TIME
+						keyword$=Upper(parseword$(file%,33,122)) ;skip word FRAME
+						If Upper(parseword$(file%,33,122))="TIME:" this\time#=parseword$(file%,45,57) ;store word in dummy
+						;springlet CHANNEL DATA
+						Repeat							
+							PokeFloat(this\bank%,offset%,parseword$(file%,45,57))
+							offset%=offset%+4 
+						Until Eof(file)	
+				
+			End Select	
+		Until Eof(file%)			
+		CloseFile(file%)
+		Return this 		
+	EndIf 
+End Function
+
+;============================
+;SPRINGLINGFRAMESET
+;============================
+
+Const SPRINGLINGFRAMESET_MAX=256
+Dim springlingframesetID.springlingframeset(SPRINGLINGFRAMESET_MAX)
+Global springlingframesetIndex.stack=stackCreateIndex(4,SPRINGLINGFRAMESET_MAX,1)
+
+Type springlingframeset
+	Field id%
+	Field typeid%
+	Field springlets%
+	Field frames%
+	Field springletpointer%
+	Field framepointer%
+	Field bank%
+End Type
+
+Function springlingframesetNew.springlingframeset()
+	this.springlingframeset=New springlingframeset
+	this\id%=0
+	this\typeid%=0
+	this\springlets%=0
+	this\frames%=0
+	this\springletpointer%=0
+	this\framepointer%=0
+	this\bank%=0
+	this\id%=StackPop(springlingframesetIndex.stack,1)
+	springlingframesetID(this\id)=this
+	Return this
+End Function
+
+Function SpringlingFrameSetSave(filename$,springling.springling,bvhframeset.bvhframeset)
+	file%=WriteFile(filename$+".springletframeset")
+	DebugLog "Writing "+filename$+".springletframeset"
+	;springling.springlingframeset=springlingframesetNew() ;create new BVH FrameSet
+	;springling\typeid%=typeid%
+	;springling\bank=CreateBank(BankSize(bvhframeset\bank%))
+	
+	WriteInt(file%,BankSize(bvhframeset\bank%))
+	WriteShort(file%,bvhframeset\springlets%)
+	WriteShort(file%,bvhframeset\frames%)
+	
+	For frame = 0 To bvhframeset\frames%-1
+		;increment frameset frame pointer
+		bvhframeset\framepointer%=((bvhframeset\springlets%+1)*12)*frame%
+
+		;ROOT
+		springlet%=1
+		PositionEntity springling\springlet[springlet%]\entity%,PeekFloat(bvhframeset\bank%,bvhframeset\framepointer+springling\springlet[springlet]\channeltypeid[1]),PeekFloat(bvhframeset\bank,bvhframeset\framepointer+springling\springlet[springlet]\channeltypeid[2]),PeekFloat(bvhframeset\bank%,bvhframeset\framepointer%+springling\springlet[springlet]\channeltypeid%[3])
+		RotateEntity springling\springlet[springlet%]\entity%,PeekFloat(bvhframeset\bank%,bvhframeset\framepointer+springling\springlet[springlet]\channeltypeid[4]+12),PeekFloat(bvhframeset\bank,bvhframeset\framepointer+springling\springlet[springlet]\channeltypeid[5]+12),PeekFloat(bvhframeset\bank%,bvhframeset\framepointer%+springling\springlet[springlet]\channeltypeid%[6]+12)
+		
+		;Write to file
+		WriteFloat(file%,EntityX(springling\springlet[springlet%]\entity%,True))
+		WriteFloat(file%,EntityY(springling\springlet[springlet%]\entity%,True))
+		WriteFloat(file%,EntityZ(springling\springlet[springlet%]\entity%,True))	
+	
+		For loop = 24 To bvhframeset\springlets%*12 Step 12
+			;springlets
+			springlet%=springlet%+1
+			RotateEntity springling\springlet[springlet%]\entity%,PeekFloat(bvhframeset\bank%,bvhframeset\framepointer%+loop%+springling\springlet[springlet]\channeltypeid%[1]),PeekFloat(bvhframeset\bank,bvhframeset\framepointer+loop+springling\springlet[springlet]\channeltypeid[2]),PeekFloat(bvhframeset\bank,bvhframeset\framepointer%+loop%+springling\springlet[springlet%]\channeltypeid%[3])
+			
+			WriteFloat(file%,EntityX(springling\springlet[springlet%]\entity%,True))
+			WriteFloat(file%,EntityY(springling\springlet[springlet%]\entity%,True))
+			WriteFloat(file%,EntityZ(springling\springlet[springlet%]\entity%,True))					
+			
+		Next
+	
+	Next
+	CloseFile(file%)	
+	;Return springling
+End Function
+
+Function SpringlingFrameSetLoad.springlingframeset(filename$,springling.springling)
+	file%=ReadFile(filename$+".springletframeset")
+	DebugLog "Reading "+filename$+".springletframeset"
+	this.springlingframeset=springlingframesetNew() ;create new springling FrameSet
+	this\bank=CreateBank(ReadInt(file%))
+	this\springlets%=ReadShort(file%)
+	this\frames%=ReadShort(file%)
+	
+	Repeat		
+		PokeFloat(this\bank%,offset%,ReadFloat(file))
+		offset%=offset%+4
+	Until Eof(file)
+	
+	CloseFile(file%)	
+	Return this
+End Function
+
+;============================
+;SPRINGLET
+;============================
+Type springlet ;verlet+spring = springlet v2
+	Field typeid%
+	Field entity
+	Field parent.springlet
+	Field name$
+	Field open
+	Field channels
+	Field channeltypeid[6]
+	Field position.vector ;current position and offset; restlength = distance
+	Field angle.vector
+	Field old.vector; previous positions
+	Field velocity.vector; position velocity
+	Field force.vector 
+	Field mass#; mass
+	Field timestep#;
+End Type
+
+Function springletNew.springlet()
+	this.springlet=New springlet
+	this\typeid%=0
+	this\entity%=0
+	this\parent.springlet=Null 
+	this\name$=""
+	this\open%=0
+	this\channels%=0
+	this\position.vector=vectorNew()
+	this\angle.vector=vectorNew()
+	this\old.vector=vectorNew()
+	this\velocity.vector=vectorNew()
+	this\force.vector =vectorNew()
+	this\mass#=0.0
+	this\timestep#=0.0
+	Return this
+End Function
+
+Function springletDelete(this.springlet)
+	this\timestep#=0.0
+	this\mass#=0.0
+	vectorDelete(this\force.vector )
+	vectorDelete(this\velocity.vector)
+	vectorDelete(this\old.vector)
+	vectorDelete(this\angle.vector)
+	vectorDelete(this\position.vector)
+	this\name$=""
+	springletDelete(this\parent.springlet)
+	FreeEntity this\entity%
+	Delete this
+End Function
+
+Function springletRead.springlet(file)
+	this.springlet=New springlet
+	this\typeid%=ReadInt(file)
+	this\entity%=ReadInt(file)
+	this\parent.springlet=springletRead(file)
+	this\name$=ReadLine(file)
+	this\open%=ReadInt(file)
+	this\channels%=ReadInt(file)
+	For loop=1 To 6:this\channeltypeid[loop]=ReadByte(file):Next
+	this\position.vector=vectorRead(file)
+	this\angle.vector=vectorRead(file)
+	this\old.vector=vectorRead(file)
+	this\velocity.vector=vectorRead(file)
+	this\force.vector=vectorRead(file)
+	this\mass#=ReadFloat(file)
+	this\timestep#=ReadFloat(file)
+	Return this
+End Function
+
+Function springletWrite(file,this.springlet)
+	WriteInt(file,this\typeid%)
+	WriteInt(file,this\entity%)
+	springletWrite(file,this\parent.springlet)
+	WriteLine(file,this\name$)
+	WriteInt(file,this\open%)
+	WriteInt(file,this\channels%)
+	For loop=1 To 6:WriteByte(file,this\channeltypeid[loop]):Next
+	vectorWrite(file,this\position.vector)
+	vectorWrite(file,this\angle.vector)
+	vectorWrite(file,this\old.vector)
+	vectorWrite(file,this\velocity.vector)
+	vectorWrite(file,this\force.vector )
+	WriteFloat(file,this\mass#)
+	WriteFloat(file,this\timestep#)
+End Function
+
+;============================
+;SPRINGLETANCHOR
+;============================
+Type springletanchor
+	Field position.vector;
+	Field springlet.springlet
+End Type
+
+Function springletanchorNew.springletanchor()
+	this.springletanchor=New springletanchor
+	;this\springlet.springlet=springletNew()
+	this\position.vector=vectorNew()
+	Return this	
+End Function
+
+Function springletanchorRead.springletanchor(file)
+	this.springletanchor=New springletanchor
+	this\position.vector=vectorRead(file)
+	this\springlet.springlet=springletRead(file)
+	Return this
+End Function
+
+Function springletanchorWrite(file,this.springletanchor)
+	vectorWrite(file,this\position.vector)
+	springletWrite(file,this\springlet.springlet)
+End Function
+
+;============================
+;SPRINGLETCONSTRAINT
+;============================
+Type springletconstraint
+	Field springlet.springlet
+	Field neighbors%;
+	Field neighbor.springlet[SPRINGLING_MAX_NEIGHBORS%];
+	Field neighbordistance#[SPRINGLING_MAX_NEIGHBORS%];restlength#
+End Type
+
+Function springletconstraintCreate.springletconstraint(springlet1.springlet,springlet2.springlet,restlength#)
+	this.springletconstraint=New springletconstraint
+	this\springlet.springlet=springlet1
+	this\neighbors%=1	
+	this\neighbor[this\neighbors%]=springlet2
+	this\neighbordistance#[this\neighbors%]=restlength#*restlength#
+	Return this
+End Function 
+
+Function springletconstraintRead.springletconstraint(file)
+	this.springletconstraint=New springletconstraint
+	this\neighbors%=ReadInt(file)
+	For loop=1 To 128:this\neighbor.springlet[loop]=springletRead(file):Next
+	For loop=1 To 128:this\neighbordistance#[loop]=ReadFloat(file):Next
+	Return this
+End Function
+
+Function springletconstraintWrite(file,this.springletconstraint)
+	WriteInt(file,this\neighbors%)
+	For loop=1 To 128:springletWrite(file,this\neighbor.springlet[loop]):Next
+	For loop=1 To 128:WriteFloat(file,this\neighbordistance#[loop]):Next
+End Function
+
+;====================
+;SPRINGLING 
+;====================
+;Advance Character Physics, <a href="http://www.gamasutra.com/resource_guide/20030121/jacobson_pfv.htm" target="_blank">http://www.gamasutra.com/resource_guide/20030121/jacobson_pfv.htm</a>
+;Exploring Spring Models, <a href="http://www.gamasutra.com/features/20011005/oliveira_01.htm" target="_blank">http://www.gamasutra.com/features/20011005/oliveira_01.htm</a>
+Global SPRINGLING_MAX%=256
+Dim springlingID.springling(SPRINGLING_MAX%)
+Global springlingIndex.stack=stackCreateIndex(4,SPRINGLING_MAX%,1)
+
+Type springling
+	Field id%
+	Field typeid%
+	Field springletpivot.springlet;central pivot connects to entity
+	Field springlets%;
+	Field springlet.springlet[SPRINGLING_MAX_SPRINGLETS]; ;array of springling springlets
+	Field springletanchors%;
+	Field springletanchor.springletanchor[SPRINGLING_MAX_ANCHOR_SPRINGLETS]; ;stability  debug
+	Field springletconstraints%
+	Field springletconstraint.springletconstraint[SPRINGLING_MAX_CONSTRIANTS]
+	Field k_coef#;
+	Field energyloss#;
+	Field mass#;
+	Field tolerance#;
+	Field iterations%
+	Field gravity.vector ;local gravity
+End Type
+
+Function springlingNew.springling()
+	this.springling=New springling
+	this\gravity.vector=vectorNew()
+	this\id%=0
+	this\typeid%=0
+	this\springlets%=0
+	this\iterations%=1
+	this\id%=StackPop(springlingIndex.stack,1)
+	springlingID(this\id)=this
+	Return this
+End Function
+
+Function springlingDelete(this.springling)
+	springlingID(this\id)=Null
+	StackPush(springlingIndex.stack,this\id%,1)
+	;For loop = 1 To 256
+	;	If this\springlet[loop]&lt;&gt;Null springletdelete(this\springlet[loop])
+	;Next
+	Delete this
+End Function
+
+Function springlingRead.springling(file)
+	this.springling=New springling
+	this\id%=ReadInt(file)
+	this\typeid%=ReadInt(file)
+	this\springlets%=ReadInt(file)
+	For loop=1 To 128:this\springlet.springlet[loop]=springletRead(file):Next
+	this\springletanchors%=ReadInt(file)
+	For loop=1 To 128:this\springletanchor.springletanchor[loop]=springletanchorRead(file):Next
+	this\springletconstraints%=ReadInt(file)
+	For loop=1 To 128:this\springletconstraint.springletconstraint[loop]=springletconstraintRead(file):Next
+	this\k_coef#=ReadFloat(file)
+	this\energyloss#=ReadFloat(file)
+	this\mass#=ReadFloat(file)
+	this\tolerance#=ReadFloat(file)
+	this\iterations%=ReadInt(file)
+	this\gravity.vector=vectorRead(file)
+	Return this
+End Function
+
+Function springlingWrite(file,this.springling)
+	WriteInt(file,this\id%)
+	WriteInt(file,this\typeid%)
+	WriteInt(file,this\springlets%)
+	For loop=1 To 128:springletWrite(file,this\springlet.springlet[loop]):Next
+	WriteInt(file,this\springletanchors%)
+	For loop=1 To 128:springletanchorWrite(file,this\springletanchor.springletanchor[loop]):Next
+	WriteInt(file,this\springletconstraints%)
+	For loop=1 To 128:springletconstraintWrite(file,this\springletconstraint.springletconstraint[loop]):Next
+	WriteFloat(file,this\k_coef#)
+	WriteFloat(file,this\energyloss#)
+	WriteFloat(file,this\mass#)
+	WriteFloat(file,this\tolerance#)
+	WriteInt(file,this\iterations%)
+	vectorWrite(file,this\gravity.vector)
+End Function
+
+
+;----------------------------
+;SPRINGLING ANIMATION
+;----------------------------
+Function springlingbvhLoad.springling(filename$)
+	file%=ReadFile(filename$+".bvh")
+	If file% 
+		;creatE skeleton
+		this.springling=springlingnew()
+			Repeat ;iterate through data til "HIERARCHY"
+				keyword$=Upper(parseword$(file%,33,125));get word
+				Select keyword$
+					Case "ROOT","JOINT","END"
+						this\springlets%=this\springlets%+1;inc springlet ct
+						this\springlet[this\springlets%]=springletNew()
+						this\springlet[this\springlets%]\entity%=CreatePivot()
+						this\springlet[this\springlets%]\typeid%=Len(keyword$)-4 ;0=root, 1=springlet, -1=end
+						;If this\springlet[this\springlets%]\typeid%=0 Root.springlet=springlet.springlet ;root springlet
+						this\springlet[this\springlets%]\name$=parseword$(file%,32,123);name
+						;testing
+						;DebugLog "Reading "+keyword$+" "+this\springlet[this\springlets%]\name$
+						NameEntity this\springlet[this\springlets%]\entity%,this\springlet[this\springlets%]\name$
+						this\springlet[this\springlets%]\mass#=1.0
+						this\springlet[this\springlets%]\timestep#=.1						
+					Case "OFFSET"
+						;replaced offset with position
+						this\springlet[this\springlets%]\position\x#=parseword$(file%,45,57)
+						this\springlet[this\springlets%]\position\y#=parseword$(file%,45,57)
+						this\springlet[this\springlets%]\position\z#=parseword$(file%,45,57)
+	
+					Case "CHANNELS"
+						this\springlet[this\springlets%]\channels=parseword$(file%,46,57)
+						;parse channel Types
+						For loop=1 To this\springlet[this\springlets%]\channels
+							Select Upper(parseword$(file%,65,122))
+								Case "XPOSITION" this\springlet[this\springlets%]\channeltypeid[loop]=0
+								Case "YPOSITION" this\springlet[this\springlets%]\channeltypeid[loop]=4
+								Case "ZPOSITION" this\springlet[this\springlets%]\channeltypeid[loop]=8
+								Case "XROTATION" this\springlet[this\springlets%]\channeltypeid[loop]=0
+								Case "YROTATION" this\springlet[this\springlets%]\channeltypeid[loop]=4
+								Case "ZROTATION" this\springlet[this\springlets%]\channeltypeid[loop]=8
+							End Select
+						Next
+						
+						;order
+						Restore bvhRotationOrder
+						Read channel1%,channel2%,channel3%,x%,y%,z%
+						For loop = 1 To 2
+							If this\springlet[this\springlets%]\channeltypeid[1]=channel1% And this\springlet[this\springlets%]\channeltypeid[2]=channel2% And this\springlet[this\springlets%]\channeltypeid[3]=channel3%
+								this\springlet[this\springlets%]\channeltypeid[1]=x%
+								this\springlet[this\springlets%]\channeltypeid[2]=y%
+								this\springlet[this\springlets%]\channeltypeid[3]=z%	
+							EndIf						
+							If this\springlet[this\springlets%]\channeltypeid[4]=channel1 And this\springlet[this\springlets%]\channeltypeid[5]=channel2 And this\springlet[this\springlets%]\channeltypeid[6]=channel3
+								this\springlet[this\springlets%]\channeltypeid[4]=x%
+								this\springlet[this\springlets%]\channeltypeid[5]=y%
+								this\springlet[this\springlets%]\channeltypeid[6]=z%	
+							EndIf
+						Next
+								
+		
+					Case "{"
+						this\springlet[this\springlets%]\open=True ;open position springlet hieararchy
+						;locate parentspringlet by transversing springlet hieararchy backwards Until parent (open springlet) is found
+						Parentspringlet.springlet=this\springlet[this\springlets%]	;make parentspringlet equal to position springlet
+						Repeat
+							If Not Parentspringlet=First springlet Parentspringlet=Before Parentspringlet ;if typeid not equal to root then tranverse hieararchy
+							If  Parentspringlet\Open this\springlet[this\springlets%]\Parent=Parentspringlet
+						Until Parentspringlet\Open
+	
+					Case "}"
+						this\springlet[this\springlets%]\Open=False ;close position springlet
+						;Find Parentspringlet
+						For loop = 1 To this\springlets%
+							If this\springlet[loop]=this\springlet[this\springlets%]\parent.springlet
+								this\springlet[this\springlets%]=this\springlet[loop] ;make parentspringlet position springlet
+								Exit
+							EndIf
+						Next
+				End Select
+	
+			Until keyword$="MOTION"
+	
+			CloseFile(file%);close file
+		EndIf
+		
+		;correct end sites, duplicates
+		springling2.springling=springlingNew()
+		For loop=1 To this\springlets%
+			duplicate=False
+			For loop2=1 To springling2\springlets
+				If this\springlet[loop]\name$=springling2\springlet[loop2]\name$
+					duplicate=True
+					Exit
+				EndIf
+			Next
+			If Not duplicate
+				springling2\springlets%=springling2\springlets%+1
+				springling2\springlet[springling2\springlets%]=this\springlet[loop]
+				If loop&gt;1
+					springling2\springletconstraints%=springling2\springletconstraints%+1
+					springling2\springletconstraint[springling2\springletconstraints%]=springletconstraintCreate(springling2\springlet[springling2\springlets%],springling2\springlet[springling2\springlets%]\parent,vectorAbsHigher#(springling2\springlet[springling2\springlets%]\position))
+					EntityParent(springling2\springlet[springling2\springlets%]\entity,springling2\springlet[springling2\springlets%]\parent\entity)
+				EndIf	
+			EndIf
+		Next
+		
+		For loop = 1 To  springling2\springlets%
+			TranslateEntity springling2\springlet[loop]\entity,springling2\springlet[loop]\position\x#,springling2\springlet[loop]\position\y#,springling2\springlet[loop]\position\z#
+		Next
+		springlingDelete(this)
+		;adjust pointers
+		springling2\tolerance#=0.0000000005
+		springling2\k_coef#=.30;
+		springling2\energyloss#=.75;
+		springling2\mass#=1.0;
+		springling2\gravity\y#=-1.5;global gravity modifier
+		Return springling2
+End Function
+
+Function springlingBind(this.springling,parent%)
+	children%=CountChildren(parent%)
+	For loop = 1 To children%
+		child%=GetChild (parent%,loop)
+		name$=EntityName$(child%)
+		DebugLog name$
+		;bind
+		For loop1 = 1 To this\springlets
+			If name$=this\springlet[loop1]\name$
+				;DebugLog "Child:"+name$+" binded to Skeleton:"+this\springlet[loop1]\name$
+				this\springlet[loop1]\entity=child%
+			EndIf
+		Next
+		springlingBind(this,child%)
+	Next
+End Function	
+
+Function springlingBVHAnimateNext(this.springling,bvhframesetIndex%,frame%)
+	;increment frameset frame pointer
+	;this.springling=First springling;(this\skeletonid)testing
+	bvhframeset.bvhframeset=bvhframesetID(bvhframesetIndex)
+	bvhframeset\framepointer=((bvhframeset\springlets+1)*12)*frame%
+	;ROOT
+	springlet%=1
+	PositionEntity this\springlet[springlet%]\entity%,PeekFloat(bvhframeset\bank,bvhframeset\framepointer+this\springlet[springlet]\channeltypeid[1]),PeekFloat(bvhframeset\bank,bvhframeset\framepointer+this\springlet[springlet]\channeltypeid[2]),PeekFloat(bvhframeset\bank,bvhframeset\framepointer+this\springlet[springlet]\channeltypeid[3])
+	RotateEntity this\springlet[springlet%]\entity%,PeekFloat(bvhframeset\bank,bvhframeset\framepointer+this\springlet[springlet]\channeltypeid[4]+12),PeekFloat(bvhframeset\bank,bvhframeset\framepointer+this\springlet[springlet]\channeltypeid[5]+12),PeekFloat(bvhframeset\bank,bvhframeset\framepointer+this\springlet[springlet]\channeltypeid[6]+12)	
+	this\springlet[springlet%]\position\x#=EntityX(this\springlet[springlet%]\entity%,True)
+	this\springlet[springlet%]\position\y#=EntityY(this\springlet[springlet%]\entity%,True)
+	this\springlet[springlet%]\position\z#=EntityZ(this\springlet[springlet%]\entity%,True)
+	For loop = 24 To bvhframeset\springlets%*12 Step 12
+		;springlets
+		springlet%=springlet%+1
+		RotateEntity this\springlet[springlet%]\entity%,PeekFloat(bvhframeset\bank,bvhframeset\framepointer+loop+this\springlet[springlet]\channeltypeid[1]),PeekFloat(bvhframeset\bank,bvhframeset\framepointer+loop+this\springlet[springlet]\channeltypeid[2]),PeekFloat(bvhframeset\bank,bvhframeset\framepointer+loop+this\springlet[springlet]\channeltypeid[3])
+		this\springlet[springlet%]\position\x#=EntityX(this\springlet[springlet%]\entity%,True)
+		this\springlet[springlet%]\position\y#=EntityY(this\springlet[springlet%]\entity%,True)
+		this\springlet[springlet%]\position\z#=EntityZ(this\springlet[springlet%]\entity%,True)
+	Next
+End Function
+
+Function springlingAnimateNext(this.springling,springlingframesetIndex%,frame%)
+	;increment frameset frame pointer
+	springlingframeset.springlingframeset=springlingframesetID(springlingframesetIndex)
+	springlingframeset\framepointer=((springlingframeset\springlets)*12)*frame%
+	For loop = 0 To (springlingframeset\springlets-1)*12 Step 12
+		springlet%=springlet%+1
+		vectorMimic(this\springlet[springlet%]\old,this\springlet[springlet%]\position)
+		this\springlet[springlet%]\position\x#=PeekFloat(springlingframeset\bank,springlingframeset\framepointer+loop)
+		this\springlet[springlet%]\position\y#=PeekFloat(springlingframeset\bank,springlingframeset\framepointer+loop+4)
+		this\springlet[springlet%]\position\z#=PeekFloat(springlingframeset\bank,springlingframeset\framepointer+loop+8)
+	Next
+End Function
+
+;----------------------------
+;SPRINGLING VERLET PHYICS
+;----------------------------
+Function springlingVerletCreate.springling(springlets,x#,y#,z#)
+	this.springling=springlingNew()  
+	this\springlets=springlets
+	For i=1 To this\springlets
+		this\springlet.springlet[i]=springletNew()
+		this\springlet[i]\position\x#=x#
+		this\springlet[i]\position\y#=y#
+		this\springlet[i]\position\z#=z#
+		this\springlet[i]\mass#=1.0
+		this\springlet[i]\timestep#=.1
+	Next
+	vectorSet(this\gravity,0,-1.5,0) 
+	Return this
+End Function
+
+;springlet verlet integration Step
+Function  springlingVerletIntegrator(this.springling) 
+   For i=1 To this\springlets
+		;temp=old
+		vectorMimic(springlettempvector,this\springlet[i]\position)
+		;x = (x+(x-oldx)) + (a*fTimeStep#*fTimeStep#)  ;a=F/m acceleration=Force/mass
+		vectorAdd(vectorAdd(this\springlet[i]\position,vectorSubtract2(springletpositionvector,this\springlet[i]\position,this\springlet[i]\old)),vectorScalarMultiply(this\springlet[i]\force,this\springlet[i]\timestep#*this\springlet[i]\timestep#))
+		;oldx=temp
+		vectorMimic(this\springlet[i]\old,springlettempvector);
+   Next
+End Function
+
+; This Function should accumulate forces For Each springlet
+Function springlingVerletAccumulateForces(this.springling)
+	; All springlets are influenced by gravity
+	For i=1 To this\springlets
+		vectorMimic(this\springlet[i]\force,this\gravity);this\springlet[i]\gravity)
+	Next	
+End Function 
+
+; Here springletconstraints should be satisfied
+Function springlingVerletSatisfyConstraints(this.springling)
+	For j=1 To this\iterations%
+		;C1
+		For loop=1 To this\springlets
+			this\springlet[loop]\position=vectorScalarMin(vectorScalarMax(this\springlet[loop]\position,100),0);
+		Next
+		For loop=1 To this\springletconstraints%
+			For loop1= 1 To this\springletconstraint[this\springletconstraints%]\neighbors%
+				;C2
+				;Pseudo-code For satisfying (C2) using sqrt approximation
+				;delta = x2-x1;
+				vectorSubtract2(springletdeltavector,this\springletconstraint[loop]\neighbor[loop1]\position,this\springletconstraint[loop]\springlet\position)
+				;delta = delta * restlength*restlength/(dotproduct(delta)+restlength*restlength)-0.5;
+				;Note that delta is a vector so delta*delta is actually a dot product. With restlength=100 the above pseudo-code will push apart Or pull together the springlets such that they once more attain the correct distance of 100 between them. Again we may think of the situation as If a very stiff spring with rest length 100 has been inserted between the springlets such that they are instantly placed correctly.
+				;restlength#=restlength#^2
+				vectorScalarMultiply(springletdeltavector,this\springletconstraint[loop]\neighbordistance#[loop1]/(vectorDotProduct(springletdeltavector,springletdeltavector)+this\springletconstraint[loop]\neighbordistance#[loop1])-0.5)
+				;x1 -= delta;
+				vectorSubtract(this\springletconstraint[loop]\springlet\position,springletdeltavector)	
+				;x2 += delta;
+				vectorAdd(this\springletconstraint[loop]\neighbor[loop1]\position,springletdeltavector)
+			Next
+		Next
+	Next
+End Function
+
+Function springlingVerletTimeStep(this.springling)
+   springlingVerletAccumulateForces(this);
+   springlingVerletIntegrator(this);
+   springlingVerletSatisfyConstraints(this);
+End Function
+
+;----------------------------
+;SPRINGLING SPRING PHYICS
+;----------------------------
+Function springlingSpringStringCreate.springling(distance#, springlets%, k_coef#, energyloss#, mass#, gravity#)
+	;If ((distance# &lt; 0.005) Or (springlets% &lt; 3)) Return Null
+	this.springling=springlingNew();
+	;adjust pointers
+	this\tolerance#=0.0000000005
+	this\k_coef#=k_coef#;
+	this\energyloss#=energyloss#;
+	this\mass#=mass#;
+	this\springlets%=springlets%
+	this\gravity\y#=gravity#;global gravity modifier
+	;setup springlets position aligned with the xz+axis
+	For loop=1 To springlets
+		this\springlet.springlet[loop]=springletNew()
+    	this\springlet[loop]\position\x#=distance#*loop;
+		this\springlet[loop]\timestep#=.1
+	Next
+	;connect springlets And setup the inertial x# distances
+	;far Left springletconstraints
+	this\springletconstraints%=this\springletconstraints%+1
+	this\springletconstraint[this\springletconstraints%]=springletconstraintCreate(this\springlet[1],this\springlet[2],distance#)
+	;inner springletconstraint
+	For loop=2 To springlets-1
+		this\springletconstraints%=this\springletconstraints%+1	
+		this\springletconstraint[this\springletconstraints%]=New springletconstraint		
+		this\springletconstraint[this\springletconstraints%]\springlet=this\springlet[loop]
+	    ;connect To the previous
+    	this\springletconstraint[this\springletconstraints%]\neighbor[1]=this\springlet[loop-1];
+	    this\springletconstraint[this\springletconstraints%]\neighbordistance#[1]=distance#;
+    	;connect To the Next
+	    this\springletconstraint[this\springletconstraints%]\neighbor[2]=this\springlet[loop+1];
+    	this\springletconstraint[this\springletconstraints%]\neighbordistance#[2]=distance#;
+		this\springletconstraint[this\springletconstraints%]\neighbors%=this\springletconstraint[this\springletconstraints%]\neighbors%+2;
+	Next
+	;far Right springletconstraint
+	this\springletconstraints%=this\springletconstraints%+1
+	this\springletconstraint[this\springletconstraints%]=springletconstraintCreate(this\springlet[springlets],this\springlet[springlets-1],distance#)
+	; setup springletanchor springlet, Right springlet is the only springletanchor
+	this\springletanchor.springletanchor[1]=springletanchorNew()
+	this\springletanchor[1]\springlet.springlet=this\springlet[1]
+	this\springletanchor[1]\position\x#=this\springlet[1]\position\x#;
+	this\springletanchors%=this\springletanchors%+1
+	Return this;
+End Function
+
+Function springlingSpringComputeSingleForce(this.springling, force.vector, pa.vector, pb.vector, k#, delta_distance#)
+	;get the distance
+	vectorSubtract2(springletdeltavector,pb,pa)
+	distance#=Sqr(vectorDotProduct(springletdeltavector,springletdeltavector));
+	If distance# &lt; this\tolerance#
+		vectorReset(force)
+	    Return;
+	EndIf
+	vectorMimic(springletforcedirection,springletdeltavector)
+	;normalize
+	vectorScalarDivide(springletforcedirection,distance#)
+	;store
+	vectorScalarMultiply2(force,springletforcedirection,k*distance#-delta_distance#);force &amp; intensity#
+End Function
+
+Function springlingSpringAccumulateForces(this.springling)
+	;accumulate all forces
+	For loop=1 To this\springletconstraints%
+	    ;Null out springletresultant
+	    vectorReset(springletresultant)
+	    For loop1=1 To this\springletconstraint[loop]\neighbors%
+			vectorMimic(this\springlet[loop]\old,this\springlet[loop]\position)
+		    springlingSpringComputeSingleForce(this,springlettempvector,this\springletconstraint[loop]\springlet\position,this\springletconstraint[loop]\neighbor[loop1]\position,this\k_coef#,this\springletconstraint[loop]\neighbordistance#[loop1]);
+		    VectorAdd(springletresultant,springlettempvector);
+	    Next
+		vectorMimic(this\springletconstraint[loop]\springlet\force,springletresultant)
+	Next
+End Function
+
+Function springlingSpringApplyForces(this.springling)
+	vectorReset(springletaccumulator)
+	;apply resultant forces To increase velocity of Each springling
+	For loop=1 To this\springlets
+		vectorAdd2(springletaccumulator,this\springlet[loop]\force,this\gravity)
+		;vectorScalarDivide(springletaccumulator,this\mass)	;mass is in somehow unecessary
+		vectorAdd(this\springlet[loop]\velocity,springletaccumulator) 
+		vectorAdd(this\springlet[loop]\position,this\springlet[loop]\velocity)
+		;energy loss For velocity
+		vectorScalarMultiply(this\springlet[loop]\velocity,this\energyloss#)
+	Next
+End Function
+
+Function springlingSpringAnchorCheck(this.springling)
+	For loop=1 To this\springletanchors%
+		If this\springletanchor[loop]\springlet\position\x#&lt;&gt;this\springletanchor[loop]\position\x# this\springletanchor[loop]\springlet\position\x#=this\springletanchor[loop]\position\x#
+		If this\springletanchor[loop]\springlet\position\y#&lt;&gt;this\springletanchor[loop]\position\y# this\springletanchor[loop]\springlet\position\y#=this\springletanchor[loop]\position\y#
+		If this\springletanchor[loop]\springlet\position\z#&lt;&gt;this\springletanchor[loop]\position\z# this\springletanchor[loop]\springlet\position\z#=this\springletanchor[loop]\position\z#
+	Next
+	;for loop=1 to this\springlets%
+	;if this\springlet[loop]=anchor type vectorMimic(springlet[loop]\position,springlet[loop]\old)
+	;next	
+End Function
+
+Function springlingSpringTimeStep(this.springling)
+	springlingSpringAccumulateForces(this);
+	springlingSpringApplyForces(this);
+	springlingSpringAnchorCheck(this);
+End Function
+
+;============================
+;MAN
+;============================
+Global MAN_MAX%=256
+Dim manID.man(MAN_MAX%)
+Global manIndex.stack=stackCreateIndex(4,MAN_MAX%,1)
+Type man
+	Field id%
+	Field typeid%
+	Field bvhframesetId%
+	Field bvhframe%
+	Field lod.lod
+	Field position.vector
+	Field angle.vector
+End Type
+
+Function manStart.man(filename$="Default")
+	;load from config
+	manopen(filename$)
+	;setup
+	For this.man=Each man
+	Next
+	Return First man
+End Function
+
+Function manStop()
+	For this.man=Each man
+		manDelete(this)
+	Next
+End Function
+
+Function manNew.man()
+	this.man=New man
+	this\id%=0
+	this\typeid%=0
+	this\bvhframe%=0
+	this\lod.lod=lodNew()
+	this\position.vector=vectorNew()
+	this\angle.vector=vectorNew()
+	this\id%=StackPop(manIndex.stack,1)
+	manID(this\id)=this
+	Return this
+End Function
+
+Function manDelete(this.man)
+	manID(this\id)=Null
+	StackPush(manIndex.stack,this\id%,1)
+	vectorDelete(this\angle.vector)
+	vectorDelete(this\position.vector)
+	lodDelete(this\lod.lod)
+	Delete this
+End Function
+
+Function manManager()
+	For this.man=Each man
+	Next
+End Function
+
+Function manRead.man(file)
+	this.man=New man
+	this\id%=ReadInt(file)
+	this\typeid%=ReadInt(file)
+	this\bvhframe%=ReadInt(file)
+	this\lod.lod=lodRead(file)
+	this\position.vector=vectorRead(file)
+	this\angle.vector=vectorRead(file)
+	Return this
+End Function
+
+Function manWrite(file,this.man)
+	WriteInt(file,this\id%)
+	WriteInt(file,this\typeid%)
+	WriteInt(file,this\bvhframe%)
+	lodWrite(file,this\lod.lod)
+	vectorWrite(file,this\position.vector)
+	vectorWrite(file,this\angle.vector)
+End Function
+
+Function manSave(filename$="Default")
+	file=WriteFile(filename$+".man")
+	For this.man= Each man
+		manWrite(file,this)
+	Next
+	CloseFile(file)
+End Function
+
+Function manOpen(filename$="Default")
+	file=ReadFile(filename+".man")
+	Repeat
+		manRead(file)
+	Until Eof(file)
+	CloseFile(file)
+End Function
+
+Function manCopy.man(this.man)
+	copy.man=New man
+	copy\id%=this\id%
+	copy\typeid%=this\typeid%
+	copy\bvhframe%=this\bvhframe%
+	copy\lod.lod=lodCopy(this\lod.lod)
+	copy\position.vector=vectorCopy(this\position.vector)
+	copy\angle.vector=vectorCopy(this\angle.vector)
+	Return copy
+End Function
+
+Function manMimic(mimic.man,this.man)
+	mimic\id%=this\id%
+	mimic\typeid%=this\typeid%
+	mimic\bvhframe%=this\bvhframe%
+	lodMimic(mimic\lod.lod,this\lod.lod)
+	vectorMimic(mimic\position.vector,this\position.vector)
+	vectorMimic(mimic\angle.vector,this\angle.vector)
+End Function
+
+Function manCreate.man(id%,typeid%,bvhframe%,lod.lod,position.vector,angle.vector)
+	this.man=manNew()
+	this\id%=id%
+	this\typeid%=typeid%
+	this\bvhframe%=bvhframe%
+	this\lod.lod=lod.lod
+	this\position.vector=position.vector
+	this\angle.vector=angle.vector
+	Return this
+End Function
+
+Function parseword$(file%,min%=33,max%=125) ;ascii character range min=33, max=125
+	If file%				
+		Repeat
+			byte%=ReadByte(file%); byte
+			char$=Chr$(byte%); char
+			If byte%&gt;=min% And byte%&lt;=max%
+				word$=word$+char$ ;word
+				charct%=charct%+1 ;inc charct, count characters valid after first character in range has be accounted for
+			Else
+				If charct%&gt;0 
+					;DebugLog word$
+					Return word$
+				EndIf	
+			EndIf
+		Until Eof(file%)=True
+		If charct&gt;0 
+			;DebugLog word$
+			Return word$
+		EndIf	
+	EndIf
+End Function
+
+Function vectorAbsHigher#(this.vector)
+	n#=Abs(this\x#)
+	If Abs(this\y#)&gt;n# n#=Abs(this\y#)
+	If Abs(this\z#)&gt;n# n#=Abs(this\z#)
+	Return n#
+End Function
+
+
+.bvhRotationOrder
+;0=x,4=y,8=z
+Data 8,0,4,4,8,0;zxy
+Data 4,8,0,8,0,4;yzx
+Data 8,4,0,8,4,0;zyx
+Data 4,0,8,4,0,8;yxz
+Data 0,4,8,0,4,8;xyz
+Data 0,8,4,0,8,4;xzy</textarea>It would be nice to see a high performance physics system made with Blitz3D. <br><br></td></tr></table><br>
+<a name="483504"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Clarks</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> verlets are good but rotations are very difficult to calculate. <br><br></td></tr></table><br>
+<a name="483506"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Stevie G</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks folks - this doesn't really tell me what I need to know though :( <br><br></td></tr></table><br>
+<a name="483516"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >flying willy</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Another astounding post by clarks. <br><br></td></tr></table><br>
+<a name="483556"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Techlord</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Stevie G <br><br>Sorry, I failed to read the entire post. I really didn't get as far as you have. I'm not sure that anyone has with a blitz-made verlet system. <br><br>Considering a tank is a all wheel traction vehicle, you may to have to contend with both front and back steer. My approach to a tank would have been much different only using the verlet for the chassis, springs for the L/R Front &amp; L/R Rear suspension. I would totally fake movement and steering (rotation) from the center of the body with the standard translation functions. Stiff movement and steering with a tank is ok. <br><br></td></tr></table><br>
+<a name="483733"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Stevie G</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks Frank,<br><br>No problems with the tank - I only apply force to the track which is moving and touching the ground, therefore if you only push the right analogue forward it turns slowly to the left, if you move the left analogue back and the right forward it spins on the spot to the left.  It works quite well so this isn't the issue.  I would however be interested on how you would bring springs into the equation - assume for some form of suspension?  Would they work in a similar fashion to verlets but with an elasticity factor for the contraint?<br><br>The question is really about simulating a car rather than a tank but I'm interested in all aspects. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

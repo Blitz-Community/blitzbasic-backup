@@ -1,0 +1,947 @@
+<!DOCTYPE html><html lang="en" ><head ><title >EasyRak (RakNet Wrapper)</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >EasyRak (RakNet Wrapper)</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >EasyRak (RakNet Wrapper)</a><br><br>
+<a name="935792"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Retimer</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> It looks like brucey might be tidying up an updated RakNet module, so i'm going to share the wrapper of a wrapper I put together, that i've been using on my servers for a while now.<br><br>First, you need jimons Raknet module, found <a href="http://repeatuntil.free.fr/raknet/" target="_blank">HERE</a>. Get the cross platform one, and place RakNet.mod into mods/jimon/ folder.<br><br>Retime.EasyRak (place in mods/retime/easyrak.mod, as "easyrak.bmx")<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+Module retime.easyrak
+
+Import jimon.raknet
+
+Type TEasyRak
+	Field UseCompression:Byte
+	Field IsServer:Byte
+	Field Interface:Int
+	Field Connected:Byte
+	Field PlayerCount:Byte
+	Field MaxPlayers:Int = 10
+	Field Users:TList = CreateList() 
+	Field Events:TList = CreateList() 
+	Field Connecting:Byte
+	Field Timeout:Int
+	Field TimeoutTimer:Int
+	
+	Field packet:Int
+	
+	Field PingTime:Int = 5000
+	Field PingTimer:Int
+
+	Method Ban(Index:Int, Length:Int) 
+		RN_AddToBanList(Self.Interface, GetRemoteIp(Index), Length) 
+	End Method
+	
+	Method Destroy() 
+		If Interface
+			'RN_CloseConnection(Interface, RN_GetSystemAddressFromIndex(Interface, 0), True) 
+			RN_Shutdown(Interface, 100) 
+			RN_DestroyRakPeerInterface(Interface) 
+		Else 'Error handler. Interface isn't even Defined Yet!
+			RuntimeError("Something was coded wrong in your application, as the raknet interface has not yet been initiated much less destroyed") 
+		End If
+	End Method
+	
+	Method DisconnectClient(Index:Int) 
+		RN_CloseConnection(Self.Interface, Index, 1) 
+		Local Ev:EasyRakEvents = New EasyRakEvents
+		Ev.EventType = Event_Disconnected
+		Ev.Index = Index
+		Self.Events.AddFirst(Ev) 
+	End Method
+
+	Method Active:Byte() 
+		If Interface
+			Return RN_IsActive(Interface) 
+		Else
+			Return 0 'Interface isn't even Defined yet!
+		End If
+	End Method
+
+	Method CreateServer:Byte(Port:Int = 20202, MaxPlayers:Int = 10, UseSecurity:Byte = 0, UsePassword:String = "") 
+		If Self.Interface
+			Self.Destroy()  'Interface already exists. Destroy it before creating new server
+		End If
+		
+		Self.Interface = RN_GetRakPeerInterface() 
+		If UseSecurity = 1
+			RN_InitializeSecurity(Interface, "0", "0", "0", "0") 
+		End If
+		
+		If UsePassword &lt;&gt; ""
+			RN_SetIncomingPassword(Interface, UsePassword, Len(UsePassword)) 
+		End If
+		
+		Local StartResult:Byte = RN_Startup(Interface, MaxPlayers, 1, Port) 
+		RN_SetMaximumIncomingConnections(Interface, MaxPlayers) 
+		Self.MaxPlayers = MaxPlayers
+		IsServer = 1
+		?debug
+			Print "startserver result: " + StartResult + " - " + Self.Active()
+		?
+		Return StartResult
+	End Method
+	
+	Method Connect_To_Server:Byte(IP:String = "127.0.0.1", Port:Int = 20202, UsePassword:String = "", Timeout:Int = 2500, UsePort:Int = 0)
+
+		If Interface
+			If Self.Packet
+				RN_DeallocatePacket(Self.Interface, Self.Packet)          'Must get rid of old packet. Otherwise it may be possible to cause memory leaks.
+			End If
+			Self.packet = 0
+			
+			RN_DestroyRakPeerInterface(Self.Interface) 
+			Self.Interface = RN_GetRakPeerInterface() 
+			rem
+			?debug
+				print "destroying interface"
+			?
+			Self.Destroy()  'Interface already exists. Destroy it before creating new server
+			end rem
+		Else
+			Self.Interface = RN_GetRakPeerInterface() 
+		End If
+		Self.Connected = 0
+		
+		RN_Startup(Interface, 1, 1, UsePort)         'The 0 at the end allows raknet to choose the best port to use, rather than running into already used ports.
+
+		Local ConnectResult:Byte = RN_Connect(Interface, IP, Port, UsePassword, Len(UsePassword)) 
+		Self.Connecting = ConnectResult
+		Self.Timeout = Timeout
+		Self.TimeoutTimer = MilliSecs() 
+		Return ConnectResult
+	End Method
+	
+	Method GetConnectionCount:Int() 
+		Return Self.Users.Count() 
+		'The below Removal would work as well.
+		rem
+			Local count:Int = 0
+			For Local i:Int = 0 To Self.MaxPlayers - 1
+				If RN_GetSystemAddressFromIndex(Interface, i) &lt;&gt; - 1 count = count + 1
+			Next
+			Return count
+		end rem
+	End Method
+	
+	Method GetMaxPlayers:Int() 
+		Return Self.MaxPlayers ' RN_GetMaximumNumberOfPeers(Interface) '&lt; This works too
+	End Method
+	
+	Method Time:Int() 
+		Return RN_GetTime() 
+	End Method
+	
+	Method HostingAsServer:Byte()  'Returns 1 for true, 0 for false.
+		Return Self.IsServer
+	End Method
+	
+	Method GetRemoteIp:String(Index:Int) 
+		Return EasyRak_DotIP(RN_SystemAddressGetBinaryAddress(RN_GetSystemAddressFromIndex(Self.Interface, Index))) 
+	End Method
+	
+	Method GetLocalIP:String() 
+		Return RN_GetLocalIP(Self.Interface, 0) 
+	End Method
+End Type
+
+
+Type TBitStream Extends TEasyRak
+	Field MsgType:Int
+	Field CurrentAddress:Int		'Player Address
+	Field CurrentIndex:Int			'Player Index
+	Field Reader:Int				'Bitstream reader
+	Field Writer:Int				'bitstream writer
+	Field Length:Int
+	
+	
+	
+	Method SendDataTo(Index:Int, Priority:Int = HIGH_PRIORITY, Reliability:Int = RELIABLE_ORDERED)       'Index = -1, Broadcast = 1 to broadcast to 'EVERYONE'
+		RN_BitStreamSetNumberOfBitsAllocated(Self.Writer, RN_BitStreamGetNumberOfBitsUsed(Self.Writer)) 
+		RN_SendBitStream(Interface, Self.Writer, Priority, Reliability, 0, RN_GetSystemAddressFromIndex(Interface, Index) , 0) 
+	End Method
+
+	Method SendDataToAll(Priority:Int = HIGH_PRIORITY, Reliability:Int = RELIABLE_ORDERED) 
+		RN_BitStreamSetNumberOfBitsAllocated(Self.Writer, RN_BitStreamGetNumberOfBitsUsed(Self.Writer)) 
+		RN_SendBitStream(Interface, Self.Writer, Priority, Reliability, 0, RN_GetSystemAddressFromIndex(Interface, - 1), 1) 
+	End Method
+	
+	Method SendDataToAll_Except(Index:Int, Priority:Int = HIGH_PRIORITY, Reliability:Int = RELIABLE_ORDERED) 
+		RN_BitStreamSetNumberOfBitsAllocated(Self.Writer, RN_BitStreamGetNumberOfBitsUsed(Self.Writer)) 
+		RN_SendBitStream(Interface, Self.Writer, Priority, Reliability, 0, RN_GetSystemAddressFromIndex(Interface, Index), 1) 
+	End Method
+	
+	Method SendReaderTo(Index:Int, Priority:Int = HIGH_PRIORITY, Reliability:Int = RELIABLE_ORDERED) 
+		RN_BitStreamSetNumberOfBitsAllocated(Self.Reader, RN_BitStreamGetNumberOfBitsUsed(Self.Reader)) 
+		RN_SendBitStream(Interface, Self.Reader, Priority, Reliability, 0, RN_GetSystemAddressFromIndex(Interface, Index), 0) 
+		Rem
+			Sends the data that was 'read'. Basically copying the read data to write data and resending it.
+		end Rem
+	End Method
+	
+	Method SendReaderToAll(Priority:Int = HIGH_PRIORITY, Reliability:Int = RELIABLE_ORDERED) 
+		RN_BitStreamSetNumberOfBitsAllocated(Self.Reader, RN_BitStreamGetNumberOfBitsUsed(Self.Reader)) 
+		RN_SendBitStream(Interface, Self.Reader, Priority, Reliability, 0, RN_GetSystemAddressFromIndex(Interface, - 1), 1) 
+		Rem
+			Sends the data that was just recieved. Basically copying the read data and resending it.
+		end Rem
+	End Method
+	
+	Method SendReaderToAll_Except(Index:Int, Priority:Int = HIGH_PRIORITY, Reliability:Int = RELIABLE_ORDERED) 
+		RN_BitStreamSetNumberOfBitsAllocated(Self.Reader, RN_BitStreamGetNumberOfBitsUsed(Self.Reader)) 
+		RN_SendBitStream(Interface, Self.Reader, Priority, Reliability, 0, RN_GetSystemAddressFromIndex(Interface, Index), 1) 
+		Rem
+			Sends the data that was just recieved. Basically copying the read data and resending it.
+		end Rem
+	End Method
+	
+	Method SetPingRate(Rate:Int) 
+		Self.PingTime = Rate
+	End Method
+	
+	Method GetLastPing:Int(Index:Int) 
+		Return RN_GetLastPing(Self.Interface, RN_GetSystemAddressFromIndex(Self.Interface, index)) 
+	End Method
+	
+	Method PingProcess() 
+		If MilliSecs() - Self.PingTimer &gt; Self.PingTime
+			Self.PingTimer = MilliSecs() 
+			For Local t:String = EachIn Self.Users
+				RN_PingPlayer(Self.Interface, RN_GetSystemAddressFromIndex(Self.Interface, Int(t))) 
+			Next
+		End If
+	End Method
+	
+	Method IsDataAvailable:Byte() 
+			PingPRocess() 
+			If Self.packet
+				RN_DeallocatePacket(Self.Interface, Self.packet)       'Must get rid of old packet. Otherwise it may be possible to cause memory leaks.
+			End If
+			Self.packet = RN_Receive(Self.Interface) 
+			If (Self.packet) Then
+				Self.Create_BitStream_From_Packet(Self.packet) 
+				Self.MsgType = RN_BitStreamReadUnsignedChar(Self.Reader) 
+				Self.CurrentIndex = RN_PacketGetplayerIndex(Self.packet) 
+				'Self.CurrentAddress = RN_GetSystemAddressFromIndex(Interface, Self.CurrentIndex) 
+
+				If Self.MsgType &lt; ID_USER_PACKET_ENUM 'Message was created by Raknet itself. 
+					ProcessMsgID(Self.MsgType, Self.CurrentIndex) 
+					Return 0
+				Else
+					Self.MsgType:-ID_USER_PACKET_ENUM
+					UseCompression = Self.ReadBool() 
+					Return 1
+				End If
+			Else
+				'Process Connection attempt
+				If Not Self.connected
+					If Self.Connecting
+						If MilliSecs() - Self.TimeoutTimer &gt; Self.Timeout Then
+							Local NewEventA:EasyRakEvents = New EasyRakEvents
+							NewEventA.EventType = Event_ConnectionAttemptTimeout
+							NewEventA.Index = Self.CurrentIndex 'Index
+							Self.Events.AddLast(NewEventA) 
+							Self.Connecting = 2
+						End If
+					End If
+				End If
+				Return 0
+			End If
+	End Method
+	
+	Method Create_BitStream(MessageID:Int, Compressed:Byte = 0) 
+		If Self.Writer Then RN_BitStreamDestroy(Self.Writer) 
+		Self.Writer = RN_BitStreamCreate1(0) 
+		RN_BitStreamWriteUnsignedChar(Self.Writer, MessageID + ID_USER_PACKET_ENUM) 
+		Self.WriteBool(Compressed)
+		Self.UseCompression = Compressed
+	End Method
+	
+	Method Reset_BitStream() 
+		RN_BitStreamReset(Self.Reader) 
+		Self.Length = 0
+	End Method
+	
+	Method Destroy_Reader_BitStream(Written:Byte) 
+		RN_BitStreamDestroy(Self.Reader) 
+	End Method
+	
+	Method Destroy_Writer_BitStream(Written:Byte) 
+		RN_BitStreamDestroy(Self.Writer) 
+	End Method
+	
+	Method Create_BitStream_From_Packet(Packet:Int) 
+		If Self.Reader Then rn_bitstreamdestroy(Self.Reader) 
+		Self.Reader = RN_BitStreamCreateFromPacket(Self.packet) 
+		Self.Length = RN_BitStreamGetNumberOfUnreadBits(Self.Reader) 
+	End Method
+	
+'''Writing Commands
+	Method WriteBool(Value:Byte) 
+		RN_BitStreamWriteBool(Self.Writer, Value) 
+	End Method
+	
+	Method WriteByte(Value:Int) 
+		If UseCompression
+			RN_BitStreamWriteCompressedUnsignedChar(Self.Writer, Value) 
+		Else
+			RN_BitStreamWriteUnsignedChar(Self.Writer, Value) 
+		End If
+	End Method
+	
+	Method WriteShort(Value:Int) 
+		If UseCompression
+			RN_BitStreamWriteCompressedShort(Self.Writer, Value) 
+		Else
+			RN_BitStreamWriteShort(Self.Writer, Value) 
+		End If
+	End Method
+	
+	
+	Method WriteInt(Value:Int) 
+		If UseCompression
+			RN_BitStreamWriteCompressedInt(Self.Writer, Value) 
+		Else
+			RN_BitStreamWriteInt(Self.Writer, Value) 
+		End If
+	End Method
+	
+	Method WriteLong(Value:Int) 
+		If UseCompression
+			RN_BitStreamWriteCompressedLong(Self.Writer, Value) 
+		Else
+			RN_BitStreamWriteLong(Self.Writer, Value) 
+		End If
+	End Method
+	
+	Method WriteFloat(Value:Float) 
+		If UseCompression
+			RN_BitStreamWriteCompressedFloat(Self.Writer, Value) 
+		Else
+			RN_BitStreamWriteFloat(Self.Writer, Value) 
+		End If
+	End Method
+	
+	Method WriteDouble(Value:Double) 
+		If UseCompression
+			RN_BitStreamWriteCompressedDouble(Self.Writer, Value) 
+		Else
+			RN_BitStreamWriteDouble(Self.Writer, Value) 
+		End If
+	End Method
+	
+	Method WriteString(Value:String)  'A string with a length UNDER the size of a short.
+		If Len(Value) &lt;= 255
+			RN_BitStreamWriteBool(Self.Writer, 0)      'The length will be written as a byte
+			If UseCompression
+				RN_BitStreamWriteCompressedUnsignedChar(Self.Writer, Len(value)) 
+			Else
+				RN_BitStreamWriteUnsignedChar(Self.Writer, Len(value)) 
+			End If
+		ElseIf Len(value) &gt; 255
+			RN_BitStreamWriteBool(Self.Writer, 1)       'The length will be written as a short
+			If UseCompression
+				RN_BitStreamWriteCompressedShort(Self.Writer, Len(value)) 
+			Else
+				RN_BitStreamWriteShort(Self.Writer, Len(value)) 
+			End If
+		End If
+		Local I:Int
+		If UseCompression
+			For I = 0 To Len(value) - 1
+				RN_BitStreamWriteCompressedUnsignedChar(Self.Writer, Asc(Value[I..I + 1] )) 
+			Next
+		Else
+			For I = 0 To Len(value) - 1
+				RN_BitStreamWriteUnsignedChar(Self.Writer, Asc(Value[I..I + 1] )) 
+			Next
+		End If
+	End Method
+	
+	Method WriteBigString(Value:String)    'A string with a length UNDER the size of a short.
+		If UseCompression
+			RN_BitStreamWriteCompressedInt(Self.Writer, Len(value)) 
+			For Local I:Int = 0 To Len(value) - 1
+				RN_BitStreamWriteCompressedUnsignedChar(Self.Writer, Asc(Value[I..I + 1] )) 
+			Next
+		Else
+			RN_BitStreamWriteInt(Self.Writer, Len(value)) 
+			For Local I:Int = 0 To Len(value) - 1
+				RN_BitStreamWriteUnsignedChar(Self.Writer, Asc(Value[I..I + 1] )) 
+			Next
+		End If
+	End Method
+	
+	Method ReadBigString:String() 
+		Local Length:Int
+		Local NewString:String
+		If UseCompression = 0
+			Length = RN_BitStreamReadInt(Self.Reader) 
+			
+			For Local I:Int = 1 To Length
+				NewString:+Chr(RN_BitStreamReadUnsignedChar(Self.Reader)) 
+			Next
+			Return NewString
+		Else 'Compressed
+			Length = RN_BitStreamReadCompressedInt(Self.Reader) 
+			
+			For Local I:Int = 1 To Length
+				NewString:+Chr(RN_BitStreamReadCompressedUnsignedChar(Self.Reader)) 
+			Next
+			Return NewString
+		End If
+	End Method
+	
+'''Reading Commands
+	Method ReadBool:Byte() 
+		Return RN_BitStreamReadBit(Self.Reader) 
+	End Method
+	
+	Method ReadByte:Int() 
+		If UseCompression
+			Return RN_BitStreamReadCompressedUnsignedChar(Self.Reader) 
+		Else
+			Return RN_BitStreamReadUnsignedChar(Self.Reader) 
+		End If
+	End Method
+	
+	Method ReadShort:Int() 
+		If UseCompression
+			Return RN_BitStreamReadCompressedShort(Self.Reader) 
+		Else
+			Return RN_BitStreamReadShort(Self.Reader) 
+		End If
+	End Method
+	
+	Method ReadInt:Int() 
+		If UseCompression
+			Return RN_BitStreamReadCompressedInt(Self.Reader) 
+		Else
+			Return RN_BitStreamReadInt(Self.Reader) 
+		End If
+	End Method
+	
+	Method ReadLong:Long() 
+		If UseCompression
+			Return RN_BitStreamReadLong(Self.Reader) 
+		Else
+			Return RN_BitStreamReadCompressedLong(Self.Reader) 
+		End If
+	End Method
+	
+	Method ReadFloat:Float() 
+		If UseCompression
+			Return RN_BitStreamReadFloat(Self.Reader) 
+		Else
+			Return RN_BitStreamReadCompressedFloat(Self.Reader) 
+		End If
+	End Method
+	
+	Method ReadDouble:Double() 
+		If UseCompression
+			Return RN_BitStreamReadDouble(Self.Reader) 
+		Else
+			Return RN_BitStreamReadCompressedDouble(Self.Reader) 
+		End If
+	End Method
+
+	Method ReadString:String() 
+		Local S:Byte = Self.ReadBool() 
+		Local S2:Int
+		Local NewString:String
+		Local I:Int
+		If UseCompression = 0
+			If S = 0
+				s2 = (RN_BitStreamReadUnsignedChar(Self.Reader)) 
+			Else
+				s2 = (RN_BitStreamReadShort(Self.Reader)) 
+			End If
+			
+			For I = 1 To s2
+				NewString:+Chr(RN_BitStreamReadUnsignedChar(Self.Reader)) 
+			Next
+			Return NewString
+		Else 'Compressed
+			If S = 0
+				s2 = (RN_BitStreamReadCompressedUnsignedChar(Self.Reader)) 
+			Else
+				s2 = (RN_BitStreamReadCompressedShort(Self.Reader)) 
+			End If
+			
+			For I = 1 To s2
+				NewString:+Chr(RN_BitStreamReadCompressedUnsignedChar(Self.Reader)) 
+			Next
+			Return NewString
+		End If
+	End Method
+
+''''Misc Commands
+	Method IgnoreBits(Length:Int) 
+		RN_BitStreamIgnoreBits(Self.Reader, Length) 
+	End Method
+''''Info Commands
+	Method Size_Bits:Int(Written:Byte = 1) 
+		If Written
+			Return RN_BitStreamGetNumberOfBitsUsed(Self.Writer) 
+		Else
+			Return RN_BitStreamGetNumberOfBitsUsed(Self.Reader) 
+		End If
+		Rem
+			Returns the current length of the bitstream in Bits.
+		end rem
+	End Method
+	
+	Method Size_Bytes:Int(Written:Byte = 1) 
+		If Written
+			Return RN_BitStreamGetNumberOfBytesUsed(Self.Writer) 
+		Else
+			Return RN_BitStreamGetNumberOfBytesUsed(Self.Reader) 
+		End If
+		Rem
+			Returns the current length of the bitstream in Bytes.
+		end rem
+	End Method
+	
+	Method Size_KiloBytes:Float(Written:Byte = 1) 
+		If Written
+			Return (RN_BitStreamGetNumberOfBytesUsed(Self.Writer) * 0.0009765625)     'bytes / 1024 basically.
+		Else
+			Return (RN_BitStreamGetNumberOfBytesUsed(Self.Reader) * 0.0009765625)    'bytes / 1024 basically.
+		End If
+		'Not sure about Blitzmax, but usually multiplication is faster than division
+		Rem
+			Returns the current length of the bitstream in Kb.
+		end rem
+	End Method
+	
+	Method UnreadBits:Int() 
+		Return RN_BitStreamGetNumberOfUnreadBits(Self.Reader) 
+		Rem
+			Returns the remaining bits not yet read from the bitstream.
+		end rem
+	End Method
+	
+	Method Reset_Read_Cursor() 
+		RN_BitStreamResetReadPointer(Self.Reader) 
+	End Method
+	
+	Method Reset_Write_Cursor() 
+		RN_BitStreamResetReadPointer(Self.Writer) 
+	End Method
+	
+	Method Get_Reader_Pos:Int() 
+		Return RN_BitStreamGetReadOffset(Self.Reader) 
+		Rem
+			Returns the current position. It's where the cursor is from your last read.
+		end rem
+	End Method
+	
+	Method ProcessMsgID(MsgId:Byte, Index:Int) 
+		Select MsgID
+			Case ID_CONNECTION_REQUEST_ACCEPTED 		'msgid = 13
+				ConnectionAccepted(Index) 
+				Local NewEvent4:EasyRakEvents = New EasyRakEvents
+				NewEvent4.EventType = Event_Connected
+				NewEvent4.Index = Index
+				Self.Events.AddLast(NewEvent4) 
+			Case ID_REMOTE_CONNECTION_LOST 				'msgid = 14
+				ConnectionLost(Index) 
+				Local NewEvent:EasyRakEvents = New EasyRakEvents
+				NewEvent.EventType = Event_Disconnected
+				NewEvent.Index = Index
+				Self.connected = 0
+				Self.Events.AddLast(NewEvent) 
+			Case ID_ALREADY_CONNECTED 					'msgid = 15
+				AlreadyConnected() 
+			Case ID_NEW_INCOMING_CONNECTION				'msgid = 16
+				NewConnectionAttempt(Index) 
+				Local NewEvent2:EasyRakEvents = New EasyRakEvents
+				NewEvent2.EventType = Event_NewConnection
+				NewEvent2.Index = Index
+				Self.Events.AddLast(NewEvent2) 
+			Case ID_NO_FREE_INCOMING_CONNECTIONS		'msgid = 17
+				NoFreeIncomingConnections(Index) 
+			Case ID_DISCONNECTION_NOTIFICATION			'msgid = 18
+				Self.connected = 0
+				DisconnectionNotice(Index) 
+				Local NewEvent3:EasyRakEvents = New EasyRakEvents
+				NewEvent3.EventType = Event_Disconnected
+				NewEvent3.Index = Index
+				Self.Events.AddLast(NewEvent3) 
+			Case ID_CONNECTION_LOST						'msgid = 19
+				LostConnectionNotice(Index) 
+				Local NewEvent6:EasyRakEvents = New EasyRakEvents
+				NewEvent6.EventType = Event_Disconnected
+				NewEvent6.Index = Index
+				Self.Events.AddLast(NewEvent6) 
+			Case ID_RSA_PUBLIC_KEY_MISMATCH				'msgid = 20
+				RSA_Key_MisMatch(Index) 
+			Case ID_CONNECTION_BANNED					'msgid = 21
+				Connection_Banned(Index) 
+			Case ID_INVALID_PASSWORD					'msgid = 22
+				Invalid_Password(Index) 
+			Case ID_MODIFIED_PACKET						'msgid = 23
+				Modified_Packet(Index) 
+			
+			'The rest is only used under different environments.
+		End Select
+	End Method
+	
+	
+	
+	
+	
+	'''''''''''''''''''''''Dealing with Internal raknet messages''''''''''''''''''''''''''''''
+		
+	Method ConnectionAccepted(Index:Int) 
+		?Debug
+			Print "-Connection Accepted"
+		?
+		Self.Connected = 1
+	End Method
+	
+	Method ConnectionLost(Index:Int) 
+		?Debug
+			Print "-Connection Lost under index: " + Index
+		?
+		Self.Connected = 0
+	End Method
+	
+	Method AlreadyConnected() 
+		?Debug
+			Print "-Already Connected! Application made an attempt to connect after already being connected."
+		?
+	End Method
+	
+	Method NewConnectionAttempt(Index:Int) 
+		?Debug
+			Print "-A new client is connecting (" + index + ") - "
+		?
+		Users.AddLast(String(index)) 
+	End Method
+	
+	Method NoFreeIncomingConnections(Index:Int) 
+		?Debug
+			Print "-The server is not accepting new connections"
+		?
+	End Method
+	
+	Method DisconnectionNotice(Index:Int) 
+		?Debug
+			Print "-The connection from index:" + Index + " has been closed"
+		?
+		Self.Users.Remove(String(index)) 
+	End Method
+	
+	Method LostConnectionNotice(Index:Int) 
+		?Debug
+			Print "-The connection from index:" + Index + " has been lost"
+		?
+		Self.Users.Remove(String(index)) 
+	End Method
+	
+	Method RSA_Key_MisMatch(Index:Int) 
+		?debug
+			Print "-Preset an RSA Public key which doesn't match the server"
+		?
+	End Method
+	
+	Method Connection_Banned(Index:Int) 
+		?debug
+			Print "-Banned from server"
+		?
+	End Method
+	
+	Method Invalid_Password(Index:Int) 
+		?debug
+			Print "-Password has been refused from server"
+		?
+	End Method
+	 
+	Method Modified_Packet(Index:Int)    'Ban em!
+		?debug
+			Print "-Packet was modified by Id: " + Index
+		?
+	End Method
+	
+End Type
+
+Const Event_NewConnection:Byte = 1
+Const Event_Disconnected:Byte = 2
+Const Event_Connected:Byte = 3
+Const Event_ConnectionAttemptTimeout:Byte = 4
+'Const Event_ClientDisconnected:Byte = 5
+
+Type EasyRakEvents
+	Field EventType:Byte
+	Field Index:Int
+End Type
+
+
+Function EasyRak_DotIP:String(IP:Int) 
+	Return (ip &amp; 255) + "." + (ip Shr 8 &amp; 255) + "." + (ip Shr 16 &amp; 255) + "." + (ip Shr 24) 
+End Function
+</textarea><br><br>I also threw together a 10 minute example of how you can use it. To use it, run the server, then run a client, and move the mouse around the screen. It should update for the server and the client (you'll see a ball moving around - very very skim example of the way unreliable movement packets are used in online fps and some mmorpgs)...along with a couple usages of reliable packets.<br><br>server.bmx (place anywhere)<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import retime.easyrak
+
+AppTitle = "RakBall Server"
+
+'Packets from client
+	Const ClientPacket_Movement:Int = 1
+'Packets from server
+	Const ServerPacket_Movement:Int = 1
+	Const ServerPacket_MaxPlayers:Int = 2
+	Const ServerPacket_SendIndex:Int = 3
+
+
+Type TBall
+	Field LocX:Int
+	Field LocY:Int
+	Field Used:Byte
+	Field id:Byte
+End Type
+
+Global MyRak:TBitStream = New TBitStream
+Global Balls:TBall[]
+Global ServerBall:TBall = New Tball
+ServerBall.Used = 1
+
+MyRak.CreateServer()
+SetupBalls()
+
+Graphics(800, 600)
+
+While Not KeyHit(KEY_ESCAPE) Or AppTerminate()
+	ProcessNetworking()
+	Cls
+		DrawBalls()
+	Flip
+Wend
+
+ShutDown()
+
+Function ShutDown()
+	MyRak.Destroy()
+	End
+End Function
+
+Function DrawBalls()
+	For Local T:TBall = EachIn Balls
+		If T.Used Then
+			If T.LocX &gt; 0 Then
+				DrawOval(T.LocX - 25, T.LocY - 25, 50, 50)
+				DrawText("Player #" + (T.id + 1), t.LocX + 25, T.LocY)
+			End If
+		End If
+	Next
+End Function
+
+Function ProcessNetworking()
+	'Handle Events
+	For Local t:EasyRakEvents = EachIn MyRak.Events
+		Select t.EventType
+			Case Event_NewConnection
+				DebugLog("New player connected at index: " + t.Index + " [" + MyRak.GetRemoteIp(T.Index) + "]")
+				Balls[t.Index].Used = 1
+				Balls[t.Index].LocX = -1000 'So we can't see it until they actually send movement packets
+				Balls[t.Index].LocY = -1000
+				SendMaxPlayers(T.Index)
+				SendIndexToPlayer(T.Index)
+			Case Event_Disconnected
+				DebugLog("Player id: " + T.Index + " disconnected from the server")
+				Balls[t.Index].Used = 0
+		End Select
+	Next
+	MyRak.Events.Clear() 'Clear the events, since you just dealt with them.
+	
+	'Handle packets
+	If MyRak.IsDataAvailable() Then
+		Local Index:Int = MyRak.CurrentIndex
+		Select MyRak.MsgType
+			Case ClientPacket_Movement
+				Local X:Int = MyRak.ReadShort()
+				Local Y:Int = MyRak.ReadShort()
+				Balls[Index].LocX = X
+				Balls[Index].LocY = Y
+				SendMovement(Index)
+		End Select
+	End If
+End Function
+
+Function SendMovement(Index:Int)
+	'Send to everyone except the client who just moved - They already see where they moved.
+	MyRak.Create_BitStream(ServerPacket_Movement)
+	MyRak.WriteByte(Index)
+	MyRak.WriteShort(Balls[Index].LocX)
+	MyRak.WriteShort(Balls[Index].LocY)
+	MyRak.SendDataToAll_Except(Index,, UNRELIABLE)
+End Function
+
+Function SendIndexToPlayer(Index:Int)
+	MyRak.Create_BitStream(ServerPacket_SendIndex)
+	MyRak.WriteByte(Index)
+	MyRak.SendDataTo(Index)
+End Function
+
+Function SendMaxPlayers(Index:Int)
+	DebugLog("sending max players: " + MyRak.MaxPlayers)
+	MyRak.Create_BitStream(ServerPacket_MaxPlayers)
+	MyRak.WriteByte(MyRak.MaxPlayers)
+	MyRak.SendDataTo(Index)
+End Function
+
+Function SetupBalls()
+	Balls = Balls[..MyRak.MaxPlayers]
+	For Local t:Int = 0 To MyRak.MaxPlayers - 1
+		Balls[t] = New TBall
+		Balls[t].id = t
+	Next
+End Function</textarea><br><br><br><br><br>Client.bmx<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import retime.easyrak
+
+AppTitle = "RakBall"
+
+'Packets from client
+	Const ClientPacket_Movement:Int = 1
+'Packets from server
+	Const ServerPacket_Movement:Int = 1
+	Const ServerPacket_MaxPlayers:Int = 2
+	Const ServerPacket_SendIndex:Int = 3
+
+Const MoveWait:Int = 100 'update, up to 10 times a second
+
+Type TBall
+	Field LocX:Int = -1000
+	Field LocY:Int
+	Field id:Byte
+End Type
+
+Global MyRak:TBitStream = New TBitStream
+Global Balls:TBall[]
+
+'Player Properties
+Global LastX:Int
+Global LastY:Int
+Global MyIndex:Int = -1
+Global Max_Players:Int = -1
+Global LastSend:Int
+
+MyRak.Connect_To_Server()
+
+Graphics (800, 600)
+
+While Not KeyHit(KEY_ESCAPE) Or AppTerminate()
+	ProcessNetworking()
+	Cls
+		If MaxPlayers &gt; - 1 Then DrawBalls()
+	Flip
+	
+	If MouseX() &lt;&gt; LastX Or MouseY() &lt;&gt; LastY Then
+		SendBallMovement(MouseX(), MouseY())
+	End If
+Wend
+
+ShutDown()
+
+Function SendBallMovement(X:Int, Y:Int)
+	If MilliSecs() &gt; LastSend + MoveWait Then
+		LastSend = MilliSecs()
+		If MyIndex &gt; - 1 Then
+			Balls[MyIndex].LocX = X
+			Balls[MyIndex].LocY = Y
+			MyRak.Create_BitStream(ClientPacket_Movement)
+			MyRak.WriteShort(X)
+			MyRak.WriteShort(Y)
+			MyRak.SendDataToAll(, UNRELIABLE) 'Using send-to-all because there is only one connection - the server.
+		End If
+	End If
+End Function
+
+Function DrawBalls()
+	For Local T:TBall = EachIn Balls
+		If T.LocX &gt; 0 Then
+			DrawOval(T.LocX - 25, T.LocY - 25, 50, 50)
+			DrawText("Player #" + (T.id + 1), t.LocX + 25, T.LocY)
+		End If
+	Next
+End Function
+
+Function ProcessNetworking()
+	'Handle Events
+	For Local t:EasyRakEvents = EachIn MyRak.Events
+		Select t.EventType
+			Case Event_Connected
+				DebugLog("Just connected to the server.")
+			Case Event_Disconnected
+				DebugLog("Disconnected from server")
+				Notify "Your connection to the server has ended."
+				ShutDown()
+			Case Event_ConnectionAttemptTimeout
+				DebugLog("couldn't connect to server...trying again")
+				MyRak.Connect_To_Server()
+		End Select
+	Next
+	MyRak.Events.Clear() 'Clear the events, since you just dealt with them.
+	
+	'Handle packets
+	If MyRak.IsDataAvailable() Then
+		Local Index:Int = MyRak.CurrentIndex
+		Select MyRak.MsgType
+			Case ServerPacket_Movement
+				If Max_Players &gt; - 1 Then
+					Local PIndex:Int = MyRak.ReadByte()
+					Local X:Short = MyRak.ReadShort()
+					Local Y:Short = MyRak.ReadShort()
+					Balls[PIndex].LocX = X
+					Balls[PIndex].LocY = Y
+				End If
+			Case ServerPacket_MaxPlayers
+				Max_Players = MyRak.ReadByte()
+				SetupBalls()
+				DebugLog("MaxPlayers: " + Max_Players)
+			Case ServerPacket_SendIndex
+				MyIndex = MyRak.ReadByte()
+				DebugLog("MyIndex: " + MyIndex)
+		End Select
+	End If
+End Function
+
+Function ShutDown()
+	MyRak.Destroy()
+	End
+End Function
+
+Function SetupBalls()
+	Balls = Balls[..Max_Players]
+	For Local t:Int = 0 To Max_Players - 1
+		Balls[t] = New TBall
+		Balls[t].id = t
+	Next
+End Function</textarea><br><br><br>Note, I haven't really gone through the module to find useless fields, or functions that may not work (security, for example, probobly doesn't work)....but the main core functions of it work.<br><br>Time <br><br></td></tr></table><br>
+<a name="935849"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Zeke</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> wow. thanks. i think this is very useful for my morpg.. (And YES, not MMORPG, only MORPG). <br><br></td></tr></table><br>
+<a name="935858"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Retimer</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm not sure just how well raknet would work with mmorpgs - i'm sure with optimism there's no reason it couldn't support 50-100 players on a powerful server.<br>I suppose I should clarify that, that is how movement is usually done (as mentioned, a very dumbed down version of 'how') in FPS games, however some mmorpgs are done using unreliable packets as well.<br><br>As for packets:<br><br><b>UNRELIABLE</b> - usually for packets that are sent 'constantly' ex: 5-10 times per second. It's not a big deal if a few packets here and there are lost in these cases. Free-movement (halflife/halo look and movement for example) is a good time to use it.<br><br><b>Reliable</b> - It's reliable, but it might not recieve in the order you sent it. If it doesn't matter what order the packet comes in, then this is the packet to use. A good use for this might be spawning entities in a 2d/3d world, assuming they can't be destroyed within the same second that they are spawned. Ex: if you spawn an entire orc camp, does it matter which orc spawns first within the same second? not really...as long as the client can see that it has spawned.<br><br><b>RELIABLE_ORDERED</b> - Same as tcp packets. It will arrive, and it will arrive in exactly the order you sent it. Good for sending stat updates, important messages all together.<br><br>Unlike basic tcp though, what's so great with raknet is that you won't have to seperate clumped together packets, amongst several other 'betters' about (r)udp. One thing you'll also notice is that I only supplied the bitstream method of sending data. I'm pretty sure this takes up more processing, for the value of less bandwidth used. <br><br></td></tr></table><br>
+<a name="935862"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Zeke</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> well let me check..,, im currently using bnetex... and everythin is going well.. but.. i also want to check raknet... because there is packet encryption etc... <br><br></td></tr></table><br>
+<a name="935955"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DreamLoader</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> nice work!!! <br><br></td></tr></table><br>
+<a name="940530"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Blitzbat</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> It seems there is an error with reading and writing floats.<br><br>For example:<br>My server calculates the positions that are floats.<br>The servers float is 0.300000012<br>The client received -0.200000003<br><br>I've tried to turn off compression on server and client but it doesn't work , too. <br><br></td></tr></table><br>
+<a name="940532"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looking at the bits...<br><pre class=code>
+00111110100110011001100110011010   &lt;-  0.300000012
+10111110010011001100110011001101   &lt;- -0.200000003
+</pre><br>it looks like the bits are out by 1. The negative bit is probably coming from the next/previous number.<br><br>HTH :-) <br><br></td></tr></table><br>
+<a name="940534"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh... and here's the code to see it for yourself :<br><pre class=code>
+Local f:Float = 0.300000012:Float
+Local f2:Float = -0.200000003:Float
+Print Bin(Int Ptr(Float Ptr(Varptr f))[0])
+Print Bin(Int Ptr(Float Ptr(Varptr f2))[0])
+</pre> <br><br></td></tr></table><br>
+<a name="940544"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Blitzbat</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> so maybe there is an error in my packet code?! <br><br></td></tr></table><br>
+<a name="940545"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Blitzbat</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> addition:<br><br>i've tried it with integers. It works great.... mhh very strange<br><br>are there any suggestions to fix this problem? <br><br></td></tr></table><br>
+<a name="940645"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Retimer</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> I will release a framework remake based on bruceys version of the raknet module soon. The above easyrak module was a rushed together prototype for creating servers/clients for my apps. There are some issues with jimons version of raknet, and with my old EasyRak module, so I wouldn't rely on it much.<br><br>It's more of a reference in the meantime. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

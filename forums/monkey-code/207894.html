@@ -1,0 +1,417 @@
+<!DOCTYPE html><html lang="en" ><head ><title >C# like lambdas and closures</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >C# like lambdas and closures</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >C# like lambdas and closures</a><br><br>
+<a name="2077985"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Erik</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> preprocessor.monkey<br><pre class=code>
+' ------------------------------------------------------
+' -                                                    -
+' -        START MACRO CODE                            -
+' -                                                    -
+' ------------------------------------------------------
+
+
+
+
+Global lastStrFromTo
+' Returns "" if not found, does not include fromstr and tostr in the result
+Function StrFromTo:String(s:String, fromstr:String, tostr:String)
+  If s="" Return ""
+  Local f = s.Find(fromstr)
+  lastStrFromTo = f
+  If f = -1 Then Return ""
+
+  f += fromstr.Length()
+  Local t = s.Find(tostr,f)
+  If t = -1 Then Return ""
+
+  Return s[f..t]
+End
+' Returns "" if tostr is not found, does not include tostr in the result
+Function StrTo:String(s:String, tostr:String)
+  Local t = s.Find(tostr)
+  If t = -1 Then Return ""
+  Return s[..t]
+End
+' Returns "" if fromstr is not found, does not include fromstr in the result
+Function StrFrom:String(s:String, fromstr:String)
+  Local f = s.Find(fromstr)
+  If f = -1 Then Return ""
+  Return s[f+fromstr.Length..]
+End
+Function IsWhitespace?(c)
+  Return c = $20  Or  (c &gt;= $09  And  c &lt;= $0d) Or  c = $85  Or  c = $A0
+End
+
+Function GetLongType:String(s:String)
+  s = s.Trim()
+
+  If s.Contains(":") Then
+    Return StrFrom(s,":")
+  Else
+    If s="$" Then Return "String"
+    If s="#" Then Return "Float"
+    If s="?" Then Return "Bool"
+
+    If s.EndsWith("$") Then Return "String"
+    If s.EndsWith("#") Then Return "Float"
+    If s.EndsWith("?") Then Return "Bool"
+  End
+
+  Return "Int"
+End
+Function RemoveType:String(s:String)
+  s = s.Trim()
+  If s.Contains(":") Then
+    Return StrTo(s,":")
+  Else
+    If s.EndsWith("%") Then Return s[..-1]
+    If s.EndsWith("$") Then Return s[..-1]
+    If s.EndsWith("#") Then Return s[..-1]
+    If s.EndsWith("?") Then Return s[..-1]
+  End
+
+  Return s
+End
+
+Global AnonFuncCount=0
+Global AnonActionCount=0
+Function ConvertMacros:String(tmp:String)
+  Local code := StrFromTo(tmp,"{(","}")
+  Local foundmacro = code.Find("=&gt;")
+
+  While foundmacro&gt;-1
+    Local codebefore := code
+    Local paramstr:String
+    Local params:String[]
+
+    Local commented?
+    For Local i := lastStrFromTo To 0 Step -1
+      If tmp[i]=13 Or tmp[i]=10 Then
+        Local codeline := tmp[i..i+100].Trim()
+        commented = codeline[0] = "'"[0]
+        Exit
+      End
+    End
+
+    If codebefore.Find("~n")&gt;-1 Then
+      linesRemovedByMacros+=(codebefore.Split("~n").Length-1)
+    End
+
+    If commented Then
+      tmp = tmp.Replace("{("+codebefore+"}", "")
+      code = StrFromTo(tmp,"{(","}")
+      foundmacro = code.Find("=&gt;")
+      Continue
+    End
+
+    For Local i := 0 Until code.Length
+      If code[i] = "("[0] Then Exit
+      If code[i] = ")"[0] Then
+        paramstr = code[0..i]
+        If paramstr.Trim()&lt;&gt;"" Then
+          params = paramstr.Split(",")
+        End
+        Exit
+      End
+    End
+    Local returnstr := StrFromTo(code,")","=&gt;").Trim()
+    Local returnType$ = GetLongType(returnstr)
+
+    code = code[foundmacro+2..]
+
+    ' If just a one line function, insert return
+    If returnstr&lt;&gt;"" And code.Find("~n")=-1 Then
+      code = "Return "+code.Trim()
+    End
+
+    Local isFunction?=False
+    Local ret := code.ToUpper().Find("RETURN ")
+    If ret&gt;-1 Then
+      For Local i := ret Until code.Length
+        If code[i]=13 Or code[i]=10 Or code[i]="'"[0] Then
+          Exit
+        End
+
+        If Not IsWhitespace(code[i]) Then
+          isFunction = True
+          Exit
+        End
+      End
+    End
+
+    Local paramtypes := ""
+
+    For Local i := 0 Until params.Length
+      paramtypes += GetLongType(params[i])+","
+    End
+
+    Local suffix := ""
+    If params.Length&gt;0 Then
+      suffix = params.Length
+    End
+
+    Local AddCode := ""
+    Local globalVarName := ""
+
+    ' Check for variable captures (closure)
+    code = code.Replace("||","___OR___")
+
+    Local fieldstr := ""
+    Local fields:String[]
+    Local AddFields := ""
+    Local Callfields := ""
+    Local InitFields := ""
+
+    Local capture := StrFromTo(code,"|","|")
+
+    While capture&lt;&gt;""
+      fieldstr += capture+","
+
+      AddFields += "  Field "+capture+"~n"
+      Local callfield := RemoveType(capture)
+      InitFields += "    Self."+callfield+"="+callfield+"~n"
+      Callfields += callfield+","
+
+      code = code.Replace("|"+capture+"|",callfield)
+      capture = StrFromTo(code,"|","|")
+    End
+
+    'Remove last commas
+    If fieldstr&lt;&gt;"" fieldstr = fieldstr[..-1]
+    If Callfields&lt;&gt;"" Callfields = Callfields[..-1]
+
+    code = code.Replace("___OR___","|")
+
+    If isFunction Then
+      If paramtypes&lt;&gt;"" Then
+        paramtypes = "&lt;"+paramtypes+returnType+"&gt;"
+      End
+
+      If fieldstr="" Then
+        AddCode = "Class AnonFunc__"+AnonFuncCount+" Extends Func"+suffix+paramtypes+"~n"+
+                   "  Method Do:"+returnType+"("+paramstr+")~n    "+
+                   code.Trim()+"~n"+
+                   "  End~n"+
+                   "End~n"+
+                   "Global "+globalVarName+" := New AnonFunc__"+AnonFuncCount+"()~n~n"
+        globalVarName = "AnonFuncCall__"+AnonFuncCount
+      Else
+        AddCode = "Class AnonFunc__"+AnonFuncCount+" Extends Func"+suffix+paramtypes+"~n"+
+                   AddFields+
+                   "  Method New("+fieldstr+")~n"+
+                   InitFields+
+                   "  End~n"+
+                   "  Method Do:"+returnType+"("+paramstr+")~n    "+
+                   code.Trim()+"~n"+
+                   "  End~n"+
+                   "End~n"
+        globalVarName = "(New AnonFunc__"+AnonFuncCount+"("+Callfields+"))"
+      End
+
+      AnonFuncCount += 1
+    Else
+      If paramtypes&lt;&gt;"" Then
+        paramtypes = "&lt;"+paramtypes[..-1]+"&gt;" 'Remove last comma
+      End
+
+      If fieldstr="" Then
+        AddCode = "Class AnonAction__"+AnonActionCount+" Extends Action"+suffix+paramtypes+"~n"+
+                  "  Method Do:Void("+paramstr+")~n    "+
+                  code.Trim()+"~n"+
+                  "  End~n"+
+                  "End~n"+
+                  "Global "+globalVarName+" := New AnonAction__"+AnonActionCount+"()~n~n"
+        globalVarName = "AnonActionCall__"+AnonActionCount
+      Else
+        AddCode = "Class AnonAction__"+AnonActionCount+" Extends Action"+suffix+paramtypes+"~n"+
+                  AddFields+
+                  "  Method New("+fieldstr+")~n"+
+                    InitFields+
+                  "  End~n"+
+                  "  Method Do:Void("+paramstr+")~n    "+
+                    code.Trim()+"~n"+
+                  "  End~n"+
+                  "End~n"
+        globalVarName = "(New AnonFunc__"+AnonActionCount+"("+Callfields+"))"
+      End
+
+      AnonActionCount += 1
+    End
+    Print "Macro:"+globalVarName+"="
+    Print AddCode
+
+    tmp = tmp.Replace("{("+codebefore+"}", globalVarName)+"~n"+AddCode
+    code = StrFromTo(tmp,"{(","}")
+    foundmacro = code.Find("=&gt;")
+
+  End
+  Return tmp
+End
+
+Function MacroExpand:String(path:String)
+  Local tmp := LoadString( path )
+  Return ConvertMacros(tmp)
+End
+
+Global linesRemovedByMacros
+Function PreProcess$( path$,modpath$="" )
+  linesRemovedByMacros = 0
+	Local cnest,ifnest,line,source:=New StringStack
+	
+	Local toker:=New Toker( path, MacroExpand(path) )
+	toker.NextToke
+
+  If linesRemovedByMacros&gt;0 Then
+    Print "("+path+":~nlines removed:"+linesRemovedByMacros+")"
+  End
+
+' ------------------------------------------------------
+' -                                                    -
+' -        END MACRO CODE                              -
+' -                                                    -
+' ------------------------------------------------------
+ </pre><br><br>If you add the code above and recompile trans, you can write something like the following;<br><br><pre class=code>
+
+Class Action
+  Method Do:Void() Abstract
+End
+
+Class Action1&lt;T&gt;
+  Method Do:Void(item:T) Abstract
+End
+
+Class Action2&lt;T,V&gt;
+  Method Do:Void(sender:T,value:V) Abstract
+End
+
+Class Func&lt;T&gt;
+  Method Do:T() Abstract
+End
+Class Func1&lt;T,R&gt;
+  Method Do:R(value:T) Abstract
+End
+Class Func2&lt;T,V,R&gt;
+  Method Do:R(value:T,value2:V) Abstract
+End
+Class Func3&lt;T,V,A,R&gt;
+  Method Do:R(value:T,value2:V,value3:A) Abstract
+End
+    
+Local sl := New SpriteStack()
+
+  sl.Push(New Circle(10,10,5))
+  sl.Push(New Circle(20,10,5))
+  sl.Push(New Oval(20,20,25,15))
+  sl.Push(New Circle(30,20,15))
+  sl.Push(New Oval(20,30,15,45))
+  sl.Push(New Rect(20,20,15,15))
+  sl.Push(New Rect(20,30,15,45))
+  sl.Push(New Sprite(0,30))
+  sl.Push(New Rect(20,20,25,15))
+  sl.Push(New Sprite(20,10))
+  sl.Push(New Sprite(50,30))
+  sl.Push(New Oval(20,20,15,15))
+
+  sl.Where({(x:Sprite)? =&gt; x.X&gt;10}).ForEach {(x:Sprite)=&gt;
+    x.Draw()
+  }
+
+  Local ints := New bbIntList([1,2,3,4,5,6,7,8,9])
+
+  Local test = 5
+  Local evens := {(x)? =&gt; x &gt; |test|}
+
+  For Local i := Eachin ints.Where(evens)
+    Print i
+  End
+
+  Print {(x)% =&gt; x*x}.Do(5)
+  Local cube := {(x)# =&gt; x*x*x}
+
+  Print cube.Do(5)
+</pre><br><br>This is just a mockup for fun, but it's close to what the C# compiler does. <br><br></td></tr></table><br>
+<a name="2077994"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice work. It'd be great to see these sorts of features in Monkey. <br><br></td></tr></table><br>
+<a name="2078003"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >maltic</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I would love to seen lambdas in Monkey. The only problems I see are with closures, since every lambda will need to carry around a context, this would create a lot of garbage. This could be a big problem on the C++ GC that comes with Monkey--I expect that making the collector generational might help since most closures are short lived. The reason C# can get away with lambdas (see F#) is that .NET and Mono have quite advanced generational, compacting, concurrent garbage collectors. Monkey has a (comparatively) simple incremental mark and sweep garbage collector. Still, I would absolutely use this feature if it were implemented. <br><br></td></tr></table><br>
+<a name="2078002"></a>
+
+<a name="2078067"></a>
+
+<a name="2078068"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Restricting curly braces to anonymous functions is an interesting thought.  The following line confuses me, though:<br><pre class=code>sl.Where({(x:Sprite)? =&gt; x.X&gt;10}).ForEach {(x:Sprite)=&gt;  x.Draw()}</pre><br><br>It's using LINQ-like query filtering, which I thought was something separate from lambda expressions (even though it's a really awesome way to use them).  Furthermore, I have no idea what ForEach is doing in there.  When trying to figure it out, I stumbled on this article, which I guess predicted the confusion from someone like me:  <a href="http://blogs.msdn.com/b/ericlippert/archive/2009/05/18/foreach-vs-foreach.aspx" target="_blank">http://blogs.msdn.com/b/ericlippert/archive/2009/05/18/foreach-vs-foreach.aspx</a> .  I agree that having ForEach as a pseudo-method which takes a fun is pretty confusing.<br><br>Maybe more like this?  (Note: scope of <i>x</i> is on the anonymous function's level, so Local <i>o</i> could be called <i>x</i> too if you really wanted)<br><pre class=code>
+For local o:Sprite = EachIn sl.Where( {(x:Sprite)? =&gt;  x.X &gt; 10} )
+    o.Draw()
+Next
+</pre><br><br><br><b>Edit</b>:  Writing the return type as a suffix of the arguments of an anonymous function confused me at first, too.  If you were assigning an anonymous function to a variable, it might be more consistent to allow the return type to be inferred from the variable's type, with syntax similar to a cast being used to "Force" the anonymous function's return type.  Some potential examples:<br><br><pre class=code>Global MyFunc:Bool = {(x:Int) =&gt;  x &gt; 10}</pre><br><pre class=code>Global MyFunc:= {Bool(x:Int) =&gt;  x &gt; 10}</pre><br><br>Also I was thinking that the syntax could be a little more Monkey-like, and that means making certain operators resemble keywords, like this:<br><pre class=code>Global MyFunc:Bool = {(x:Int) Returns x &gt; 10}</pre><br><br>Could make it more readable, particularly if =&gt; is only used in this very specific instance! <br><br></td></tr></table><br>
+<a name="2078062"></a>
+
+<a name="2078060"></a>
+
+<a name="2078061"></a>
+
+<a name="2078103"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Also I was thinking that the syntax could be a little more Monkey-like, and that means making certain operators resemble keywords <br></div><br>Although this is an interesting project, i feel that introducing brackets and unusual assignment operators deviates from the original vision of the language. <br><br></td></tr></table><br>
+<a name="2078185"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> @AdamRedwoods<br><br>When doing background research for my post, I looked at how several languages implemented lambda expressions, including the syntax of several functional languages, and have found many of them to be pretty confusing.  The language that I feel Monkey most closely resembles, VB.NET, has a lambda syntax which would probably be a nightmare to parse -- There is no operator or keyword which separates an anonymous function from the body of that function;  the compiler is simply supposed to "recognize" it by context.  As a side effect of that, it's also not visually apparent on its face to a casual observer that the code's different from the rest of the program in terms of flow!  To make matters worse, it re-uses existing keywords in a new way to describe the beginning of an anonymous function as a layer of syntactic sugar:<br><pre class=code>  Dim increment1 = Function(x) x + 1</pre><br><br>As you can see, Function is re used with slightly different syntax, and the function body is just kinda sitting out there off to the side.  In a longer line of code this could get lost.  On the other hand, curly braces aren't used anywhere in Monkey right now, so this does a really good job of emphasizing the paradigm shift that lambda expressions bring.  My biggest concern with the "original vision of the language", as you'd put it, is with how that's interpreted.  Some people might think that lambda expressions aren't included in that vision at all.  <br><br>I think they would fit perfectly fine, and we can do it in a way that makes Monkey stand out as a flagship example of how a BASIC dialect could do it right.  My thoughts on the matter are that they just have to be done without introducing "operator symbol soup" -- the crap that seems to infect languages like C++, particularly the fetishization of opaque operator overloading functionality. (cout &lt;&lt; "Hello World", anyone?)  <br><br>That's why I suggested making a new reserved keyword instead of a symbol for this purpose.  And brackets, I was okay with only because they'd be so easy for anyone who knows Monkey to recognize it as a lambda expression, something which goes against the normal "flow" of imperative style.  It would probably be easier to maintain in trans, too, because there would be less contextual guessing scenarios.  (Mark seemed to make a deliberate choice avoiding using context-sensitive keywords in things like EachIn, Logic operators vs bitwise, and etc. compared to VB -- which has a whole boatload of context-sensitive keywords like If, Is, and so on.)<br><br>What would you suggest in its place? <br><br></td></tr></table><br>
+<a name="2078184"></a>
+
+<a name="2078182"></a>
+
+<a name="2078181"></a>
+
+<a name="2078205"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >maltic</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> If you wanted to keep in the tradition of BASIC-like syntax (as well as being pithy), you could always pull a Python/Scheme: <pre class=code>map(my_array, Lambda:Int (x:Int) x + 1 End)</pre> Or the slightly clearer Ruby-Python cross breed: <pre class=code>map(my_array, Lambda:Int (x:Int) Do x + 1 End)</pre> Both are completely context free in the LL(1) sense.<br><br>Personally I don't think you can get /much/ better than Haskell for syntax <pre class=code>map myArray (\ x -&gt; x + 1)</pre> (which is actually fully generic and type safe) but that isn't really an option here.<br><br>ML-like languages, particularly F#, are also not bad these days. If you enjoy these features in C#, you should check out F#: <pre class=code>Array.map myArray (fun x -&gt; x + 1)</pre> Again this is fully generic and type safe.<br><br>Of course, nothing will ever beat Forth: <pre class=code>my_array [1 +] map</pre><br>How is that for minimal syntax?<br><br>Edit: Sorry for the tangent. Language design is a bit of a hobby of mine. <br><br></td></tr></table><br>
+<a name="2078204"></a>
+
+<a name="2078203"></a>
+
+<a name="2078202"></a>
+
+<a name="2078201"></a>
+
+<a name="2078200"></a>
+
+<a name="2078199"></a>
+
+<a name="2078198"></a>
+
+<a name="2078197"></a>
+
+<a name="2078196"></a>
+
+<a name="2078193"></a>
+
+<a name="2078194"></a>
+
+<a name="2078195"></a>
+
+<a name="2078189"></a>
+
+<a name="2078190"></a>
+
+<a name="2078191"></a>
+
+<a name="2078192"></a>
+
+<a name="2079115"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Samah</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> <a href="http://en.wikipedia.org/wiki/Shakespeare_(programming_language)" target="_blank">http://en.wikipedia.org/wiki/Shakespeare_(programming_language)</a><br><br><pre class=code>A program of lambda example.
+
+Romeo, a young man of strong resolve.
+Macbeth, an odd man with a kind streak.
+
+     Act I: Assumption that Macbeth remembers infinite things
+	 
+	 Scene I: The retrieval of Macbeth
+
+[Enter Romeo and Macbeth]
+
+Romeo:
+ Recall your past lives!
+ You are as brave as the sum of thyself and a hero!
+
+Macbeth:
+ Remember me.
+ Let us return to scene I.
+
+[Exeunt]</pre> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

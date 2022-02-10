@@ -1,0 +1,663 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Particle System</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Particle System</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Particle System</a><br><br>
+<a name="783533"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SSS</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi everyone! (Full code at the bottom of the post)<br><br>I started work on an RTS a little while ago and decided that it was time to make a particle system for it. Now, I've never actually made a particle system so this was a first but I kind of like the design. So, I've decided to release it. I only started it an hour or so ago so don't expect much; but that's kind of the philosophy. It's meant to be as modular as possible to allow for any modifications that you want. <br><br>The way it works is through "modifiers". Particles themselves have nothing associated with them. Instead they are acted upon by modifiers that are all user defined. They can hold any kind of data that you'd like them to hold through the use of a "Data" type. Furthermore user defined emitters govern the creation of the particles themselves. <br><br>Anyway, code might make it slightly easier to see so here is the underlying structure:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Type TParticle
+	Global number
+
+	Field data:TList
+	Field alive
+	
+	Method New()
+		data = New TList
+		alive = True
+		number:+1
+	End Method
+	
+	Method Delete()
+		number:-1
+	End Method
+	
+	Method AddData(dat:TData)
+		For Local i:TData = EachIn(data)
+			If dat.name$ = i.name$ Then  Return False
+		Next
+		data.addlast(dat)
+		Return True
+	End Method
+	
+	Method Set(kind$,dat:TData)
+		For Local i:TData = EachIn(data)
+			If kind = i.name$ 
+				data.remove(i)
+			EndIf
+		Next
+		data.addlast(dat)
+		Return True
+	End Method
+	
+	Method Get:TData(kind$)
+		For Local i:TData = EachIn(data)
+			If kind = i.name$ Then Return i
+		Next
+		Return Null
+	End Method
+End Type
+
+Type TModifier
+	Global list:TList = New TList
+	
+	Field plist:TList
+	
+	Method New()
+		list.addlast(Self)
+		plist = New TList
+	End Method
+	
+	Method AddParticle(p:TParticle)
+		plist.addlast(p)
+		SetData(p)
+	End Method
+	
+	Function UpdateAll()
+		For Local i:TModifier = EachIn(list)
+			i.UpdateParticles()
+		Next
+	End Function
+	
+	Method UpdateParticles()
+		Lock()
+		For Local i:TParticle = EachIn(plist)
+			If i.alive = True
+				Update(i)
+			Else
+				plist.remove(i)
+			EndIf
+		Next
+		Unlock()
+	End Method
+	
+	Method Update(p:TParticle) Abstract
+	
+	Method SetData(p:TParticle) Abstract
+	
+	Method Lock() Abstract
+	
+	Method Unlock() Abstract
+End Type
+
+Type TData
+	Field name$
+End Type
+
+Type TEmitter
+	Global list:TList=New TList
+	
+	Field rate
+	Field x#,y#
+	
+	Field time
+	
+	Method New()
+		list.addlast(Self)
+		time = MilliSecs()
+		rate = 1000
+	End Method
+	
+	Function UpdateAll()
+		Local time = MilliSecs()
+		For Local i:TEmitter = EachIn(list)
+			For Local t:Int = 0 To Int((time-i.time)/i.rate)-1
+				i.Emit()
+				i.time = MilliSecs()
+			Next
+		Next
+	End Function
+	
+	Method Emit() Abstract
+End Type
+</textarea><br><br>Then, in the main loop,<br><pre class=code>
+Graphics 800,600
+
+While Not KeyDown(KEY_ESCAPE)
+	Cls
+	TModifier.UpdateAll()
+	TEmitter.UpdateAll()
+	Flip
+Wend
+</pre><br><br>Clearly though, this won't do anything at all! So, to make it do something useful. To start we need to add some modifiers and emitters. Lets  start with making the particles able to draw and move. Lets also add an emitter that will emit particles randomly in every direction.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Type TRandomEmitter Extends TEmitter
+	Global drawing:TDrawing = New TDrawing
+	Global mover:TMove = New TMove
+	Global culler:TCull = New TCull
+
+
+	Method Emit()
+		Local p:TParticle = New TParticle
+		p.AddData(TPosition.Create(x,y))
+		p.AddData(TVelocity.Create(Rnd(4)-2,Rnd(4)-2))
+		p.AddData(TColor.Create(Rand(255),Rand(255),Rand(255)))
+		drawing.AddParticle(p)
+		mover.AddParticle(p)
+		culler.AddParticle(p)
+	End Method
+End Type
+
+Type TPosition Extends TData
+	Field x#, y#
+	
+	Method New()
+		name$ = "position"
+	End Method
+	
+	Function Create:TPosition(x#,y#)
+		Local p:TPosition = New TPosition
+		p.x = x
+		p.y = y
+		Return p
+	End Function
+End Type
+
+Type TVelocity Extends TData
+	Field x#, y#
+	
+	Method New()
+		name$ = "velocity"
+	End Method
+
+	Function Create:TVelocity(x#,y#)
+		Local p:TVelocity= New TVelocity
+		p.x = x
+		p.y = y
+		Return p
+	End Function
+End Type
+
+Type TColor Extends TData
+	Field r,g,b
+	
+	Method New()
+		name$ = "color"
+	End Method
+
+	Function Create:TColor(r,g,b)
+		Local p:TColor= New TColor
+		p.r = r
+		p.g = g
+		p.b = b
+		Return p
+	End Function
+End Type
+
+Type TDrawing Extends TModifier
+	Method Update(p:TParticle)
+		Local pos:TPosition = TPosition(p.Get("position"))
+		Local col:TColor = TColor(p.Get("color"))
+		If Not col = Null
+			SetColor col.r,col.g,col.b
+		EndIf
+		DrawOval pos.x#-2,pos.y#-2,4,4
+		SetColor 255,255,255
+	End Method
+	
+	Method SetData(p:TParticle)
+		p.AddData(New TPosition)
+	End Method
+	
+	Method Lock()
+	End Method
+	
+	Method Unlock()
+	End Method
+End Type 
+
+Type TMove Extends TModifier
+	Method Update(p:TParticle)
+		Local pos:TPosition = TPosition(p.Get("position"))
+		Local vel:TVelocity = TVelocity(p.Get("velocity"))
+		
+		pos.x :+ vel.x
+		pos.y :+ vel.y
+		
+	End Method
+	
+	Method SetData(p:TParticle)
+		p.AddData(New TVelocity)
+		p.AddData(New TPosition)
+	End Method
+	
+	Method Lock()
+	End Method
+	
+	Method Unlock()
+	End Method
+End Type
+
+Type TCull Extends TModifier
+	Method Update(p:TParticle)
+		Local pos:TPosition = TPosition(p.Get("position"))
+		If pos.x&lt;0 Or pos.x&gt;GraphicsWidth() Or pos.y&lt;0 Or pos.y&gt;GraphicsHeight() Then p.alive = False
+	End Method
+	
+	Method SetData(p:TParticle)
+		p.AddData(New TPosition)
+	End Method
+	
+	Method Lock()
+	End Method
+	
+	Method Unlock()
+	End Method
+End Type
+</textarea><br><br>Then a random emitter would have to be added to the main loop. It would become,<br><pre class=code>
+Local em:TRandomEmitter = New TRandomEmitter
+em.x = 400
+em.y = 300
+em.rate = 5
+While Not KeyDown(KEY_ESCAPE)
+	Cls
+	TModifier.UpdateAll()
+	TEmitter.UpdateAll()
+	Flip
+Wend
+</pre><br><br>To see how easy it is to add new modifiers let us make it so that the particles fade out. This requires four modifications:<br><br>1) The introduction of a data type to hold the alpha of the particles<br><br>2) The introduction of a type to adjust the alpha<br><br>3) Modification to the drawing type to draw with alpha<br><br>4) The addition of the fade type in the emitter<br><br>The base types look like,<br><pre class=code>
+Type TAlpha Extends TData
+	Field alpha#
+	
+	Method New()
+		name$ = "alpha"
+		alpha = 1.0
+	End Method
+	
+	Function Create:TAlpha(alpha#)
+		Local p:TAlpha =New TAlpha
+		p.alpha = alpha
+		Return p
+	End Function
+End Type
+
+Type TFade Extends TModifier
+	Method Update(p:TParticle)
+		Local alpha:TAlpha = TAlpha(p.Get("alpha"))
+		alpha.alpha:-0.01
+		If alpha.alpha&lt;0 Then p.alive = False
+	End Method
+	
+	Method SetData(p:TParticle)
+		p.AddData(New TAlpha)
+	End Method
+	
+	Method Lock()
+	End Method
+	
+	Method Unlock()
+	End Method
+End Type
+</pre><br><br>and the updated draw type and emitter type look like,<br><pre class=code>
+Type TRandomEmitter Extends TEmitter
+	Global drawing:TDrawing = New TDrawing
+	Global mover:TMove = New TMove
+	Global culler:TCull = New TCull
+	Global fader:TFade = New TFade
+
+
+	Method Emit()
+		Local p:TParticle = New TParticle
+		p.AddData(TPosition.Create(x,y))
+		p.AddData(TVelocity.Create(Rnd(4)-2,Rnd(4)-2))
+		p.AddData(TColor.Create(Rand(255),Rand(255),Rand(255)))
+		p.AddData(New TAlpha)
+		fader.AddParticle(p)
+		drawing.AddParticle(p)
+		mover.AddParticle(p)
+		culler.AddParticle(p)
+	End Method
+End Type
+
+Type TDrawing Extends TModifier
+	Field blendmode
+	
+	Method Update(p:TParticle)
+		Local pos:TPosition = TPosition(p.Get("position"))
+		Local col:TColor = TColor(p.Get("color"))
+		Local alpha:TAlpha = TAlpha(p.Get("alpha"))
+		If Not alpha = Null
+			SetAlpha alpha.alpha
+		EndIf
+		If Not col = Null
+			SetColor col.r,col.g,col.b
+		EndIf
+		DrawOval pos.x#-2,pos.y#-2,4,4
+		SetColor 255,255,255
+		SetAlpha 1
+	End Method
+	
+	Method SetData(p:TParticle)
+		p.AddData(New TPosition)
+	End Method
+	
+	Method Lock()
+		blendmode = GetBlend()
+		SetBlend ALPHABLEND
+	End Method
+	
+	Method Unlock()
+		SetBlend blendmode
+	End Method
+End Type 
+</pre><br><br>Here's all the code in one place ready to be run!<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+Type TParticle
+	Global number
+
+	Field data:TList
+	Field alive
+	
+	Method New()
+		data = New TList
+		alive = True
+		number:+1
+	End Method
+	
+	Method Delete()
+		number:-1
+	End Method
+	
+	Method AddData(dat:TData)
+		For Local i:TData = EachIn(data)
+			If dat.name$ = i.name$ Then  Return False
+		Next
+		data.addlast(dat)
+		Return True
+	End Method
+	
+	Method Set(kind$,dat:TData)
+		For Local i:TData = EachIn(data)
+			If kind = i.name$ 
+				data.remove(i)
+			EndIf
+		Next
+		data.addlast(dat)
+		Return True
+	End Method
+	
+	Method Get:TData(kind$)
+		For Local i:TData = EachIn(data)
+			If kind = i.name$ Then Return i
+		Next
+		Return Null
+	End Method
+End Type
+
+Type TModifier
+	Global list:TList = New TList
+	
+	Field plist:TList
+	
+	Method New()
+		list.addlast(Self)
+		plist = New TList
+	End Method
+	
+	Method AddParticle(p:TParticle)
+		plist.addlast(p)
+		SetData(p)
+	End Method
+	
+	Function UpdateAll()
+		For Local i:TModifier = EachIn(list)
+			i.UpdateParticles()
+		Next
+	End Function
+	
+	Method UpdateParticles()
+		Lock()
+		For Local i:TParticle = EachIn(plist)
+			If i.alive = True
+				Update(i)
+			Else
+				plist.remove(i)
+			EndIf
+		Next
+		Unlock()
+	End Method
+	
+	Method Update(p:TParticle) Abstract
+	
+	Method SetData(p:TParticle) Abstract
+	
+	Method Lock() Abstract
+	
+	Method Unlock() Abstract
+End Type
+
+Type TData
+	Field name$
+End Type
+
+Type TEmitter
+	Global list:TList=New TList
+	
+	Field rate
+	Field x#,y#
+	
+	Field time
+	
+	Method New()
+		list.addlast(Self)
+		time = MilliSecs()
+		rate = 1000
+	End Method
+	
+	Function UpdateAll()
+		Local time = MilliSecs()
+		For Local i:TEmitter = EachIn(list)
+			For Local t:Int = 0 To Int((time-i.time)/i.rate)-1
+				i.Emit()
+				i.time = MilliSecs()
+			Next
+		Next
+	End Function
+	
+	Method Emit() Abstract
+End Type
+
+Type TRandomEmitter Extends TEmitter
+	Global drawing:TDrawing = New TDrawing
+	Global mover:TMove = New TMove
+	Global culler:TCull = New TCull
+	Global fader:TFade = New TFade
+
+
+	Method Emit()
+		Local p:TParticle = New TParticle
+		p.AddData(TPosition.Create(x,y))
+		p.AddData(TVelocity.Create(Rnd(4)-2,Rnd(4)-2))
+		p.AddData(TColor.Create(Rand(255),Rand(255),Rand(255)))
+		p.AddData(New TAlpha)
+		fader.AddParticle(p)
+		drawing.AddParticle(p)
+		mover.AddParticle(p)
+		culler.AddParticle(p)
+	End Method
+End Type
+
+Type TPosition Extends TData
+	Field x#, y#
+	
+	Method New()
+		name$ = "position"
+	End Method
+	
+	Function Create:TPosition(x#,y#)
+		Local p:TPosition = New TPosition
+		p.x = x
+		p.y = y
+		Return p
+	End Function
+End Type
+
+Type TVelocity Extends TData
+	Field x#, y#
+	
+	Method New()
+		name$ = "velocity"
+	End Method
+
+	Function Create:TVelocity(x#,y#)
+		Local p:TVelocity= New TVelocity
+		p.x = x
+		p.y = y
+		Return p
+	End Function
+End Type
+
+Type TColor Extends TData
+	Field r,g,b
+	
+	Method New()
+		name$ = "color"
+	End Method
+
+	Function Create:TColor(r,g,b)
+		Local p:TColor= New TColor
+		p.r = r
+		p.g = g
+		p.b = b
+		Return p
+	End Function
+End Type
+
+Type TAlpha Extends TData
+	Field alpha#
+	
+	Method New()
+		name$ = "alpha"
+		alpha = 1.0
+	End Method
+	
+	Function Create:TAlpha(alpha#)
+		Local p:TAlpha =New TAlpha
+		p.alpha = alpha
+		Return p
+	End Function
+End Type
+
+Type TDrawing Extends TModifier
+	Field blendmode
+	
+	Method Update(p:TParticle)
+		Local pos:TPosition = TPosition(p.Get("position"))
+		Local col:TColor = TColor(p.Get("color"))
+		Local alpha:TAlpha = TAlpha(p.Get("alpha"))
+		If Not alpha = Null
+			SetAlpha alpha.alpha
+		EndIf
+		If Not col = Null
+			SetColor col.r,col.g,col.b
+		EndIf
+		DrawOval pos.x#-2,pos.y#-2,4,4
+		SetColor 255,255,255
+		SetAlpha 1
+	End Method
+	
+	Method SetData(p:TParticle)
+		p.AddData(New TPosition)
+	End Method
+	
+	Method Lock()
+		blendmode = GetBlend()
+		SetBlend ALPHABLEND
+	End Method
+	
+	Method Unlock()
+		SetBlend blendmode
+	End Method
+End Type 
+
+Type TMove Extends TModifier
+	Method Update(p:TParticle)
+		Local pos:TPosition = TPosition(p.Get("position"))
+		Local vel:TVelocity = TVelocity(p.Get("velocity"))
+		
+		pos.x :+ vel.x
+		pos.y :+ vel.y
+		
+	End Method
+	
+	Method SetData(p:TParticle)
+		p.AddData(New TVelocity)
+		p.AddData(New TPosition)
+	End Method
+	
+	Method Lock()
+	End Method
+	
+	Method Unlock()
+	End Method
+End Type
+
+Type TCull Extends TModifier
+	Method Update(p:TParticle)
+		Local pos:TPosition = TPosition(p.Get("position"))
+		If pos.x&lt;0 Or pos.x&gt;GraphicsWidth() Or pos.y&lt;0 Or pos.y&gt;GraphicsHeight() Then p.alive = False
+	End Method
+	
+	Method SetData(p:TParticle)
+		p.AddData(New TPosition)
+	End Method
+	
+	Method Lock()
+	End Method
+	
+	Method Unlock()
+	End Method
+End Type
+
+Type TFade Extends TModifier
+	Method Update(p:TParticle)
+		Local alpha:TAlpha = TAlpha(p.Get("alpha"))
+		alpha.alpha:-0.01
+		If alpha.alpha&lt;0 Then p.alive = False
+	End Method
+	
+	Method SetData(p:TParticle)
+		p.AddData(New TAlpha)
+	End Method
+	
+	Method Lock()
+	End Method
+	
+	Method Unlock()
+	End Method
+End Type
+		
+Graphics 800,600
+
+Local em:TRandomEmitter = New TRandomEmitter
+em.x = 400
+em.y = 300
+em.rate = 5
+
+Local fps = 0
+Local frames = 0
+Local time = MilliSecs()
+While Not KeyDown(KEY_ESCAPE)
+	Cls
+	TModifier.UpdateAll()
+	TEmitter.UpdateAll()
+	frames = frames + 1
+	If MilliSecs()-time&gt;1000
+		time = MilliSecs()
+		fps = frames
+		frames = 0
+	EndIf
+	DrawText TParticle.number + " Particles",10,10
+	DrawText fps + " Frames Per Second",10,30
+	Flip
+Wend
+</textarea><br><br>Anyway, I hope someone finds this in some way useful and I'd love to hear comments/critiques on the design. <br><br></td></tr></table><br>
+<a name="783534"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SSS</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> If anyone actually decides they might want to use this then post here and I'll write up some more formal documentation about the addition of new modifiers etc... The basic theory is that you should never have to touch any of the underlying code (that which is in the first box). <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

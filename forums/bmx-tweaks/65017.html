@@ -1,0 +1,419 @@
+<!DOCTYPE html><html lang="en" ><head ><title >RequestFile() with Options button</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >RequestFile() with Options button</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=110" >BlitzMax Module Tweaks</a>/<a href="#bottom" >RequestFile() with Options button</a><br><br>
+<a name="725746"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Want an options button in your save file dialog?:<br><img src="http://www.modula2.org/projects/custsavedialog/spss_export.gif"><br><br>Replace "brl.mod\system.mod\system.win32.cpp" with this:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+#include &lt;shlobj.h&gt;
+
+#include "system.h"
+
+static int mods;
+static int started;
+
+static HWND mouseHwnd;
+static BBObject *mouseSource;
+static int mouseVisible;
+
+static int keyCode( int wp,int lp ){
+	switch( ((lp&gt;&gt;17)&amp;0x80)|((lp&gt;&gt;16)&amp;0x7f) ){
+	case 42:return VK_LSHIFT;
+	case 54:return VK_RSHIFT;
+	case 29:return VK_LCONTROL;
+	case 157:return VK_RCONTROL;
+	case 56:return VK_LMENU;
+	case 184:return VK_RMENU;
+	}
+	return wp;
+}
+
+static void updateMods(){
+	mods=0;
+	if( GetKeyState( VK_SHIFT )&lt;0 ) mods|=MODIFIER_SHIFT;
+	if( GetKeyState( VK_CONTROL )&lt;0 ) mods|=MODIFIER_CONTROL;
+	if( GetKeyState( VK_MENU )&lt;0 ) mods|=MODIFIER_OPTION;
+	if( GetKeyState( VK_LWIN )&lt;0 || GetKeyState( VK_RWIN )&lt;0 ) mods|=MODIFIER_SYSTEM;
+}
+
+static const char *appTitle(){
+	return bbStringToCString( bbAppTitle );
+}
+
+static void bbSystemShutdown(){	
+	if( !started ) return;
+	timeEndPeriod( 1 );
+	started=0;
+}
+
+static int isControl( HWND hwnd ){
+	int style=GetWindowLong( hwnd,GWL_STYLE) &amp; (WS_TABSTOP|WS_CHILD);
+	return style==(WS_TABSTOP|WS_CHILD);
+}
+
+static void updateMouseVisibility(){
+	int visible=mouseVisible || !mouseHwnd;
+	int n=ShowCursor( visible );
+	if( n&lt;-1 || n&gt;0 ) ShowCursor( !visible );
+}
+
+static void setMouseHwnd( HWND hwnd,int x,int y,BBObject *source ){
+	if( hwnd==mouseHwnd ) return;
+	if( mouseHwnd ){
+		POINT p;
+		GetCursorPos( &amp;p );
+		ScreenToClient( mouseHwnd,&amp;p );
+		bbSystemEmitEvent( BBEVENT_MOUSELEAVE,mouseSource,0,0,p.x,p.y,&amp;bbNullObject );
+	}
+	mouseHwnd=hwnd;
+	updateMouseVisibility();
+	if( mouseHwnd ){
+		TRACKMOUSEEVENT tm={sizeof(tm),TME_LEAVE,hwnd,0};
+		mouseSource=source;
+		bbSystemEmitEvent( BBEVENT_MOUSEENTER,mouseSource,0,0,x,y,&amp;bbNullObject );
+		_TrackMouseEvent( &amp;tm );
+	}
+}
+
+static HWND focHwnd;
+
+static void beginPanel(){
+	focHwnd=GetFocus();
+}
+
+static void endPanel(){
+	SetFocus( focHwnd );
+}
+
+void bbSystemEmitOSEvent( HWND hwnd,UINT msg,WPARAM wp,LPARAM lp,BBObject *source ){
+
+	RECT rect;
+	int inRect,id,data=0,x=0,y=0;
+	
+	switch( msg ){
+	case WM_KEYDOWN:case WM_SYSKEYDOWN:
+		if( wp&lt;1 || wp&gt;255 ) return;
+		id=( lp &amp; 0x40000000 ) ? BBEVENT_KEYREPEAT : BBEVENT_KEYDOWN;
+		data=keyCode( wp,lp );
+		break;
+	case WM_KEYUP:case WM_SYSKEYUP:
+		if( wp&lt;1 || wp&gt;255 ) return;
+		id=BBEVENT_KEYUP;
+		data=keyCode( wp,lp );
+		break;
+	case WM_CHAR:case WM_SYSCHAR:
+		id=BBEVENT_KEYCHAR;
+		data=wp;
+		break;
+	case WM_LBUTTONDOWN:case WM_RBUTTONDOWN:case WM_MBUTTONDOWN:
+		SetCapture( hwnd );
+		id=BBEVENT_MOUSEDOWN;
+		data=(msg==WM_LBUTTONDOWN) ? 1 : (msg==WM_RBUTTONDOWN ? 2 : 3);
+		x=(short)LOWORD(lp);
+		y=(short)HIWORD(lp);
+		break;
+	case WM_LBUTTONUP:case WM_RBUTTONUP:case WM_MBUTTONUP:
+		ReleaseCapture();
+		id=BBEVENT_MOUSEUP;
+		data=(msg==WM_LBUTTONUP) ? 1 : (msg==WM_RBUTTONUP ? 2 : 3);
+		x=(short)LOWORD(lp);
+		y=(short)HIWORD(lp);
+		break;
+	case WM_MOUSEMOVE:
+		x=(short)LOWORD(lp);
+		y=(short)HIWORD(lp);
+		if (wp&amp;MK_LBUTTON) data=1;
+		if (wp&amp;MK_MBUTTON) data=4;
+		if (wp&amp;MK_RBUTTON) data=2;
+		GetClientRect( hwnd,&amp;rect );
+		inRect=(x&gt;=0 &amp;&amp; y&gt;=0 &amp;&amp; x&lt;rect.right &amp;&amp; y&lt;rect.bottom);
+		setMouseHwnd( inRect ? hwnd : 0,x,y,source );
+		id=BBEVENT_MOUSEMOVE;
+		break;
+	case WM_MOUSELEAVE:
+		if( hwnd==mouseHwnd ) setMouseHwnd( 0,(short)LOWORD(lp),(short)HIWORD(lp),&amp;bbNullObject );
+		return;
+	case WM_MOUSEWHEEL:
+		id=BBEVENT_MOUSEWHEEL;
+		data=(short)HIWORD(wp)/120;
+		break;
+	case WM_CLOSE:		
+		id=BBEVENT_APPTERMINATE;
+		break;
+	case WM_ACTIVATEAPP:
+		id=wp ? BBEVENT_APPRESUME : BBEVENT_APPSUSPEND;
+		break;
+	default:
+		return;
+	}
+	
+	bbSystemEmitEvent( id,source,data,mods,x,y,&amp;bbNullObject );
+}
+
+void bbSystemStartup(){
+	if( started ) return;
+	
+	timeBeginPeriod( 1 );
+	atexit( bbSystemShutdown );
+	mouseVisible=1;
+	started=1;
+}
+
+void bbSystemPoll(){
+
+	MSG msg;
+
+	while( PeekMessage( &amp;msg,0,0,0,PM_REMOVE ) ){
+	
+		switch( msg.message ){
+		case WM_KEYDOWN:case WM_KEYUP:
+		case WM_SYSKEYDOWN:case WM_SYSKEYUP:
+			switch( msg.wParam ){
+			case VK_SHIFT:
+			case VK_CONTROL:
+			case VK_MENU:
+			case VK_LWIN:case VK_RWIN:
+				updateMods();
+				break;
+			}
+			break;
+		}
+		
+		if( isControl( msg.hwnd ) ){
+			HWND hwnd=GetParent( msg.hwnd );
+			while( hwnd &amp;&amp; isControl( hwnd ) ) hwnd=GetParent( hwnd );
+			if( hwnd &amp;&amp; IsDialogMessage( hwnd,&amp;msg ) ) continue;
+		}
+		
+		TranslateMessage( &amp;msg );
+		DispatchMessage( &amp;msg );
+	}
+}
+
+void bbSystemWait(){
+	MsgWaitForMultipleObjects( 0,0,0,INFINITE,QS_ALLINPUT );	//QS_ALLEVENTS );
+	bbSystemPoll();
+}
+
+void bbSystemMoveMouse( int x,int y ){
+	POINT point={x,y};
+	HWND hwnd=GetActiveWindow();
+	if( hwnd ) ClientToScreen( hwnd,&amp;point );
+	SetCursorPos( point.x,point.y );
+}
+
+void bbSystemSetMouseVisible( int visible ){
+	mouseVisible=visible;
+	updateMouseVisibility();
+}
+
+void bbSystemNotify( const char *text,int serious ){
+	int flags=(serious?MB_ICONWARNING:MB_ICONINFORMATION)|MB_OK|MB_APPLMODAL|MB_TOPMOST;
+	
+	beginPanel();
+	
+	MessageBox( GetActiveWindow(),text,appTitle(),flags );
+	
+	endPanel();
+}
+
+int bbSystemConfirm( const char *text,int serious ){
+	int n;
+	int flags=(serious?MB_ICONWARNING:MB_ICONINFORMATION)|MB_OKCANCEL|MB_APPLMODAL|MB_TOPMOST;
+	
+	beginPanel();
+
+	n=MessageBox( GetActiveWindow(),text,appTitle(),flags );
+	
+	endPanel();
+	return (n==IDOK)?1:0;
+}
+
+int bbSystemProceed( const char *text,int serious ){
+	int n;
+	int flags=(serious?MB_ICONWARNING:MB_ICONINFORMATION)|MB_YESNOCANCEL|MB_APPLMODAL|MB_TOPMOST;
+	
+	beginPanel();
+
+	n=MessageBox( GetActiveWindow(),text,appTitle(),flags );
+	
+	endPanel();
+	
+	if( n==IDYES ) return 1;
+	if( n==IDNO ) return 0;
+	return -1;
+}
+
+typedef void CallbackFunc( void ); 
+
+CallbackFunc* OptionsCallback;
+
+int CALLBACK BrowseForFileCallback(HWND hwnd,UINT uMsg,LPARAM lp, LPARAM pData){
+	OFNOTIFY *not;
+	NMHDR str;
+	HWND hdlg;
+	char szPath[MAX_PATH];
+	switch(uMsg)
+	{
+		case WM_INITDIALOG:
+			hdlg=GetDlgItem(GetParent(hwnd),pshHelp);
+			SetWindowText(hdlg,"Options");
+			break;
+		case WM_NOTIFY:
+			not = (OFNOTIFY*)pData;
+			str = not-&gt;hdr;
+			switch(str.code)
+			{
+				case CDN_HELP:
+					if (OptionsCallback!=0) {
+						OptionsCallback();
+					}
+					break;
+			}
+			break;
+	}
+	return 0;
+}
+
+int bbSystemRequestFile( const char *text,const char *exts,int save,const char *file,const char *dir,char *buf,int bufsz, CallbackFunc* pFunc ){
+//int bbSystemRequestFile( const char *text,const char *exts,int save,const char *file,const char *dir,char *buf,int bufsz ){
+	int n;
+	OPENFILENAME of={sizeof(of)};
+	
+	OptionsCallback=pFunc;
+
+	strcpy( buf,file );
+	
+	of.hwndOwner=GetActiveWindow();
+	of.lpstrTitle=text;
+	of.lpstrFilter=exts;
+	of.lpstrFile=buf;
+	of.lpstrInitialDir=dir[0] ? dir : 0;
+	of.nMaxFile=bufsz;
+	of.Flags=OFN_HIDEREADONLY|OFN_NOCHANGEDIR;
+
+	beginPanel();
+	
+	if( save ){
+		of.lpstrDefExt=exts;
+		of.Flags|=OFN_OVERWRITEPROMPT;
+
+		if (pFunc!=0) {
+			of.Flags|=OFN_SHOWHELP;
+			of.Flags|=OFN_EXPLORER;
+			of.Flags|=OFN_ENABLEHOOK;
+			of.lpfnHook=BrowseForFileCallback;
+		}
+
+		n=GetSaveFileName( &amp;of );
+	}else{
+		of.Flags|=OFN_FILEMUSTEXIST;
+		n=GetOpenFileName( &amp;of );
+	}
+	
+	endPanel();
+	
+	return n ? 1 : 0;
+}
+
+int CALLBACK BrowseForFolderCallback(HWND hwnd,UINT uMsg,LPARAM lp, LPARAM pData){
+	char szPath[MAX_PATH];
+
+	switch(uMsg)
+	{
+		case BFFM_INITIALIZED:
+			SendMessage(hwnd, BFFM_SETSELECTION, TRUE, pData);
+			break;
+
+		case BFFM_SELCHANGED: 
+			if (SHGetPathFromIDList((LPITEMIDLIST) lp ,szPath)) 
+			{
+				SendMessage(hwnd, BFFM_SETSTATUSTEXT,0,(LPARAM)szPath);	
+
+			}
+			break;
+	}
+
+	return 0;
+}
+
+int bbSystemRequestDir( const char *_text,const char *_dir,char *buf,int bufsz ){
+
+	LPMALLOC shm;
+	ITEMIDLIST *idlist;
+	BROWSEINFO bi={0};
+	char tmp[4096],*p;
+	
+	GetFullPathName( _dir,4096,tmp,&amp;p );
+	
+	bi.hwndOwner=GetActiveWindow();
+	bi.lpszTitle=_text;
+	bi.ulFlags=BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE;
+	bi.lpfn = BrowseForFolderCallback;
+	bi.lParam = (LPARAM)tmp;
+	
+	beginPanel();
+
+	idlist=SHBrowseForFolder(&amp;bi);
+	
+	endPanel();
+	
+	if( !idlist ) return 0;
+	
+	SHGetPathFromIDList( idlist,buf );
+
+//	SHFree( idlist );	//?!?
+	
+	return 1;
+}
+
+int bbOpenURL( const char *url ){
+	return (int)ShellExecuteA(0,0,url,0,0,10)&gt;32;	//SW_SHOWDEFAULT
+}</textarea><br><br>Open system.bmx and add an extra parameter at the end of RequestFile():<br><pre class=code>Function RequestFile$( text$,extensions$="",save_flag=False,initial_path$="",optionscallback:Byte Ptr=Null )</pre><br><br>Open driver.bmx and add an extra parameter at the end of the RequestFile() method:<br><pre class=code>Method RequestFile$( text$,exts$,save,file$,optionscallback:Byte Ptr ) Abstract</pre><br><br>Open SystemWin32.bmx and replace the RequestFile method with this:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">	Method RequestFile$( text$,exts$,save,path$,optionscallback:Byte Ptr )
+		Local file$,dir$
+		
+		path=path.Replace( "/","\" )
+		
+		Local i=path.FindLast( "\" )
+		If i&lt;&gt;-1
+			dir=path[..i]
+			file=path[i+1..]
+		Else
+			file=path
+		EndIf
+	
+		If exts
+			If exts.Find(":")=-1
+				exts="Files~0*."+exts
+			Else
+				exts=exts.Replace(":","~0*.")
+			EndIf
+			exts=exts.Replace(";","~0")
+			exts=exts.Replace(",",";*.")+"~0"
+		EndIf
+		
+		Local buf:Byte[4096]
+		
+		If bbSystemRequestFile( text,exts,save,file,dir,buf,buf.length,optionscallback ) 
+			Return String.FromCString(buf)
+		EndIf
+
+	End Method</textarea><br><br>Basically, anywhere RequestFile() appears, you need to add the optional callback parameter at the end of it.<br><br>Recompile brl.system and run this code:<br><pre class=code>RequestFile("Options save file requester","All Files:*",1,"",SaveOptionsCallback)
+
+Function SaveOptionsCallback()
+	w=300
+	h=400
+	win:TGadget=CreateWindow("Save Options",(Desktop().ClientWidth()-w)/2,(Desktop().ClientHeight()-h)/2,w,h,0,WINDOW_TITLEBAR+WINDOW_DIALOG)
+	button:TGadget=CreateButton("OK",win.clientwidth()/2-30,win.clientheight()-30,60,28,win)
+
+	Repeat
+		Select WaitEvent()
+			Case EVENT_WINDOWCLOSE
+				If EventSource()=win Exit
+			Case EVENT_GADGETACTION
+				If EventSource()=button Exit
+		EndSelect
+	Forever
+	FreeGadget win
+
+EndFunction</pre> <br><br></td></tr></table><br>
+<a name="726215"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Gavin Beard</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> not had time to test yet but thanks alot, can be very useful :D <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

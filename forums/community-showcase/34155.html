@@ -1,0 +1,720 @@
+<!DOCTYPE html><html lang="en" ><head ><title >ETS : Eole Terrain System</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >ETS : Eole Terrain System</h1><a href="forums.php" >Community Forums</a>/<a href="topics.php?forum=61" >Showcase</a>/<a href="#bottom" >ETS : Eole Terrain System</a><br><br>
+<a name="368703"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Eole</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi all !<br><br>I decide ti give my terrain system without occulusion system in a speciale License Agreement version.<br><br>The heightmap must be in n^2+1 width 129,257,513,1025 ..<br><br>Look at the code to use it<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+; ------------------------------------------------------------------------------------
+; Project Title	: QTS : Quadtree Terrain System
+;
+; Author		: Poursin Nicolas
+; Email			: Nicolas.poursin@...
+;
+; Version		: 1.0.0          
+; Date			: 05.04.2004
+; ------------------------------------------------------------------------------------
+
+
+; ------------------------------------------------------------------------------------
+; Terms of Use License
+;
+; This is a legal agreement ("License Agreement") between you And Poursin Nicolas.
+
+;	You are permitted To:
+
+;   - Create For free or commercial games 
+;   - Free Tool
+;	 
+;	You are Not permitted To: 
+;
+;	1) Sell, resell it
+;	2) Use it, in commercial tool 
+;	3) Modify the products And sell it                   
+; ------------------------------------------------------------------------------------
+
+
+; The global who contain the terrain mesh
+Global QTS_Terrain 
+
+
+; Set collission state for the terrain
+Const QTS_TerrainCollision = 800	
+
+
+; Type that contain the patch of the terrain
+Type QTS_TPatch
+
+	Field mesh
+	Field x#
+	Field y#
+	Field z#
+	Field inView
+	
+End Type
+
+
+
+; Bank used to create the terrain
+Global QTS_QuadTree
+Global QTS_HeightMap
+Global QTS_Vertex
+Global QTS_Tile
+
+; Global information  on the terrain
+Global QTS_BlockSize		; Size of Terrain Patch = 16 * QTS_BlockSize
+Global QTS_HeightMapSize	; Size of the heightmap must = 2^n+1 ( 129,257,513,1025 etc ...)
+
+
+;********************************************** PUBLIC FONCTION **************************************************************
+
+
+
+;------------------------------------------------------------------------------------
+; Name: 				QTS_CreateTerrain
+;
+; Description: Create the terrain m
+;
+; Arguments:	- filename$ : path to the heightmap
+;				- Blocksize	: Size of the terrain patch = 16 * QTS_BlockSize
+;				- EdgeError	: The Error lenght to set the number of polygons
+; -----------------------------------------------------------------------------------
+Function QTS_CreateTerrain( filename$ , BlockSize , EdgeError   )
+
+	QTS_Terrain = CreateMesh()
+	QTS_LoadHeightMap( filename$  )
+
+	QTS_BlockSize = BlockSize
+	QTS_NbPatch = QTS_HeightMapSize/( QTS_BlockSize*16)
+	QTS_Tile = CreateBank( 64*64*4 )
+	
+	QTS_Roughness(EdgeError)
+	QTS_CreatePatch( QTS_BlockSize )
+
+	QTS_Texture()
+	
+	FreeBank QTS_QuadTree
+	FreeBank QTS_HeightMap
+	FreeBank QTS_Vertex
+
+End Function
+
+;------------------------------------------------------------------------------------
+; Name: 				QTS_FreeTerrain
+;
+; Description: Free the terrain and all attach object
+; -----------------------------------------------------------------------------------
+Function QTS_FreeTerrain()
+
+	FreeEntity QTS_Terrain
+	For tt.QTS_TPatch = Each QTS_TPatch
+		Delete tt
+	Next
+	
+End Function
+
+;------------------------------------------------------------------------------------
+; Name: 				QTS_UpdateTerrain
+;
+; Description: Free the terrain and all attach object
+;
+; Arguments:	- Cam : Camera handle
+;				- ViewDistance# : Distance in front of camera that terrain pathc is still visible 
+; -----------------------------------------------------------------------------------
+Function QTS_UpdateTerrain( cam , ViewDistance# )
+
+
+	For tile.QTS_TPatch = Each QTS_TPatch
+
+			If EntityDistance( cam, tile\mesh ) &lt; ViewDistance# Then
+
+				If  EntityInView( tile\mesh ,cam) Then
+
+					ShowEntity 	tile\mesh
+		
+				Else
+					HideEntity tile\mesh
+
+				EndIf
+			Else
+				HideEntity tile\mesh
+		EndIf
+		
+	Next
+	
+End Function
+
+; This fonction return the patch mesh at one position
+Function QTS_GetMesh( x,z , scalevalue# )
+
+	patchsize# = (QTS_BlockSize * 16/2 ) * scalevalue#
+ 	
+	For tile.QTS_TPatch = Each QTS_TPatch
+		xx = EntityX( tile\mesh,True)
+		zz= EntityZ( tile\mesh,True)
+	
+		If x&gt;= xx - patchsize# And x &lt; xx+ patchsize# And z&gt;= zz - patchsize# And z &lt; zz+ patchsize# Then
+			Return tile\mesh
+		EndIf
+		
+	Next
+
+	Return False
+	
+	
+End Function
+
+
+; REturn the height of the terrain
+Function QTS_TerrainY#(x#,z#)
+
+	pick=LinePick(x#,200000,z#,0,-2000000,0)
+
+	Return (PickedY())
+
+End Function
+
+; TExture the terrain
+Function QTS_TextureTerrain( hTexture,scale#=1,level=0,BlendMode=2)
+
+	TextureBlend hTexture,BlendMode
+	ScaleTexture hTexture,scale#,scale#
+	
+	For tile.QTS_TPatch = Each QTS_TPatch
+		EntityTexture tile\mesh,hTexture,0,level
+	Next
+	
+End Function
+
+
+
+
+
+
+;********************************************** PRIVATE FONCTION **************************************************************
+
+Function QTS_Roughness( Error )
+
+	
+	EdgeLength = 3
+	
+	While EdgeLength &lt;=17
+
+		EdgeOffset = (EdgeLength-1)/2
+		ChildOffset = (Edgelength-1)/4
+
+		z= EdgeOffset
+		While z &lt; QTS_HeightMapSize 
+
+			x= EdgeOffset
+			While x &lt; QTS_HeightMapSize 
+
+				node = 0
+				kill=0
+
+
+				If EdgeLength&gt;3 Then
+					; top edge
+					Node = QTS_GetMatrixValue( x-ChildOffset , z-ChildOffset)
+					Node = QTS_MAX( Node , QTS_GetMatrixValue( x+ChildOffset , z-ChildOffset))
+					Node = QTS_MAX( Node , QTS_GetMatrixValue( x+ChildOffset , z+ChildOffset))
+					Node = QTS_MAX( Node , QTS_GetMatrixValue( x-ChildOffset , z+ChildOffset))
+				EndIf
+				
+
+				
+				If EdgeLength = 3 Or node=0 Then
+
+					QTS_SetMatrixValue( x-EdgeOffset , z-EdgeOffset , 1)
+					QTS_SetMatrixValue( x+EdgeOffset , z-EdgeOffset , 1)
+					QTS_SetMatrixValue( x+EdgeOffset , z+EdgeOffset , 1)
+					QTS_SetMatrixValue( x-EdgeOffset , z+EdgeOffset , 1)
+				
+					; top edge
+					morph# = Abs(QTS_TrueHeightAtPoint#(x,z-EdgeOffset) - ((QTS_TrueHeightAtPoint#(x-EdgeOffset,z-EdgeOffset) + QTS_TrueHeightAtPoint#( x+EdgeOffset,z-EdgeOffset) ) /2))
+					If morph#&gt; Error Then
+						QTS_SetMatrixValue(  x,z-EdgeOffset, 1 )
+					Else
+						
+						If EdgeLength&gt;3 Then
+
+
+								QTS_SetMatrixValue( x,z-EdgeOffset ,  0)
+
+						EndIf
+
+						
+						kill = kill +1
+					EndIf
+
+
+					; right edge
+					morph# = Abs(QTS_TrueHeightAtPoint#(x+EdgeOffset,z) - ((QTS_TrueHeightAtPoint#(x+EdgeOffset,z-EdgeOffset) + QTS_TrueHeightAtPoint#( x+EdgeOffset,z+EdgeOffset) ) /2))
+					If morph#&gt; Error Then
+						QTS_SetMatrixValue( x+EdgeOffset,z , 1 )
+					Else
+						If EdgeLength&gt;3 Then	
+							QTS_SetMatrixValue( x+EdgeOffset,z , 0 )
+						EndIf
+						
+						
+						kill = kill +1
+					EndIf
+
+	
+					; bottom edge
+					morph# = Abs(QTS_TrueHeightAtPoint#(x,z+EdgeOffset) - ((QTS_TrueHeightAtPoint#(x+EdgeOffset,z+EdgeOffset) + QTS_TrueHeightAtPoint#( x-EdgeOffset,z+EdgeOffset) ) /2))
+					If morph#&gt; Error Then
+						QTS_SetMatrixValue( x,z+EdgeOffset, 1 )
+					Else
+						If EdgeLength&gt;3 Then
+
+								QTS_SetMatrixValue( x,z+EdgeOffset , 0 )
+							
+						EndIf
+						kill = kill +1
+					EndIf					
+
+
+					; left Edge
+					morph# = Abs(QTS_TrueHeightAtPoint#(x-EdgeOffset,z) - ((QTS_TrueHeightAtPoint#(x-EdgeOffset,z+EdgeOffset) + QTS_TrueHeightAtPoint#( x-EdgeOffset,z-EdgeOffset) ) /2))
+					If morph#&gt; Error Then
+						QTS_SetMatrixValue( x-EdgeOffset,z, 1)
+					Else
+						If EdgeLength&gt;3 Then
+							QTS_SetMatrixValue( x-EdgeOffset,z , 0)
+						EndIf
+						kill = kill +1
+					EndIf
+
+					QTS_SetMatrixValue( x,z, 1)
+					
+					If kill=4 Then	
+				  		; top Left To bottom Right
+						morph# = Abs(QTS_TrueHeightAtPoint#(x,z) - ((QTS_TrueHeightAtPoint#(x-EdgeOffset,z-EdgeOffset) + QTS_TrueHeightAtPoint#( x+EdgeOffset,z+EdgeOffset) ) /2))
+						If morph#&lt;= Error Then
+							morph# = Abs(QTS_TrueHeightAtPoint#(x,z) - ((QTS_TrueHeightAtPoint#(x+EdgeOffset,z-EdgeOffset) + QTS_TrueHeightAtPoint#( x-EdgeOffset,z+EdgeOffset) ) /2))
+							If morph#&lt;= Error Then
+								QTS_SetMatrixValue( x,z , 0 )
+							EndIf
+						EndIf
+					EndIf
+						
+				Else If EdgeLength&gt;3
+				
+					QTS_SetMatrixValue( x , z-EdgeOffset , 1 )
+					QTS_SetMatrixValue( x+EdgeOffset , z , 1 )
+					QTS_SetMatrixValue( x , z+EdgeOffset , 1 )
+					QTS_SetMatrixValue( x-EdgeOffset , z , 1 )	
+
+				EndIf
+
+				x = x + EdgeLength-1
+				
+			Wend
+
+			
+			z = z + EdgeLength-1
+		Wend
+
+		EdgeLength = (EdgeLength Shl 1 ) - 1
+
+		
+	Wend
+
+	; Propagation
+	For z=16 To 513-1 Step 32
+		For x=16 To 513-1 Step 32
+			QTS_ProcessNode( x,z, 33, False , False )
+		Next
+	Next
+			
+End Function
+
+; Create a node of a terrain patch
+Function QTS_RenderNode( x,z,EdgeLength , EdgeOffset ,surf , bRender )
+
+	 
+	; top
+	If bRender Then	VC = QTS_AddVertex( x,z,surf)
+
+	
+	If bRender Then  V1 = QTS_AddVertex( x-EdgeOffset , z-EdgeOffset ,surf)
+	If bRender=False Then QTS_SetMatrixValue( x-EdgeOffset , z-EdgeOffset)
+
+	If bRender Then VE = QTS_Addvertex( x+EdgeOffset , z-EdgeOffset , surf)
+	If bRender=False Then QTS_SetMatrixValue( x+EdgeOffset , z-EdgeOffset )
+	
+	
+	zz = z-EdgeOffset
+	xstart = x-EdgeOffset+1
+	xend = x-EdgeOffset+EdgeLength -1 - 1
+	
+	For xx=xstart To xend
+
+		If QTS_GetMatrixValue(xx,zz)&gt;0 Then
+		
+			If bRender Then V2 = QTS_AddVertex( xx , zz ,surf)
+			If bRender=False Then QTS_SetMatrixValue( xx , zz )
+			
+			If bRender Then AddTriangle surf,V1,V2,VC
+			V1=V2
+		EndIf
+		
+	Next
+
+	If bRender Then AddTriangle surf,v1,ve,vc
+
+	
+	; bottom
+	If bRender Then VC = QTS_AddVertex( x,z,surf)
+
+	If bRender Then V1 = QTS_AddVertex( x-EdgeOffset , z+EdgeOffset ,surf)
+	If bRender=False Then QTS_SetMatrixValue( x-EdgeOffset , z+EdgeOffset)
+
+	If bRender Then VE = QTS_Addvertex( x+EdgeOffset , z+EdgeOffset , surf)
+	If bRender=False Then QTS_SetMatrixValue( x+EdgeOffset , z+EdgeOffset )
+	
+	
+	zz = z+EdgeOffset
+	xstart = x-EdgeOffset+1
+	xend = x-EdgeOffset+EdgeLength -1 - 1
+	
+	For xx=xstart To xend
+
+		If QTS_GetMatrixValue(xx,zz)&gt;0 Then
+		
+			If bRender Then V2 = QTS_AddVertex( xx , zz ,surf)
+			If bRender=False Then QTS_SetMatrixValue( xx , zz )
+			
+			If bRender Then AddTriangle surf,V2,V1,VC
+			V1=V2
+		EndIf
+	Next
+
+	If bRender Then AddTriangle surf,ve,v1,vc
+
+
+	; right
+	If bRender Then VC = QTS_AddVertex( x,z,surf)
+
+	If bRender Then V1 = QTS_AddVertex( x+EdgeOffset , z-EdgeOffset ,surf)
+	If bRender=False Then QTS_SetMatrixValue( x+EdgeOffset , z-EdgeOffset)
+
+	If bRender Then VE = QTS_Addvertex( x+EdgeOffset , z+EdgeOffset , surf)
+	If bRender=False Then QTS_SetMatrixValue( x+EdgeOffset , z+EdgeOffset )
+	
+	
+	xx = x+EdgeOffset
+	zstart = z-EdgeOffset+1
+	zend = z-EdgeOffset+EdgeLength -1 - 1
+	
+	For zz=zstart To zend
+
+		If QTS_GetMatrixValue(xx,zz)&gt;0 Then
+			If bRender Then V2 = QTS_AddVertex( xx , zz ,surf)
+			If bRender=False Then QTS_SetMatrixValue( xx , zz )
+			
+			If bRender Then AddTriangle surf,V1,V2,VC
+			V1=V2
+		EndIf
+	Next
+
+	If bRender Then AddTriangle surf,v1,ve,vc
+
+	; left
+	If bRender Then VC = QTS_AddVertex( x,z,surf)
+
+	If bRender Then V1 = QTS_AddVertex( x-EdgeOffset , z-EdgeOffset ,surf)
+	If bRender=False Then QTS_SetMatrixValue( x-EdgeOffset , z-EdgeOffset)
+
+	If bRender Then VE = QTS_Addvertex( x-EdgeOffset , z+EdgeOffset , surf)
+	If bRender=False Then QTS_SetMatrixValue( x-EdgeOffset , z+EdgeOffset )
+	
+	xx = x-EdgeOffset
+	zstart = z-EdgeOffset+1
+	zend = z-EdgeOffset+EdgeLength -1 - 1
+	
+	For zz=zstart To zend
+
+		If QTS_GetMatrixValue(xx,zz)&gt;0 Then
+			If bRender Then V2 = QTS_AddVertex( xx , zz ,surf)
+			If bRender=False Then QTS_SetMatrixValue( xx , zz )
+			
+			If bRender Then AddTriangle surf,V2,V1,VC
+			V1=V2
+		EndIf
+	Next
+
+	If bRender Then AddTriangle surf,ve,v1,vc
+
+	
+End Function
+
+; Create a terrain patch
+Function QTS_CreatePatch( BlockSize )
+
+	QTS_NbPatch=0
+	
+	qts=CreateBank( 64*64*4)
+	
+	z=0
+	ztab=0
+	While z &lt;=  QTS_HeightMapSize
+
+		x=0
+		xtab=0
+		While x &lt;= QTS_HeightMapSize
+
+			PatchNumer = PatchNumer + 1
+			
+			xx# = x  + (BlockSize * 16/2 )
+			zz# = z  + (BlockSize * 16/2 )
+
+				
+			TerrainPatch = CreateMesh()
+
+			
+			TerrainPatchSurface = CreateSurface( TerrainPatch )
+
+			QTS_Vertex = CreateBank( (QTS_HeightMapSize) * (QTS_HeightMapSize) * 4)
+			
+			For bz=8 To Blocksize*16 Step 16
+				For bx=8 To Blocksize*16 Step 16
+					cx = x+bx
+					cz = z+bz
+					If cx&lt;QTS_HeightMapSize And cz&lt;QTS_HeightMapSize Then		
+						QTS_ProcessNode( cx,cz, 17 , TerrainPatchSurface ,True )
+					EndIf
+				Next
+			Next
+
+			QTS_NbPatch = QTS_NbPatch +1
+			
+			FreeBank QTS_Vertex
+			UpdateNormals TerrainPatch
+
+			
+			
+			PositionMesh terrainpatch,-xx#,-MeshHeight(terrainpatch)/2,zz#
+
+			
+			
+			EntityParent TerrainPatch,QTS_Terrain
+			EntityType TerrainPatch,QTS_TerrainCollision
+
+			
+			tile.QTS_TPatch = New QTS_TPatch
+			
+			tile\mesh = TerrainPatch
+			tile\x# = xtab * (BlockSize * 16/2 ) *2
+			tile\y# = MeshHeight(terrainpatch)/2
+			tile\z# = -ztab *(BlockSize * 16/2 ) *2 
+ 			tile\inView = False
+			
+			PositionEntity tile\mesh,tile\x#,tile\y#,tile\z#
+			EntityPickMode tile\mesh,2
+
+			EntityColor tile\mesh,250,250,250
+			
+			PokeInt QTS_Tile, ((ztab*64 + xtab)*4),Handle( tile )
+			
+			x = x + (BlockSize * 16)
+			xtab=xtab+1
+		Wend
+		z = z + (BlockSize * 16)
+		ztab=ztab+1
+	Wend
+	
+End Function
+
+
+; Check a Node of a terrain patch
+Function QTS_ProcessNode( x,z, EdgeLength, surf , bRender )
+
+	EdgeOffset = (EdgeLength-1)/2
+	ChildOffset = (Edgelength-1)/4
+		
+	node = QTS_GetMatrixValue( x,z )
+	
+	If node=1   Then
+		
+		If  EdgeLength=3 Then
+			QTS_RenderNode( x,z,EdgeLength , EdgeOffset ,surf ,bRender)
+		Else
+			; top left child
+			If QTS_GetMatrixValue( x-ChildOffset,z-ChildOffset ) &gt; 0 Then
+				QTS_ProcessNode( x-ChildOffset,z-ChildOffset, EdgeLength-(Edgelength/2), surf ,bRender)
+			Else
+				 QTS_RenderNode(  x-ChildOffset,z-ChildOffset, EdgeLength-(Edgelength/2) , EdgeOffset-(EdgeOffset/2) ,surf,bRender)
+			EndIf
+
+			; top right child
+			If QTS_GetMatrixValue( x+ChildOffset,z-ChildOffset ) &gt; 0 Then
+				QTS_ProcessNode( x+ChildOffset,z-ChildOffset, EdgeLength-(Edgelength/2), surf ,bRender)
+			Else
+		
+			 QTS_RenderNode(  x+ChildOffset,z-ChildOffset, EdgeLength-(Edgelength/2) , EdgeOffset-(EdgeOffset/2) ,surf,bRender)
+
+			EndIf
+
+			; bottom left child
+			If QTS_GetMatrixValue( x-ChildOffset,z+ChildOffset ) &gt; 0 Then
+				QTS_ProcessNode( x-ChildOffset,z+ChildOffset, EdgeLength-(Edgelength/2), surf,bRender)
+			Else
+		
+			 QTS_RenderNode(  x-ChildOffset,z+ChildOffset, EdgeLength-(Edgelength/2) , EdgeOffset-(EdgeOffset/2) ,surf,bRender)
+			EndIf
+
+			; bottom right child
+			If QTS_GetMatrixValue( x+ChildOffset,z+ChildOffset ) &gt; 0 Then
+				QTS_ProcessNode( x+ChildOffset,z+ChildOffset, EdgeLength-(Edgelength/2), surf,bRender)
+			Else
+			
+				 QTS_RenderNode(  x+ChildOffset,z+ChildOffset, EdgeLength-(Edgelength/2) , EdgeOffset-(EdgeOffset/2) ,surf,bRender)
+			EndIf
+
+		EndIf
+	
+	Else
+		
+		QTS_RenderNode( x,z,EdgeLength , EdgeOffset ,surf,bRender)
+		
+	EndIf
+
+
+	
+End Function
+
+Function QTS_AddVertex( x,z,surf)
+
+
+	If PeekInt( QTS_Vertex, QTS_MatrixIndex( x,z)*4)=0 Then
+		y# = QTS_TrueHeightAtPoint(x,z) *0.1
+		vertex = AddVertex( surf,x,y#,-z,0,0)
+		PokeInt QTS_Vertex, QTS_MatrixIndex( x,z)*4 , vertex+1
+
+	Else
+		vertex = PeekInt( QTS_Vertex, QTS_MatrixIndex( x,z)*4)-1
+	EndIf
+	
+
+	
+	Return Vertex
+	
+End Function
+
+
+Function QTS_LoadHeightMap(filename$ ,shadow=False)
+
+	
+	heightmap = LoadImage( filename$ )
+	
+	QTS_HeightMapSize = ImageWidth( heightmap )
+
+	QTS_HeightMap = CreateBank( (QTS_HeightMapSize) * (QTS_HeightMapSize) )
+	If Not shadow Then
+		QTS_QuadTree = CreateBank( (QTS_HeightMapSize) * (QTS_HeightMapSize) )
+	EndIf
+	
+
+	LockBuffer ImageBuffer( heightmap)
+
+	For z=0 To QTS_HeightMapSize-1
+		For x=0 To QTS_HeightMapSize-1
+			pixel = ReadPixelFast( x,z, ImageBuffer(heightmap) ) And 255
+			offset = z * QTS_HeightMapSize + x
+			PokeByte QTS_HeightMap, offset , pixel
+			If Not shadow Then	
+				PokeByte QTS_QuadTree, offset , 0
+			EndIf
+		Next
+		
+	Next
+
+	UnlockBuffer ImageBuffer( heightmap)
+	FreeImage heightmap
+		
+End Function
+
+Function QTS_Texture()
+
+
+	size = QTS_HeightMapSize 
+
+	For z=0 To 63
+		For x=0 To 63
+			obj = PeekInt( QTS_Tile, (z*64+x)*4)
+			If obj&gt;0
+				tile.QTS_TPatch = Object.QTS_TPatch( obj)
+				If tile\mesh &lt;&gt;-1 Then
+
+					Surface = GetSurface(tile\mesh, 1)
+					Vertices = CountVertices(Surface)
+
+					For Vertex = 0 To Vertices-1
+
+						VX# = EntityX#(tile\mesh) +  (VertexX#(Surface, Vertex) + (4 * 16 )/2)
+						VZ# = EntityZ#(tile\mesh) +  (VertexZ#(Surface, Vertex) -  (4 * 16 )/2)
+						VertexTexCoords Surface, Vertex, VX#/size, -VZ#/size, 0,0
+						
+					Next
+			
+				EndIf					
+			EndIf
+		Next
+	Next
+	
+	
+End Function
+
+Function QTS_GetMatrixValue( x,z )
+
+	value=PeekByte(QTS_QuadTree, QTS_MatrixIndex( x,z))
+	
+	Return value
+	
+End Function
+
+Function QTS_SetMatrixValue( x,z , value=1 )
+
+		
+	PokeByte QTS_QuadTree , QTS_MatrixIndex( x , z) , value
+
+
+End Function
+
+Function QTS_MatrixIndex( x,z)
+
+	Return (( z * QTS_HeightMapSize) + x)
+	
+End Function
+
+Function QTS_Max#(v1#,v2#)
+
+	If v1#&gt;V2# Then
+		Return v1#
+	Else
+		Return v2#
+	EndIf
+	
+End Function
+
+Function QTS_TrueHeightAtPoint#( x, z)
+
+	value#=PeekByte(QTS_HeightMap, (z * QTS_HeightMapSize) + x)
+	
+	Return value#
+	
+End Function
+
+
+
+
+</textarea> <br><br></td></tr></table><br>
+<a name="368704"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Filax</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Great ! <br><br></td></tr></table><br>
+<a name="368804"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Eole</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> It's not really finish, maybe some bugs could exist <br><br></td></tr></table><br>
+<a name="369121"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >mrtricks</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Have downloaded it -- looking forward to trying it out! <br><br></td></tr></table><br>
+<a name="369326"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Eole</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> ok, look int he Bitz3D Forum I put an example <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

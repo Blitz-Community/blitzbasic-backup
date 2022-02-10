@@ -1,0 +1,178 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Ping test</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Ping test</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Ping test</a><br><br>
+<a name="779430"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Vertex</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I write a ping function for my network module BNetEx and I can only test it on my Win2k x86. I don't know if it works correct on MacOS(with Motorola processor) or on Linux. It can be different byte orders or so on...<br><br><pre class=code>SuperStrict
+
+Framework Pub.StdC
+
+Extern "OS"
+	Const INVALID_SOCKET_ : Int = -1
+	Const SOCK_RAW_       : Int = 3
+	Const IPPROTO_ICMP    : Int = 1
+
+	?Win32
+		Const SOL_SOCKET_ : Int = $FFFF
+
+		Function inet_addr_:Int(Address$z) = "inet_addr@4"
+		Function GetCurrentProcessId:Int() = "GetCurrentProcessId@0"
+
+	?MacOS
+		Const SOL_SOCKET_ : Int = $FFFF
+
+		Function inet_addr_:Int(Address$z) = "inet_addr"
+		Function GetCurrentProcessId:Int() = "getpid"
+
+	?Linux
+		Const SOL_SOCKET_ : Int = 1
+
+		Function inet_addr_:Int(Address$z) = "inet_addr"
+		Function GetCurrentProcessId:Int() = "getpid"
+	?
+End Extern
+
+Type TICMP
+	Field _Type     : Byte
+	Field Code      : Byte
+	Field Checksum  : Short
+	Field ID        : Short
+	Field Sequence  : Short
+
+	Function BuildChecksum:Short(Buffer:Short Ptr, Size:Int)
+		Local Checksum:Long
+
+		While Size &gt; 1
+			Checksum :+ Buffer[0]
+			Buffer :+ 1
+			Size :- 2
+		Wend
+		If Size Then Checksum :+ (Byte Ptr(Buffer))[0]
+
+		Checksum = (Checksum Shr 16) + (Checksum &amp; $FFFF)
+		Checksum :+ Checksum Shr 16
+		Return htons_(~Checksum)
+	End Function
+End Type
+
+Const ICMP_ECHOREPLY   : Byte = 0
+Const ICMP_UNREACHABLE : Byte = 3
+Const ICMP_ECHO        : Byte = 8
+
+Const ICMP_CODE_NETWORK_UNREACHABLE : Byte = 0
+Const ICMP_CODE_HOST_UNREACHABLE    : Byte = 1
+
+Function Ping:Int(RemoteIP:Int, Data:Byte Ptr, Size:Int, Sequence:Int = 0, ..
+                  Timeout:Int = 5000)
+	Local Socket:Int, ProcessID:Int, ICMP:TICMP, Buffer:Byte Ptr, ..
+	      Start:Int, Stop:Int, Result:Int, SenderIP:Int, SenderPort:Int, ..
+	      IPSize:Int
+
+	Socket = socket_(AF_INET_, SOCK_RAW_, IPPROTO_ICMP)
+	If Socket = INVALID_SOCKET_ Then Return -1
+
+	If setsockopt_(Socket, SOL_SOCKET_, SO_RCVTIMEO, Varptr(Timeout), 4) = ..
+	   SOCKET_ERROR_ Then
+		closesocket_(Socket)
+		Return -1
+	EndIf
+
+	ProcessID = GetCurrentProcessID()
+
+	ICMP = New TICMP
+	ICMP._Type     = ICMP_ECHO
+	ICMP.Code      = 0
+	ICMP.Checksum  = 0
+	ICMP.ID        = ProcessID
+	ICMP.Sequence  = 0
+
+	Buffer = MemAlloc(65536)
+	MemCopy(Buffer, ICMP, 8)
+	MemCopy(Buffer + 8, Data, Size)
+	Short Ptr(Buffer)[1] = htons_(TICMP.BuildChecksum(Short Ptr(Buffer), 8 + Size))
+
+	If sendto_(Socket, Buffer, 8 + Size, 0, RemoteIP, 0) = SOCKET_ERROR_ Then
+		MemFree(Buffer)
+		closesocket_(Socket)
+		Return -1
+	EndIf
+
+	Start = MilliSecs()
+	Repeat
+		Result = recvfrom_(Socket, Buffer, 65536, 0, SenderIP, SenderPort)
+		Stop = MilliSecs()
+		If Result = SOCKET_ERROR_ Then
+			MemFree(Buffer)
+			closesocket_(Socket)
+			Return -1
+		EndIf
+
+		?X86
+			IPSize = (Buffer[0] &amp; $0F)*4
+		?PPC
+			IPSize = (Buffer[0] &amp; $F0)*4
+		?
+		MemCopy(ICMP, Buffer + IPSize, 8)
+
+		If ICMP.ID &lt;&gt; ProcessID Then
+			Continue
+		ElseIf ICMP._Type = ICMP_UNREACHABLE Then
+			If ICMP.Code = ICMP_CODE_HOST_UNREACHABLE Or ..
+			   ICMP.Code = ICMP_CODE_NETWORK_UNREACHABLE Then
+				MemFree(Buffer)
+				closesocket_(Socket)
+				Return -1
+			EndIf
+		ElseIf ICMP.Code = ICMP_ECHOREPLY Then
+			Exit
+		EndIf
+	Forever
+
+	MemFree(Buffer)
+	closesocket_(Socket)
+	Return Stop - Start
+End Function
+
+Function IntIP:Int(IP:String)
+	Return htonl_(inet_addr_(IP))
+End Function
+
+Function GetHostIP:Int(HostName:String)
+	Local Addresses:Byte Ptr Ptr, AddressType:Int, AddressLength:Int
+	Local PAddress:Byte Ptr, Address:Int
+
+	Addresses = gethostbyname_(HostName, AddressType, AddressLength)
+	If (Not Addresses) Or AddressType &lt;&gt; AF_INET_ Or AddressLength &lt;&gt; 4 Then Return 0
+
+	If Addresses[0] Then
+		PAddress = Addresses[0]
+		Address = (PAddress[0] Shl 24) | (PAddress[1] Shl 16) | ..
+		          (PAddress[2] Shl 8) | PAddress[3]
+		Return Address
+	Else
+		Return 0
+	EndIf
+End Function
+
+Global RemoteIP : Int, ..
+       Message  : String, ..
+       Data     : Byte Ptr, ..
+       Result   : Int
+
+RemoteIP = GetHostIP("google.com")
+If Not RemoteIP Then
+	WriteStdout("Host not found~n")
+	End
+EndIf
+
+Message = "Hello, world!"
+Data = Message.ToCString()
+Result = Ping(RemoteIP, Data, Message.Length)
+If Result = -1 Then
+	WriteStdout("Ping failed~n")
+	MemFree(Data)
+	End
+EndIf
+
+WriteStdout("Ping tooks " + Result + "ms~n")
+MemFree(Data)
+End</pre><br>(Test is at the end of the sourcecode)<br><br>If it's work, please remove the ! from "Hello, world!" so that is an odd data size and test it again.<br><br>Thank you!<br><br>cu olli <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

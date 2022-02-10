@@ -1,0 +1,913 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Using a large look up array</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Using a large look up array</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Using a large look up array</a><br><br>
+<a name="1150575"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jur</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I am trying to optimize pixmap operations and I have found out that a big bottleneck in such operations is conversion from floats to integers. Calculations usually needs some divisions so floats are utilized, but at the end you always need to write integer (or byte) into a color value.<br><br>To get rid of divisions I made a big array (16MB) with all possible variants for divisions. With this method only integer operations are performed but also a lot of the table look ups. Result: it works now 200-300% faster! That is a huge improvement! But... i have read that such method can results in cache thrashing and that, I read, is not a good thing. Can anybody recommend me what to do? I have a great improvement in performance so i would like to keep that method, but I dont want any weird problems later.<br><br>Here is the code - functions are for alpha blending of two RGBA pixmaps of same size with additional opacity for both. There are two versions - an ordinary (with divisions) and the one which read from look up table. <br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+SuperStrict
+
+Global DivideTable:Byte[][]
+
+DivideTable = DivideTable[..255*255+1]
+For Local i:Int=0 Until DivideTable.length
+	DivideTable[i] = DivideTable[i][..256]
+Next
+
+For Local value:Int=0 Until DivideTable.length
+	For Local faktor:Int=0 Until DivideTable[value].length
+		If faktor&gt;0 Then
+			DivideTable[value][faktor] = Byte(value/faktor)
+		EndIf
+	Next
+Next
+
+
+
+Function PastePixmapViaTable(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	Local bottomPtr:Byte Ptr = PixmapPixelPtr(PixmapBottom)
+	Local topPtr:Byte Ptr = PixmapPixelPtr(PixmapTop)
+
+
+	Local opacityBottom:Int = _opacityBottom*255
+	Local opacityTop:Int = _opacityTop*255
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local Atop:Int = DivideTable[topPtr[3]*opacityTop][255]
+			Local Abottom:Int = DivideTable[bottomPtr[3]*opacityBottom][255]
+			Local A:Int =  255-DivideTable[(255-Atop)*(255- Abottom)][255]
+			Local div:Int = DivideTable[Abottom*(255-Atop)][A]
+			
+			bottomPtr[0] = DivideTable[Atop*topPtr[0]][A] + DivideTable[bottomPtr[0]*div][255]
+			bottomPtr[1] = DivideTable[Atop*topPtr[1]][A] + DivideTable[bottomPtr[1]*div][255]
+			bottomPtr[2] = DivideTable[Atop*topPtr[2]][A] + DivideTable[bottomPtr[2]*div][255]
+			bottomPtr[3] = A
+
+			topPtr:+4
+			bottomPtr:+4
+		Next
+	Next
+	'EndRem
+EndFunction
+
+
+
+Function PastePixmap(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	Local bottomPtr:Byte Ptr = PixmapPixelPtr(PixmapBottom)
+	Local topPtr:Byte Ptr = PixmapPixelPtr(PixmapTop)
+	
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local Atop:Int = topPtr[3]*_opacityTop
+			Local Abottom:Int = bottomPtr[3]*_opacityBottom
+			Local A:Float =  255-(255-Atop)*(255-Abottom)/255
+			bottomPtr[0] = Atop*topPtr[0]/A + (Abottom*bottomPtr[0]*((255-Atop)/A))/255
+			bottomPtr[1] = Atop*topPtr[1]/A + (Abottom*bottomPtr[1]*((255-Atop)/A))/255
+			bottomPtr[2] = Atop*topPtr[2]/A + (Abottom*bottomPtr[2]*((255-Atop)/A))/255
+			bottomPtr[3] = Int(A)
+			topPtr:+4
+			bottomPtr:+4
+		Next
+	Next
+
+EndFunction
+
+</textarea> <br><br></td></tr></table><br>
+<a name="1150578"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Calculations usually needs some divisions so floats are utilized <br></div><br><br>Why? This line:<br><br><pre class=code>Local A:Float =  255-(255-Atop)*(255-Abottom)/255</pre><br><br>...will put a whole number in A, because the operations were all integer operations anyway.<br><br>The next three lines will generate fractional values, because now they're using all-float operations, but since the values are cast straight back to integer when the results get put in bottomPtr[n], that fractional part goes unused.<br><br>In other words, perhaps I'm just astonishingly bad at arithmetic, but is there a reason why you can't just declare A:Int instead of A:Float and be done with it? <br><br></td></tr></table><br>
+<a name="1150587"></a>
+
+<a name="1150588"></a>
+
+<a name="1150589"></a>
+
+<a name="1150590"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jesse</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> why don't you use a byte ptr to store the divide table instead of arrays, Arrays are objects and  object carry a bit of overhead which makes them quite a bit slower than byte pointers. You can allocate bytes of memory with "MemAlloc" which would be more memory efficient and a bit faster to process. Even if you have to make the two dimension calculations, it will still be quite a bit faster.<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1150614"></a>
+
+<a name="1150615"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jur</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Yasha<br> I have a float so I dont need to check for divide by zero. But calculations are not critical either with floats or integers as long as there is no conversion (or casting) from float to integer. I have made a test and with a pixmap of 1000*1000 pixels all calculation are performed within 1 millisecs. It was the last step in the loop - casting a float value into a byte pointer which took 220 ms.<br><br>@Jesse<br>Nice idea. I made another function which now use "memory table" and it is indeed faster. Here are all variants (+ added a function which use ReadPixel/WritePixel just to compare):<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Global DivideTable:Byte[][]
+DivideTable = DivideTable[..256*256]
+For Local i:Int=0 Until DivideTable.length
+	DivideTable[i] = DivideTable[i][..256]
+Next
+
+For Local value:Int=0 Until DivideTable.length
+	For Local faktor:Int=0 Until DivideTable[value].length
+		If faktor&gt;0 Then
+			Local div:Int = value/faktor
+			div = Min(div,255)
+			div = Max(div,0)
+			DivideTable[value][faktor] = Byte(div)
+		EndIf
+	Next
+Next
+
+
+Global DivideMemory:Byte Ptr = MemAlloc(256*256*256)
+Local offset:Int
+For Local j:Int=0 Until 256
+	For Local i:Int=0 Until 65536
+		If j&gt;0 Then 
+			Local div:Int = i/j
+			div = Min(div,255)
+			div = Max(div,0)
+			DivideMemory[offset] = Byte(div)
+		Else
+			DivideMemory[offset] = 0	
+		EndIf
+		offset:+1
+	Next
+Next
+
+
+Local Pixmap:TPixmap=CreatePixmap(2000,2000, PF_RGBA8888)
+Local PixmapA:TPixmap = CopyPixmap(Pixmap)
+Local PixmapB:TPixmap = CopyPixmap(Pixmap)
+Local PixmapC:TPixmap = CopyPixmap(Pixmap)
+Local PixmapD:TPixmap = CopyPixmap(Pixmap)
+
+Local Pixmap2:TPixmap=CreatePixmap(2000,2000, PF_RGBA8888)
+
+
+Local time:Int=MilliSecs()
+
+PastePixmap_ReadWritePixel(PixmapA,0.6,Pixmap2,0.2)
+
+Print "WritePixel/ReadPixel time :"+(MilliSecs()-time)
+
+time:Int=MilliSecs()
+
+PastePixmap_Normal(PixmapB,0.6,Pixmap2,0.2)
+
+Print "Normal time :"+(MilliSecs()-time)
+
+time:Int=MilliSecs()
+
+PastePixmap_ArrayTable(PixmapC,0.6,Pixmap2,0.2)
+
+Print "ArrayTable time :"+(MilliSecs()-time)
+
+time:Int=MilliSecs()
+
+PastePixmap_MemoryTable(PixmapD,0.6,Pixmap2,0.2)
+
+Print "MemoryTable time :"+(MilliSecs()-time)
+
+
+
+Function PastePixmap_ReadWritePixel(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local BGRAtop:Int = ReadPixel(PixmapTop,x,y)
+			Local Btop:Int = BGRAtop &amp; $FF
+			Local Gtop:Int = (BGRAtop Shr 8) &amp; $FF
+			Local Rtop:Int = (BGRAtop Shr 16) &amp; $FF
+			Local Atop:Int = ((BGRAtop Shr 24) &amp; $FF) * _opacityTop
+			
+			Local BGRAbottom:Int = ReadPixel(PixmapBottom,x,y)
+			Local Bbottom:Int = BGRAbottom &amp; $FF
+			Local Gbottom:Int = (BGRAbottom Shr 8) &amp; $FF
+			Local Rbottom:Int = (BGRAbottom Shr 16) &amp; $FF
+			Local Abottom:Int = ((BGRAbottom Shr 24) &amp; $FF) * _opacityBottom
+
+			Local A:Float =  255-(255-Atop)*(255-Abottom)/255
+			Local R:Int = Atop*Rtop/A + (Abottom*Rbottom*((255-Atop)/A))/255
+			Local G:Int = Atop*Gtop/A + (Abottom*Gbottom*((255-Atop)/A))/255
+			Local B:Int = Atop*Btop/A + (Abottom*Bbottom*((255-Atop)/A))/255
+			
+			WritePixel(PixmapBottom,x,y, B | (G Shl 8) | (R Shl 16) | (Int(A) Shl 24))
+		Next
+	Next
+EndFunction
+
+
+
+
+Function PastePixmap_Normal(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	Local bottomPtr:Byte Ptr = PixmapPixelPtr(PixmapBottom)
+	Local topPtr:Byte Ptr = PixmapPixelPtr(PixmapTop)
+	
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local Atop:Int = topPtr[3]*_opacityTop
+			Local Abottom:Int = bottomPtr[3]*_opacityBottom
+			Local A:Float =  255-(255-Atop)*(255-Abottom)/255
+			bottomPtr[0] = Atop*topPtr[0]/A + (Abottom*bottomPtr[0]*((255-Atop)/A))/255
+			bottomPtr[1] = Atop*topPtr[1]/A + (Abottom*bottomPtr[1]*((255-Atop)/A))/255
+			bottomPtr[2] = Atop*topPtr[2]/A + (Abottom*bottomPtr[2]*((255-Atop)/A))/255
+			bottomPtr[3] = Int(A)
+			topPtr:+4
+			bottomPtr:+4
+		Next
+	Next
+EndFunction	
+	
+	
+
+Function PastePixmap_ArrayTable(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	Local bottomPtr:Byte Ptr = PixmapPixelPtr(PixmapBottom)
+	Local topPtr:Byte Ptr = PixmapPixelPtr(PixmapTop)
+
+	Local opacityBottom:Int = _opacityBottom*255
+	Local opacityTop:Int = _opacityTop*255
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local Atop:Int = DivideTable[topPtr[3]*opacityTop][255]
+			Local Abottom:Int = DivideTable[bottomPtr[3]*opacityBottom][255]
+			Local A:Int =  255-DivideTable[(255-Atop)*(255- Abottom)][255]
+			Local div:Int = DivideTable[Abottom*(255-Atop)][A]
+			
+			bottomPtr[0] = DivideTable[Atop*topPtr[0]][A] + DivideTable[bottomPtr[0]*div][255]
+			bottomPtr[1] = DivideTable[Atop*topPtr[1]][A] + DivideTable[bottomPtr[1]*div][255]
+			bottomPtr[2] = DivideTable[Atop*topPtr[2]][A] + DivideTable[bottomPtr[2]*div][255]
+			bottomPtr[3] = A
+
+			topPtr:+4
+			bottomPtr:+4
+		Next
+	Next
+EndFunction
+
+
+Function PastePixmap_MemoryTable(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	Local bottomPtr:Byte Ptr = PixmapPixelPtr(PixmapBottom)
+	Local topPtr:Byte Ptr = PixmapPixelPtr(PixmapTop)
+	
+
+	Local opacityBottom:Int = _opacityBottom*255
+	Local opacityTop:Int = _opacityTop*255
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local Atop:Int = DivideMemory[topPtr[3]*opacityTop + 255*65536]
+			Local Abottom:Int = DivideMemory[bottomPtr[3]*opacityBottom + 255*65536]
+			Local A:Int =  255-DivideMemory[(255-Atop)*(255- Abottom) + 255*65536]
+			Local div:Int = DivideMemory[Abottom*(255-Atop) + A*65536]
+			
+			bottomPtr[0] = DivideMemory[Atop*topPtr[0]+ A*65536] + DivideMemory[bottomPtr[0]*div + 255*65536]
+			bottomPtr[1] = DivideMemory[Atop*topPtr[1]+ A*65536] + DivideMemory[bottomPtr[1]*div + 255*65536]
+			bottomPtr[2] = DivideMemory[Atop*topPtr[2]+ A*65536] + DivideMemory[bottomPtr[2]*div + 255*65536]
+			bottomPtr[3] = A
+
+			topPtr:+4
+			bottomPtr:+4
+		Next
+	Next
+EndFunction
+</textarea><br><br>The results in millisecond  (release mode, Athlon X2 3600+):<br><br>WritePixel/ReadPixel time :1366<br>Normal time :844<br>ArrayTable time :340<br>MemoryTable time :313<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1150618"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jur</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> But the original dilemma was about the cash thrashing. Actually I dont know what that really is, but I assume something like that : a value is read from memory and written in cash for quicker access. If there is too much random values written into cash constantly, then the cash need so much updating that the entire system slows down. <br>The question is can such a thing occur by heavy use of look up tables in a way I use them? <br><br></td></tr></table><br>
+<a name="1150654"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JBR</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> WritePixel/ReadPixel time :7841<br>Normal time :7740<br>ArrayTable time :58<br>MemoryTable time :59<br><br>This is on an i7 2700K &amp; 4.8GHz :-) <br><br></td></tr></table><br>
+<a name="1150667"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Can you try using fixed point instead of float lookup tables? Then you can use a very fast Shr or Shl to convert between fixed point and regular integers.<br><br>e.g. If you only need values 0..255 in your image data, then perhaps use 16:16 fixed point.<br><br>Reading 120 from the pixmap becomes (120 Shl 16), writing 120 to the pixmap becomes (120 Shr 16). Then you can do division, multiplication and other math also just by using integers, and bypass the need for a lookup table which is surely slower than working purely with integer locals. <br><br></td></tr></table><br>
+<a name="1150671"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jur</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hm, I know nothing about fixed point but I will check it out. Having only local integer variables would be the best solution. Actually that would be so good that I doubt it is possible (without some serious drawbacks). <br><br></td></tr></table><br>
+<a name="1150700"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> ?<br><br>It depends only on what values you work with. If all your numbers are in the 0..255 range, or even in a 0..32767 range, you can use 16:16 fixed point format. I bet it's faster than what you're doing with memory accesses. <br><br></td></tr></table><br>
+<a name="1150710"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> There is no difference (in implementation) between fixed point and integers. A fixed-point number is an integer + scale factor.<br><br>In this case, it just means an integer Shl 16. The important thing is that it would still be vulnerable to hardware exceptions.<br><br>In my not-remotely-humble opinion, if division by zero is going to be an issue, I would suggest making sure the divisor is never zero (e.g. maybe make it one instead?). Otherwise, you're stuck. <br><br></td></tr></table><br>
+<a name="1150789"></a>
+
+<a name="1150790"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BinaryBurst</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Try this version. Got it the straight way. It is faster than any of the above versions, but I'll post the assembly version which should make things a lot faster. Oh, by the way, the bottleneck is memory latency because the pixmap is too big to fit in the cache.<br><br><pre class=code>
+
+Global DivideTable:Byte[][]
+DivideTable = DivideTable[..256*256]
+For Local i:Int=0 Until DivideTable.length
+	DivideTable[i] = DivideTable[i][..256]
+Next
+
+For Local value:Int=0 Until DivideTable.length
+	For Local faktor:Int=0 Until DivideTable[value].length
+		If faktor&gt;0 Then
+			Local div:Int = value/faktor
+			div = Min(div,255)
+			div = Max(div,0)
+			DivideTable[value][faktor] = Byte(div)
+		EndIf
+	Next
+Next
+
+
+Global DivideMemory:Byte Ptr = MemAlloc(256*256*256)
+Local offset:Int
+For Local j:Int=0 Until 256
+	For i:Int=0 Until 65536
+		If j&gt;0 Then 
+			div:Int = i/j
+			div = Min(div,255)
+			div = Max(div,0)
+			DivideMemory[offset] = Byte(div)
+		Else
+			DivideMemory[offset] = 0	
+		EndIf
+		offset:+1
+	Next
+Next
+
+
+Local Pixmap:TPixmap=CreatePixmap(2000,2000, PF_RGBA8888)
+Local PixmapA:TPixmap = CopyPixmap(Pixmap)
+Local PixmapB:TPixmap = CopyPixmap(Pixmap)
+Local PixmapC:TPixmap = CopyPixmap(Pixmap)
+Local PixmapD:TPixmap = CopyPixmap(Pixmap)
+Local PixmapE:TPixmap = CopyPixmap(Pixmap)
+
+Local Pixmap2:TPixmap=CreatePixmap(2000,2000, PF_RGBA8888)
+
+
+Local time:Int=MilliSecs()
+PastePixmap_ReadWritePixel(PixmapA,0.6,Pixmap2,0.2)
+Print "WritePixel/ReadPixel time :"+(MilliSecs()-time)
+
+time:Int=MilliSecs()
+PastePixmap_Normal(PixmapB,0.6,Pixmap2,0.2)
+Print "Normal time :"+(MilliSecs()-time)
+
+time:Int=MilliSecs()
+PastePixmap_ArrayTable(PixmapC,0.6,Pixmap2,0.2)
+Print "ArrayTable time :"+(MilliSecs()-time)
+
+time:Int=MilliSecs()
+PastePixmap_MemoryTable(PixmapD,0.6,Pixmap2,0.2)
+Print "MemoryTable time :"+(MilliSecs()-time)
+
+time:Int=MilliSecs()
+p_argb8888(PixmapE,0.6,Pixmap2,0.2)
+Print "Straight way time :"+(MilliSecs()-time)
+
+Function PastePixmap_ReadWritePixel(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local BGRAtop:Int = ReadPixel(PixmapTop,x,y)
+			Local Btop:Int = BGRAtop &amp; $FF
+			Local Gtop:Int = (BGRAtop Shr 8) &amp; $FF
+			Local Rtop:Int = (BGRAtop Shr 16) &amp; $FF
+			Local Atop:Int = ((BGRAtop Shr 24) &amp; $FF) * _opacityTop
+			
+			Local BGRAbottom:Int = ReadPixel(PixmapBottom,x,y)
+			Local Bbottom:Int = BGRAbottom &amp; $FF
+			Local Gbottom:Int = (BGRAbottom Shr 8) &amp; $FF
+			Local Rbottom:Int = (BGRAbottom Shr 16) &amp; $FF
+			Local Abottom:Int = ((BGRAbottom Shr 24) &amp; $FF) * _opacityBottom
+
+			Local A:Float =  255-(255-Atop)*(255-Abottom)/255
+			Local R:Int = Atop*Rtop/A + (Abottom*Rbottom*((255-Atop)/A))/255
+			Local G:Int = Atop*Gtop/A + (Abottom*Gbottom*((255-Atop)/A))/255
+			Local B:Int = Atop*Btop/A + (Abottom*Bbottom*((255-Atop)/A))/255
+			
+			WritePixel(PixmapBottom,x,y, B | (G Shl 8) | (R Shl 16) | (Int(A) Shl 24))
+		Next
+	Next
+EndFunction
+
+
+
+
+Function PastePixmap_Normal(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	Local bottomPtr:Byte Ptr = PixmapPixelPtr(PixmapBottom)
+	Local topPtr:Byte Ptr = PixmapPixelPtr(PixmapTop)
+	
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local Atop:Int = topPtr[3]*_opacityTop
+			Local Abottom:Int = bottomPtr[3]*_opacityBottom
+			Local A:Float =  255-(255-Atop)*(255-Abottom)/255
+			bottomPtr[0] = Atop*topPtr[0]/A + (Abottom*bottomPtr[0]*((255-Atop)/A))/255
+			bottomPtr[1] = Atop*topPtr[1]/A + (Abottom*bottomPtr[1]*((255-Atop)/A))/255
+			bottomPtr[2] = Atop*topPtr[2]/A + (Abottom*bottomPtr[2]*((255-Atop)/A))/255
+			bottomPtr[3] = Int(A)
+			topPtr:+4
+			bottomPtr:+4
+		Next
+	Next
+EndFunction	
+	
+	
+
+Function PastePixmap_ArrayTable(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	Local bottomPtr:Byte Ptr = PixmapPixelPtr(PixmapBottom)
+	Local topPtr:Byte Ptr = PixmapPixelPtr(PixmapTop)
+
+	Local opacityBottom:Int = _opacityBottom*255
+	Local opacityTop:Int = _opacityTop*255
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local Atop:Int = DivideTable[topPtr[3]*opacityTop][255]
+			Local Abottom:Int = DivideTable[bottomPtr[3]*opacityBottom][255]
+			Local A:Int =  255-DivideTable[(255-Atop)*(255- Abottom)][255]
+			Local div:Int = DivideTable[Abottom*(255-Atop)][A]
+			
+			bottomPtr[0] = DivideTable[Atop*topPtr[0]][A] + DivideTable[bottomPtr[0]*div][255]
+			bottomPtr[1] = DivideTable[Atop*topPtr[1]][A] + DivideTable[bottomPtr[1]*div][255]
+			bottomPtr[2] = DivideTable[Atop*topPtr[2]][A] + DivideTable[bottomPtr[2]*div][255]
+			bottomPtr[3] = A
+
+			topPtr:+4
+			bottomPtr:+4
+		Next
+	Next
+EndFunction
+
+
+Function PastePixmap_MemoryTable(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	Local bottomPtr:Byte Ptr = PixmapPixelPtr(PixmapBottom)
+	Local topPtr:Byte Ptr = PixmapPixelPtr(PixmapTop)
+	
+
+	Local opacityBottom:Int = _opacityBottom*255
+	Local opacityTop:Int = _opacityTop*255
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local Atop:Int = DivideMemory[topPtr[3]*opacityTop + 255*65536]
+			Local Abottom:Int = DivideMemory[bottomPtr[3]*opacityBottom + 255*65536]
+			Local A:Int =  255-DivideMemory[(255-Atop)*(255- Abottom) + 255*65536]
+			Local div:Int = DivideMemory[Abottom*(255-Atop) + A*65536]
+			
+			bottomPtr[0] = DivideMemory[Atop*topPtr[0]+ A*65536] + DivideMemory[bottomPtr[0]*div + 255*65536]
+			bottomPtr[1] = DivideMemory[Atop*topPtr[1]+ A*65536] + DivideMemory[bottomPtr[1]*div + 255*65536]
+			bottomPtr[2] = DivideMemory[Atop*topPtr[2]+ A*65536] + DivideMemory[bottomPtr[2]*div + 255*65536]
+			bottomPtr[3] = A
+
+			topPtr:+4
+			bottomPtr:+4
+		Next
+	Next
+EndFunction
+
+Function p_argb8888(pix1:TPixmap,af1:Float,pix2:TPixmap,af2:Float)
+	Local p1:Byte Ptr = pix1.pixels
+	Local p2:Byte Ptr = pix2.pixels
+	
+	a1=af1*255 ; a2=af2*255
+	a=255-(255-a1)*(255-a2)/255
+	
+	k=256*a1/a
+	p=256*a2*(255-a1)/255/a
+	z=pix1.pitch/pix1.width
+	
+	i=0
+	While i&lt;=pix1.capacity
+		p1[i+0] = a
+		p1[i+1] = (p1[i+1]*k) Shr 8 + (p2[i+1]*p) Shr 8 
+		p1[i+2] = (p1[i+2]*k) Shr 8 + (p2[i+2]*p) Shr 8 
+		p1[i+3] = (p1[i+3]*k) Shr 8 + (p2[i+3]*p) Shr 8 
+		
+		i:+z
+	Wend
+EndFunction
+
+Function p_bgr888(pix1:TPixmap,af1:Float,pix2:TPixmap,af2:Float)
+	Local p1:Byte Ptr = pix1.pixels
+	Local p2:Byte Ptr = pix2.pixels
+	
+	a1=af1*255 ; a2=af2*255
+	a=255-(255-a1)*(255-a2)/255
+	
+	k=256*a1/a
+	p=256*a2*(255-a1)/255/a
+	z=pix1.pitch/pix1.width
+
+	i=0
+	While i&lt;=pix1.capacity
+		p1[i+1] = (p1[i+1]*k) Shr 8 + (p2[i+1]*p) Shr 8 
+		p1[i+2] = (p1[i+2]*k) Shr 8 + (p2[i+2]*p) Shr 8 
+		p1[i+0] = (p1[i+0]*k) Shr 8 + (p2[i+0]*p) Shr 8 
+		
+		i:+z
+	Wend
+EndFunction
+</pre><br><br>1.6 Ghz, DDR2 266 Mhz<br><pre class=code>
+WritePixel/ReadPixel time :14093
+Normal time :13762
+ArrayTable time :198
+MemoryTable time :188
+Straight way time :76
+</pre><br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1150804"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jur</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey, that one is really fast, but it doesnt support alpha channels. Alphas make combining two images more complicated.<br>This is the common function for merging two images with alpha:<br>C = Cbottom*(1-Atop/A) + (Atop/A)*(Ctop*(1-Abottom) + Abottom* BLEND(Ctop,Cbottom))<br>For alpha blending BLEND(Ctop,Cbottom) = Ctop<br>Now good luck with converting that function to use only bit operations :) <br><br></td></tr></table><br>
+<a name="1150837"></a>
+
+<a name="1150838"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jur</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> I did some more optimization work. I looked at fixed point math and then saw that it is not really needed because I dont need fractional part. I always divide color values like value1*value2/value3 and never  value1/value2. <br>I found one great formula which allows more optimization:<br>C/255 = (C+1 + (C Shr 8)) Shr 8<br>This formula is valid for integers from 0 to 65025 which is enough when multiplying two color with byte range. As dividing by 255 appears quite often, this formula allows to work mostly with integer math.<br><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+
+Global DivideTable:Byte[][]
+DivideTable = DivideTable[..256*256]
+For Local i:Int=0 Until DivideTable.length
+	DivideTable[i] = DivideTable[i][..256]
+Next
+
+For Local value:Int=0 Until DivideTable.length
+	For Local faktor:Int=0 Until DivideTable[value].length
+		If faktor&gt;0 Then
+			Local div:Int = value/faktor
+			div = Min(div,255)
+			div = Max(div,0)
+			DivideTable[value][faktor] = Byte(div)
+		EndIf
+	Next
+Next
+
+
+Global DivideMemory:Byte Ptr = MemAlloc(256*256*256)
+Local offset:Int
+For Local j:Int=0 Until 256
+	For Local i:Int=0 Until 65536
+		If j&gt;0 Then 
+			Local div:Int = i/j
+			div = Min(div,255)
+			div = Max(div,0)
+			DivideMemory[offset] = Byte(div)
+		Else
+			DivideMemory[offset] = 0	
+		EndIf
+		offset:+1
+	Next
+Next
+
+
+Local Pixmap:TPixmap=CreatePixmap(2000,2000, PF_RGBA8888)
+Local pixPtr:Byte Ptr = PixmapPixelPtr(Pixmap)
+
+For Local iy:Int=0 Until Pixmap.height
+	For Local ix:Int=0 Until Pixmap.width
+		pixPtr[0] = Rand(0,255)
+		pixPtr[1] = Rand(0,255)
+		pixPtr[2] = Rand(0,255)
+		pixPtr[3] = Rand(0,255)
+		pixPtr:+4
+	Next
+Next
+
+Local PixmapA:TPixmap = CopyPixmap(Pixmap)
+Local PixmapB:TPixmap = CopyPixmap(Pixmap)
+Local PixmapC:TPixmap = CopyPixmap(Pixmap)
+Local PixmapD:TPixmap = CopyPixmap(Pixmap)
+Local PixmapE:TPixmap = CopyPixmap(Pixmap)
+Local PixmapF:TPixmap = CopyPixmap(Pixmap)
+
+Local Pixmap2:TPixmap=CreatePixmap(2000,2000, PF_RGBA8888)
+
+
+Local time:Int=MilliSecs()
+
+PastePixmap_ReadWritePixel(PixmapA,0.6,Pixmap2,0.2)
+
+Print "WritePixel/ReadPixel time:"+(MilliSecs()-time)
+
+time:Int=MilliSecs()
+
+PastePixmap_Normal(PixmapB,0.6,Pixmap2,0.2)
+
+Print "Normal time:"+(MilliSecs()-time)
+
+time:Int=MilliSecs()
+
+PastePixmap_ArrayTable(PixmapC,0.6,Pixmap2,0.2)
+
+Print "ArrayTable time:"+(MilliSecs()-time)
+
+time:Int=MilliSecs()
+
+PastePixmap_MemoryTable(PixmapD,0.6,Pixmap2,0.2)
+
+Print "MemoryTable time:"+(MilliSecs()-time)
+
+time:Int=MilliSecs()
+
+PastePixmap_NormalOptimized(PixmapE,0.6,Pixmap2,0.2)
+
+Print "Normal Optimized:"+(MilliSecs()-time)
+
+time:Int=MilliSecs()
+
+PastePixmap_NormalOptimized(Pixmap,0.6,Pixmap2,0.2)
+
+Print "MemoryTable Optimized:"+(MilliSecs()-time)
+
+
+
+Function PastePixmap_ReadWritePixel(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local BGRAtop:Int = ReadPixel(PixmapTop,x,y)
+			Local Btop:Int = BGRAtop &amp; $FF
+			Local Gtop:Int = (BGRAtop Shr 8) &amp; $FF
+			Local Rtop:Int = (BGRAtop Shr 16) &amp; $FF
+			Local Atop:Int = ((BGRAtop Shr 24) &amp; $FF) * _opacityTop
+			
+			Local BGRAbottom:Int = ReadPixel(PixmapBottom,x,y)
+			Local Bbottom:Int = BGRAbottom &amp; $FF
+			Local Gbottom:Int = (BGRAbottom Shr 8) &amp; $FF
+			Local Rbottom:Int = (BGRAbottom Shr 16) &amp; $FF
+			Local Abottom:Int = ((BGRAbottom Shr 24) &amp; $FF) * _opacityBottom
+
+			Local A:Float =  255-(255-Atop)*(255-Abottom)/255
+			Local R:Int = Atop*Rtop/A + (Abottom*Rbottom*((255-Atop)/A))/255
+			Local G:Int = Atop*Gtop/A + (Abottom*Gbottom*((255-Atop)/A))/255
+			Local B:Int = Atop*Btop/A + (Abottom*Bbottom*((255-Atop)/A))/255
+			
+			WritePixel(PixmapBottom,x,y, B | (G Shl 8) | (R Shl 16) | (Int(A) Shl 24))
+		Next
+	Next
+EndFunction
+
+
+
+
+Function PastePixmap_Normal(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	Local bottomPtr:Byte Ptr = PixmapPixelPtr(PixmapBottom)
+	Local topPtr:Byte Ptr = PixmapPixelPtr(PixmapTop)
+	
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local Atop:Int = topPtr[3]*_opacityTop
+			Local Abottom:Int = bottomPtr[3]*_opacityBottom
+			Local A:Float =  255-(255-Atop)*(255-Abottom)/255
+			bottomPtr[0] = Atop*topPtr[0]/A + (Abottom*bottomPtr[0]*((255-Atop)/A))/255
+			bottomPtr[1] = Atop*topPtr[1]/A + (Abottom*bottomPtr[1]*((255-Atop)/A))/255
+			bottomPtr[2] = Atop*topPtr[2]/A + (Abottom*bottomPtr[2]*((255-Atop)/A))/255
+			bottomPtr[3] = Int(A)
+			topPtr:+4
+			bottomPtr:+4
+		Next
+	Next
+EndFunction
+
+
+
+Function PastePixmap_NormalOptimized(BottomPixmap:TPixmap, bottomOpacity:Float, TopPixmap:TPixmap, topOpacity:Float)
+	
+	'------------------------------------
+	'C/255 = (C+1 + (C Shr 8)) Shr 8
+	'------------------------------------
+	
+	Local bottomPixPtr:Byte Ptr = PixmapPixelPtr(BottomPixmap)		'RGBA
+	Local topPixPtr:Byte Ptr = PixmapPixelPtr(TopPixmap)			'RGBA
+	
+	Local AbottomOpacity:Int = 255*bottomOpacity
+	Local AtopOpacity:Int = 255*topOpacity
+		
+	For Local iy:Int=0 Until BottomPixmap.height
+		For Local ix:Int=0 Until BottomPixmap.width
+			
+			'Local Atop:Float = topPixPtr[3]*topOpacity
+			'Local Abottom:Float = bottomPixPtr[3]*bottomOpacity
+			'Local A:Int =  255-((255-Atop)*(255-Abottom))/255
+			'If A&gt;0
+				'bottomPixPtr[0] = (Atop*topPixPtr[0] + (Abottom*bottomPixPtr[0]/255)*(255-Atop))/A
+				'bottomPixPtr[1] = (Atop*topPixPtr[1] + (Abottom*bottomPixPtr[1]/255)*(255-Atop))/A
+				'bottomPixPtr[2] = (Atop*topPixPtr[2] + (Abottom*bottomPixPtr[2]/255)*(255-Atop))/A
+			'EndIf
+			
+			Local f:Int = topPixPtr[3]*AtopOpacity
+			Local Atop:Int = (f+1 + (f Shr 8)) Shr 8
+			f = bottomPixPtr[3]*AbottomOpacity
+			Local Abottom:Int = (f+1 + (f Shr 8)) Shr 8
+			f = (255-Atop)*(255-Abottom)
+			Local A:Int =  255 - ((f+1 + (f Shr 8)) Shr 8)
+			
+			If A&gt;0 Then
+				f = Abottom*bottomPixPtr[0]
+				f = (f+1 + (f Shr 8)) Shr 8
+				bottomPixPtr[0] = (Atop*topPixPtr[0] + f*(255-Atop))/A
+				'---
+				f = Abottom*bottomPixPtr[1]
+				f = (f+1 + (f Shr 8)) Shr 8
+				bottomPixPtr[1] = (Atop*topPixPtr[1] + f*(255-Atop))/A
+				'---
+				f = Abottom*bottomPixPtr[2]
+				f = (f+1 + (f Shr 8)) Shr 8
+				bottomPixPtr[2] = (Atop*topPixPtr[2] + f*(255-Atop))/A
+			EndIf
+			bottomPixPtr[3] = A
+			'---
+			bottomPixPtr:+4
+			topPixPtr:+4
+		Next
+	Next	
+EndFunction	
+	
+
+
+Function PastePixmap_MemoryTableOptimized(PixmapBottom:TPixmap, bottomOpacity:Float, PixmapTop:TPixmap, topOpacity:Float)
+	
+	Local bottomPixPtr:Byte Ptr = PixmapPixelPtr(PixmapBottom)
+	Local topPixPtr:Byte Ptr = PixmapPixelPtr(PixmapTop)
+
+	Local AbottomOpacity:Int = 255*bottomOpacity
+	Local AtopOpacity:Int = 255*topOpacity
+	
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local f:Int = topPixPtr[3]*AtopOpacity
+			Local Atop:Int = (f+1 + (f Shr 8)) Shr 8
+			f = bottomPixPtr[3]*AbottomOpacity
+			Local Abottom:Int = (f+1 + (f Shr 8)) Shr 8
+			f = (255-Atop)*(255-Abottom)
+			Local A:Int =  255 - ((f+1 + (f Shr 8)) Shr 8)
+			
+			'------
+			f = Abottom*bottomPixPtr[0]
+			f = (f+1 + (f Shr 8)) Shr 8 
+			bottomPixPtr[0] = DivideMemory[(Atop*topPixPtr[0] + f*(255-Atop)) + A*65536]
+			
+			f = Abottom*bottomPixPtr[1]
+			f = (f+1 + (f Shr 8)) Shr 8
+			bottomPixPtr[1] = DivideMemory[(Atop*topPixPtr[1] + f*(255-Atop)) + A*65536]
+			
+			f = Abottom*bottomPixPtr[2]
+			f = (f+1 + (f Shr 8)) Shr 8
+			bottomPixPtr[2] = DivideMemory[(Atop*topPixPtr[2] + f*(255-Atop)) + A*65536]
+			bottomPixPtr[3] = A
+
+			topPixPtr:+4
+			bottomPixPtr:+4
+		Next
+	Next
+EndFunction
+
+
+	
+
+Function PastePixmap_ArrayTable(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	Local bottomPtr:Byte Ptr = PixmapPixelPtr(PixmapBottom)
+	Local topPtr:Byte Ptr = PixmapPixelPtr(PixmapTop)
+
+	Local opacityBottom:Int = _opacityBottom*255
+	Local opacityTop:Int = _opacityTop*255
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local Atop:Int = DivideTable[topPtr[3]*opacityTop][255]
+			Local Abottom:Int = DivideTable[bottomPtr[3]*opacityBottom][255]
+			Local A:Int =  255-DivideTable[(255-Atop)*(255- Abottom)][255]
+			Local div:Int = DivideTable[Abottom*(255-Atop)][A]
+			
+			bottomPtr[0] = DivideTable[Atop*topPtr[0]][A] + DivideTable[bottomPtr[0]*div][255]
+			bottomPtr[1] = DivideTable[Atop*topPtr[1]][A] + DivideTable[bottomPtr[1]*div][255]
+			bottomPtr[2] = DivideTable[Atop*topPtr[2]][A] + DivideTable[bottomPtr[2]*div][255]
+			bottomPtr[3] = A
+
+			topPtr:+4
+			bottomPtr:+4
+		Next
+	Next
+EndFunction
+
+
+Function PastePixmap_MemoryTable(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	Local bottomPtr:Byte Ptr = PixmapPixelPtr(PixmapBottom)
+	Local topPtr:Byte Ptr = PixmapPixelPtr(PixmapTop)
+	
+
+	Local opacityBottom:Int = _opacityBottom*255
+	Local opacityTop:Int = _opacityTop*255
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local Atop:Int = DivideMemory[topPtr[3]*opacityTop + 255*65536]
+			Local Abottom:Int = DivideMemory[bottomPtr[3]*opacityBottom + 255*65536]
+			Local A:Int =  255-DivideMemory[(255-Atop)*(255- Abottom) + 255*65536]
+			Local div:Int = DivideMemory[Abottom*(255-Atop) + A*65536]
+			
+			bottomPtr[0] = DivideMemory[Atop*topPtr[0]+ A*65536] + DivideMemory[bottomPtr[0]*div + 255*65536]
+			bottomPtr[1] = DivideMemory[Atop*topPtr[1]+ A*65536] + DivideMemory[bottomPtr[1]*div + 255*65536]
+			bottomPtr[2] = DivideMemory[Atop*topPtr[2]+ A*65536] + DivideMemory[bottomPtr[2]*div + 255*65536]
+			bottomPtr[3] = A
+
+			topPtr:+4
+			bottomPtr:+4
+		Next
+	Next
+EndFunction
+
+</textarea><br><br>Results:<br><br>WritePixel/ReadPixel time:1462<br>Normal time:964<br>ArrayTable time:528<br>MemoryTable time:485<br>Normal Optimized:445<br>MemoryTable Optimized:440<br><br>It can be seen that this new optimization give a nice speed boost. <br><br>By the way, the results (merged images) of all these functions were checked in Photoshop and they provide correct alpha blending.<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1151011"></a>
+
+<a name="1151012"></a>
+
+<a name="1151013"></a>
+
+<a name="1151014"></a>
+
+<a name="1151015"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BinaryBurst</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Try this one:<br><pre class=code>
+Function p_argb8888(pix1:TPixmap,af1:Float,pix2:TPixmap,af2:Float)
+	Local p1:Byte Ptr = pix1.pixels
+	Local p2:Byte Ptr = pix2.pixels
+	
+	z=pix1.pitch/pix1.width
+	
+	i=0
+	While i&lt;=pix1.capacity
+	
+		a = (p1[i+0]*p2[i+0]*a1*a2) Shr 24 + 1
+		k = p1[i+0] Shl 8 / a
+		p = (p1[i+0]*p2[i+0]) / a
+		
+		p1[i+1] = ( p1[i+1] * k + p2[i+1] * p ) Shr 8 
+		p1[i+2] = ( p1[i+3] * k + p2[i+2] * p ) Shr 8 
+		p1[i+3] = ( p1[i+2] * k + p2[i+3] * p ) Shr 8 
+		p1[i+0] = a
+		
+		i:+z
+	Wend
+EndFunction
+</pre><br><pre class=code>
+WritePixel/ReadPixel time:1710
+Normal time:1053
+ArrayTable time:416
+MemoryTable time:431
+Normal Optimized:224
+MemoryTable Optimized:225
+p_argb8888 time: 198
+</pre><br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1151045"></a>
+
+<a name="1151046"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jur</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> I changed "a1" to "af2" and "a2" to "af2" to make it work, but it doesnt give correct results on real images. In fact that equation for alpha (a) is weird. With shr 24 you divide with 2^24 and the result is zero. ??<br>I dont think much more speed gain is posssible in BlitzMax, so I may try to convert some functions to c++.<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1151092"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> I may be being stupid, but if you mainly want to avoid integer-divide-by-zero exceptions, can't you just do this:<br><br><pre class=code>Function PastePixmap_Fast(PixmapBottom:TPixmap, _opacityBottom:Float, PixmapTop:TPixmap, _opacityTop:Float)
+	
+	Local bottomPtr:Byte Ptr = PixmapPixelPtr(PixmapBottom)
+	Local topPtr:Byte Ptr = PixmapPixelPtr(PixmapTop)
+	
+	
+	For Local y:Int=0 Until PixmapBottom.height
+		For Local x:Int=0 Until PixmapBottom.width
+			
+			Local Atop:Int = topPtr[3]*_opacityTop
+			Local Abottom:Int = bottomPtr[3]*_opacityBottom
+			Local A:Int =  255-(255-Atop)*(255-Abottom)/255
+			If A
+				bottomPtr[0] = Atop*topPtr[0]/A + (Abottom*bottomPtr[0]*((255-Atop)/A))/255
+				bottomPtr[1] = Atop*topPtr[1]/A + (Abottom*bottomPtr[1]*((255-Atop)/A))/255
+				bottomPtr[2] = Atop*topPtr[2]/A + (Abottom*bottomPtr[2]*((255-Atop)/A))/255
+				bottomPtr[3] = Int(A)
+			Else
+				bottomPtr[0] = 0
+				bottomPtr[1] = 0
+				bottomPtr[2] = 0
+				bottomPtr[3] = 0
+			EndIf
+			topPtr:+4
+			bottomPtr:+4
+		Next
+	Next
+EndFunction</pre><br><br>Float division by zero still results in invalidated operations, which in turn become 0 when cast back to int (since you're making no attempt to actually <i>deal</i> with the infinity-value), so if the divisor is 0 just don't perform the operation at all, for the same result. <br><br></td></tr></table><br>
+<a name="1151101"></a>
+
+<a name="1151102"></a>
+
+<a name="1151112"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> I dont think much more speed gain is posssible in BlitzMax, so I may try to convert some functions to c++. <br></div><br><br>Hiya,<br><br>My 2 cents worth...<br><br>If you've not done it already, <a href="/posts.php?topic=98061#1143524" target="_blank">look here for compiler optimisations</a><br><br>Of course SIMD is the fastest way to go with image manipulations, and it can all be done within BlitzMax too using either imported assembler, or 'c with inline assembler' files. The compiler optimisation setting will already produce SIMD code, but I'd double check the output as it may be possible to improve it, or at least reduce the instruction count.<br><br>edit:- where mentioned SIMD, I mean SSE which is SIMD extensions.<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1151111"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jur</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Yasha<br> I want to make code as fast as possible and nothing else. For divide with zero you have two options: keep variable as float and divide (the result is not a valid number, but it doesnt matter what is written instead, as that zero is alpha, which means transparent pixel), or use an integer variable and prevent division with an if statement. Which is faster? In my test the second way was a little faster. A little.<br>The key for a bigger speed boost is to use integers AND divide as little as possible! Well I guess it makes sense that using simple and faster instructions will give faster code.<br><br>@col<br>Sounds cool, I will try different parameters and see if there will be difference. As for the assembler stuff, well I know it is fast, but that is the only thing I know about it :). <br><br></td></tr></table><br>
+<a name="1151357"></a>
+
+<a name="1151358"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> <b>EDIT:</b> Stupid suggestion I didn't check properly before posting, ignore this<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,2087 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Using bloomfiltering in a FPS.</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Using bloomfiltering in a FPS.</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >Using bloomfiltering in a FPS.</a><br><br>
+<a name="756685"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Foolish Frost</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, I'm having trouble making the bloomfilter work at multiple resolutions.  Ive combined and modded the code from the following: Cubewater demo, The frametweening example, and the bloomfilter.<br><br>A few side notes, WASD allows control with the mouse.  Space jumps.  I also modded the 'physics' code to better allow walking up stairs, but if you look down while trying to climb, it still will not work.  I know what the problem is with that, but this is going to be a walkthrough engine, more than a First-person-shooter, so it seems acceptable.<br><br>All of the following files need to be inserted into the 'cubewater' demo directory<br><br>you can change the resolution in the lines<br><br>Global rezx = 1024	<br>Global rezy = 600<br><br>in the frameskipping demo.bb<br><br>frameskipping demo.bb<br><pre class=code>Global FXCamera,CubeLightMapSize,CubeLightMapTexture,WaterMapSize,WaterMapTexture,waterdirection
+Global camera,ball,level,campitch#,camyaw#,mvx#,mvy#,mvz#,DummyTexure,water,r#
+Global turn,sprite,underwater,tab,player,firesprite,detail,floorpivot
+Global fpsindex#,fpstime#,fpsfold_millisecs#,fpsfps#,wdb,wasunderwater,oldpicked
+Global lcount=0
+Global falling#, jump#
+Dim firelight(8)
+
+CubeLightMapSize = 256 ; the resolution of the dynamic lightmap *not used in this demo*
+WaterMapSize = 256 ; the resolution of the water
+
+Const C_level=1,C_player=2,C_floorpivot=3
+
+Type layer
+	Field mesh
+	Field count
+	Field spritebank ; pointer to a type just for holding a list of sprites
+	Field emptybank  ; points to bank positions that are empty for filling
+End Type
+
+Type sprite
+	Field x#,y#,z#,s#,a#
+	Field vx#,vy#,vz#,vs#,va#
+	Field r,g,b,vr#,vg#,vb#
+	Field gravity#
+	Field verti[3]
+	Field surf,mesh,spawntype
+	Field life
+End Type
+
+Type spawn
+	Field time,spawntime,spawntype
+	Field x#,y#,z#
+End Type
+
+Type deletelist
+	Field ent,x#,y#,z#
+End Type
+
+Type bumptexture
+	Field filename$
+End Type
+
+; ------------------------------------------------------------------
+; 	GameCore -- support@...
+; ------------------------------------------------------------------
+; The basics of a frame-limited Blitz 3D game, ready to rock
+; ------------------------------------------------------------------
+;             Adapted from Mark Sibly's code
+; ------------------------------------------------------------------
+
+Global info1$="Cube mapped water effect"
+Global info2$="Mouse to look around, W/A/S/Z to move"
+
+Include "../start.bb"
+
+; ------------------------------------------------------------------
+;	Game's frames-per-second setting
+; ------------------------------------------------------------------
+
+Global gameFPS = 30
+
+;set up fps counter
+fps_milli=MilliSecs(): fps_counter=0: update_frequency=10
+
+; ------------------------------------------------------------------
+;	Open 3D display mode
+; ------------------------------------------------------------------
+
+Global rezx = 1024	
+Global rezy = 600
+Graphics3D rezx, rezy, 32, 2
+
+; ------------------------------------------------------------------
+; General setup
+; ------------------------------------------------------------------
+
+HidePointer
+AmbientLight 12,12,12
+player=CreatePivot()
+floorpivot=CreatePivot()
+camera=CreateCamera(player)
+CameraClsMode camera,False,True
+
+
+MoveEntity camera,0,1.2,0
+PositionEntity player,-52,11,353
+CameraFogMode camera,1
+CameraFogColor camera,100,200,255
+;InitGlow(camera)
+
+FXCamera=CreateCamera()
+CameraClsMode FXCamera,False,True
+CameraProjMode FXCamera,0
+CameraViewport FXCamera,0,0,WaterMapSize,WaterMapSize
+
+;SET UP FIRE
+Global fire=LoadTexture("level/fire.png",2+48)
+Global firemesh=CreateLayer()
+EntityTexture firemesh,fire
+firesprite=LoadSprite("level/glow.png",2)
+ScaleSprite firesprite,4.5,10
+HideEntity firesprite
+
+
+;SET UP LEVEL
+
+level = LoadAnimMesh("./leveltest/testmap1.b3d")
+;PositionEntity level ,0,10,0
+;ScaleEntity level, .125,.125,.125
+;RotateEntity level, 0, 180, 0
+
+;MoveEntity player,-52,150,353
+
+level = LoadAnimMesh("level/test.b3d")
+RecurseSeek(level)
+
+
+
+
+;GRAB lights from scene and create some blitz lights, torches etc...
+For d.deletelist=Each deletelist
+	If lcount&lt;8
+		s.spawn=New spawn
+		s\spawntime=2
+		s\spawntype=0
+		s\time=s\spawntime
+		s\x=EntityX(d\ent,1)
+		s\y=EntityY(d\ent,1)
+		s\z=EntityZ(d\ent,1)	
+		firelight(lcount) = CreateLight(2)
+		PositionEntity firelight(lcount),EntityX(d\ent),EntityY(d\ent),EntityZ(d\ent)
+		newsprite=CopyEntity(firesprite)
+		PositionEntity newsprite,EntityX(d\ent),EntityY(d\ent)+1.5,EntityZ(d\ent)
+	EndIf
+	
+	lcount=lcount+1
+	
+	FreeEntity d\ent
+	Delete d
+Next
+
+; SET UP WATER - load a reference mesh 
+
+water=LoadMesh("level/water.3ds")
+MoveEntity water,0,-2,0
+WaterMapTexture=CreateTexture(WaterMapSize,WaterMapSize,128+256+48)
+EntityTexture water,WaterMapTexture
+EntityColor water,100,200,255
+EntityColor water,512,512,512
+EntityAlpha water,0.7
+EntityFX water,1
+AddEntity(water)
+
+Type Vertices
+	Field x#
+	Field y#
+	Field z#
+End Type
+surf=GetSurface(water,1)
+Dim Vertex.Vertices(CountVertices(surf))
+For i=0 To CountVertices(surf)-1
+	Vertex(i) = New Vertices
+	Vertex(i)\x#=VertexX#(surf,i)
+	Vertex(i)\y#=VertexY#(surf,i)
+	Vertex(i)\z#=VertexZ#(surf,i)
+Next
+
+
+;FIRE
+wnospawn=1
+If wnospawn=0
+s.spawn=New spawn
+s\spawntime=2
+s\spawntype=1
+s\time=s\spawntime
+s\x=-9
+s\y=79
+s\z=-305	
+
+s.spawn=New spawn
+s\spawntime=2
+s\spawntype=1
+s\time=s\spawntime
+s\x=9
+s\y=79
+s\z=-305
+EndIf
+;----------------------------------------------------------------------------------
+
+Collisions c_player,c_level,2,2
+EntityType player,c_player
+EntityType floorpivot,c_player
+
+EntityType level,c_level,1
+EntityRadius player,4.5,6
+EntityRadius floorpivot,4
+;----------------------------------------------------------------------------------
+
+mainlight=CreateLight()
+RotateEntity mainlight,45,45,45
+LightColor mainlight,128,128,128
+
+RotateEntity player,0,180,0
+MoveMouse GraphicsWidth()/2,GraphicsHeight()/2
+VWait : Flip
+
+underwater = 0
+
+;setup glow
+Include "Bloomfilter.bb"
+InitGlow(camera,rezx,rezy)
+
+Glowint# = 0.10
+GlowBleed# = 35
+
+; ------------------------------------------------------------------
+;	Frame limiting code setup
+; ------------------------------------------------------------------
+
+framePeriod = 1000 / gameFPS
+frameTime = MilliSecs () - framePeriod
+
+Repeat
+
+	; --------------------------------------------------------------
+	; Frame limiting
+	; --------------------------------------------------------------
+
+	Repeat
+		frameElapsed = MilliSecs () - frameTime
+	Until frameElapsed
+
+	frameTicks = frameElapsed / framePeriod
+	
+	frameTween# = Float (frameElapsed Mod framePeriod) / Float (framePeriod)
+
+	; --------------------------------------------------------------
+	; Update game and world state
+	; --------------------------------------------------------------
+	
+	For frameLimit = 1 To frameTicks
+	
+		If frameLimit = frameTicks Then CaptureWorld
+		frameTime = frameTime + framePeriod
+		
+		db=1-db
+		FreeLook()
+		playergravity()
+		RenderWater()
+		UpdateNormals water		
+		Spawn()
+		RenderSprites()
+		
+		
+		glow#=Cos(MilliSecs())
+		lum#=(Abs(glow*Sin(glow))*255)*0.8
+		For i=0 To 6
+			LightColor firelight(i),220+lum,160+lum/2,100+lum/3
+			LightRange firelight(i),((lum*1.8)+32)
+		Next
+
+		UpdateWorld
+			
+	Next
+
+	; --------------------------------------------------------------
+	; **** Wireframe for DEBUG only -- remove before release! ****
+	; --------------------------------------------------------------
+		
+	;If KeyHit (17): w = 1 - w: WireFrame w: EndIf ; Press 'W'
+
+	; --------------------------------------------------------------
+	; Draw glow
+	; --------------------------------------------------------------
+	
+	SetGlowIntensity(Glowint)
+	RenderGlow(Glowbleed)
+		
+	; --------------------------------------------------------------
+	; Draw 3D world
+	; --------------------------------------------------------------
+
+	RenderWorld frameTween
+	
+	; fps counter
+	fps_counter=fps_counter+1
+	If fps_counter=update_frequency
+	     fps=1000/Float(((MilliSecs()-fps_milli))/update_frequency)
+	     fps_milli=MilliSecs()
+	     fps_counter=0
+	     EndIf
+	
+	; print fps
+	Text 00,00,"FPS:"+fps
+	
+	; --------------------------------------------------------------
+	; Show result
+	; --------------------------------------------------------------
+
+	Flip
+
+Until KeyHit (1)
+
+End
+
+;----------------------------------------------------------------------------------
+; FPS functions
+;----------------------------------------------------------------------------------
+
+Function Spawn()
+	For s.spawn=Each spawn
+		s\time=s\time-1
+		If s\time&lt;0
+			s\time=s\spawntime
+			If s\spawntype=0 AddFire(s\x,s\y,s\z)
+			;If s\spawntype=1 AddWater(s\x,s\y,s\z)
+		EndIf
+	Next
+End Function
+
+;----------------------------------------------------------------------------------
+
+Function AddFire(fx#=0,fy#=0,fz#=0)
+
+	;re-use if we can
+	temp=0
+	For s.sprite=Each sprite
+		If s\mesh=firemesh
+			If s\life=0
+				temp = Handle(s)
+				;counter=counter+1
+				Exit
+			EndIf
+		EndIf
+	Next
+	If temp=0 temp = AddSprite(firemesh)
+		
+	vec#=Rnd(360)
+	xpos#=-Cos(vec)*0.9
+	ypos#=0
+	zpos#=-Sin(vec)*0.9
+	scale#=2.3
+	alpha#=0.9
+	
+	velx#=-xpos*0.02
+	vely#=Rnd(0.2)+0.1
+	velz#=-zpos*0.02
+	
+	scalespd#=-0.08
+	alphaspd#=-0.015
+	gravity#=-0.002
+
+	r=255
+	g=255
+	b=255
+	
+	vr#=-8
+	vg#=-8
+	vb#=-8
+
+	
+	life=80
+	UpdateSprite temp,life,xpos+fx,ypos+fy,zpos+fz,velx,vely,velz,scale,scalespd,alpha,alphaspd,r,g,b,vr#,vg#,vb#,gravity#
+
+End Function
+
+
+;--------------------------------------------------------------------------------------------
+
+Function RenderSprites()
+	For s.sprite=Each sprite
+		If s\life&gt;0
+			s\life=s\life-1			
+			s\x=s\x+s\vx
+			s\y=s\y+s\vy
+			s\z=s\z+s\vz
+			s\s=s\s+s\vs
+			s\a=s\a+s\va
+			s\r=s\r+s\vr
+			s\g=s\g+s\vg
+			s\b=s\b+s\vb
+			s\vy=s\vy+s\gravity#
+			
+			TFormPoint s\x,s\y,s\z,0,camera
+			If TFormedZ#()&gt;0
+				TFormVector -s\s,-s\s,0,camera,0 
+				VertexCoords s\surf,s\verti[0],s\x+TFormedX#(),s\y+TFormedY#(),s\z+TFormedZ#()
+				TFormVector s\s,-s\s,0,camera,0 
+				VertexCoords s\surf,s\verti[1],s\x+TFormedX#(),s\y+TFormedY#(),s\z+TFormedZ#()
+				TFormVector -s\s,s\s,0,camera,0 
+				VertexCoords s\surf,s\verti[2],s\x+TFormedX#(),s\y+TFormedY#(),s\z+TFormedZ#()
+				TFormVector s\s,s\s,0,camera,0 
+				VertexCoords s\surf,s\verti[3],s\x+TFormedX#(),s\y+TFormedY#(),s\z+TFormedZ#()
+				VertexColor s\surf,s\verti[0],s\r,s\g,s\b,s\a
+				VertexColor s\surf,s\verti[1],s\r,s\g,s\b,s\a
+				VertexColor s\surf,s\verti[2],s\r,s\g,s\b,s\a
+				VertexColor s\surf,s\verti[3],s\r,s\g,s\b,s\a
+			EndIf
+			
+		EndIf
+	Next
+End Function
+
+;--------------------------------------------------------------------------------------------
+Function CreateLayer()
+	l.layer=New layer	
+	l\mesh=CreateMesh() : surf=CreateSurface(l\mesh)
+	l\spritebank=CreateBank()
+	NameEntity l\mesh,Handle(l)
+	EntityColor l\mesh,255,255,255
+	EntityFX l\mesh,1+2
+	EntityBlend l\mesh,3
+	Return l\mesh
+End Function
+;--------------------------------------------------------------------------------------------
+Function AddSprite(mesh)
+	l.layer=Object.layer(EntityName(mesh))
+	surf=GetSurface(l\mesh,1)
+	l\count=l\count+1
+	ResizeBank l\spritebank,l\count*4
+	;create a new sprite
+	s.sprite=New sprite
+	s\verti[0]=AddVertex(surf,0,0,0,0,1) ;topleft
+	s\verti[1]=AddVertex(surf,0,0,0,1,1) ;topright
+	s\verti[2]=AddVertex(surf,0,0,0,0,0) ;bottomleft
+	s\verti[3]=AddVertex(surf,0,0,0,1,0) ;bottomright
+	AddTriangle(surf,s\verti[1],s\verti[2],s\verti[3])
+	AddTriangle(surf,s\verti[2],s\verti[1],s\verti[0])
+	s\s=10 : s\a=1
+	s\r=255 : s\g=255 : s\b=255
+	s\x=0 : s\y=0 : s\z=0
+	s\surf=surf
+	s\mesh=l\mesh
+	;put the new sprite into the bank
+	PokeInt l\spritebank,(l\count*4)-4,Handle(s)
+	Return Handle(s)
+End Function
+;--------------------------------------------------------------------------------------------
+Function UpdateSprite(sprite,life,x#,y#,z#,vx#,vy#,vz#,scale#,scalevel#,alpha#,alphavel#,r,g,b,vr#,vg#,vb#,gravity#)
+	s.sprite = Object.sprite( sprite )
+	s\x=x
+	s\y=y
+	s\z=z
+
+	s\vx=vx
+	s\vy=vy
+	s\vz=vz	
+	s\gravity#=gravity#
+	s\s=scale
+	s\vs=scalevel
+	s\a=alpha
+	s\va=alphavel
+
+	s\r=r : s\g=g : s\b=b
+	s\vr=vr : s\vg=vg : s\vb=vb
+
+	
+	s\life=life
+End Function
+
+;--------------------------------------------------------------------------------------------
+Function fps()
+	fpsindex=fpsindex+1
+	fpstime=fpstime+MilliSecs()-fpsfold_millisecs
+	If fpstime=&gt;1000
+		fpsfps=fpsindex
+		fpstime=0
+		fpsindex=0
+	EndIf
+	fpsfold_millisecs=MilliSecs()
+	Return fpsfps
+End Function
+;--------------------------------------------------------------------------------------------
+Function TransTex(texture,angle#,scale#=1)
+	ScaleTexture texture,scale,scale
+	RotateTexture texture,angle#
+	x#=Cos(angle)/scale/2
+	y#=Sin(angle)/scale/2
+	PositionTexture texture,(x-.5)-y,(y-.5)+x
+End Function
+
+;----------------------------------------------------------------------------------
+
+Function RenderWater()
+
+	HideEntities()
+	CameraProjMode camera,0
+	CameraProjMode FXCamera,1
+	
+	wdb=1-wdb
+		
+	
+	;flip water if under it
+				
+	If underwater=0	
+		If waterdirection=-1
+			FlipMesh water
+			EntityAlpha water,.7
+			EntityColor water,255,255,255
+		EndIf
+		waterdirection=1
+		
+		PositionEntity FXCamera,EntityX(player),EntityY(water)-2,EntityZ(player)
+
+		
+		
+		If wdb
+			;do left view	
+			SetCubeFace WaterMapTexture,0
+			RotateEntity FXCamera,0,90,0
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+			;do forward view
+			SetCubeFace WaterMapTexture,1
+			RotateEntity FXCamera,0,0,0
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+		Else
+			;do right view	
+			SetCubeFace WaterMapTexture,2
+			RotateEntity FXCamera,0,-90,0
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+			;do backward view
+			SetCubeFace WaterMapTexture,3
+			RotateEntity FXCamera,0,180,0
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+		EndIf
+		;do up view
+		SetCubeFace WaterMapTexture,4
+		RotateEntity FXCamera,-90,0,0
+		RenderWorld
+		CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+	
+	Else
+		If waterdirection=1
+			FlipMesh water
+			EntityAlpha water,1
+			EntityColor water,155,200,255
+
+		EndIf	
+		waterdirection=-1
+		
+		PositionEntity FXCamera,-EntityX(player),EntityY(player)-2,EntityZ(player)
+		
+		
+		If wdb
+			;do left view	
+			SetCubeFace WaterMapTexture,0
+			RotateEntity FXCamera,0,-90,180
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+			;do forward view
+			SetCubeFace WaterMapTexture,1
+			RotateEntity FXCamera,0,0,180
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+		Else
+			;do right view	
+			SetCubeFace WaterMapTexture,2
+			RotateEntity FXCamera,0,90,180
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+			;do backward view
+			SetCubeFace WaterMapTexture,3
+			RotateEntity FXCamera,0,180,180
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+		EndIf
+		
+		;do down view
+		SetCubeFace WaterMapTexture,5
+		RotateEntity FXCamera,-90,0,180
+		RenderWorld
+		CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+	EndIf
+
+
+
+	CameraProjMode FXCamera,0
+	CameraProjMode camera,1
+	ShowEntities()
+
+
+	s=GetSurface(water,1)
+	For i=0 To CountVertices(s)-1
+		Freq#=MilliSecs()/4
+		Vertex(i)\y#=Sin(freq+Vertex(i)\x#*500+Vertex(i)\z#*300)*1.2
+		VertexCoords s,i,Vertex(i)\x#,-Vertex(i)\y#,Vertex(i)\z#
+	Next
+
+	If EntityY(camera,1)&lt;-2 underwater=1 Else underwater=0
+
+	If underwater
+		CameraFogColor camera,50,100,155
+		t#=MilliSecs()/6
+		ScaleEntity camera,1+Cos(t)*0.04,1+Sin(t)*0.04,1+Cos(t)*0.02
+		CameraFogRange camera,0,200+Sin(MilliSecs()*0.05)*60
+		TurnEntity player,0,0,Sin(t)*2
+	Else
+		CameraFogColor camera,100,200,255
+		ScaleEntity camera,1,1,1
+		CameraFogRange camera,100,1000
+	EndIf
+	
+End Function
+
+;----------------------------------------------------------------------------------
+
+Type entity
+	Field ent
+End Type
+
+Type level
+	Field ent
+End Type
+
+Type cubelight
+	Field ent,r,g,b,radius
+End Type
+
+;----------------------------------------------------------------------------------
+Function AddEntity(ent)
+	e.entity=New entity
+	e\ent=ent
+End Function
+
+;----------------------------------------------------------------------------------
+
+Function HideEntities()
+	For e.entity=Each entity
+		HideEntity e\ent
+	Next
+End Function
+;----------------------------------------------------------------------------------
+Function ShowEntities()
+	For e.entity=Each entity
+		ShowEntity e\ent
+	Next
+End Function
+;----------------------------------------------------------------------------------
+Function AddLevel(ent)
+	e.level=New level
+	e\ent=ent
+End Function
+;----------------------------------------------------------------------------------
+
+Function HideLevel()
+	For e.level=Each level
+		HideEntity e\ent
+	Next
+End Function
+;----------------------------------------------------------------------------------
+
+Function ShowLevel()
+	For e.level=Each level
+		ShowEntity e\ent
+	Next
+End Function
+
+;----------------------------------------------------------------------------------
+
+
+Function freelook()
+
+	mxspd#=MouseXSpeed()*0.25
+	myspd#=MouseYSpeed()*0.25
+	
+	If underwater
+		mxspd=mxspd*0.6
+		myspd=myspd*0.6
+	EndIf
+	
+		
+	MoveMouse GraphicsWidth()/2,GraphicsHeight()/2
+
+	campitch=campitch+myspd
+	If campitch&lt;-85 Then campitch=-85
+	If campitch&gt;85 Then campitch=85
+	RotateEntity player,campitch,EntityYaw(player)-mxspd,0
+	
+	If KeyDown(203) Then mvx=mvx-.3
+	If KeyDown(205) Then mvx=mvx+.3
+	If KeyDown(200) Then mvz=mvz+.3
+	If KeyDown(208) Then mvz=mvz-.3
+	
+	If KeyDown(30) Then mvx=mvx-.3
+	If KeyDown(32) Then mvx=mvx+.3
+	If KeyDown(17) Then mvz=mvz+.3
+	If KeyDown(31) Then mvz=mvz-.3
+	
+	If KeyDown(57) And jump = 0.0 And falling &lt;= 0.25 Then jump = 3.5
+	
+	PositionEntity floorpivot,EntityX(player),EntityY(player)-4,EntityZ(player)
+	
+	;If underwater
+	;
+	;	mvx=mvx/1.2
+	;	mvy=mvy-0.005
+	;	mvz=mvz/1.2
+	;	wasunderwater=1
+	;
+	;Else
+	;	
+	;	falling = falling + 0.1
+	;	mvy=mvy-falling 
+	;	If EntityCollided(floorpivot,c_level)
+	;		mvy=mvy+falling 
+	;		falling = 0.0
+	;	EndIf
+	;	
+	;	If wasunderwater
+	;		wasunderwater=0
+	;		mvy=4
+	;	EndIf
+	;	
+	;EndIf
+		
+	;mvx=mvx/1.2
+	;mvy=mvy/1.2
+	;mvz=mvz/1.2
+	
+	;MoveEntity player,mvx,0,mvz
+	;TranslateEntity player,0,mvy,0
+	
+	;If EntityY(player)&gt;60 Then PositionEntity player,EntityX(player),60,EntityZ(player)
+	
+End Function
+
+Function RecurseSeek(ent)
+	tab=tab+4
+	For i=1 To CountChildren(ent)	
+		child=GetChild(ent,i)
+		name$=Lower(EntityName(child))
+		If Instr(name$,"fire")
+			d.deletelist=New deletelist
+			d\ent=child
+		EndIf			
+	Next
+	tab=tab-4
+End Function
+
+Function playergravity()
+	If underwater
+	
+		falling = 0.0
+		mvx=mvx/1.2
+		mvy=mvy-0.005
+		mvz=mvz/1.2
+		wasunderwater=1
+	
+	Else
+		
+		mvy=mvy-0.3 
+		falling = falling + 0.1
+		
+		If jump &gt;= 2.0
+			mvy=(mvy-falling)+(jump-2)
+		Else
+			mvy=(mvy-falling)
+		EndIf
+		
+		If jump &gt; 0.0
+			jump = jump - 0.15
+		Else
+			jump = 0
+		EndIf
+			
+		If EntityCollided(floorpivot,c_level)
+			mvy=mvy+falling 
+			falling = 0.0
+		EndIf
+
+		If EntityCollided(player,c_level)
+			falling = 0.25
+			mvy=mvy+falling 
+		EndIf
+		
+		If wasunderwater
+			falling = 0.0
+			wasunderwater=0
+			mvy=4
+		EndIf
+		
+	EndIf
+	
+	mvx=mvx/1.2
+	mvy=mvy/1.2
+	mvz=mvz/1.2
+	
+	MoveEntity player,mvx,0,mvz
+	TranslateEntity player,0,mvy,0
+	
+End Function</pre><br><br>BloomFilter.bb<br><pre class=code>;GLOW EFFECT
+;SSwifts blur routine ---------------------
+; This is the location in the world where the camera will reside.
+; This location should be far from any other geometry you have in your world.
+Const BLUR_CAM_X# = 65536.0
+Const BLUR_CAM_Y# = 65536.0
+Const BLUR_CAM_Z# = 0.0
+Global BLUR_CAM% = 0
+
+Global GLsprite%
+
+;NOTE!
+;IF YOU ADJUST THE TEX SIZE YOU HAVE TO MESS WITH POSITION 
+;VALUES INSIDE BLUR TEXTURE FUNCTION TO GET THE BLUR POSITIONED RIGHT.
+
+Global GLtexsize% = 256
+Global GLcam%
+Global GLtex%
+Global GLdummytex%
+
+Dim BLURMESH%(4*4)
+
+;Modified to additive blend in the same time as blur.
+;Also modified the copyrecting... so that multiple passes don't cause texture drifting.
+;this is just a quick fix... don't actually get why tex texture drifts...
+Function BlurTexture(texture, Blur_Quality, Blur_Radius#, blurpasses%)
+; -------------------------------------------------------------------------------------------------------------------
+; This function blurs a texture using a technique that takes advantage of 3D acceleration.  
+;
+; * You MUST hide all other cameras before calling this function!
+; * You MUST reset your texture's blending mode, scale, and position after calling this function!
+;
+; Texture is the texture you want blurred.
+;
+; Blur_Quality defines the quality of the blur.  1 = 4 passes, 2 = 8 passes, 3 = 12 passes, etc.
+;
+; (The reason that the passes are in multiples of four is because interference artifacts are created when
+; the number of passes is not a multiple of four... meaning that ten passes will actually look far worse
+; than eight.)
+;
+; Blur_Radius# defines the radius of the blur, in pixels, assuming a map size of 256x256.
+;
+;(Ie, a radius of 16 will be the same width regardless of whether the texture is 16x16 or 512x512.  It will
+; only be exactly 16 pixels wide if the map is 256x256.)
+; -------------------------------------------------------------------------------------------------------------------
+
+; This is used for temporary storage of the meshes used for soft shadow blurring.
+;Local BlurMesh[16*4]
+
+
+; If blurring is enabled...
+If Blur_Quality &gt; 0
+
+If BLUR_CAM=0
+Blur_Cam = CreateCamera()
+
+; Set the camera's range to be very small so as to reduce the possiblity of extra objects making it into the scene.
+CameraRange Blur_Cam, 0.1, 100
+
+; Set the camera to zoom in on the object to reduce perspective error from the object being too close to the camera.
+CameraZoom Blur_Cam, 16.0
+
+; Aim camera straight down.
+RotateEntity Blur_Cam, 90, 0, 0, True
+
+; Set the camera viewport to the same size as the texture.
+CameraViewport Blur_Cam, 0, 0, GLtexsize, GLtexsize
+
+; Set the camera so it clears the color buffer before rendering the texture.
+CameraClsColor Blur_Cam, 0,0,0
+CameraClsMode  Blur_Cam,True, True
+
+; Position the blur camera far from other entities in the world.
+PositionEntity Blur_Cam, BLUR_CAM_X#, BLUR_CAM_Y#, BLUR_CAM_Z#
+Else
+ShowEntity BLUR_CAM
+End If
+
+; Create the sprites to use for blurring the shadow maps.
+For Loop = 0 To (Blur_Quality*4)-1
+
+If BLURMESH(loop) = 0
+BlurMesh(Loop) = CreateSprite()
+EntityBlend BlurMesh(Loop),3;3
+
+EntityTexture Blurmesh(loop),GLdummytex,0,0
+EntityTexture BlurMesh(Loop),Texture,0,1
+EntityTexture BlurMesh(loop),Texture,0,2
+
+EntityFX BlurMesh(Loop), 1+8
+ScaleSprite BlurMesh(Loop), 2, 2
+;EntityAlpha Blurmesh(loop),0.5
+End If
+
+ShowEntity blurmesh(loop)
+Next
+
+; Scale the texture down because we scale the sprites up so they fill a larger area of the
+; screen.  (Otherwise the edges of the texture are darker than the middle because they don't
+; get covered.
+ScaleTexture    Texture, 0.5, 0.5
+PositionTexture Texture, 0.5, 0.5
+
+; Blur texture by blitting semi-transparent copies of it on top of it.
+BlurRadius# = Blur_Radius# * (1.0 / 256.0)
+BlurAngleStep# = 360.0 / Float(Blur_Quality*4)
+
+; Normally we would just divide 255 by the number of passes so that adding all the passes
+; together would not exceed 256.  However, if we did that, then we could not have a number of
+; passes which does not divide 256 evenly, or else the error would result in the white part of
+; the image being slightly less than white.  So we round partial values up to ensure that
+; white will always be white, even if it ends up being a little whiter than white as a result
+; when all the colors are added, since going higher than white just clamps to white.
+;BlurShade = Ceil(255.0 / Float(Blur_Quality*4))
+
+; Place each of the blur objects around a circle of radius blur_radius.
+For Loop = 0 To (Blur_Quality*4)-1
+
+BlurAngle# = BlurAngleStep# * Float(Loop) + 180.0*(Loop Mod 2)
+Xoff# = BlurRadius# * Cos(BlurAngle#)
+Yoff# = BlurRadius# * Sin(BlurAngle#)
+
+
+;MESS WITH THESE VALUES IF YOU ADJUST THE TEXTURE SIZE
+PositionEntity BlurMesh(Loop), BLUR_CAM_X# + Xoff#-0.006, BLUR_CAM_Y# - 16.0, BLUR_CAM_Z# + Yoff#+0.008 , True
+Next
+
+; Render the new texture.
+
+For i=1 To blurpasses
+RenderWorld
+CopyRect 0, 0, TextureWidth(Texture), TextureHeight(Texture), 0, 0, BackBuffer(), TextureBuffer(Texture)
+Next
+
+
+; Free the blur entities.
+For Loop = 0 To (Blur_Quality*4)-1
+HideEntity Blurmesh(loop)
+Next
+
+; Free the blur camera.
+HideEntity BLUR_CAM
+EndIf
+End Function
+
+
+Function SetGlowZoom(zoom#)
+	If GLsprite &lt;&gt; 0 Then ScaleSprite GLsprite, 100.0/zoom#, 100.0/zoom#
+End Function
+
+;Params
+;CAM - Your main scene camera
+Function InitGlow(cam,rezx#,rezy#)
+GLcam = cam
+
+;xdivisor# = 4.0
+xdivisor# = (rezx/rezy)*2.34
+ydivisor# = xdivisor * (rezy/rezx)
+
+If GLtex = 0
+ClearTextureFilters()
+GLtex = CreateTexture(GLtexsize,GLtexsize,1+16+32+256)
+TextureFilter("",1+8)
+End If
+
+;CREATE SPRITE
+GLsprite = CreateSprite()
+EntityTexture GLsprite,GLtex
+PositionEntity GLsprite,-52,10,100
+EntityOrder GLsprite,-9999
+EntityBlend GLsprite,3
+ScaleSprite GLsprite,rezx / xdivisor, rezy / ydivisor
+EntityParent GLsprite,cam
+EntityFX GLsprite,1
+
+If gldummytex=0
+ClearTextureFilters()
+gldummytex = CreateTexture(32,32,1)
+TextureFilter("",1+8)
+TextureBlend gldummytex,2
+SetGlowIntensity()
+End If
+
+
+
+;Test code
+;Use this test code to check how the blur is aligned 
+;sprite = CreateSprite()
+;PositionEntity sprite,0,0,20
+;ScaleSprite sprite,4,4
+;EntityParent sprite,cam
+;EntityOrder sprite,-9000
+End Function
+
+;Intensity Between 0-1 (between no glow to ---&gt; my eyes hurt glow)
+Function SetGlowIntensity(d#=0.2)
+SetBuffer TextureBuffer(GLdummytex)
+ClsColor 255*d,255*d,255*d
+Cls
+SetBuffer BackBuffer()
+End Function
+
+
+;Play with bleed to get desired result.... it's a bit difficult to explain... the higher value .. the more the glow  colours bleed
+;Use tween as a tween value if you use render tweening in your app
+;More blurpasses really slow things down so beware and makes the blur act differently
+Function RenderGlow(bleed%=30,tween%=0,blurpasses%=1)
+TextureBlend GLtex,5
+EntityColor GLsprite,bleed,bleed,bleed
+
+CameraViewport GLcam,0,0,GLtexsize,GLtexsize
+
+RenderWorld tween
+CopyRect 0,0,GLtexsize,GLtexsize,0,0,BackBuffer(),TextureBuffer(GLtex)
+
+CameraViewport GLcam,0,0,GraphicsWidth(),GraphicsHeight()
+EntityColor GLsprite,255,255,255
+
+
+;TextureBlend GLtex,5
+blurtexture(GLtex,1,4,blurpasses)
+ScaleTexture GLtex, 1, 1
+PositionTexture GLtex,0,0
+;TextureBlend GLtex,2
+End Function
+
+
+Function FreeGlow()
+If GLsprite&lt;&gt;0
+FreeEntity GLsprite : GLsprite=0
+FreeTexture GLtex : GLtex=0
+FreeTexture GLdummytex : GLdummytex=0
+FreeEntity BLUR_CAM : BLUR_CAM=0
+
+For i=1 To 4*4
+If blurmesh(i)&lt;&gt;0 Then FreeEntity blurmesh(i) : blurmesh(i)=0
+Next
+
+End If
+End Function
+
+
+</pre> <br><br></td></tr></table><br>
+<a name="756793"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Foolish Frost</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok.  I know it's only been less than a day, but I figured it out.  Bloomfilter only needed a simple mod from the original code.  Seems the Zoom was resizing the texture, but it was not moving back to the middle like it should have.<br><br>Corrected sourcecode for a frameskipping demo, and the corrected BloomFilter system.<br><br>FrameSkipping demo.bb<br><pre class=code>Global FXCamera,CubeLightMapSize,CubeLightMapTexture,WaterMapSize,WaterMapTexture,waterdirection
+Global camera,ball,level,campitch#,camyaw#,mvx#,mvy#,mvz#,DummyTexure,water,r#
+Global turn,sprite,underwater,tab,player,firesprite,detail,floorpivot
+Global fpsindex#,fpstime#,fpsfold_millisecs#,fpsfps#,wdb,wasunderwater,oldpicked
+Global lcount=0
+Global falling#, jump#
+Dim firelight(8)
+
+CubeLightMapSize = 256 ; the resolution of the dynamic lightmap *not used in this demo*
+WaterMapSize = 256 ; the resolution of the water
+
+Const C_level=1,C_player=2,C_floorpivot=3
+
+Type layer
+	Field mesh
+	Field count
+	Field spritebank ; pointer to a type just for holding a list of sprites
+	Field emptybank  ; points to bank positions that are empty for filling
+End Type
+
+Type sprite
+	Field x#,y#,z#,s#,a#
+	Field vx#,vy#,vz#,vs#,va#
+	Field r,g,b,vr#,vg#,vb#
+	Field gravity#
+	Field verti[3]
+	Field surf,mesh,spawntype
+	Field life
+End Type
+
+Type spawn
+	Field time,spawntime,spawntype
+	Field x#,y#,z#
+End Type
+
+Type deletelist
+	Field ent,x#,y#,z#
+End Type
+
+Type bumptexture
+	Field filename$
+End Type
+
+; ------------------------------------------------------------------
+; 	GameCore -- support@...
+; ------------------------------------------------------------------
+; The basics of a frame-limited Blitz 3D game, ready to rock
+; ------------------------------------------------------------------
+;             Adapted from Mark Sibly's code
+; ------------------------------------------------------------------
+
+Global info1$="Cube mapped water effect"
+Global info2$="Mouse to look around, W/A/S/Z to move"
+
+Include "../start.bb"
+
+; ------------------------------------------------------------------
+;	Game's frames-per-second setting
+; ------------------------------------------------------------------
+
+Global gameFPS = 30
+
+;set up fps counter
+fps_milli=MilliSecs(): fps_counter=0: update_frequency=10
+
+; ------------------------------------------------------------------
+;	Open 3D display mode
+; ------------------------------------------------------------------
+
+Global rezx = 640	
+Global rezy = 480
+Graphics3D rezx, rezy, 32, 2
+
+; ------------------------------------------------------------------
+; General setup
+; ------------------------------------------------------------------
+
+HidePointer
+AmbientLight 12,12,12
+player=CreatePivot()
+floorpivot=CreatePivot()
+camera=CreateCamera(player)
+CameraClsMode camera,False,True
+
+
+MoveEntity camera,0,1.2,0
+PositionEntity player,-52,11,353
+CameraFogMode camera,1
+CameraFogColor camera,100,200,255
+;InitGlow(camera)
+
+FXCamera=CreateCamera()
+CameraClsMode FXCamera,False,True
+CameraProjMode FXCamera,0
+CameraViewport FXCamera,0,0,WaterMapSize,WaterMapSize
+
+;SET UP FIRE
+Global fire=LoadTexture("level/fire.png",2+48)
+Global firemesh=CreateLayer()
+EntityTexture firemesh,fire
+firesprite=LoadSprite("level/glow.png",2)
+ScaleSprite firesprite,4.5,10
+HideEntity firesprite
+
+
+;SET UP LEVEL
+
+level = LoadAnimMesh("./leveltest/testmap1.b3d")
+;PositionEntity level ,0,10,0
+;ScaleEntity level, .125,.125,.125
+;RotateEntity level, 0, 180, 0
+
+;MoveEntity player,-52,150,353
+
+level = LoadAnimMesh("level/test.b3d")
+RecurseSeek(level)
+
+
+
+
+;GRAB lights from scene and create some blitz lights, torches etc...
+For d.deletelist=Each deletelist
+	If lcount&lt;8
+		s.spawn=New spawn
+		s\spawntime=2
+		s\spawntype=0
+		s\time=s\spawntime
+		s\x=EntityX(d\ent,1)
+		s\y=EntityY(d\ent,1)
+		s\z=EntityZ(d\ent,1)	
+		firelight(lcount) = CreateLight(2)
+		PositionEntity firelight(lcount),EntityX(d\ent),EntityY(d\ent),EntityZ(d\ent)
+		newsprite=CopyEntity(firesprite)
+		PositionEntity newsprite,EntityX(d\ent),EntityY(d\ent)+1.5,EntityZ(d\ent)
+	EndIf
+	
+	lcount=lcount+1
+	
+	FreeEntity d\ent
+	Delete d
+Next
+
+; SET UP WATER - load a reference mesh 
+
+water=LoadMesh("level/water.3ds")
+MoveEntity water,0,-2,0
+WaterMapTexture=CreateTexture(WaterMapSize,WaterMapSize,128+256+48)
+EntityTexture water,WaterMapTexture
+EntityColor water,100,200,255
+EntityColor water,512,512,512
+EntityAlpha water,0.7
+EntityFX water,1
+AddEntity(water)
+
+Type Vertices
+	Field x#
+	Field y#
+	Field z#
+End Type
+surf=GetSurface(water,1)
+Dim Vertex.Vertices(CountVertices(surf))
+For i=0 To CountVertices(surf)-1
+	Vertex(i) = New Vertices
+	Vertex(i)\x#=VertexX#(surf,i)
+	Vertex(i)\y#=VertexY#(surf,i)
+	Vertex(i)\z#=VertexZ#(surf,i)
+Next
+
+
+;FIRE
+wnospawn=1
+If wnospawn=0
+s.spawn=New spawn
+s\spawntime=2
+s\spawntype=1
+s\time=s\spawntime
+s\x=-9
+s\y=79
+s\z=-305	
+
+s.spawn=New spawn
+s\spawntime=2
+s\spawntype=1
+s\time=s\spawntime
+s\x=9
+s\y=79
+s\z=-305
+EndIf
+;----------------------------------------------------------------------------------
+
+Collisions c_player,c_level,2,2
+EntityType player,c_player
+EntityType floorpivot,c_player
+
+EntityType level,c_level,1
+EntityRadius player,4.5,6
+EntityRadius floorpivot,4
+;----------------------------------------------------------------------------------
+
+mainlight=CreateLight()
+RotateEntity mainlight,45,45,45
+LightColor mainlight,128,128,128
+
+RotateEntity player,0,180,0
+MoveMouse GraphicsWidth()/2,GraphicsHeight()/2
+VWait : Flip
+
+underwater = 0
+
+;setup glow
+Include "Bloomfilter.bb"
+;InitGlow(camera,rezx,rezy)
+InitGlow(camera)
+SetGlowZoom(1.0)
+Glowint# = 0.15
+GlowBleed# = 50
+
+SetGlowIntensity(Glowint)
+
+; ------------------------------------------------------------------
+;	Frame limiting code setup
+; ------------------------------------------------------------------
+
+framePeriod = 1000 / gameFPS
+frameTime = MilliSecs () - framePeriod
+
+Repeat
+
+	; --------------------------------------------------------------
+	; Frame limiting
+	; --------------------------------------------------------------
+
+	Repeat
+		frameElapsed = MilliSecs () - frameTime
+	Until frameElapsed
+
+	frameTicks = frameElapsed / framePeriod
+	
+	frameTween# = Float (frameElapsed Mod framePeriod) / Float (framePeriod)
+
+	; --------------------------------------------------------------
+	; Update game and world state
+	; --------------------------------------------------------------
+	
+	For frameLimit = 1 To frameTicks
+	
+		If frameLimit = frameTicks Then CaptureWorld
+		frameTime = frameTime + framePeriod
+		
+		db=1-db
+		FreeLook()
+		playergravity()
+		
+		If GLsprite &lt;&gt; 0 Then EntityAlpha GLsprite, 0
+		RenderWater()
+		If GLsprite &lt;&gt; 0 Then EntityAlpha GLsprite, 1
+		
+		UpdateNormals water		
+		Spawn()
+		RenderSprites()
+		
+		
+		glow#=Cos(MilliSecs())
+		lum#=(Abs(glow*Sin(glow))*255)*0.8
+		For i=0 To 6
+			LightColor firelight(i),220+lum,160+lum/2,100+lum/3
+			LightRange firelight(i),((lum*1.8)+32)
+		Next
+
+		UpdateWorld
+			
+	Next
+
+	; --------------------------------------------------------------
+	; **** Wireframe for DEBUG only -- remove before release! ****
+	; --------------------------------------------------------------
+		
+	;If KeyHit (17): w = 1 - w: WireFrame w: EndIf ; Press 'W'
+
+	; --------------------------------------------------------------
+	; Draw glow
+	; --------------------------------------------------------------
+	
+	RenderGlow(Glowbleed)
+		
+	; --------------------------------------------------------------
+	; Draw 3D world
+	; --------------------------------------------------------------
+
+	RenderWorld frameTween
+	
+	; fps counter
+	fps_counter=fps_counter+1
+	If fps_counter=update_frequency
+	     fps=1000/Float(((MilliSecs()-fps_milli))/update_frequency)
+	     fps_milli=MilliSecs()
+	     fps_counter=0
+	     EndIf
+	
+	; print fps
+	Text 00,00,"FPS:"+fps
+	
+	; --------------------------------------------------------------
+	; Show result
+	; --------------------------------------------------------------
+
+	Flip
+
+Until KeyHit (1)
+
+End
+
+;----------------------------------------------------------------------------------
+; FPS functions
+;----------------------------------------------------------------------------------
+
+Function Spawn()
+	For s.spawn=Each spawn
+		s\time=s\time-1
+		If s\time&lt;0
+			s\time=s\spawntime
+			If s\spawntype=0 AddFire(s\x,s\y,s\z)
+			;If s\spawntype=1 AddWater(s\x,s\y,s\z)
+		EndIf
+	Next
+End Function
+
+;----------------------------------------------------------------------------------
+
+Function AddFire(fx#=0,fy#=0,fz#=0)
+
+	;re-use if we can
+	temp=0
+	For s.sprite=Each sprite
+		If s\mesh=firemesh
+			If s\life=0
+				temp = Handle(s)
+				;counter=counter+1
+				Exit
+			EndIf
+		EndIf
+	Next
+	If temp=0 temp = AddSprite(firemesh)
+		
+	vec#=Rnd(360)
+	xpos#=-Cos(vec)*0.9
+	ypos#=0
+	zpos#=-Sin(vec)*0.9
+	scale#=2.3
+	alpha#=0.9
+	
+	velx#=-xpos*0.02
+	vely#=Rnd(0.2)+0.1
+	velz#=-zpos*0.02
+	
+	scalespd#=-0.08
+	alphaspd#=-0.015
+	gravity#=-0.002
+
+	r=255
+	g=255
+	b=255
+	
+	vr#=-8
+	vg#=-8
+	vb#=-8
+
+	
+	life=80
+	UpdateSprite temp,life,xpos+fx,ypos+fy,zpos+fz,velx,vely,velz,scale,scalespd,alpha,alphaspd,r,g,b,vr#,vg#,vb#,gravity#
+
+End Function
+
+
+;--------------------------------------------------------------------------------------------
+
+Function RenderSprites()
+	For s.sprite=Each sprite
+		If s\life&gt;0
+			s\life=s\life-1			
+			s\x=s\x+s\vx
+			s\y=s\y+s\vy
+			s\z=s\z+s\vz
+			s\s=s\s+s\vs
+			s\a=s\a+s\va
+			s\r=s\r+s\vr
+			s\g=s\g+s\vg
+			s\b=s\b+s\vb
+			s\vy=s\vy+s\gravity#
+			
+			TFormPoint s\x,s\y,s\z,0,camera
+			If TFormedZ#()&gt;0
+				TFormVector -s\s,-s\s,0,camera,0 
+				VertexCoords s\surf,s\verti[0],s\x+TFormedX#(),s\y+TFormedY#(),s\z+TFormedZ#()
+				TFormVector s\s,-s\s,0,camera,0 
+				VertexCoords s\surf,s\verti[1],s\x+TFormedX#(),s\y+TFormedY#(),s\z+TFormedZ#()
+				TFormVector -s\s,s\s,0,camera,0 
+				VertexCoords s\surf,s\verti[2],s\x+TFormedX#(),s\y+TFormedY#(),s\z+TFormedZ#()
+				TFormVector s\s,s\s,0,camera,0 
+				VertexCoords s\surf,s\verti[3],s\x+TFormedX#(),s\y+TFormedY#(),s\z+TFormedZ#()
+				VertexColor s\surf,s\verti[0],s\r,s\g,s\b,s\a
+				VertexColor s\surf,s\verti[1],s\r,s\g,s\b,s\a
+				VertexColor s\surf,s\verti[2],s\r,s\g,s\b,s\a
+				VertexColor s\surf,s\verti[3],s\r,s\g,s\b,s\a
+			EndIf
+			
+		EndIf
+	Next
+End Function
+
+;--------------------------------------------------------------------------------------------
+Function CreateLayer()
+	l.layer=New layer	
+	l\mesh=CreateMesh() : surf=CreateSurface(l\mesh)
+	l\spritebank=CreateBank()
+	NameEntity l\mesh,Handle(l)
+	EntityColor l\mesh,255,255,255
+	EntityFX l\mesh,1+2
+	EntityBlend l\mesh,3
+	Return l\mesh
+End Function
+;--------------------------------------------------------------------------------------------
+Function AddSprite(mesh)
+	l.layer=Object.layer(EntityName(mesh))
+	surf=GetSurface(l\mesh,1)
+	l\count=l\count+1
+	ResizeBank l\spritebank,l\count*4
+	;create a new sprite
+	s.sprite=New sprite
+	s\verti[0]=AddVertex(surf,0,0,0,0,1) ;topleft
+	s\verti[1]=AddVertex(surf,0,0,0,1,1) ;topright
+	s\verti[2]=AddVertex(surf,0,0,0,0,0) ;bottomleft
+	s\verti[3]=AddVertex(surf,0,0,0,1,0) ;bottomright
+	AddTriangle(surf,s\verti[1],s\verti[2],s\verti[3])
+	AddTriangle(surf,s\verti[2],s\verti[1],s\verti[0])
+	s\s=10 : s\a=1
+	s\r=255 : s\g=255 : s\b=255
+	s\x=0 : s\y=0 : s\z=0
+	s\surf=surf
+	s\mesh=l\mesh
+	;put the new sprite into the bank
+	PokeInt l\spritebank,(l\count*4)-4,Handle(s)
+	Return Handle(s)
+End Function
+;--------------------------------------------------------------------------------------------
+Function UpdateSprite(sprite,life,x#,y#,z#,vx#,vy#,vz#,scale#,scalevel#,alpha#,alphavel#,r,g,b,vr#,vg#,vb#,gravity#)
+	s.sprite = Object.sprite( sprite )
+	s\x=x
+	s\y=y
+	s\z=z
+
+	s\vx=vx
+	s\vy=vy
+	s\vz=vz	
+	s\gravity#=gravity#
+	s\s=scale
+	s\vs=scalevel
+	s\a=alpha
+	s\va=alphavel
+
+	s\r=r : s\g=g : s\b=b
+	s\vr=vr : s\vg=vg : s\vb=vb
+
+	
+	s\life=life
+End Function
+
+;--------------------------------------------------------------------------------------------
+Function fps()
+	fpsindex=fpsindex+1
+	fpstime=fpstime+MilliSecs()-fpsfold_millisecs
+	If fpstime=&gt;1000
+		fpsfps=fpsindex
+		fpstime=0
+		fpsindex=0
+	EndIf
+	fpsfold_millisecs=MilliSecs()
+	Return fpsfps
+End Function
+;--------------------------------------------------------------------------------------------
+Function TransTex(texture,angle#,scale#=1)
+	ScaleTexture texture,scale,scale
+	RotateTexture texture,angle#
+	x#=Cos(angle)/scale/2
+	y#=Sin(angle)/scale/2
+	PositionTexture texture,(x-.5)-y,(y-.5)+x
+End Function
+
+;----------------------------------------------------------------------------------
+
+Function RenderWater()
+
+	HideEntities()
+	CameraProjMode camera,0
+	CameraProjMode FXCamera,1
+	
+	wdb=1-wdb
+		
+	
+	;flip water if under it
+				
+	If underwater=0	
+		If waterdirection=-1
+			FlipMesh water
+			EntityAlpha water,.7
+			EntityColor water,255,255,255
+		EndIf
+		waterdirection=1
+		
+		PositionEntity FXCamera,EntityX(player),EntityY(water)-2,EntityZ(player)
+
+		
+		
+		If wdb
+			;do left view	
+			SetCubeFace WaterMapTexture,0
+			RotateEntity FXCamera,0,90,0
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+			;do forward view
+			SetCubeFace WaterMapTexture,1
+			RotateEntity FXCamera,0,0,0
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+		Else
+			;do right view	
+			SetCubeFace WaterMapTexture,2
+			RotateEntity FXCamera,0,-90,0
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+			;do backward view
+			SetCubeFace WaterMapTexture,3
+			RotateEntity FXCamera,0,180,0
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+		EndIf
+		;do up view
+		SetCubeFace WaterMapTexture,4
+		RotateEntity FXCamera,-90,0,0
+		RenderWorld
+		CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+	
+	Else
+		If waterdirection=1
+			FlipMesh water
+			EntityAlpha water,1
+			EntityColor water,155,200,255
+
+		EndIf	
+		waterdirection=-1
+		
+		PositionEntity FXCamera,-EntityX(player),EntityY(player)-2,EntityZ(player)
+		
+		
+		If wdb
+			;do left view	
+			SetCubeFace WaterMapTexture,0
+			RotateEntity FXCamera,0,-90,180
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+			;do forward view
+			SetCubeFace WaterMapTexture,1
+			RotateEntity FXCamera,0,0,180
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+		Else
+			;do right view	
+			SetCubeFace WaterMapTexture,2
+			RotateEntity FXCamera,0,90,180
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+			;do backward view
+			SetCubeFace WaterMapTexture,3
+			RotateEntity FXCamera,0,180,180
+			RenderWorld
+			CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+		EndIf
+		
+		;do down view
+		SetCubeFace WaterMapTexture,5
+		RotateEntity FXCamera,-90,0,180
+		RenderWorld
+		CopyRect 0,0,WaterMapSize,WaterMapSize,0,0,BackBuffer(),TextureBuffer(WaterMapTexture)
+	EndIf
+
+
+
+	CameraProjMode FXCamera,0
+	CameraProjMode camera,1
+	ShowEntities()
+
+
+	s=GetSurface(water,1)
+	For i=0 To CountVertices(s)-1
+		Freq#=MilliSecs()/4
+		Vertex(i)\y#=Sin(freq+Vertex(i)\x#*500+Vertex(i)\z#*300)*1.2
+		VertexCoords s,i,Vertex(i)\x#,-Vertex(i)\y#,Vertex(i)\z#
+	Next
+
+	If EntityY(camera,1)&lt;-2 underwater=1 Else underwater=0
+
+	If underwater
+		CameraFogColor camera,50,100,155
+		t#=MilliSecs()/6
+		ScaleEntity camera,1+Cos(t)*0.04,1+Sin(t)*0.04,1+Cos(t)*0.02
+		CameraFogRange camera,0,200+Sin(MilliSecs()*0.05)*60
+		TurnEntity player,0,0,Sin(t)*2
+	Else
+		CameraFogColor camera,100,200,255
+		ScaleEntity camera,1,1,1
+		CameraFogRange camera,100,1000
+	EndIf
+	
+End Function
+
+;----------------------------------------------------------------------------------
+
+Type entity
+	Field ent
+End Type
+
+Type level
+	Field ent
+End Type
+
+Type cubelight
+	Field ent,r,g,b,radius
+End Type
+
+;----------------------------------------------------------------------------------
+Function AddEntity(ent)
+	e.entity=New entity
+	e\ent=ent
+End Function
+
+;----------------------------------------------------------------------------------
+
+Function HideEntities()
+	For e.entity=Each entity
+		HideEntity e\ent
+	Next
+End Function
+;----------------------------------------------------------------------------------
+Function ShowEntities()
+	For e.entity=Each entity
+		ShowEntity e\ent
+	Next
+End Function
+;----------------------------------------------------------------------------------
+Function AddLevel(ent)
+	e.level=New level
+	e\ent=ent
+End Function
+;----------------------------------------------------------------------------------
+
+Function HideLevel()
+	For e.level=Each level
+		HideEntity e\ent
+	Next
+End Function
+;----------------------------------------------------------------------------------
+
+Function ShowLevel()
+	For e.level=Each level
+		ShowEntity e\ent
+	Next
+End Function
+
+;----------------------------------------------------------------------------------
+
+
+Function freelook()
+
+	mxspd#=MouseXSpeed()*0.25
+	myspd#=MouseYSpeed()*0.25
+	
+	If underwater
+		mxspd=mxspd*0.6
+		myspd=myspd*0.6
+	EndIf
+	
+		
+	MoveMouse GraphicsWidth()/2,GraphicsHeight()/2
+
+	campitch=campitch+myspd
+	If campitch&lt;-85 Then campitch=-85
+	If campitch&gt;85 Then campitch=85
+	RotateEntity player,campitch,EntityYaw(player)-mxspd,0
+	
+	If KeyDown(203) Then mvx=mvx-.3
+	If KeyDown(205) Then mvx=mvx+.3
+	If KeyDown(200) Then mvz=mvz+.3
+	If KeyDown(208) Then mvz=mvz-.3
+	
+	If KeyDown(30) Then mvx=mvx-.3
+	If KeyDown(32) Then mvx=mvx+.3
+	If KeyDown(17) Then mvz=mvz+.3
+	If KeyDown(31) Then mvz=mvz-.3
+	
+	If KeyDown(57) And jump = 0.0 And falling &lt;= 0.25 Then jump = 3.5
+	
+	PositionEntity floorpivot,EntityX(player),EntityY(player)-4,EntityZ(player)
+	
+	;If underwater
+	;
+	;	mvx=mvx/1.2
+	;	mvy=mvy-0.005
+	;	mvz=mvz/1.2
+	;	wasunderwater=1
+	;
+	;Else
+	;	
+	;	falling = falling + 0.1
+	;	mvy=mvy-falling 
+	;	If EntityCollided(floorpivot,c_level)
+	;		mvy=mvy+falling 
+	;		falling = 0.0
+	;	EndIf
+	;	
+	;	If wasunderwater
+	;		wasunderwater=0
+	;		mvy=4
+	;	EndIf
+	;	
+	;EndIf
+		
+	;mvx=mvx/1.2
+	;mvy=mvy/1.2
+	;mvz=mvz/1.2
+	
+	;MoveEntity player,mvx,0,mvz
+	;TranslateEntity player,0,mvy,0
+	
+	;If EntityY(player)&gt;60 Then PositionEntity player,EntityX(player),60,EntityZ(player)
+	
+End Function
+
+Function RecurseSeek(ent)
+	tab=tab+4
+	For i=1 To CountChildren(ent)	
+		child=GetChild(ent,i)
+		name$=Lower(EntityName(child))
+		If Instr(name$,"fire")
+			d.deletelist=New deletelist
+			d\ent=child
+		EndIf			
+	Next
+	tab=tab-4
+End Function
+
+Function playergravity()
+	If underwater
+	
+		falling = 0.0
+		mvx=mvx/1.2
+		mvy=mvy-0.005
+		mvz=mvz/1.2
+		wasunderwater=1
+	
+	Else
+		
+		mvy=mvy-0.3 
+		falling = falling + 0.1
+		
+		If jump &gt;= 2.0
+			mvy=(mvy-falling)+(jump-2)
+		Else
+			mvy=(mvy-falling)
+		EndIf
+		
+		If jump &gt; 0.0
+			jump = jump - 0.15
+		Else
+			jump = 0
+		EndIf
+			
+		If EntityCollided(floorpivot,c_level)
+			mvy=mvy+falling 
+			falling = 0.0
+		EndIf
+
+		If EntityCollided(player,c_level)
+			falling = 0.25
+			mvy=mvy+falling 
+		EndIf
+		
+		If wasunderwater
+			falling = 0.0
+			wasunderwater=0
+			mvy=4
+		EndIf
+		
+	EndIf
+	
+	mvx=mvx/1.2
+	mvy=mvy/1.2
+	mvz=mvz/1.2
+	
+	MoveEntity player,mvx,0,mvz
+	TranslateEntity player,0,mvy,0
+	
+End Function</pre><br><br>Bloomfilter.bb<br><pre class=code>;GLOW EFFECT
+;SSwifts blur routine ---------------------
+; This is the location in the world where the camera will reside.
+; This location should be far from any other geometry you have in your world.
+Const BLUR_CAM_X# = 65536.0
+Const BLUR_CAM_Y# = 65536.0
+Const BLUR_CAM_Z# = 0.0
+Global BLUR_CAM% = 0
+
+Global GLsprite%
+
+;NOTE!
+;IF YOU ADJUST THE TEX SIZE YOU HAVE TO MESS WITH POSITION 
+;VALUES INSIDE BLUR TEXTURE FUNCTION TO GET THE BLUR POSITIONED RIGHT.
+
+Global GLtexsize% = 256
+Global GLcam%
+Global GLtex%
+Global GLdummytex%
+
+Dim BLURMESH%(4*4)
+
+;Modified to additive blend in the same time as blur.
+;Also modified the copyrecting... so that multiple passes don't cause texture drifting.
+;this is just a quick fix... don't actually get why tex texture drifts...
+Function BlurTexture(texture, Blur_Quality, Blur_Radius#, blurpasses%)
+; -------------------------------------------------------------------------------------------------------------------
+; This function blurs a texture using a technique that takes advantage of 3D acceleration.  
+;
+; * You MUST hide all other cameras before calling this function!
+; * You MUST reset your texture's blending mode, scale, and position after calling this function!
+;
+; Texture is the texture you want blurred.
+;
+; Blur_Quality defines the quality of the blur.  1 = 4 passes, 2 = 8 passes, 3 = 12 passes, etc.
+;
+; (The reason that the passes are in multiples of four is because interference artifacts are created when
+; the number of passes is not a multiple of four... meaning that ten passes will actually look far worse
+; than eight.)
+;
+; Blur_Radius# defines the radius of the blur, in pixels, assuming a map size of 256x256.
+;
+;(Ie, a radius of 16 will be the same width regardless of whether the texture is 16x16 or 512x512.  It will
+; only be exactly 16 pixels wide if the map is 256x256.)
+; -------------------------------------------------------------------------------------------------------------------
+
+; This is used for temporary storage of the meshes used for soft shadow blurring.
+;Local BlurMesh[16*4]
+
+
+; If blurring is enabled...
+If Blur_Quality &gt; 0
+
+If BLUR_CAM=0
+Blur_Cam = CreateCamera()
+
+; Set the camera's range to be very small so as to reduce the possiblity of extra objects making it into the scene.
+CameraRange Blur_Cam, 0.1, 100
+
+; Set the camera to zoom in on the object to reduce perspective error from the object being too close to the camera.
+CameraZoom Blur_Cam, 16.0
+
+; Aim camera straight down.
+RotateEntity Blur_Cam, 90, 0, 0, True
+
+; Set the camera viewport to the same size as the texture.
+CameraViewport Blur_Cam, 0, 0, GLtexsize, GLtexsize
+
+; Set the camera so it clears the color buffer before rendering the texture.
+CameraClsColor Blur_Cam, 0,0,0
+CameraClsMode  Blur_Cam,True, True
+
+; Position the blur camera far from other entities in the world.
+PositionEntity Blur_Cam, BLUR_CAM_X#, BLUR_CAM_Y#, BLUR_CAM_Z#
+Else
+ShowEntity BLUR_CAM
+End If
+
+; Create the sprites to use for blurring the shadow maps.
+For Loop = 0 To (Blur_Quality*4)-1
+
+If BLURMESH(loop) = 0
+BlurMesh(Loop) = CreateSprite()
+EntityBlend BlurMesh(Loop),3;3
+
+EntityTexture Blurmesh(loop),GLdummytex,0,0
+EntityTexture BlurMesh(Loop),Texture,0,1
+EntityTexture BlurMesh(loop),Texture,0,2
+
+EntityFX BlurMesh(Loop), 1+8
+ScaleSprite BlurMesh(Loop), 2, 2
+;EntityAlpha Blurmesh(loop),0.5
+End If
+
+ShowEntity blurmesh(loop)
+Next
+
+; Scale the texture down because we scale the sprites up so they fill a larger area of the
+; screen.  (Otherwise the edges of the texture are darker than the middle because they don't
+; get covered.
+ScaleTexture    Texture, 0.5, 0.5
+PositionTexture Texture, 0.5, 0.5
+
+; Blur texture by blitting semi-transparent copies of it on top of it.
+BlurRadius# = Blur_Radius# * (1.0 / 256.0)
+BlurAngleStep# = 360.0 / Float(Blur_Quality*4)
+
+; Normally we would just divide 255 by the number of passes so that adding all the passes
+; together would not exceed 256.  However, if we did that, then we could not have a number of
+; passes which does not divide 256 evenly, or else the error would result in the white part of
+; the image being slightly less than white.  So we round partial values up to ensure that
+; white will always be white, even if it ends up being a little whiter than white as a result
+; when all the colors are added, since going higher than white just clamps to white.
+;BlurShade = Ceil(255.0 / Float(Blur_Quality*4))
+
+; Place each of the blur objects around a circle of radius blur_radius.
+For Loop = 0 To (Blur_Quality*4)-1
+
+BlurAngle# = BlurAngleStep# * Float(Loop) + 180.0*(Loop Mod 2)
+Xoff# = BlurRadius# * Cos(BlurAngle#)
+Yoff# = BlurRadius# * Sin(BlurAngle#)
+
+
+;MESS WITH THESE VALUES IF YOU ADJUST THE TEXTURE SIZE
+PositionEntity BlurMesh(Loop), BLUR_CAM_X# + Xoff#-0.006, BLUR_CAM_Y# - 16.0, BLUR_CAM_Z# + Yoff#+0.008 , True
+Next
+
+; Render the new texture.
+
+For i=1 To blurpasses
+RenderWorld
+CopyRect 0, 0, TextureWidth(Texture), TextureHeight(Texture), 0, 0, BackBuffer(), TextureBuffer(Texture)
+Next
+
+
+; Free the blur entities.
+For Loop = 0 To (Blur_Quality*4)-1
+HideEntity Blurmesh(loop)
+Next
+
+; Free the blur camera.
+HideEntity BLUR_CAM
+EndIf
+End Function
+
+
+Function SetGlowZoom(zoom#)
+	If GLsprite &lt;&gt; 0 Then ScaleSprite GLsprite, 100.0/zoom#, 100.0/zoom#
+	If GLsprite &lt;&gt; 0 Then PositionEntity GLsprite,0,0,100
+End Function
+
+;Params
+;CAM - Your main scene camera
+Function InitGlow(cam)
+GLcam = cam
+
+If GLtex = 0
+ClearTextureFilters()
+GLtex = CreateTexture(GLtexsize,GLtexsize,1+16+32+256)
+TextureFilter("",1+8)
+End If
+
+;CREATE SPRITE
+GLsprite = CreateSprite()
+EntityTexture GLsprite,GLtex
+PositionEntity GLsprite,0,0,100
+EntityOrder GLsprite,-9999
+EntityBlend GLsprite,3
+ScaleSprite GLsprite,100,100
+EntityParent GLsprite,cam
+EntityFX GLsprite,1
+
+If gldummytex=0
+ClearTextureFilters()
+gldummytex = CreateTexture(32,32,1)
+TextureFilter("",1+8)
+TextureBlend gldummytex,2
+SetGlowIntensity()
+End If
+
+
+
+;Test code
+;Use this test code to check how the blur is aligned 
+;sprite = CreateSprite()
+;PositionEntity sprite,0,0,20
+;ScaleSprite sprite,4,4
+;EntityParent sprite,cam
+;EntityOrder sprite,-9000
+End Function
+
+;Intensity Between 0-1 (between no glow to ---&gt; my eyes hurt glow)
+Function SetGlowIntensity(d#=0.2)
+SetBuffer TextureBuffer(GLdummytex)
+ClsColor 255*d,255*d,255*d
+Cls
+SetBuffer BackBuffer()
+End Function
+
+
+;Play with bleed to get desired result.... it's a bit difficult to explain... the higher value .. the more the glow  colours bleed
+;Use tween as a tween value if you use render tweening in your app
+;More blurpasses really slow things down so beware and makes the blur act differently
+Function RenderGlow(bleed%=30,tween%=0,blurpasses%=1)
+TextureBlend GLtex,5
+EntityColor GLsprite,bleed,bleed,bleed
+
+CameraViewport GLcam,0,0,GLtexsize,GLtexsize
+
+RenderWorld tween
+CopyRect 0,0,GLtexsize,GLtexsize,0,0,BackBuffer(),TextureBuffer(GLtex)
+
+CameraViewport GLcam,0,0,GraphicsWidth(),GraphicsHeight()
+EntityColor GLsprite,255,255,255
+
+
+;TextureBlend GLtex,5
+blurtexture(GLtex,1,4,blurpasses)
+ScaleTexture GLtex, 1, 1
+PositionTexture GLtex,0,0
+;TextureBlend GLtex,2
+End Function
+
+
+Function FreeGlow()
+If GLsprite&lt;&gt;0
+FreeEntity GLsprite : GLsprite=0
+FreeTexture GLtex : GLtex=0
+FreeTexture GLdummytex : GLdummytex=0
+FreeEntity BLUR_CAM : BLUR_CAM=0
+
+For i=1 To 4*4
+If blurmesh(i)&lt;&gt;0 Then FreeEntity blurmesh(i) : blurmesh(i)=0
+Next
+
+End If
+End Function</pre> <br><br></td></tr></table><br>
+<a name="765118"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Barbapapa</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I am getting a MAV when I try it out, any ideas? <br><br></td></tr></table><br>
+<a name="765273"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Mattizzle</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Barb,<br>run it in debug and see what happens...<br><br>Foolish Frost,<br>1024x600 is a foolish resolution not even supported by computer monitors (whether you can force them or not)! That could possibly be your problem, but I will assume you have tried supported resolutions and still found problems. With that said, good luck. Combining "demo" programs can be very succesfull in the end, but without understanding them, troubleshooting can become very tedious. <br><br></td></tr></table><br>
+<a name="765410"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Barbapapa</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> yes of course, dummy me, thanks ... <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

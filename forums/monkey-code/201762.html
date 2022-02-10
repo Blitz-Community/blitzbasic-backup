@@ -1,0 +1,1162 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Heightmap generation algorithms</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Heightmap generation algorithms</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >Heightmap generation algorithms</a><br><br>
+<a name="2016776"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >impixi</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> A port of my BlitzMax- and C- code for generating fractal heightmap data.<br><br>(algorithms: perlin, mid point displacement, hill, fault line, rolling particle, sticky particle)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+'Miscellaneous Heightmap Generation Algorithms
+
+Strict
+
+Import mojo.app
+Import mojo.graphics
+Import mojo.input
+Import monkey.random
+
+
+'------------------------------------------------------------------
+
+Function Main:Int()
+
+	Local mainApp:MyApp = New MyApp()
+
+	Return 0
+
+End
+
+'------------------------------------------------------------------
+
+Class MyApp Extends App
+
+
+	Field heightMap1:HeightMap
+	Field currentAlgo:String
+
+
+	Method OnCreate:Int()			
+		
+		SetUpdateRate 60
+		
+		heightMap1 = New HeightMap(128, 128)
+		
+		currentAlgo = "None"
+		
+		Return 0
+	
+	End
+	
+	
+	Method OnUpdate:Int()
+
+		If TouchHit(0)
+
+			Select Floor(Rnd(0.0, 6.9))
+				Case 0
+					heightMap1.GenerateHillMap Millisecs(), 100, heightMap1.cols * 0.5, False
+					currentAlgo = "Hill"
+				Case 1
+					heightMap1.GenerateParticleMap Millisecs(), 500, 1000, 0, [-1, 1, -1, 1]
+					currentAlgo = "Sticky Particle"
+				Case 2
+					heightMap1.GenerateParticleMap Millisecs(), 500, 1000, 1, [-1, 1, -1, 1]
+					currentAlgo = "Rolling Particle"
+				Case 3
+					heightMap1.GenerateRandomMap Millisecs()
+					currentAlgo = "Random"
+				Case 4
+					heightMap1.GenerateFaultMap Millisecs(), 500
+					currentAlgo = "Fault Line"
+				Case 5
+					heightMap1.GenerateMPDMap Millisecs(), 0.5
+					currentAlgo = "Mid Point Displacement"
+				Case 6
+					heightMap1.GeneratePerlinMap Millisecs(), 1.7
+					currentAlgo = "Perlin Noise"
+			End
+
+		Endif
+
+		Return 0
+	
+	End
+	
+	
+	Method OnRender:Int()
+
+		Cls 0, 0, 0
+	
+		SetColor 255, 255, 255
+		DrawText "L-Click/Touch: = Generate New", 5, 5
+		DrawText "Algorithm: " + currentAlgo, 5, 35
+	
+		RenderSimpleHMap 5, 65, 2, 2
+	
+		Return 0
+	
+	End
+
+	
+	Method RenderSimpleHMap:Void(x:Int, y:Int, rectW:Int = 1, rectH:Int = 1)
+	
+		Local sx:Int = x
+		Local sy:Int = y
+	
+    	For Local r:Int = 0 Until heightMap1.rows
+      		For Local c:Int = 0 Until heightMap1.cols
+				Local byte:Int = Floor(heightMap1.values[(c * heightMap1.rows) + r] * 255)
+				SetColor byte, byte, byte
+				DrawRect sx, sy, rectW, rectH				
+				sx += rectW
+      		Next
+			sx = x
+			sy += rectH
+		Next
+	
+	End
+
+
+End
+
+
+
+Class HeightMap
+
+
+	Field cols:Int, rows:Int
+	Field values:Float[]
+
+
+	Method New(c:Int, r:Int)
+	
+		cols = c
+		rows = r
+		values = New Float[cols * rows]
+	
+	End
+
+
+	Method Fill:Void(value:Float)
+	#rem 
+	Fill the heightmap with a specific value.
+	value: the value To fill the heightmap with.
+	#end
+
+   		For Local c:Int = 0 Until cols
+     			For Local r:Int = 0 Until rows
+				values[(c * rows) + r] = value
+			Next
+		Next
+
+	End
+
+
+	Method GenerateHillMap:Void(rSeed:Int, numHills:Int, maxHillSize:Int, island:Bool)
+	#rem
+  		Create a map using the "hill algorithm".
+  		rSeed: random seed. Use Millisecs() to generate a different result every time.
+  		numHills: number of hills. (&gt;1000) is best. Minimum 1.
+  		maxHillSize: maximum hill radius. For best results, value should be significantly 
+  		less than the map's shortest dimension.
+		island: create an island-like result. True/False
+  	#end
+
+		Seed = rSeed
+	
+		Fill 0.0
+
+		If island Then maxHillSize = Floor(maxHillSize * 0.5)
+
+		For Local n:Int = 1 To numHills
+	
+			Local radius:Int = Floor(Rnd(0, (maxHillSize + 1)))
+			Local centreC:Int = Floor(Rnd(0, cols))
+			Local centreR:Int = Floor(Rnd(0, rows))
+		
+			If island
+				Local theta:Int = Floor(Rnd(0, 360))
+				Local distC:Int = Floor(Rnd(0, (cols * 0.5) - radius))
+				Local distR:Int = Floor(Rnd(0, (rows * 0.5) - radius))
+			  	centreC = (cols * 0.5) + (Cos(theta) * distC)
+			  	centreR = (rows * 0.5) + (Sin(theta) * distR)
+			Endif
+
+      		Local startC:Int = centreC - radius
+			If (startC &lt; 0) Then startC = 0
+
+      		Local endC:Int = centreC + radius
+  			If (endC &gt; cols) Then endC = cols
+
+    		Local startR:Int = centreR - radius
+    		If (startR &lt; 0) Then startR = 0
+
+   			Local endR:Int = centreR + radius
+      		If (endR &gt; rows) Then endR = rows
+
+   			For Local c:Int = startC Until endC
+				For Local r:Int = startR Until endR
+					Local y:Float = (radius * radius) - (((c - centreC) * (c - centreC)) + ((r - centreR) * (r - centreR)))
+	      			If (y &gt; 0.0) Then values[((c * rows) + r)] += y
+	    		Next
+			Next
+    	
+		Next
+  
+		Normalise
+		
+	End
+
+
+	Method GenerateParticleMap:Void(rSeed:Int, particles:Int, clusters:Int, style:Int, amts:Int[])
+  	#rem 
+	  	rSeed: random seed. Use Millisecs() to generate a different result every time.
+  		particles: number of particles To calculate per cluster. Minimum 1.
+	  	clusters: number of clusters: higher number gives greater map density. Minimum 1.
+		style: algorithm Method: 0 = sticky or 1 = rolling.
+		amts: algorithm variation.
+  	#end
+
+	    Local disp:Float = 1.0
+  
+		Seed = rSeed
+
+		Fill(0.0)
+  
+		Local m:Int, n:Int, c:Int, r:Int
+
+		If (style = 0) 					'Sticky style
+	
+	    	For m = 1 To clusters
+		 	 	c = Floor(Rnd(0, cols)) 
+      			r = Floor(Rnd(0, rows))
+	
+		    	For n = 1 To particles
+					Local i:Int = (c * rows) + r
+			  		
+					If (((c &lt; cols) And (r &lt; rows) And (c &gt;= 0) And (r &gt;= 0)))
+						
+						values[i] += disp
+	
+				    	Select Floor(Rnd(0, amts.Length))
+						
+     		    			Case 0
+		           				c += amts[0]
+								
+	    	     			Case 1
+		     	       			c += amts[1]
+								
+							Case 2
+								r += amts[2]
+			
+	        		  		Case 3
+     	       					r += amts[3]
+					
+        				End
+					Endif
+				
+				Next
+	
+    		Next
+		
+		Else 						'Rolling style
+	
+	    	For m = 1 To clusters
+		 	 	c = Floor(Rnd(0, cols)) 
+      			r = Floor(Rnd(0, rows))
+	
+		    	For n = 1 To particles
+					Local i:Int = (c * rows) + r
+
+     	   			If (((c &lt; cols) And (r &lt; rows) And (c &gt;= 0) And (r &gt;= 0)))
+			
+	      				Local y:Float = values[i] + disp
+	      				values[i] = y
+	
+		      			Local startc:Int = c - 1
+     	     			If (startc &lt; 0) Then startc = 0
+
+          				Local endc:Int = c + 1
+          				If (endc &gt; cols) Then endc = cols
+
+	          			Local startr:Int = r - 1
+     	     			If (startr &lt; 0) Then startr = 0
+
+     	    			Local endr:Int = r + 1
+          				If (endr &gt; rows) Then endr = rows
+				
+						Local c2:Int, r2:Int
+
+     	     			For c2 = startc Until endc
+							For r2 = startr Until endr
+								Local i2:Int = (c2 * rows) + r2
+								Local y2:Float = values[i2]
+              					If (y2 &lt; y) Then values[i2] = y2 + disp
+	            			Next
+						Next
+	
+	    			Endif
+	
+					Select Floor(Rnd(0, amts.Length))
+						
+     		    		Case 0
+		     				c += amts[0]
+							
+	    	    		Case 1
+		     	  		  	c += amts[1]
+								
+						Case 2
+							r += amts[2]
+			
+	        			Case 3
+     	       				r += amts[3]
+					
+        			End
+
+				Next
+
+	     	Next
+
+    	Endif
+	
+	    Normalise
+	
+	End
+	
+	
+	Method GenerateRandomMap:Void(rSeed:Int)
+    #rem 
+  		Generate a map of random heights between 0.0 And 1.0.
+  		rSeed: random seed. Use Millisecs() to generate a different result every time.
+  	#end
+	
+		Seed = rSeed
+		
+    	For Local c := 0 Until cols
+     		For Local r := 0 Until rows
+				values[(c * rows) + r] = Rnd(0.0, 1.0)
+			Next
+		Next
+		     		
+	End
+
+
+	Method GenerateFaultMap:Void(rSeed:Int, realism:Int)
+ 	#rem
+  		Generate a map using the "fault line" algorithm.
+  		rSeed: random seed. Use Millisecs() To generate a different result every time.
+  		realism: number of fault lines: higher number (&gt; 500) gives greater realism. Minimum 1.
+  	#end
+
+   		Seed = rSeed
+
+		Fill(0.0)
+
+    	Local d:Float = Sqrt((cols * cols) + (rows * rows))
+    	Local disp:Float = 10.0
+    
+		For Local n := 1 To realism
+	
+    		Local v:Float = Rnd(0.0, 360.0)
+	  		Local a:Float = Sin(v)
+	      	Local b:Float = Cos(v)
+    	  	Local e:Float = (Rnd(0.0, 1.0) * d) - (d / 2.0)
+
+    		For Local c := 0 Until cols
+        		For Local r := 0 Until rows
+					If (((a * c) + (b * r) - e) &gt; 0.0) 
+						values[(c * rows) + r] += disp
+					Else 
+						values[(c * rows) + r] -= disp
+					Endif
+				Next
+			Next
+    
+		Next
+		
+		Normalise
+
+	End
+
+	
+	Method GenerateMPDMap:Void(rSeed:Int, grain:Float)
+	#rem
+		PORTED And MODIFIED code from the BlitzCoder.com code database.
+  		**** ORIGINAL B3D CODE AUTHOR: Simon Wetterlind 13-08-2002 ****
+  		**** v.0.9.3 - Revised: 18-11-2002 by Simon Wetterlind. ****
+  		These methods are used to generate a terrain map using the 
+  		Midpoint Displacement (ie Diamond Square / Plasma) fractal algorithm.
+
+  		rSeed: random seed. Use Millisecs() to generate a different result every time.
+  		grain is the "graininess" i.e. the influence of randomness.
+	#end
+
+	    Seed = rSeed
+
+		Fill -1.0
+
+	    values[0] = Rnd(0.0, 1.0)
+    	values[(cols - 1)] = Rnd(0.0, 1.0)
+    	values[(rows - 1) * cols]= Rnd(0.0, 1.0)
+    	values[(cols * rows) - 1] = Rnd(0.0, 1.0)
+
+   		RecurseMPD(0, 0, cols - 1, rows - 1, grain, 1.0)
+
+	    Normalise
+	
+	End
+
+	'Utility method for midpoint displacement algorithm.
+	Method RecurseMPD:Void(c0:Int, r0:Int, c2:Int, r2:Int, grain:Float, level:Float)
+
+		If (Not(((c2 - c0) &lt; 2) And ((r2 - r0) &lt; 2)))
+	
+     		Local v:Float, i:Float
+
+     		level = 2.0 * level
+     
+      		Local c1:Int = Ceil((c0 + c2) / 2.0)
+      		Local r1:Int = Ceil((r0 + r2) / 2.0)
+
+	    	v = values[(c1 * rows) + r0]
+			If (v = -1.0) Then v = MPD(c0, r0, c1, r0, c2, r0, grain, level)
+		
+			i = v
+     
+			v = values[(c2 * rows) + r1]
+			If (v = -1.0) Then v = MPD(c2, r0, c2, r1, c2, r2, grain, level)
+		
+			i += v
+     
+			v = values[(c1 * rows) + r2]
+			If (v = -1.0) Then v = MPD(c0, r2, c1, r2, c2, r2, grain, level)
+      
+			i += v
+
+			v = values[(c0 * rows) + r1]
+			If (v = -1.0) Then v = MPD(c0, r0, c0, r1, c0, r2, grain, level)
+      
+			i += v
+
+			If (values[(c1 * rows) + r1] = -1.0) Then values[(c1 * rows) + r1] = Float(i) / 4.0
+ 
+			RecurseMPD(c0, r0, c1, r1, grain, level)
+			RecurseMPD(c1, r0, c2, r1, grain, level)
+			RecurseMPD(c1, r1, c2, r2, grain, level)
+			RecurseMPD(c0, r1, c1, r2, grain, level)
+	 
+		Endif
+		
+	End
+
+	'Utility method for midpoint displacement algorithm.
+	Method MPD:Float(c0:Int, r0:Int, c1:Int, r1:Int, c2:Int, r2:Int, grain:Float, level:Float)
+  
+		Local r:Float = Rnd(-grain, grain) / level
+	
+		r += ((values[(c0 * rows) + r0] + values[(c2 * rows) + r2]) / 2.0)
+     
+		If (r &lt; 0.0) Then r = 0.0 Else If (r &gt; 1.0) Then r = 1.0
+
+    	values[(c1 * rows) + r1] = r
+     
+	    Return r   
+	
+	End
+
+
+	Method GeneratePerlinMap:Void(rSeed:Int, multiplier:Float)
+	#rem
+		Generate a map using the "perlin noise" alogorithm.
+  		PORTED And MODIFIED code from the blitzbasic.com code archives.
+	  	**** ORIGINAL B3D CODE AUTHOR: Shawn C. Swift ****
+  		NOTE: This Method will only work on maps with equal Width And 
+	  	Height dimensions that are a power of two: eg 256 x 256.
+  		rSeed: random seed. Use Millisecs() to generate a different result every time.
+  		multiplier: algorithm variation.
+	#end	
+		
+		If (rows &lt;&gt; cols) Then Return
+
+		Seed = rSeed
+
+		Local size:Int = cols
+    	Local noiseMapSize:Int = Floor(size / 2)
+		Local noiseMap:Float[(noiseMapSize + 1) * (noiseMapSize + 1)]
+
+		For Local c:Int = 0 Until size
+    		For Local r:Int = 0 Until size
+				values[(c * size) + r] = Rnd(0.0, 1.0)
+			Next
+		Next
+
+		Local maxHeight:Float = multiplier
+
+		Repeat
+		
+     		For Local noiseR:Int = 0 To noiseMapSize
+	    		For Local noiseC:Int = 0 To noiseMapSize
+					noiseMap[(noiseC * noiseMapSize) + noiseR] = Rnd(0.0, 1.0) * maxHeight
+				Next
+			Next
+	 
+     	 	Local scaleDifference:Int = size / noiseMapSize
+			Local stepSize:Float = 1.0 / Float(scaleDifference)
+		 
+	      	For Local noiseR:Int = 0 Until noiseMapSize
+	    		For Local noiseC:Int = 0 Until noiseMapSize
+						
+  	      			Local n1:Float = noiseMap[(noiseC * noiseMapSize) + noiseR]
+		  			Local n2:Float = noiseMap[((noiseC + 1) * noiseMapSize) + noiseR]
+	      			Local n3:Float = noiseMap[(noiseC * noiseMapSize) + (noiseR + 1)]
+	      			Local n4:Float = noiseMap[((noiseC + 1) * noiseMapSize) + (noiseR + 1)]
+	      			Local hC:Int = noiseC * scaleDifference
+	      			Local hR:Int = noiseR * scaleDifference
+					Local vY:Float = 0.0
+	
+			   		For Local heightR:Int = 0 Until scaleDifference
+				
+						Local vCY:Float = 1.0 - ((Cos(vY * 180.0) + 1.0) * 0.5)
+		    			Local vX:Float = 0.0
+            
+		   				For Local heightC:Int = 0 Until scaleDifference
+					
+							Local vCX:Float = 1.0 - ((Cos(vX * 180.0) + 1.0) * 0.5)
+							Local nA:Float = n1 * (1.0 - vCX)
+		       				Local nB:Float = n2 * vCX
+		       				Local nC:Float = n3 * (1.0 - vCX)
+	  	       				Local nD:Float = n4 * vCX
+							
+							Local off:Int = (((hC + heightC) * size) + (hR + heightR))
+							Local y:Float = values[off]
+							values[off] = (y + (nA + nB) * (1.0 - vCY) + (nC + nD) * vCY)
+		       				vX += stepSize
+		
+						Next
+					
+		    			vY += stepSize
+
+		      		Next
+	
+	    		Next  	
+     		Next
+				
+			noiseMapSize = noiseMapSize * 0.5
+    		maxHeight = maxHeight * multiplier
+		
+		Until (noiseMapSize &lt; 1)
+
+		Normalise()
+
+	End
+
+
+	Method Normalise:Void()
+
+   		Local minValue:Float = 1E+37 
+		Local maxValue:Float = 1E-37 
+	
+		For Local c:Int = 0 Until cols
+     		For Local r:Int = 0 Until rows
+				Local i:Int = (c * rows) + r
+ 	   			If (values[i] &lt; minValue)
+					minValue = values[i] 
+				Else 
+					If (values[i] &gt; maxValue) Then maxValue = values[i]
+				Endif
+			Next
+		Next
+
+		For Local c:Int = 0 Until cols
+     		For Local r:Int = 0 Until rows
+				Local i:Int = (c * rows) + r
+	   			values[i] = (values[i] - minValue) / (maxValue - minValue)
+			Next
+		Next
+
+	End
+
+
+End
+</textarea> <br><br></td></tr></table><br>
+<a name="2016548"></a>
+
+<a name="2036624"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >impixi</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here's a test version that renders the result to an Image's pixels (requires Monkey Pro V063+):<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+'Miscellaneous Heightmap Generation Algorithms
+
+Strict
+
+Import mojo.app
+Import mojo.graphics
+Import mojo.input
+Import monkey.random
+
+
+'------------------------------------------------------------------
+
+Function Main:Int()
+
+	Local mainApp:MyApp = New MyApp()
+
+	Return 0
+
+End
+
+'------------------------------------------------------------------
+
+Class MyApp Extends App
+
+	Field heightMap1:HeightMap
+	Field currentAlgo:String
+
+	Field renderImage1:Image
+	Field updateRender:Bool
+	Field pixels:Int[]
+
+	Method OnCreate:Int()			
+		
+		SetUpdateRate 60
+		
+		heightMap1 = New HeightMap(128, 128)
+		renderImage1 = CreateImage(heightMap1.cols, heightMap1.rows)
+		pixels = New Int[renderImage1.Width() * renderImage1.Height()]
+		
+		updateRender = True
+		
+		currentAlgo = "None"
+		
+		Return 0
+	
+	End
+	
+	Method OnUpdate:Int()
+
+		If TouchHit(0)
+
+			Select Floor(Rnd(0.0, 6.9))
+				Case 0
+					heightMap1.GenerateHillMap Millisecs(), 100, heightMap1.cols * 0.5, False
+					currentAlgo = "Hill"
+				Case 1
+					heightMap1.GenerateParticleMap Millisecs(), 500, 1000, 0, [-1, 1, -1, 1]
+					currentAlgo = "Sticky Particle"
+				Case 2
+					heightMap1.GenerateParticleMap Millisecs(), 500, 1000, 1, [-1, 1, -1, 1]
+					currentAlgo = "Rolling Particle"
+				Case 3
+					heightMap1.GenerateRandomMap Millisecs()
+					currentAlgo = "Random"
+				Case 4
+					heightMap1.GenerateFaultMap Millisecs(), 500
+					currentAlgo = "Fault Line"
+				Case 5
+					heightMap1.GenerateMPDMap Millisecs(), 0.5
+					currentAlgo = "Mid Point Displacement"
+				Case 6
+					heightMap1.GeneratePerlinMap Millisecs(), 1.7
+					currentAlgo = "Perlin Noise"
+			End
+
+			CalcPixels()
+
+		Endif
+
+		Return 0
+	
+	End
+	
+	Method OnRender:Int()
+
+		Cls 0, 0, 0
+	
+		SetColor 255, 255, 255
+		DrawText "L-Click/Touch: = Generate New", 5, 5
+		DrawText "Algorithm: " + currentAlgo, 5, 35
+	
+		If updateRender
+			renderImage1.WritePixels(pixels, 0, 0, renderImage1.Width(), renderImage1.Height())
+			updateRender = false		
+		Endif
+		DrawImage renderImage1, 5, 65
+		
+		Return 0
+	
+	End
+
+	Method CalcPixels:Void()
+	
+    	For Local r:Int = 0 Until heightMap1.rows
+      		For Local c:Int = 0 Until heightMap1.cols
+      			Local i:Int = (c * heightMap1.rows) + r
+				Local byte:Int = Floor(heightMap1.values[i] * 255)
+				Local intColor:Int = (255 Shl 24 | byte Shl 16 | byte Shl 8 | byte ) 'pixel format: ARGB
+				pixels[i] = intColor				
+      		Next
+		Next
+	
+		updateRender = True
+	
+	End
+
+End
+
+
+'-----------------
+
+
+Class HeightMap
+
+
+	Field cols:Int, rows:Int
+	Field values:Float[]
+
+
+	Method New(c:Int, r:Int)
+	
+		cols = c
+		rows = r
+		values = New Float[cols * rows]
+	
+	End
+
+
+	Method Fill:Void(value:Float)
+	#rem 
+	Fill the heightmap with a specific value.
+	value: the value To fill the heightmap with.
+	#end
+
+   		For Local c:Int = 0 Until cols
+     			For Local r:Int = 0 Until rows
+				values[(c * rows) + r] = value
+			Next
+		Next
+
+	End
+
+
+	Method GenerateHillMap:Void(rSeed:Int, numHills:Int, maxHillSize:Int, island:Bool)
+	#rem
+  		Create a map using the "hill algorithm".
+  		rSeed: random seed. Use Millisecs() to generate a different result every time.
+  		numHills: number of hills. (&gt;1000) is best. Minimum 1.
+  		maxHillSize: maximum hill radius. For best results, value should be significantly 
+  		less than the map's shortest dimension.
+		island: create an island-like result. True/False
+  	#end
+
+		Seed = rSeed
+	
+		Fill 0.0
+
+		If island Then maxHillSize = Floor(maxHillSize * 0.5)
+
+		For Local n:Int = 1 To numHills
+	
+			Local radius:Int = Floor(Rnd(0, (maxHillSize + 1)))
+			Local centreC:Int = Floor(Rnd(0, cols))
+			Local centreR:Int = Floor(Rnd(0, rows))
+		
+			If island
+				Local theta:Int = Floor(Rnd(0, 360))
+				Local distC:Int = Floor(Rnd(0, (cols * 0.5) - radius))
+				Local distR:Int = Floor(Rnd(0, (rows * 0.5) - radius))
+			  	centreC = (cols * 0.5) + (Cos(theta) * distC)
+			  	centreR = (rows * 0.5) + (Sin(theta) * distR)
+			Endif
+
+      		Local startC:Int = centreC - radius
+			If (startC &lt; 0) Then startC = 0
+
+      		Local endC:Int = centreC + radius
+  			If (endC &gt; cols) Then endC = cols
+
+    		Local startR:Int = centreR - radius
+    		If (startR &lt; 0) Then startR = 0
+
+   			Local endR:Int = centreR + radius
+      		If (endR &gt; rows) Then endR = rows
+
+   			For Local c:Int = startC Until endC
+				For Local r:Int = startR Until endR
+					Local y:Float = (radius * radius) - (((c - centreC) * (c - centreC)) + ((r - centreR) * (r - centreR)))
+	      			If (y &gt; 0.0) Then values[((c * rows) + r)] += y
+	    		Next
+			Next
+    	
+		Next
+  
+		Normalise
+		
+	End
+
+
+	Method GenerateParticleMap:Void(rSeed:Int, particles:Int, clusters:Int, style:Int, amts:Int[])
+  	#rem 
+	  	rSeed: random seed. Use Millisecs() to generate a different result every time.
+  		particles: number of particles To calculate per cluster. Minimum 1.
+	  	clusters: number of clusters: higher number gives greater map density. Minimum 1.
+		style: algorithm Method: 0 = sticky or 1 = rolling.
+		amts: algorithm variation.
+  	#end
+
+	    Local disp:Float = 1.0
+  
+		Seed = rSeed
+
+		Fill(0.0)
+  
+		Local m:Int, n:Int, c:Int, r:Int
+
+		If (style = 0) 					'Sticky style
+	
+	    	For m = 1 To clusters
+		 	 	c = Floor(Rnd(0, cols)) 
+      			r = Floor(Rnd(0, rows))
+	
+		    	For n = 1 To particles
+					Local i:Int = (c * rows) + r
+			  		
+					If (((c &lt; cols) And (r &lt; rows) And (c &gt;= 0) And (r &gt;= 0)))
+						
+						values[i] += disp
+	
+				    	Select Floor(Rnd(0, amts.Length))
+						
+     		    			Case 0
+		           				c += amts[0]
+								
+	    	     			Case 1
+		     	       			c += amts[1]
+								
+							Case 2
+								r += amts[2]
+			
+	        		  		Case 3
+     	       					r += amts[3]
+					
+        				End
+					Endif
+				
+				Next
+	
+    		Next
+		
+		Else 						'Rolling style
+	
+	    	For m = 1 To clusters
+		 	 	c = Floor(Rnd(0, cols)) 
+      			r = Floor(Rnd(0, rows))
+	
+		    	For n = 1 To particles
+					Local i:Int = (c * rows) + r
+
+     	   			If (((c &lt; cols) And (r &lt; rows) And (c &gt;= 0) And (r &gt;= 0)))
+			
+	      				Local y:Float = values[i] + disp
+	      				values[i] = y
+	
+		      			Local startc:Int = c - 1
+     	     			If (startc &lt; 0) Then startc = 0
+
+          				Local endc:Int = c + 1
+          				If (endc &gt; cols) Then endc = cols
+
+	          			Local startr:Int = r - 1
+     	     			If (startr &lt; 0) Then startr = 0
+
+     	    			Local endr:Int = r + 1
+          				If (endr &gt; rows) Then endr = rows
+				
+						Local c2:Int, r2:Int
+
+     	     			For c2 = startc Until endc
+							For r2 = startr Until endr
+								Local i2:Int = (c2 * rows) + r2
+								Local y2:Float = values[i2]
+              					If (y2 &lt; y) Then values[i2] = y2 + disp
+	            			Next
+						Next
+	
+	    			Endif
+	
+					Select Floor(Rnd(0, amts.Length))
+						
+     		    		Case 0
+		     				c += amts[0]
+							
+	    	    		Case 1
+		     	  		  	c += amts[1]
+								
+						Case 2
+							r += amts[2]
+			
+	        			Case 3
+     	       				r += amts[3]
+					
+        			End
+
+				Next
+
+	     	Next
+
+    	Endif
+	
+	    Normalise
+	
+	End
+	
+	
+	Method GenerateRandomMap:Void(rSeed:Int)
+    #rem 
+  		Generate a map of random heights between 0.0 And 1.0.
+  		rSeed: random seed. Use Millisecs() to generate a different result every time.
+  	#end
+	
+		Seed = rSeed
+		
+    	For Local c := 0 Until cols
+     		For Local r := 0 Until rows
+				values[(c * rows) + r] = Rnd(0.0, 1.0)
+			Next
+		Next
+		     		
+	End
+
+
+	Method GenerateFaultMap:Void(rSeed:Int, realism:Int)
+ 	#rem
+  		Generate a map using the "fault line" algorithm.
+  		rSeed: random seed. Use Millisecs() To generate a different result every time.
+  		realism: number of fault lines: higher number (&gt; 500) gives greater realism. Minimum 1.
+  	#end
+
+   		Seed = rSeed
+
+		Fill(0.0)
+
+    	Local d:Float = Sqrt((cols * cols) + (rows * rows))
+    	Local disp:Float = 10.0
+    
+		For Local n := 1 To realism
+	
+    		Local v:Float = Rnd(0.0, 360.0)
+	  		Local a:Float = Sin(v)
+	      	Local b:Float = Cos(v)
+    	  	Local e:Float = (Rnd(0.0, 1.0) * d) - (d / 2.0)
+
+    		For Local c := 0 Until cols
+        		For Local r := 0 Until rows
+					If (((a * c) + (b * r) - e) &gt; 0.0) 
+						values[(c * rows) + r] += disp
+					Else 
+						values[(c * rows) + r] -= disp
+					Endif
+				Next
+			Next
+    
+		Next
+		
+		Normalise
+
+	End
+
+	
+	Method GenerateMPDMap:Void(rSeed:Int, grain:Float)
+	#rem
+		PORTED And MODIFIED code from the BlitzCoder.com code database.
+  		**** ORIGINAL B3D CODE AUTHOR: Simon Wetterlind 13-08-2002 ****
+  		**** v.0.9.3 - Revised: 18-11-2002 by Simon Wetterlind. ****
+  		These methods are used to generate a terrain map using the 
+  		Midpoint Displacement (ie Diamond Square / Plasma) fractal algorithm.
+
+  		rSeed: random seed. Use Millisecs() to generate a different result every time.
+  		grain is the "graininess" i.e. the influence of randomness.
+	#end
+
+	    Seed = rSeed
+
+		Fill -1.0
+
+	    values[0] = Rnd(0.0, 1.0)
+    	values[(cols - 1)] = Rnd(0.0, 1.0)
+    	values[(rows - 1) * cols]= Rnd(0.0, 1.0)
+    	values[(cols * rows) - 1] = Rnd(0.0, 1.0)
+
+   		RecurseMPD(0, 0, cols - 1, rows - 1, grain, 1.0)
+
+	    Normalise
+	
+	End
+
+	'Utility method for midpoint displacement algorithm.
+	Method RecurseMPD:Void(c0:Int, r0:Int, c2:Int, r2:Int, grain:Float, level:Float)
+
+		If (Not(((c2 - c0) &lt; 2) And ((r2 - r0) &lt; 2)))
+	
+     		Local v:Float, i:Float
+
+     		level = 2.0 * level
+     
+      		Local c1:Int = Ceil((c0 + c2) / 2.0)
+      		Local r1:Int = Ceil((r0 + r2) / 2.0)
+
+	    	v = values[(c1 * rows) + r0]
+			If (v = -1.0) Then v = MPD(c0, r0, c1, r0, c2, r0, grain, level)
+		
+			i = v
+     
+			v = values[(c2 * rows) + r1]
+			If (v = -1.0) Then v = MPD(c2, r0, c2, r1, c2, r2, grain, level)
+		
+			i += v
+     
+			v = values[(c1 * rows) + r2]
+			If (v = -1.0) Then v = MPD(c0, r2, c1, r2, c2, r2, grain, level)
+      
+			i += v
+
+			v = values[(c0 * rows) + r1]
+			If (v = -1.0) Then v = MPD(c0, r0, c0, r1, c0, r2, grain, level)
+      
+			i += v
+
+			If (values[(c1 * rows) + r1] = -1.0) Then values[(c1 * rows) + r1] = Float(i) / 4.0
+ 
+			RecurseMPD(c0, r0, c1, r1, grain, level)
+			RecurseMPD(c1, r0, c2, r1, grain, level)
+			RecurseMPD(c1, r1, c2, r2, grain, level)
+			RecurseMPD(c0, r1, c1, r2, grain, level)
+	 
+		Endif
+		
+	End
+
+	'Utility method for midpoint displacement algorithm.
+	Method MPD:Float(c0:Int, r0:Int, c1:Int, r1:Int, c2:Int, r2:Int, grain:Float, level:Float)
+  
+		Local r:Float = Rnd(-grain, grain) / level
+	
+		r += ((values[(c0 * rows) + r0] + values[(c2 * rows) + r2]) / 2.0)
+     
+		If (r &lt; 0.0) Then r = 0.0 Else If (r &gt; 1.0) Then r = 1.0
+
+    	values[(c1 * rows) + r1] = r
+     
+	    Return r   
+	
+	End
+
+
+	Method GeneratePerlinMap:Void(rSeed:Int, multiplier:Float)
+	#rem
+		Generate a map using the "perlin noise" alogorithm.
+  		PORTED And MODIFIED code from the blitzbasic.com code archives.
+	  	**** ORIGINAL B3D CODE AUTHOR: Shawn C. Swift ****
+  		NOTE: This Method will only work on maps with equal Width And 
+	  	Height dimensions that are a power of two: eg 256 x 256.
+  		rSeed: random seed. Use Millisecs() to generate a different result every time.
+  		multiplier: algorithm variation.
+	#end	
+		
+		If (rows &lt;&gt; cols) Then Return
+
+		Seed = rSeed
+
+		Local size:Int = cols
+    	Local noiseMapSize:Int = Floor(size / 2)
+		Local noiseMap:Float[(noiseMapSize + 1) * (noiseMapSize + 1)]
+
+		For Local c:Int = 0 Until size
+    		For Local r:Int = 0 Until size
+				values[(c * size) + r] = Rnd(0.0, 1.0)
+			Next
+		Next
+
+		Local maxHeight:Float = multiplier
+
+		Repeat
+		
+     		For Local noiseR:Int = 0 To noiseMapSize
+	    		For Local noiseC:Int = 0 To noiseMapSize
+					noiseMap[(noiseC * noiseMapSize) + noiseR] = Rnd(0.0, 1.0) * maxHeight
+				Next
+			Next
+	 
+     	 	Local scaleDifference:Int = size / noiseMapSize
+			Local stepSize:Float = 1.0 / Float(scaleDifference)
+		 
+	      	For Local noiseR:Int = 0 Until noiseMapSize
+	    		For Local noiseC:Int = 0 Until noiseMapSize
+						
+  	      			Local n1:Float = noiseMap[(noiseC * noiseMapSize) + noiseR]
+		  			Local n2:Float = noiseMap[((noiseC + 1) * noiseMapSize) + noiseR]
+	      			Local n3:Float = noiseMap[(noiseC * noiseMapSize) + (noiseR + 1)]
+	      			Local n4:Float = noiseMap[((noiseC + 1) * noiseMapSize) + (noiseR + 1)]
+	      			Local hC:Int = noiseC * scaleDifference
+	      			Local hR:Int = noiseR * scaleDifference
+					Local vY:Float = 0.0
+	
+			   		For Local heightR:Int = 0 Until scaleDifference
+				
+						Local vCY:Float = 1.0 - ((Cos(vY * 180.0) + 1.0) * 0.5)
+		    			Local vX:Float = 0.0
+            
+		   				For Local heightC:Int = 0 Until scaleDifference
+					
+							Local vCX:Float = 1.0 - ((Cos(vX * 180.0) + 1.0) * 0.5)
+							Local nA:Float = n1 * (1.0 - vCX)
+		       				Local nB:Float = n2 * vCX
+		       				Local nC:Float = n3 * (1.0 - vCX)
+	  	       				Local nD:Float = n4 * vCX
+							
+							Local off:Int = (((hC + heightC) * size) + (hR + heightR))
+							Local y:Float = values[off]
+							values[off] = (y + (nA + nB) * (1.0 - vCY) + (nC + nD) * vCY)
+		       				vX += stepSize
+		
+						Next
+					
+		    			vY += stepSize
+
+		      		Next
+	
+	    		Next  	
+     		Next
+				
+			noiseMapSize = noiseMapSize * 0.5
+    		maxHeight = maxHeight * multiplier
+		
+		Until (noiseMapSize &lt; 1)
+
+		Normalise()
+
+	End
+
+
+	Method Normalise:Void()
+
+   		Local minValue:Float = 1E+37 
+		Local maxValue:Float = 1E-37 
+	
+		For Local c:Int = 0 Until cols
+     		For Local r:Int = 0 Until rows
+				Local i:Int = (c * rows) + r
+ 	   			If (values[i] &lt; minValue)
+					minValue = values[i] 
+				Else 
+					If (values[i] &gt; maxValue) Then maxValue = values[i]
+				Endif
+			Next
+		Next
+
+		For Local c:Int = 0 Until cols
+     		For Local r:Int = 0 Until rows
+				Local i:Int = (c * rows) + r
+	   			values[i] = (values[i] - minValue) / (maxValue - minValue)
+			Next
+		Next
+
+	End
+
+
+End
+</textarea> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

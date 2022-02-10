@@ -1,0 +1,609 @@
+<!DOCTYPE html><html lang="en" ><head ><title >A* Pathfinding utilizing banks</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >A* Pathfinding utilizing banks</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=88" >Blitz3D Tutorials</a>/<a href="#bottom" >A* Pathfinding utilizing banks</a><br><br>
+<a name="438865"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Klaas</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Advanced A* Pathfinding utilizing banks<br>---------------------------------------<br>Programm: B3D and BP<br>State: intermediate and advanced users<br><br>This Tutorial does not explain A* itself! <br>For an excelent A* Pathfinding Tutorial check <a href="http://www.policyalmanac.org/games/aStarTutorial.htm" target="_blank">http://www.policyalmanac.org/games/aStarTutorial.htm</a><br><br>You should fully understand A* before continuing this tutorial.<br>This tutorial explains how to avoid arrays and types while pathfinding.<br><br>Why not Arrays?<br>- arrays are not dynamic and consume lots of memory<br>- arrays cannot be created on runtime<br>- arrays are always global<br><br>Why not types?<br>- since types cannot be nested into eachother its hard to parallel process pathfindings. This would take some managment and its hard to deal with.<br>- types are always global<br><br>so my choice is to entirely use banks for pathfinding<br>Why banks?<br>- there fast!<br>- they are small in memory<br>- they can be nested (will cover this later)<br>- they are not global<br>- they can even be stored easily or send through networks<br><br>Sorry, but i havent any webspace so i cant include the media.<br><br>First you should draw a small image (about 32x32) the background should be black and then paint some walls with pure white(255,255,255).<br>Save it as Bitmap or PNG. We will call the file "map.png" in the following code<br><br>Now we will initialise the graphics<br><br><pre class=code>
+Graphics 1024,768,32,2
+SetBuffer(BackBuffer())
+</pre><br><br>We need some globals<br><pre class=code>
+;map width and height
+Global as_dim_x
+Global as_dim_y
+
+;this is the variable to store the image ... see below
+Global as_map_bank
+;stores how many pathfindings are in progress
+Global as_count
+
+;the treshhold when tiles are unwalkable
+Global as_unwalk = 120
+
+;some constants i will explain later
+Const DEF_AS_MANHATTEN = 10
+
+Const DEF_AS_OPEN = 1
+Const DEF_AS_CLOSED = 2
+
+Const DEF_OFF_F = 0
+Const DEF_OFF_G = 4
+Const DEF_OFF_H = 8
+Const DEF_OFF_X = 12
+Const DEF_OFF_Y = 16
+Const DEF_OFF_PARENT = 20
+</pre><br><br><br>Because accessing images with ReadPixel is much slower than reading in memorybanks we will convert our "map.png" to a bank with this function<br><pre class=code>
+Function img2bank(img)
+	;store the image dimension as global map width and height
+	as_dim_x = ImageWidth(map)
+	as_dim_y = ImageHeight(map)
+	
+	mx = as_dim_x
+	my = as_dim_y
+	
+	;now we create a bank that has as much bytes as pixels in the image
+	bank = CreateBank(mx * my)
+	
+	buffer = ImageBuffer(img)
+	LockBuffer(buffer)
+	
+	;step through each pixel
+	For y=0 To my-1
+		For x=0 To mx-1
+			;we use the blue channel to determ the brightness
+			b = ReadPixelFast(x,y,buffer) And $FF
+			PokeByte(bank,(x + mx * y),b)
+		Next
+	Next
+	
+	UnlockBuffer(buffer)
+	Return bank
+End Function
+</pre><br><br>This one is quit simple. We create a bank thats imagewidth x imageheight and store the bluevalue row by row, column by column in the bank<br><br>Okay now lets  convert our image<br><pre class=code>
+map = LoadImage("map.png")
+as_map_bank = img2bank(map)
+</pre><br><br>At this point you should have read the A* Tutorial as mentioned above (or know how A* works), or you wont get it !!!<br><br>I've said no types ... i was lying ;-)<br>I will use types to store the running pathfinding processes<br>So here we go!<br><pre class=code>
+Type as_path
+	Field info_bank
+	Field node_bank
+	Field sort_bank
+	Field temp_bank
+
+	Field result_bank
+	
+	Field start_x,start_y
+	Field end_x,end_y
+	
+	Field data_size
+	Field status
+	Field current_node
+	Field time
+End Type
+</pre><br><br>So whats that all about?:<br>info_bank<br>- this bank will be link between the map and the "A* node's". Each entry in there contains the current status of the node(open, closed, untouched) and the "handle" to the nodes data.(i will explain that later)<br>node_bank<br>- this one stores all the nodes data<br>sort_bank<br>- this bank contains the sorted "open" list. Each entry consists of the F-value and the node "handle"<br>temp_bank<br>- this bank is for swaping memory blocks. you will see later<br><br>result_bank<br>- this one will containe the resulting path in reverse order.<br>Why reverse? Because A* traces back the best way and you dont know how many steps you need. It can only be "stored" in reverse order from targetpoint to startpoint.<br><br>start_x,start_y<br>end_x,end_y<br>- that not too hard to guess<br><br>data_size<br>- this one stores how much data is stored per node. this could be different for some reasons (i will cover this later)<br><br>status<br>- stores if the process of pathfinding is still running or cant be solved etc.<br><br>current_node<br>- the current node. Thats importent to continue the search after a break<br><br>time<br>- stores how much time the pathfind can consume<br><br>Okay,now we've got all we need to get started.<br>now we need a function to create and initialise our "as_path"-object<br><pre class=code>
+Function as_createPath.as_path()
+	a.as_path = New as_path
+	
+	a\info_bank = CreateBank(as_dim_x * as_dim_y * 5)
+	a\node_Bank = CreateBank()
+	a\sort_Bank = CreateBank()
+	a\result_Bank = CreateBank()
+	a\temp_bank = CreateBank(1024*4)
+	
+	as_count = as_count + 1
+	Return a
+End Function
+</pre><br>the function is declerated as returntype ".as_path".<br>!!! To all that dont know about types as returns you should check the forum about that !!!<br>so what do we do here:<br><br>1. we create the info_bank<br>--------------------------<br>each entry in this bank consits of 5 byte<br>1 Byte - status of the tile (open, closed, untouched)<br>4 Byte Int - this will containe the handle of the node in the node_bank. Its not truely a handle its the offset to the nodes data.<br><br>so we got (mapwidth * mapheight * 5)<br><br>2.create the node_bank<br>----------------------<br>this is left blank cause we dont have any nodes now<br><br>3.create the sort_bank<br>----------------------<br>this is left blank cause we dont have any nodes to sort now<br><br>4.create the result_bank<br>----------------------<br>yep, no results till now<br><br>5.create the temp_bank<br>----------------------<br>The size of the tempbank results from the size of the map and should be guessed at startup.<br>I will cover this later in detail<br><br>6. increment the as_count<br>-------------------------<br>its always good to know how many threads we got<br><br><br>Now we need a function to start the process<br><pre class=code>
+Function as_pathfind(a.as_path,start_x,start_y,end_x,end_y)
+	size = BankSize(a\info_bank)-1
+	For i=0 To size Step 5
+		PokeByte(a\info_bank,i,0)
+	Next
+	ResizeBank(a\node_bank,0)
+	ResizeBank(a\sort_bank,0)	
+
+	a\start_x = start_x
+	a\start_y = start_y
+	a\end_x = end_x
+	a\end_y = end_y
+	
+	a\data_size = 4 * 6
+	a\status = 1
+End Function
+</pre><br><br>The whole thing is setup that "entitys" dont have to delete there as_path object. They use always there personal pathfinding object. But this depents on the game and can be changed easily.<br><br>1.cleaning up<br>-------------<br>step through all the enrys in the info-bank and set the status-byte to zero(untouched). We dont clear the handles cause they will be overwritten. Reseting this would cosume time and time is short!<br><br>2. reset node_bank and sort_bank<br>--------------------------------<br>no comment<br><br>3. store start and endpoint<br>---------------------------<br>no comment<br><br>4. setting datasize<br>-------------------<br>now its time to explain the nodes data:<br>each node consits of<br>4 byte int - the F value<br>4 byte int - the G value<br>4 byte int - the H value<br>4 byte int - the Xposition<br>4 byte int - the Yposition<br>4 byte int - handle to the PARENT node<br><br>check the constants from the start .. that are the offsets in the nodes data<br><br>5. set status<br>-------------<br>set to 1 ... initialised and ready to go<br><br>Switching status<br>----------------<br>Now we we should switch each status in the pathfinding process<br><pre class=code>
+Function as_calc(a.as_path,time = 99999999)
+	a\time = time
+	
+	map_bank = as_map_bank
+	
+	mx = as_dim_x
+	my = as_dim_y
+	
+	Select a\status
+	Case 1 ;initialise	
+		If a\start_x =&gt; mx Or a\start_x &lt; 0 Or a\start_y =&gt; my Or a\start_y &lt; 0 Then 
+			;the startpoint is off the map
+			a\status = 4
+			Return False
+		EndIf
+		If a\end_x =&gt; mx Or a\end_x &lt; 0 Or a\end_y =&gt; my Or a\end_y &lt; 0 Then
+			;the endpoint is off the map
+			a\status = 4
+			Return False
+		EndIf
+		
+		;start oder endpunkt ist nicht begehbar
+		If PeekByte(map_bank,a\start_x + mx * a\start_y) =&gt; as_unwalk Then 
+			;the startpoint is not walkable
+			a\status = 4
+			Return False
+		EndIf
+		If PeekByte(map_bank,a\end_x + mx * a\end_y) =&gt; as_unwalk Then 
+			;the endpoint is not walkable
+			a\status = 4
+			Return False
+		EndIf
+		
+		;open the startnode
+		a\current_node = as_openNode(a,f,g,h,a\start_x,a\start_y,parent)
+
+		a\status = 2
+		;start the search
+		Return as_path(a.as_path)
+	Case 2 ;calculating
+	
+		;continue the search
+		Return as_path(a.as_path)
+	
+	Case 3 ;finished
+		Return 3
+	Case 4 ;cannot calculate
+		Return 4
+	End Select
+	
+End Function
+</pre><br><br>so each time we run through the list of as_path objects we will call "as_calc"<br>on status 1 we first check if the search can be made. If the start or end tile is off the map or not walkable the search cannot be successfull so the status is set to 4(cannot calculate)<br>if the search can be successfull the status is set to 2(calculating) and the startpoint will be stored in the "openlist"<br><br>if status is 2 the search is still in progress and will be continued now<br><br>status 3 means the path is allready calcualated and the result can be found in the result_bank<br><br>status 4 means there is no wy from start to endpoint<br><br>Storing nodes in the "openlist"<br>-------------------------------<br>now stuff gets serious and we should take a detailed look on the node_bank<br><br>the nodebank is a list of all known nodes<br>it looks like this:<br><br><pre class=code>
+Offset	Datablock
+	+---+---+---+---+---+------+
+0	| F | G | H | X | Y |PARENT|
+	+---+---+---+---+---+------+
+24	| F | G | H | X | Y |PARENT|
+	+---+---+---+---+---+------+
+48	| F | G | H | X | Y |PARENT|
+	+---+---+---+---+---+------+
+	  .
+	  .
+	  .
+	+---+---+---+---+---+------+
+n*24	| F | G | H | X | Y |PARENT|
+	+---+---+---+---+---+------+
+</pre><br><br>the handle to a node is the offset in the bank<br><br>to store an additional node we increase the size of the bank by the datamount per node (24 bytes)<br><pre class=code>
+	+---+---+---+---+---+------+
+0	| F | G | H | X | Y |PARENT|
+	+---+---+---+---+---+------+
+24	| F | G | H | X | Y |PARENT|
+	+---+---+---+---+---+------+
+48	| F | G | H | X | Y |PARENT|
+	+---+---+---+---+---+------+
+72	|   |   |   |   |   |      |
+	+---+---+---+---+---+------+
+</pre><br>then we store the nodes data into the last block<br><br><pre class=code>
+	+---+---+---+---+---+------+
+0	| F | G | H | X | Y |PARENT|
+	+---+---+---+---+---+------+
+24	| F | G | H | X | Y |PARENT|
+	+---+---+---+---+---+------+
+48	| F | G | H | X | Y |PARENT|
+	+---+---+---+---+---+------+
+72	|   |   |   |   |   |      |  &lt;&lt;&lt; Poke new values
+	+---+---+---+---+---+------+
+</pre><br>since we need to access the node with the lowest f score we will always sort the newly added nodes into rthe sortbank<br>now lets take a closer look into the sortbank:<br><br><pre class=code>
+Offset	Datablock
+	+---+--------+
+0	| F | HANDLE |
+	+---+--------+
+5	| F | HANDLE |
+	+---+--------+
+10	| F | HANDLE |
+	+---+--------+
+	  .
+	  .
+	  .
+	+---+--------+
+n*5	| F | HANDLE |
+	+---+--------+
+</pre><br><br>and we want to be F sorted descending so that the last entry is the lowest F<br>now we have to ad one new<br><br><pre class=code>
+	+---+--------+
+new	| 25| HANDLE |
+	+---+--------+
+
+
+	+---+--------+
+0	| 30| HANDLE |
+	+---+--------+
+5	| 20| HANDLE |
+	+---+--------+
+10	| 10| HANDLE |
+	+---+--------+
+</pre><br><br>first we run through from bottom to top until the new f-value is smaler or equal the f value<br><pre class=code>
+size = BankSize(a\sort_bank)
+offset = size
+While offset &gt; 0
+	other_f = PeekInt(a\sort_bank,offset - 8)
+	If f &lt;= other_f
+		Exit
+	EndIf
+	offset = offset - 8
+Wend
+</pre><br>We got offset 0 cause the new F=25 is smaler then the F=30<br>Now we copy everything belowe this entry to the tempbank<br><pre class=code>
+count = size - offset
+nOffset = offset + 8
+CopyBank(a\sort_bank,offset,a\temp_bank,0,count)
+</pre><br><br><pre class=code>
+	+---+--------+
+0	| 30| HANDLE | 
+	+---+--------+        +------------+
+5	| 20| HANDLE |  &gt;&gt;&gt;   |     TEMP   |  
+	+---+--------+        +------------+
+10	| 10| HANDLE |  &gt;&gt;&gt;   |     TEMP   |
+	+---+--------+        +------------+
+</pre><br><br>now increase the size of the bank <br><pre class=code>
+size = BankSize(a\sort_bank) + 8
+</pre><br><br><pre class=code>
+	+---+--------+
+0	| 30| HANDLE |
+	+---+--------+
+5	| 20| HANDLE |  
+	+---+--------+  
+10	| 10| HANDLE |  
+	+---+--------+  
+15	|   |        |  
+	+---+--------+  
+</pre><br><br>now we have to write back the value<br><pre class=code>
+ResizeBank(a\sort_bank,size)
+CopyBank(a\temp_bank,0,a\sort_bank,nOffset,count)
+</pre><br><br><pre class=code>
+	+---+--------+
+0	| 30| HANDLE |
+	+---+--------+
+5	| 20| HANDLE | 
+	+---+--------+        +------------+ 
+10	| 20| HANDLE |  &lt;&lt;&lt;   |     TEMP   | 
+	+---+--------+        +------------+
+15	| 10| HANDLE |  &lt;&lt;&lt;   |     TEMP   |
+	+---+--------+        +------------+
+</pre><br><br>now there is space for our new entry<br><pre class=code>
+PokeInt(a\sort_bank,offset,f)
+PokeInt(a\sort_bank,offset+4,hoffset)
+</pre><br><br><pre class=code>
+	+---+--------+
+0	| 30| HANDLE |
+	+---+--------+
+5	| 25| HANDLE | &lt;&lt;&lt; Poke new values
+	+---+--------+ 
+10	| 20| HANDLE | 
+	+---+--------+
+15	| 10| HANDLE |
+	+---+--------+
+</pre><br><br>now we wil take a closer look into the info_bank<br>this is a representation of the known map:<br><br>S = status of the Tile (opend, closed or untouched)<br>H = handle -&gt; Offset to the nodes data in the node_bank<br><br><pre class=code>
+Offset		DATA(5 byte per tile)
+		+-------+-------+-------+     +-------+
+0*width*5	| S &amp; H | S &amp; H | S &amp; H |     | S &amp; H |
+		+-------+-------+-------+     +-------+
+1*width*5	| S &amp; H | S &amp; H | S &amp; H | ... | S &amp; H |
+		+-------+-------+-------+     +-------+
+2*width*5	| S &amp; H | S &amp; H | S &amp; H |     | S &amp; H |
+		+-------+-------+-------+     +-------+
+		  .                                   
+		  .                                   
+		  .                                   
+		+-------+-------+-------+     +-------+
+n*width*5	| S &amp; H | S &amp; H | S &amp; H | ... | S &amp; H |
+		+-------+-------+-------+     +-------+
+</pre><br><br>here we will now mark the node as opend<br><pre class=code>
+offset = (x + (y * as_dim_x)) * 5
+PokeByte(a\info_bank,offset,DEF_AS_OPEN)
+PokeInt(a\info_bank,offset+1,hOffset)
+</pre><br><br><pre class=code>
+Function as_openNode(a.as_path,f,g,h,x,y,parent)
+	;increase the bank to one more entry
+	hOffset = BankSize(a\node_bank)
+	ResizeBank(a\node_bank,hOffset + a\data_size)
+	
+	
+	size = BankSize(a\sort_bank)
+	offset = size
+	While offset &gt; 0
+		other_f = PeekInt(a\sort_bank,offset - 8)
+		If f &lt;= other_f
+			Exit
+		EndIf
+		offset = offset - 8
+	Wend
+	
+	count = size - offset
+	nOffset = offset + 8
+	CopyBank(a\sort_bank,offset,a\temp_bank,0,count)
+
+	size = BankSize(a\sort_bank) + 8
+	ResizeBank(a\sort_bank,size)
+	CopyBank(a\temp_bank,0,a\sort_bank,nOffset,count)
+	
+	;write the f and the handle in the sort_bank
+	PokeInt(a\sort_bank,offset,f)
+	PokeInt(a\sort_bank,offset+4,hoffset)
+
+	;write the data into the new node space
+	PokeInt(a\node_bank,hOffset + DEF_OFF_F,f)
+	PokeInt(a\node_bank,hOffset + DEF_OFF_G,g)
+	PokeInt(a\node_bank,hOffset + DEF_OFF_H,h)
+	PokeInt(a\node_bank,hOffset + DEF_OFF_X,x)
+	PokeInt(a\node_bank,hOffset + DEF_OFF_Y,y)
+	PokeInt(a\node_bank,hOffset + DEF_OFF_PARENT,parent)
+
+	;mark the tile as opend
+	offset = (x + (y * as_dim_x)) * 5
+	PokeByte(a\info_bank,offset,DEF_AS_OPEN)
+	PokeInt(a\info_bank,offset+1,hOffset)
+	
+	;return the handle
+	Return hoffset
+End Function
+</pre><br><br>that was tough ... :-)<br><br>A* main <br>-------<br>now here comes the big block of A*<br><br><pre class=code>
+Function as_path(a.as_path)
+	map_bank = as_map_bank
+		
+	mx = as_dim_x
+	my = as_dim_y
+	
+	begin = MilliSecs()
+	;as long we are in time ...
+	While (MilliSecs() - begin) &lt; a\time
+		;close the node
+		;the below for this function
+		as_closeNode(a,a\current_node)
+		current_x = PeekInt(a\node_bank,a\current_node + DEF_OFF_X)
+		current_y = PeekInt(a\node_bank,a\current_node + DEF_OFF_Y)
+		current_g = PeekInt(a\node_bank,a\current_node + DEF_OFF_G)
+
+		;check to see if the endpoint has been reached
+		If current_x = a\end_x And current_y = a\end_y Then
+			;the endpoint has been reach
+			;create and fill the resultbank
+			; i will explain this at the end of this tutorial .. so leave this now
+			a\result_bank = CreateBank(8)
+			size = 8
+			
+			current_node = a\current_node
+			x = PeekInt(a\node_bank,current_node + DEF_OFF_X)
+			y = PeekInt(a\node_bank,current_node + DEF_OFF_Y)
+			PokeInt(a\result_bank,0,x)
+			PokeInt(a\result_bank,4,y)
+			
+			scale = 55
+			While current_node
+				current_node = PeekInt(a\node_bank,current_node + DEF_OFF_PARENT)
+				x = PeekInt(a\node_bank,current_node + DEF_OFF_X)
+				y = PeekInt(a\node_bank,current_node + DEF_OFF_Y)
+				size = size + 8
+				
+				ResizeBank(a\result_bank,size)
+				PokeInt(a\result_bank,size - 8,x)
+				PokeInt(a\result_bank,size - 4,y)
+			Wend
+			
+			a\status = 3
+			Return True
+		EndIf
+
+		;open all surrounding nodes
+		For y = current_y - 1 To current_y + 1
+			For x = current_x - 1 To current_x + 1
+			
+				;if its not the center ...
+				If x &lt;&gt; current_x Or y &lt;&gt; current_y
+					;.. and not off the map ...
+					If x &lt; mx And x &gt;= 0 And y &lt; my And y &gt;= 0 Then						
+						offset = (x + mx * y)
+						offset2 = offset * 5
+
+						new_status = PeekByte(a\info_bank,offset2)
+						b = PeekByte(map_bank,offset)
+						
+						;... and not allready closed or unwalkable
+						If new_status &lt;&gt; DEF_AS_CLOSED And b &lt; as_unwalk
+							g = 14
+							If x = current_x Or y = current_y Then g = 10
+							g = current_g + g; + (b / 10)
+							
+							Select new_status
+							Case DEF_AS_OPEN
+								;this one is allready open check if this one should be edited
+								new_node = PeekInt(a\info_bank,offset2+1)
+								new_g = PeekInt(a\node_bank,new_node + DEF_OFF_G)
+								new_h = PeekInt(a\node_bank,new_node + DEF_OFF_H)
+								
+								If g &lt; new_g
+									;this node must be edited ... as_updateNode will sort this into the sort_bank
+									; will explain this later
+									f = g + new_h
+									;update the values in the nodebank
+									PokeInt(a\node_bank,new_node + DEF_OFF_PARENT,a\current_node)
+									PokeInt(a\node_bank,new_node + DEF_OFF_G,g)
+									PokeInt(a\node_bank,new_node + DEF_OFF_F,f)
+									
+									;resort the sortlist
+									as_updateNode(a.as_path,new_node,f)
+								EndIf
+							Default
+								;this  tile is still untouched ... add this to the openlist
+								h = (Abs(a\end_x - x) + Abs(a\end_y - y)) * DEF_AS_MANHATTEN
+								f = g + h
+								parent = a\current_node
+								as_openNode(a.as_path,f,g,h,x,y,parent)
+							End Select
+						EndIf
+					EndIf
+				EndIf
+			Next
+		Next
+		;this one is for debbuging and uses the draw function(see below)
+		draw(a)
+		WaitKey
+		
+		; get the next node with the lowest F score
+		size = BankSize(a\sort_bank)
+		If size = 0 Then
+			;oops .. no more nodes .. there is no path to the endpoint
+			;set status to 4 (cannot calculate)
+			a\status = 4
+			Return False
+		Else
+			;get next node for next loop
+			a\current_node = PeekInt(a\sort_bank,BankSize(a\sort_bank)-4)
+		EndIf
+	Wend
+	
+	Return True
+End Function
+</pre><br>i will not get into this to deep<br>the nodes data can be accessed by there handle + the offset of the data<br>like:<br>node_g = PeekInt(a\node_bank,node_handle + DEF_OFF_G)<br><br><br>Closing nodes<br>-------------<br>okay ... now lets check what happens if a node gets closed<br><pre class=code>
+Function as_closeNode(a.as_path,node)
+	size = BankSize(a\sort_bank)
+
+	ResizeBank(a\sort_bank,size - 8)
+	
+	x = PeekInt(a\node_bank,node + DEF_OFF_X)
+	y = PeekInt(a\node_bank,node + DEF_OFF_Y)
+	
+	offset = (x + y * as_dim_x) * 5
+	PokeByte(a\info_bank,offset,DEF_AS_CLOSED)
+	Return 
+End Function
+</pre><br><br>thats easy ...<br>first we reduce the sortbank by one set of data cause the node to be closed is allways the last one in the list<br>then we mark the tile in the infobank as closed<br><br>now lets see how we can resort the list of handles if we edited one of the nodes<br><br>Updating nodes and sort them<br>----------------------------<br>This one gave me some headache and i dont know if this is the optimal approach to do this!<br><br>first we will search the node to be updated<br><pre class=code>
+offset = size
+While offset &gt; 0
+	offset = offset - 8
+	other_node = PeekInt(a\sort_bank,offset + 4)
+	If node = other_node
+		Exit
+	EndIf
+Wend
+</pre><br><br>then we will erase the node<br><br><pre class=code>
+	+---+--------+
+0	| 30| HANDLE |
+	+---+--------+
+5	| 20| HANDLE |  &lt;&lt;&lt; should be erased
+	+---+--------+ 
+10	| 10| HANDLE | 
+	+---+--------+ 
+15	| 5 | HANDLE | 
+	+---+--------+ 
+</pre><br><br>copy everything below<br><br><pre class=code>
+	+---+--------+
+0	| 30| HANDLE |
+	+---+--------+ 
+5	| 20| HANDLE | 
+	+---+--------+         +------------+
+10	| 10| HANDLE |   &gt;&gt;&gt;   |            |
+	+---+--------+         +---TEMP-----+
+15	| 5 | HANDLE |   &gt;&gt;&gt;   |            |
+	+---+--------+         +------------+
+</pre><br><br>write the data back on the position of the node to be erased<br><br><pre class=code>
+	+---+--------+
+0	| 30| HANDLE |
+	+---+--------+         +------------+ 
+5	| 10| HANDLE |   &lt;&lt;&lt;   |            | 
+	+---+--------+         +---TEMP-----+
+10	| 5 | HANDLE |   &lt;&lt;&lt;   |            |
+	+---+--------+         +------------+
+15	| 5 | HANDLE |
+	+---+--------+
+</pre><br><br>then do the same as descriped when adding a node to the openlist (see above)<br>but dont increase the size of the bank ... we allready got one free entry<br><br><pre class=code>
+Function as_updateNode(a.as_path,node,f)
+	size = BankSize(a\sort_bank)
+	
+	;find the node to update
+	offset = size
+	While offset &gt; 0
+		offset = offset - 8
+		other_node = PeekInt(a\sort_bank,offset + 4)
+		If node = other_node
+			Exit
+		EndIf
+	Wend
+	
+	;erase the node
+	count = size - offset
+	CopyBank(a\sort_bank,offset,a\temp_bank,0,count)
+	CopyBank(a\temp_bank,8,a\sort_bank,offset,count-8)
+	
+	offset = size - 8
+	While offset &gt; 0
+		other_f = PeekInt(a\sort_bank,offset - 8)
+		If f &lt;= other_f
+			Exit
+		EndIf
+		offset = offset - 8
+	Wend
+	
+	count = size - offset - 8
+	CopyBank(a\sort_bank,offset,a\temp_bank,0,count)
+
+	nOffset = offset + 8	
+	CopyBank(a\temp_bank,0,a\sort_bank,nOffset,count)
+	
+	;write the f and the handle in the sort_bank
+	PokeInt(a\sort_bank,offset,f)
+	PokeInt(a\sort_bank,offset+4,node)	
+	
+End Function
+</pre><br><br><br>Tracing back the path<br>---------------------<br>at this point we have found the endpoint in our openlist<br>now lets resize our resultbank back to 8<br>then step from parent to parent and add the X and Y value to the resultbank until there is no more parent node<br>this will lead from endpoint to the startpoint and the resultbank contains the X,Y Positions leading to the target in reverse order.<br><br><pre class=code>
+Offset	Datablock
+	+---+---+
+0	| X | Y |
+	+---+---+
+8	| X | Y |
+	+---+---+
+16	| X | Y |
+	+---+---+
+	  .
+	  .
+	  .
+	+---+---+
+n*8	| X | Y |
+	+---+---+
+</pre><br><br><pre class=code>
+;create and fill the resultbank
+resizeBank(a\result_bank,8)
+size = 8
+
+current_node = a\current_node
+x = PeekInt(a\node_bank,current_node + DEF_OFF_X)
+y = PeekInt(a\node_bank,current_node + DEF_OFF_Y)
+PokeInt(a\result_bank,0,x)
+PokeInt(a\result_bank,4,y)
+
+scale = 55
+While current_node
+	current_node = PeekInt(a\node_bank,current_node + DEF_OFF_PARENT)
+	x = PeekInt(a\node_bank,current_node + DEF_OFF_X)
+	y = PeekInt(a\node_bank,current_node + DEF_OFF_Y)
+	size = size + 8
+	
+	ResizeBank(a\result_bank,size)
+	PokeInt(a\result_bank,size - 8,x)
+	PokeInt(a\result_bank,size - 4,y)
+Wend
+
+a\status = 3
+Return True
+</pre><br><br>Debugging and drawing<br>---------------------<br>this is a small function to draw the result<br>this is for very small maps only (13 x 13)<br><br>[code]<br>Function draw(a.as_path)<br>	Cls()<br>	scale = 55<br>	<br>	If a\result_bank Then <br>		Color(100,0,20)<br>		size = BankSize(a\result_bank)<br>		For i=size To 0 Step -8<br>			xs = PeekInt(a\result_bank,i - 8) * scale<br>			ys = PeekInt(a\result_bank,i - 4) * scale<br>			Rect(xs,ys,scale,scale,1)<br>		Next<br>	End If<br><br>	<br>	For y=0 To as_dim_y-1<br>		For x=0 To as_dim_x-1<br>			xs = x * scale<br>			ys = y * scale<br>			<br>			offset = (x + y * as_dim_x)<br>			b = PeekByte(as_map_bank,offset)<br>			Color(b,b,b)<br>			Rect(xs,ys,scale,scale,0)<br>			<br>			offset = (x + y * as_dim_x) * 5<br>			status = PeekByte(a\info_bank,offset)<br>			node = PeekInt(a\info_bank,offset + 1)<br>			<br>			Select status<br>			Case DEF_AS_OPEN<br>				Color(20,250,20)<br>				Rect(xs,ys,scale,scale,0)<br>				<br>				Color(200,250,200)<br>				f = PeekInt(a\node_bank,node + DEF_OFF_F)<br>				g = PeekInt(a\node_bank,node + DEF_OFF_G)<br>				h = PeekInt(a\node_bank,node + DEF_OFF_H)<br>				<br>				parent = PeekInt(a\node_bank,node + DEF_OFF_PARENT)<br>				<br>				px = PeekInt(a\node_bank,parent + DEF_OFF_X)<br>				py = PeekInt(a\node_bank,parent + DEF_OFF_Y)<br><br>				Text xs + 1,ys + 1,f<br>				Text xs , ys + scale - 1 - (FontHeight()),g<br>				Text xs + scale - StringWidth(h) - 1 , ys + scale - 1 - FontHeight(),h<br>				<br>				Line(xs+scale/2,ys+scale/2,px*scale+scale/2,py*scale+scale/2)<br>			Case DEF_AS_CLOSED<br>				Color(20,20,250)<br>				Rect(x*scale,y*scale,scale,scale,0)<br>				<br>				Color(200,200,250)<br>				f = PeekInt(a\node_bank,node + DEF_OFF_F)<br>				g = PeekInt(a\node_bank,node + DEF_OFF_G)<br>				h = PeekInt(a\node_bank,node + DEF_OFF_H)<br><br>				parent = PeekInt(a\node_bank,node + DEF_OFF_PARENT)<br>				<br>				px = PeekInt(a\node_bank,parent + DEF_OFF_X)<br>				py = PeekInt(a\node_bank,parent + DEF_OFF_Y)<br><br>				Text xs + 1,ys + 1,f<br>				Text xs , ys + scale - 1 - (FontHeight()),g<br>				Text xs + scale - StringWidth(h) - 1 , ys + scale - 1 - FontHeight(),h<br><br>				Line(xs+scale/2,ys+scale/2,px*scale+scale/2,py*scale+scale/2)<br>			End Select<br>		Next<br>		<br>	Next<br>	<br>	x = PeekInt(a\node_bank,a\current_node + DEF_OFF_X)<br>	y = PeekInt(a\node_bank,a\current_node + DEF_OFF_y)<br><br>	Color(250,20,20)<br>	Rect(x*scale,y*scale,scale,scale,0)<br><br>	Color(250,20,20)<br>	Rect(a\end_x*scale,a\end_y*scale,scale,scale,1)<br><br>	Color(20,250,20)<br>	Rect(a\start_x*scale,a\start_y*scale,scale,scale,1)<br><br>	size = BankSize(a\sort_bank)-1<br>	While i &lt; size	<br>		count = count + 1<br>		Text 800,count * 17, i + " -&gt; f:" + PeekInt(a\sort_bank,i) +" - node:"+ PeekInt(a\sort_bank,i+4)<br>		i = i + 8<br>	Wend<br><br>	Flip()<br>End Function<br>[\code]<br><br><br>so, thats it for now<br><br>I hope you find this usefull.<br><br>My english isnt that good so if anyone could correct this tutorial to be more understandable please mail the corrected thread to:<br>rayzor-s-edge@...<br>i will then update this post.<br>thx in advance.<br><br>If you got some improvements or questions ... please drop a line. <br><br></td></tr></table><br>
+<a name="438878"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dustin</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Very detailed tutorial!  And the english is just fine.<br><br>Thanks! <br><br></td></tr></table><br>
+<a name="439716"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GW</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Why not Arrays? <br>- accessing arrays in Blitzbasic is slow  *WRONG*<br>- arrays are not dynamic and consume lots of memory *WRONG* <br>- arrays are always global *WRONG*<br><br>Why not types? <br>- since types cannot be nested into eachother *WRONG*<br>- types are always global *SO WHAT* <br><br></td></tr></table><br>
+<a name="439770"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Klaas</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> @GW<br>- accessing arrays in Blitzbasic is slow *WRONG* <br>i've benchmarked arrays and banks ... accessing arrays was about 1/2 that fast<br>[edit]my mistake ... they are not slow[/edit]<br><br>- arrays are not dynamic and consume lots of memory *WRONG* <br>arrays can be redimed - YES<br>.. but you cannot redim without losing all values in the array, this means you have to make the array as big as the highest possible nodecount therefor you consum lots of extra memory without need!<br><br>- arrays are always global *WRONG* <br>arrays are always global ... except Blitzarrays and those are always constant<br><br>- since types cannot be nested into eachother *WRONG* <br>Types cannot be nested<br>for t.type = each type <br>would allways get ALL existing entries of "type"<br>for t.type = each parent\type <br>cannot be done <br><br>- types are always global *SO WHAT* <br>calculating pathes paralel would result in a mess in the typelist. you allways have to sort the types by there "task" <br><br></td></tr></table><br>
+<a name="439880"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >MSW</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>- accessing arrays in Blitzbasic is slow *WRONG* <br>i've benchmarked arrays and banks ... accessing arrays was about 1/2 that fast <br> <br></div><br><br>erm...okay...thats very doubtful, but if you say so.<br><br><div class="quote"> <br>- since types cannot be nested into eachother *WRONG* <br>Types cannot be nested <br>for t.type = each type <br>would allways get ALL existing entries of "type" <br>for t.type = each parent\type <br>cannot be done <br> <br></div><br><br>erm...I hope you realise that there are other ways to perform loops accessing types... "For t.type = each type" is but ONE way Blitz allows you to loop through types...course the other ways require a little bit more work from the programmer, but then again C/C++ users are used to that sort of thing and they have no problems with haveing to implament thier own parent/child data nesting schemes.<br><br>Anyway, very good tutorial overall. <br><br></td></tr></table><br>
+<a name="439998"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Klaas</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> okay, its true that it can be done ...<br>i've wrote:<br>"since types cannot be nested into eachother its hard to parallel process pathfindings. This would take some managment and its hard to deal with."<br><br>i wanted to say that doing this with types would have some managment overhead that you do not have when using banks. I correct the statements in the tutorial soon to avoid confusion about that. <br><br></td></tr></table><br>
+<a name="440007"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >morduun</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Banks in this case are a =lot= more useful than arrays, if for no other reason than individual a* banks can be attached to individual pathfinding entities via their handle in an appropriate type field.  In theory you could do the same with BlitzArrays but then you'd need to futz around with constant and inflexible dim values, so in the end I think Klaas has the most flexible and best overall method here. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

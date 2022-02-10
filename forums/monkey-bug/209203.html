@@ -1,0 +1,88 @@
+<!DOCTYPE html><html lang="en" ><head ><title >V82(A): Bug with the 'Alias' keyword.</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >V82(A): Bug with the 'Alias' keyword.</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=501" >Monkey Bug Reports</a>/<a href="#bottom" >V82(A): Bug with the 'Alias' keyword.</a><br><br>
+<a name="2096362"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImmutableOctet(SKNG)</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> <b>I'm not sure if you've read <a href="http://www.monkey-x.com/Community/posts.php?topic=9166&amp;post=96053" target="_blank">my forum post(s) before</a>, Mark; but since it's been a week with no response, I'll post a reminder:</b><br><br><b>If you have already read my post about this, disregard most of this post.</b><br><br>The 'Alias' keyword is partially broken in V82(A), the '_env' variable is not exactly handled properly. I assume this wasn't an issue due to the original structure of the 'Alias' keyword's implementation, but it's an issue now.<br><br><b>I have already posted a solution in my second post; all you need to do is call 'PushEnv' and 'PopEnv'. I have been using this fix for a week now, and have had no problems thus far.</b><br><br><b>For reference, here's the post I'm referring to:</b><br><div class="quote"> <br>In hindsight, I have actually found one <i>somewhat small</i> problem with the new version of 'trans'.<br><br><b>It would seem that the 'Alias' keyword can cause the compiler to crash with this version. It seems to be related to <a href="https://github.com/blitz-research/monkey/blob/cda30956cdae33ae0c3a0e46d75fdaab30991e34/modules/trans/parser.monkey#L1633" target="_blank">this line</a>, and especially <a href="https://github.com/blitz-research/monkey/blob/cda30956cdae33ae0c3a0e46d75fdaab30991e34/modules/trans/parser.monkey#L1644" target="_blank">this line</a>.</b><br><br>After a <i>not so quick</i> look at this, I realized the effect you were looking for might be better handled with 'PushEnv' and 'PopEnv'. After testing this, I can confirm that this fixed the problem in the situation I tested. From what I understand, the crash was from a chain of events, which begin at lines <a href="https://github.com/blitz-research/monkey/blob/cda30956cdae33ae0c3a0e46d75fdaab30991e34/modules/trans/parser.monkey#L1633" target="_blank">1633</a> and <a href="https://github.com/blitz-research/monkey/blob/cda30956cdae33ae0c3a0e46d75fdaab30991e34/modules/trans/parser.monkey#L1644" target="_blank">1644</a> of 'trans.parser' (The 'ParseMain' method's 'Alias' code). Basically, the entire issue is that '_env' is being set to 'Null', instead of being restored. So, when '_env' is used later (By the preprocessor), you get a memory access violation. Weirdly enough, this problem can only be seen from the preprocessor of the module doing the importing of the module which has the aliases in question. If the first module / build file has aliases, there's no issue (For that module, I'm pretty sure this will still happen anyway).<br><br>The fix would be something like this (This may require more testing):<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+PushEnv _module	'naughty! Shouldn't be doing GetDecl in parser...
+
+Repeat
+	Local id:=ParseIdent()
+	decl=scope.FindDecl( id )
+	If Not decl Err "Identifier '"+id+"' not found."
+	If Not CParse( "." ) Exit
+	scope=ScopeDecl( decl )
+	If Not scope Or FuncDecl( scope ) Err "Invalid scope '"+id+"'."
+Forever
+
+'_env=Null
+
+PopEnv '/naughty
+</textarea><br><br>Basically, I just restore the old version of '_env', so we don't have any issues.<br><br><b>Here's an example which will cause this issue:</b><br><br><b>"module01.monkey":</b><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+Public
+
+' Preprocessor related:
+#TEST = True
+
+' Imports:
+
+' This will set forth the events that will make the compiler crash without my fix.
+' Read through 'module02', then come back here.
+Import module02
+
+#Rem
+	Since '_env' was modified, if 'EvalBool' is called by the compiler, a memory access violation will occur.
+	
+	This only happens if this module (The module importing 'module02'; 'module01') tries to
+	use anything with the preprocessor which needs 'EvalBool' (Likely others as well).
+	
+	Oddly enough, it doesn't actually cause an error if you use a literal instead of 'Test',
+	but that's not really the point here.
+#End
+
+' The compiler will cause a memory access violation here.
+#If TEST
+	' This point won't be reached currently; my fix will reach here, however.
+	#Error "This is a test."
+#End
+
+' Functions:
+Function Main:Int()
+	' Nothing's actually needed here, it'll cause a memory access violation before this.
+	
+	' Return the default response.
+	Return 0
+End
+</textarea><br><br><b>"module02.monkey":</b><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+Public
+
+' Imports:
+
+' This is just used as an example, I just needed a class to alias.
+Import mojo.app
+
+' Aliases:
+
+#Rem
+	This won't cause the violation directly, but it will mess with '_env'.
+	
+	Also note that this has to be an non-target-specific type. If 'Int' or similar is used,
+	it'll just continue the routine before even messing with '_env'.
+	
+	Basically, from here, any modules importing this module ('module02') will be unable to
+	pre-process anything without causing an error. See 'module01' for details.
+#End
+
+Alias TestAlias = app.App
+</textarea><br><br><b>Assuming I understood the point of all of that, my fix should work just fine. It doesn't have any issues with the above example. I had a hell of a time debugging this (And not in a good way), so here's hoping this is the last of that for now.</b><br> <br></div> <br><br></td></tr></table><br>
+<a name="2096360"></a>
+
+<a name="2096359"></a>
+
+<a name="2096358"></a>
+
+<a name="2096357"></a>
+
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,298 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Thread-Pool multithreading problem</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Thread-Pool multithreading problem</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Thread-Pool multithreading problem</a><br><br>
+<a name="1213891"></a>
+
+<a name="1213892"></a>
+
+<a name="1213893"></a>
+
+<a name="1213894"></a>
+
+<a name="1213896"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> So I'm making this little thread pool thing so that I can start throwing jobs at it. Strangely it seems like it works ok when built for Release, but when in Debug, something seems to go wrong and it throws an error. Now I know Release mode can do things invisibly that Debug will identify as an error, but the program actually behaves differently in Debug mode.<br><br>In Release mode, the thread pool is initialized and all of the threads are Pause()'d awaiting work. This creates a semaphore for each and then waits for the semaphore signal that there's work to do. This works fine in Release mode. In Debug mode it seems like the semaphore is being ignored completely. By putting a simple `Print "here"` immediately after the WaitSemaphore() in the Pause() method, even with absolutely no jobs assigned to the queue, it seems like the semaphore is totally ignored and the thread just flows right past it and prints 'here' when it shouldn't. Again, in Release mode this does not happen and the semaphores are respected.<br><br>Is the debugger supposed to work properly with threads or is this a crapshoot and do I have to resort to just relying on printing to the console to try to debug things? I was reading a Blitz3D thread that suggested the debugger may not work properly with threads? Or could it be a bug or something? Or have I misunderstood how to use semaphores? Or maybe the presence of the debugger causes something to happen outside of the LockMutexes within some kind of debugger code?<br><br>Once the semaphore is ignored, obviously the program is not built to deal with a failed signaling system, so it results in an index array-bounds error because something's happening that shouldn't be.<br><br>I'm in BlitzMax 1.49 - Here is the code ... I use self-optimizing arrays (highest element is moved to fill the gap left by a lower element), to manage the queue of a) what threads are available, b) what jobs are free to be defined, c) what jobs have been assigned and are waiting to be claimed by a thread, etc.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+'Thread pool threads and availability (real threads)
+Global ThreadPoolSize:Int=16							'Maximum number of threads
+Global ThreadPool:TThread[]								'Real threads as a thread pool
+Global ThreadPoolInfo:Thread[]							'Extra information for each thread
+Global ThreadPoolMutex:TMutex=Null						'Mutex to lock access to the thread pool data
+Global ThreadPoolAvailable:Int[]						'Which threads are available for work
+Global ThreadPoolAvailableThreads:Int=0					'How many paused threads are available for work
+
+'Thread pool unassigned jobs (so that main program can create and assign new jobs to threads)
+Global ThreadPoolWorkMaxSize:Int=ThreadPoolSize*100		'Maximum number of jobs that can be queued
+Global ThreadPoolWorkAvailable:Int[]					'Which jobs are not allocated/available for new work assignment
+Global ThreadPoolWorkAvailableSize:Int=0				'How many jobs are available for new work
+
+'Thread pool jobs waiting to start (so that threads can find work)
+Global ThreadPoolWorkToDo:Int[]							'Which jobs are ready to start
+Global ThreadPoolWorkToDoSize:Int=0						'How many jobs are ready to start
+
+'Thread pool jobs (actual work to be done)
+Global ThreadPoolWork(WorkIndex:Int)[]					'Functions to be run by threads
+Global ThreadPoolWorkPixmaps:TPixmap[]					'Pixmap parameters for work functions
+Global ThreadPoolWorkPixmaps2:TPixmap[]					'Pixmap parameters for work functions
+Global ThreadPoolWorkIntegers:Int[]						'Integer parameters for work functions
+Global ThreadPoolWorkIntegers2:Int[]					'Integer parameters for work functions
+Global ThreadPoolWorkFloats:Float[]						'Float parameters for work functions
+Global ThreadPoolWorkFloats2:Float[]					'Float parameters for work functions
+
+InitThreadPool()
+Print "creating work"
+For Local a:Int=0 To ThreadPoolSize*100
+	AssignWork(HelloWorld,Null,Null,0,0,0,0)
+Next
+
+Repeat
+Until ThreadPoolWorkAvailableSize=ThreadPoolWorkMaxSize
+End
+
+
+Function HelloWorld(WorkIndex:Int)
+	For Local a:Int=1 To 10000000
+		Local b:Int=a+1
+		If a Mod 100000=0 Then Print a
+	Next
+End Function
+
+Function AssignWork(func(WorkIndex:Int),Pixmap1:TPixmap=Null,Pixmap2:TPixmap=Null,Int1:Int=0,int2:Int=0,Float1:Float=0,float2:Float=0)
+	'Assign work to be done by the thread pool
+
+	'Check/wait for room to assign new jobs
+	LockMutex ThreadPoolMutex							'Lock it
+	Local Avail:Int=ThreadPoolWorkAvailableSize			'Room for new jobs?
+	If Avail=0
+		'No room for new jobs, wait
+		UnlockMutex ThreadPoolMutex						'Unlock it
+		Repeat
+			Delay 1
+			If Avail=0 Then LockMutex ThreadPoolMutex	'Lock it
+			Avail=ThreadPoolWorkAvailableSize			'Room for new jobs?
+			If Avail=0 Then UnlockMutex ThreadPoolMutex	'Unlock it
+		Until Avail&gt;0
+	EndIf
+
+	'Assign job
+	Avail=ThreadPoolWorkAvailable[0]					'Index of a job we can assign
+	ThreadPoolWork[Avail]=func							'Set the function to work on
+	ThreadPoolWorkPixmaps[Avail]=Pixmap1				'Set the first pixmap (source)
+	ThreadPoolWorkPixmaps2[Avail]=Pixmap2				'Set the second pixmap (dest)
+	ThreadPoolWorkIntegers[Avail]=Int1					'Set the first integer
+	ThreadPoolWorkIntegers2[Avail]=Int2					'Set the second integer
+	ThreadPoolWorkFloats[Avail]=Float1					'Set the first float
+	ThreadPoolWorkFloats[Avail]=Float2					'Set the second float
+	ThreadPoolWorkAvailableSize:-1						'One less available
+	If ThreadPoolWorkAvailableSize&gt;0
+		ThreadPoolWorkAvailable[0]=ThreadPoolWorkAvailable[ThreadPoolWorkAvailableSize]	'Move last available index to fill gap
+	EndIf
+	
+	'Make sure there's a thread active and assign it
+	If ThreadPoolAvailableThreads&gt;0
+		'There's a thread paused, let's activate it and assign this job so it doesn't have to search for it
+		Local AvailThread:Int=ThreadPoolAvailable[0]	'Get an available thread
+		ThreadPoolAvailableThreads:-1					'One less available thread
+		If ThreadPoolAvailableThreads&gt;0
+			ThreadPoolAvailable[0]=ThreadPoolAvailable[ThreadPoolAvailableThreads]	'Move last to first to fill the gap
+		EndIf
+		ThreadPoolInfo[AvailThread].CurrentJob=Avail	'Assign the job to the thread
+		ThreadPoolInfo[AvailThread].Resume()			'Resume the thread excecuting after a pause. Thread will be awoken, job will be run, and flow continues from here in parallel
+	Else
+		'All threads are already running, they will find the job
+		ThreadPoolWorkToDo[ThreadPoolWorkToDoSize]=Avail	'Mark this job as ready to start by threads looking for work
+		ThreadPoolWorkToDoSize:+1						'One more job ready to start
+	EndIf
+	UnlockMutex ThreadPoolMutex							'Unlock it
+
+End Function
+
+Function InitThreadPool()
+	'Initialize the thread pool
+	
+	'Create thread pool
+	ThreadPoolMutex=CreateMutex()						'Create a mutex to lock access to thread pool data
+	LockMutex(ThreadPoolMutex)							'Lock it
+	ThreadPool=ThreadPool[..ThreadPoolSize]				'Size array for thread storage
+	ThreadPoolInfo=ThreadPoolInfo[..ThreadPoolSize]		'Size array for thread info storage
+	ThreadPoolAvailable=ThreadPoolAvailable[..ThreadPoolSize]	'Size array for availability
+	ThreadPoolAvailableThreads=0						'None yet
+	ThreadPoolWork=ThreadPoolWork[..ThreadPoolWorkMaxSize]	'Make room for work queue
+	ThreadPoolWorkAvailable=ThreadPoolWorkAvailable[..ThreadPoolWorkMaxSize]	'Make room for work availability
+	ThreadPoolWorkAvailableSize=ThreadPoolWorkMaxSize	'How many jobs are unassigned
+	ThreadPoolWorkToDo=ThreadPoolWorkToDo[..ThreadPoolWorkMaxSize]	'Make room for work ready to start
+	ThreadPoolWorkToDoSize=0							'No work ready yet
+	For Local w:Int=0 Until ThreadPoolWorkMaxSize
+		ThreadPoolWorkAvailable[w]=w					'This work job is available for assignment
+	Next
+	ThreadPoolWork=ThreadPoolWork[..ThreadPoolWorkMaxSize]	'Make room for work functions
+	ThreadPoolWorkPixmaps=ThreadPoolWorkPixmaps[..ThreadPoolWorkMaxSize]	'Make room for pixmap parameters
+	ThreadPoolWorkPixmaps2=ThreadPoolWorkPixmaps2[..ThreadPoolWorkMaxSize]	'Make room for pixmap parameters
+	ThreadPoolWorkIntegers=ThreadPoolWorkIntegers[..ThreadPoolWorkMaxSize]	'Make room for integer parameters
+	ThreadPoolWorkIntegers2=ThreadPoolWorkIntegers[..ThreadPoolWorkMaxSize]	'Make room for integer parameters
+	ThreadPoolWorkFloats=ThreadPoolWorkFloats[..ThreadPoolWorkMaxSize]	'Make room for float parameters
+	ThreadPoolWorkFloats=ThreadPoolWorkFloats[..ThreadPoolWorkMaxSize]	'Make room for float parameters	
+	For Local t:Int=0 Until ThreadPoolSize
+		ThreadPoolInfo[t]=New Thread					'Create extra info
+		ThreadPoolInfo[t].Index=t						'Index of the thread
+		ThreadPool[t]=CreateThread(ThreadStarter,ThreadPoolInfo[t])	'Create the thread for real
+	Next
+	UnlockMutex(ThreadPoolMutex)						'Unlock it
+	
+	'Now that we have unlocked the mutex, the threads will start locking it to mark themselves as active, so wait until all are available
+	Repeat
+		Delay 1
+	Until ThreadPoolAvailableThreads=ThreadPoolSize		'Wait until they're all ready (read only)
+End Function
+
+Function ThreadStarter:Object(Data:Object)
+	'Start up a new thread and get it to call its own excecute method
+	
+	Local ThisThread:Thread=Thread(Data)				'Convert data into a Thread type
+	ThisThread.Handle=CurrentThread()					'Store the Thread handle
+	ThisThread.Execute()								'Start the thread working on data, which initially will put it into pause mode
+	DetachThread(ThisThread.Handle)						'When Execute finishes running and returns, it will automatically close and release the handle. Do this instead of closethread here, otherwise the next line will not run
+	'After this line the thread will automatically be closed
+	
+	'Remove the thread
+	ThisThread.Handle=Null								'Let go of this thread's handle
+End Function
+
+Type Thread
+	Field Handle:TThread=Null							'This thread
+	Field Semaphore:TSemaphore=Null						'Used to pause thread
+	Field Index:Int=-1									'Index of this thread in the Threads array
+	Field Terminate:Int=False							'Whether to stop this thread forever
+	Field Paused:Int=False								'Whether and waiting for work
+	Field CurrentJob:Int=-1								'Index of current job assigned
+	
+	Method Pause()
+		'Pause this thread, will resume when semaphore is signalled
+		LockMutex(ThreadPoolMutex)						'Lock it
+		If Semaphore=Null Then Semaphore=CreateSemaphore(0)	'Create semaphore if not already done so
+		CurrentJob=-1									'Not working on a job
+		Paused=True										'This thread is paused
+		ThreadPoolAvailable[ThreadPoolAvailableThreads]=Index	'Mark this thread as paused and available for work
+		ThreadPoolAvailableThreads:+1					'1 more available
+		UnlockMutex(ThreadPoolMutex)					'Unlock it
+		WaitSemaphore(Semaphore)						'Wait for a signal to resume
+		Paused=False
+	End Method
+	
+	Method Resume()
+		'Make this thread resume processing
+		'This method should be called from the main thread because this thread won't be able to resume itself
+		PostSemaphore(Semaphore)						'Signal the thread to resume
+	End Method
+		
+	Method Execute()
+		'Do some work
+		Pause()											'Pause until work is available
+
+		While Terminate=False
+			'While this thread can still keep processing, find some work to do or pause
+			If CurrentJob&lt;&gt;-1
+				'Main program woke this thread to run a specific job
+				ThreadPoolWork[CurrentJob](CurrentJob)	'Execute the job and pass it the index of any parameters
+				LockMutex ThreadPoolMutex				'Lock it
+				ThreadPoolWorkAvailable[ThreadPoolWorkAvailableSize]=CurrentJob	'Mark this job as now available/free
+				ThreadPoolWorkAvailableSize:+1			'One more available
+				CurrentJob=-1							'Job done
+				UnlockMutex	ThreadPoolMutex				'Unlock it
+			Else
+				'A main-program assigned job is done is was not assigned, try to find a job before pausing
+				LockMutex ThreadPoolMutex				'Lock it
+				If ThreadPoolWorkToDoSize&gt;0
+					'There is a job to do, do it
+					CurrentJob=ThreadPoolWorkToDo[0]	'Get the first job
+					ThreadPoolWorkToDoSize:-1			'1 less job waiting
+					If ThreadPoolWorkToDoSize&gt;0
+						ThreadPoolWorkToDo[0]=ThreadPoolWorkToDo[ThreadPoolWorkToDoSize]	'Copy last to first to fill gap
+					EndIf
+					UnlockMutex ThreadPoolMutex			'Unlock it
+					ThreadPoolWork[CurrentJob](CurrentJob)		'Excecute the job and pass it the index of any paramters
+					LockMutex ThreadPoolMutex			'Lock it
+					ThreadPoolWorkAvailable[ThreadPoolWorkAvailableSize]=CurrentJob	'Mark this job as now available/free
+					ThreadPoolWorkAvailableSize:+1		'One more available
+					CurrentJob=-1						'Job done
+					UnlockMutex	ThreadPoolMutex			'Unlock it
+				Else
+					'No jobs to work on, pause this thread
+					UnlockMutex ThreadPoolMutex			'Unlock it
+					Pause()
+				EndIf
+			EndIf
+		Wend
+	End Method
+	
+End Type
+</textarea> <br><br></td></tr></table><br>
+<a name="1213905"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just compiled it on linux<br><br>had to<br>Import "-ldl"<br><br>as I did not modify my appstub-file.<br><br>In both - release and debug - it printed unordered numbers, no crashes.<br><br><br>Compiled on my virtualXP with 2 cores assigned:<br>Release and debug compilation works without throwing errors.<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1213917"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm. Thanks for doing that, though I'm a bit miffed why your debug version works and mine doesn't. <br><br>Hm... seems to run in debug okay on Windows too... but not OSX. <br><br></td></tr></table><br>
+<a name="1213988"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Also I've found various other things work ok in release but not debug. e.g. otus.lzma module, bah.freeimage module, etc.. various errors. I guess I might have to go back to the drawing board and reinstall blitz or something. <br><br></td></tr></table><br>
+<a name="1214011"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> For bah.image you could ask Brucey for help, he is on a Mac too. Maybe you have a collision of the included libraries.<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1214039"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> hmm, possibly.. I will check that, thanks. <br><br></td></tr></table><br>
+<a name="1214051"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yah its not a module conflict. Everything builds fine in release mode without multithreading. it's when multithreading is switched on that it throws tonnes of errors. <br><br></td></tr></table><br>
+<a name="1214067"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> maybe you are able to post some of these errors here?<br><br>Did you search the data squid of your choice for it?<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1214089"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> On windows it builds multithreaded debug ok and runs correctly. But on OSX when it gets to the WaitSemaphore(), with absolutely nothing posting any semaphores program flow just continues right past it, and so if there is a print statement after it such as Print "here", in the console it will print `here` when it shouldn't. The semaphore is ignored. There is no real error message from that, as such.... it's not doing what the command is supposed to do. <br><br></td></tr></table><br>
+<a name="1214099"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> When I try to run it, I get the error :<br><pre class=code>
+Unhandled Exception:Attempt to index array element beyond array length
+</pre><br>... on line 162 :<br><pre class=code>
+		ThreadPoolAvailable[ThreadPoolAvailableThreads]=Index	'Mark this thread as paused and available for work
+</pre><br>However, if I put a Debuglog in before the LockMutex() call, it's fine, and seems to run as expected in Debug. <br><br></td></tr></table><br>
+<a name="1214105"></a>
+
+<a name="1214106"></a>
+
+<a name="1214107"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes, that error is thrown AFTER the code flows through to a section of program that it is not supposed to be flowing to. Since the semaphore fails, code gets executed when it isn't meant to and it produces the resulting array index error that you mentioned. That isn't the error, the error is that the WaitSemaphore does not work. Either that or maybe a LockMutex isn't working perhaps? <br><br></td></tr></table><br>
+<a name="1214126"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> And all those Globals make my head hurt.<br><br>Wouldn't this be much nicer (and possibly easier to debug) with at ThreadPool manager and no globals? <br><br></td></tr></table><br>
+<a name="1214131"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> As it would end in a Singleton this "example code" just saved some minutes writing a wrapping-type and GetInstance function.<br><br>But to tell the truth: I thought the same when looking at the code.<br>Also "function(param)" is easier to read for me than "function param".<br><br>All in all this should not be the source of the problem :D<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1214133"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote">  As it would end in a Singleton this "example code" <br></div><br>You'll notice I refrained from writing the word Singleton in my post ;-)<br>(although it had been there until I revised my answer, because you don't *need* a singleton) <br><br></td></tr></table><br>
+<a name="1214135"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> You do not need if:<br>global myInstance:TClassName = new TClassName<br><br>or<br><br>Type TClassName<br>global varA:int<br>global varB:int<br>End Type<br>TClassName.varA = 2<br><br><br>Did I miss another option? Both variants are just for the sake of structuring the code. Do not spend some minutes converting the "Manager" into something like "TPoolMember" with a global list/array of all members and some "manager" functions. This won't count :D<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1214143"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> Wot you talking about? My code is perfect ;-)<br><br>Each to their own. I don't think the program has a bug in it. The WaitSemaphore() gets executed and DOES NOT WAIT. <br><br></td></tr></table><br>
+<a name="1214153"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> It does compile fine, threaded or unthreaded, release or debug, on windows. Just not on osx. <br><br></td></tr></table><br>
+<a name="1214190"></a>
+
+<a name="1214191"></a>
+
+<a name="1214192"></a>
+
+<a name="1214200"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> I found that if I inject enough of a delay before the WaitSemaphore(), or even before the UnlockMutex that comes before the WaitSemaphore, then in debug mode it will work properly. It seems to me this is a bug, as I can't see how anything else unusual would be happening in-between the unlocking and the semaphore waiting. The following code corrects it:<br><br><pre class=code>
+	Method Pause()
+		'Pause this thread, will resume when semaphore is signalled
+		If Semaphore=Null Then Semaphore=CreateSemaphore(0)	'Create semaphore if not already done so
+		LockMutex(ThreadPoolMutex)						'Lock it
+		CurrentJob=-1									'Not working on a job
+		Paused=True										'This thread is paused
+		ThreadPoolAvailable[ThreadPoolAvailableThreads]=Index	'Mark this thread as paused and available for work
+		ThreadPoolAvailableThreads:+1					'1 more available
+		UnlockMutex(ThreadPoolMutex)					'Unlock it
+?Debug
+Delay 1'bugfix, WaitSemaphore won't work on debug otherwise
+?
+		WaitSemaphore(Semaphore)						'Wait for a signal to resume
+		Paused=False
+Print "zzzResuming "+index
+	End Method
+</pre><br><br>Unless I'm not understanding how mutexes and semaphores are supposed to work (mutex waits until the mutex is free them locks it, semaphore puts the thread on hold until a signal is posted), or am not accounting for `something` potentially happening in between the two instructions, this seems like a blitz bug to me. And it is only on OSX. <br><br></td></tr></table><br>
+<a name="1214226"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> File a bug report and maybe you are the lucky one whose bug Mark is able to reproduce - if he then tries to fix it - time will show.<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1214260"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm... p'haps. For now I guess I have to live with this `bugfix` and hope I don't have to use the semaphores elsewhere. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

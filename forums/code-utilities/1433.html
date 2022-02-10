@@ -1,0 +1,221 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Pub.PCXLoader</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Pixmap loader for PCX files, language=bmx, category=File Utilities'><meta name='author' content='gman'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=8>File Utilities</a>/Pub.PCXLoader</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="1433.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pub.PCXLoader by gman</td><td align="right">2005 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Pretty basic as it only loads 8bit 256 color images with a palette.  full mod download at:<br><br><a href="http://www.gprogs.com/pub.pcxloader/2006_01_14_pcxloader.zip" target="_blank">2006_01_14 PCXLoader Mod</a><br><br><a href="http://www.gprogs.com/pub.pcxloader/pcxsample.zip" target="_blank">PCXLoader Sample</a><br><br>extract contained files to mod/pub.mod/pcxloader.mod<br><br>this works like all other pixmap loaders.  just import the lib and call LoadPixmap. </td></tr><tr ><td class="cell"><pre class="code">Strict
+
+Rem
+bbdoc: PCX loader.  Only supports 8bit 256 color palette PCX images.
+End Rem
+Module Pub.PCXLoader
+
+ModuleInfo "Version: 1.00"
+ModuleInfo "Author: gman"
+ModuleInfo "License: freebie"
+
+Import BRL.Pixmap
+Import BRL.Bank
+
+Type TPixmapLoaderPCX Extends TPixmapLoader
+
+	Method LoadPixmap:TPixmap( file:TStream )
+		Local retval:TPixmap=Null
+		
+		Local PCXData:Byte[]
+		Local PaletteData:Int[]
+
+		Local header:SPCXHeader=New SPCXHeader
+		header.fillFromReader(file,SPCXHeader.size,0,0)
+
+		' Return If the header is wrong
+		If (header.Manufacturer &lt;&gt; $0a And header.Encoding &lt;&gt; $01) Then Return Null
+
+		' Return If this isn't a supported type
+		If ((header.BitsPerPixel &lt; 8) Or (header.BitsPerPixel &gt; 24))
+			DebugLog("Unsupported bits per pixel in PCX file ("+header.BitsPerPixel+").")
+			Return Null
+		EndIf
+
+		Local pos:Int = StreamPos(file)
+		Local palIndicator:Byte
+				
+		' check the PAL indicator
+		SeekStream(file,StreamSize(file)-769)
+
+		palIndicator=ReadByte(file)
+
+		If ( palIndicator &lt;&gt; 12 )
+			DebugLog("Unsupported pal indicator in PCX file ("+palIndicator+").")
+			Return Null
+		EndIf
+					
+		' read palette
+		PaletteData = PaletteData[..256]
+		Local tempPalette:Byte Ptr=ReadString(file,768).ToCString()
+		
+		' convert the red,green,blue of the palette into colors				
+		For Local i:Int=0 To 255
+			PaletteData[i]=($ff000000 | ..
+				tempPalette[i*3+0] Shl 16 | ..
+				tempPalette[i*3+1] Shl 8 | ..
+				tempPalette[i*3+2])								
+		Next
+		tempPalette=Null
+
+		SeekStream(file,pos)
+
+		Local width:Int, height:Int
+		width = header.XMax - header.XMin + 1
+		height = header.YMax - header.YMin + 1
+				
+		' read in the image data
+		Local offset:Long,imagebytes:Long
+		Local cnt:Int,char:Byte
+				
+		imagebytes = header.BytesPerLine * header.Planes * (1 + header.Ymax - header.Ymin)
+		PCXData=PCXData[..imagebytes]
+		Local bufr:Byte Ptr=Varptr(PCXData[0])
+	
+		Local written:Int		
+		For offset = 0 To imagebytes-1    ' /* increment by cnt below */
+
+			' read in the next char and see if we have read past the end of file
+          	If Not encget(char,cnt,file) Then Exit
+
+			' store the data, repeat the char cnt times if needed
+               For Local i:Int = 0 To cnt-1
+				bufr[0]=char
+               	bufr:+1
+			Next
+
+			written:+ cnt
+
+			' check to see if we have written enough
+			If written&gt;=imagebytes Then Exit
+		Next
+
+		' create the pixmap									
+		Local tmpptr:Byte Ptr=Varptr(PCXData[0])
+		retval=CreatePixmap(width,height,PF_RGB888)				
+		
+		For Local y:Int=0 To height-1				
+			For Local x:Int=0 To width-1
+				WritePixel(retval,x,y,PaletteData[tmpptr[0]])
+				tmpptr:+1
+			Next
+		Next				
+		
+		header=Null
+		bufr=Null
+		tmpptr=Null
+		PaletteData=Null
+		PCXData=Null
+
+		Return retval
+	End Method
+End Type
+
+New TPixmapLoaderPCX
+
+Private 
+
+Rem
+/* This procedure reads one encoded block from the image file And stores a
+count And data byte.
+
+Return result:  1 = valid data stored, Null = out of data in file */
+EndRem
+Function encget:Int(pbyt:Byte Var,pcnt:Int Var,fid:TStream)
+	Local i:Byte
+     pcnt = 1        '/* assume a "run" length of one */
+
+	If Eof(fid) Then Return Null Else i=ReadByte(fid)
+
+	If ($C0 = ($C0 &amp; i))
+		pcnt = $3F &amp; i
+		If Eof(fid) Then Return Null Else i=ReadByte(fid)
+	EndIf
+
+	pbyt = i
+     Return 1
+EndFunction
+
+Type SPCXHeader Extends PACK_STRUCT
+	Global size:Int=128
+
+	Field Manufacturer:Byte
+	Field Version:Byte
+	Field Encoding:Byte
+	Field BitsPerPixel:Byte
+	Field XMin:Short
+	Field YMin:Short
+	Field XMax:Short
+	Field YMax:Short
+	Field HorizDPI:Short
+	Field VertDPI:Short
+	Field Palette:Byte[48]
+	Field Reserved:Byte
+	Field Planes:Byte
+	Field BytesPerLine:Short
+	Field PaletteType:Short
+	Field HScrSize:Short
+	Field VScrSize:Short
+	Field Filler:Byte[54]
+
+	Method fillFromBank(bank:TBank,start:Int=0)
+		Local i:Int
+		
+		Manufacturer=PeekByte(bank,start)
+		Version=PeekByte(bank,start+1)
+		Encoding=PeekByte(bank,start+2)
+		BitsPerPixel=PeekByte(bank,start+3)
+		XMin=PeekShort(bank,start+4)
+		YMin=PeekShort(bank,start+6)
+		XMax=PeekShort(bank,start+8)
+		YMax=PeekShort(bank,start+10)
+		HorizDPI=PeekShort(bank,start+12)
+		VertDPI=PeekShort(bank,start+14)
+		
+		For i=0 To 47
+			Palette[i]=PeekByte(bank,start+16+i)
+		Next
+		
+		Reserved=PeekByte(bank,start+64)
+		Planes=PeekByte(bank,start+65)
+		BytesPerLine=PeekShort(bank,start+66)
+		PaletteType=PeekShort(bank,start+68)
+		HScrSize=PeekShort(bank,start+70)
+		VScrSize=PeekShort(bank,start+72)
+		For i=0 To 53
+			Filler[i]=PeekByte(bank,start+74+i)
+		Next		
+	EndMethod
+	
+EndType
+
+' generic type for reading in PACK_STRUCT structures from files
+Type PACK_STRUCT
+	Global size:Int=0
+			
+	Method fillFromBank(bank:TBank,start:Int)
+	EndMethod
+
+	' returns true if successful
+	Method fillFromReader:Int(fileToRead:TStream,tbsize:Int,readeroffset:Int=0,bankoffset:Int=0)
+		If Not fileToRead Then Return False
+		
+		' create the bank
+		Local structbank:TBank=CreateBank(tbsize)
+		
+		' read from the file
+		structbank.Read(fileToRead,readeroffset,tbsize)
+		
+		' populate the STRUCT with what was read
+		fillFromBank(structbank,bankoffset)
+		
+		' clear out the bank
+		structbank=Null
+		
+		Return True
+	EndMethod
+	
+	Method getBank:TBank()
+		Return Null
+	EndMethod	
+EndType</pre></td></tr></table><br><a name="comments">Comments</a><br><br>None.<br><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

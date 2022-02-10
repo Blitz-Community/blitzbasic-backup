@@ -1,0 +1,218 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Object Loader</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Read/write any object to a stream, language=bmx, category=File Utilities'><meta name='author' content='Otus'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=8>File Utilities</a>/Object Loader</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2262.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Object Loader by Otus</td><td align="right">2008 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Allows you to read or write an arbitrary object to a stream (eg. a file or over the network). Uses the reflection module to get runtime information about type structure (fields). May be of use when implementing saved games or multiplayer over the network.<br><br>For an example program and a module version, please download the zip file from here: <a href="http://jan.varho.org/blog/programming/blitz/blitzmax-object-loader-module/" target="_blank">http://jan.varho.org/blog/programming/blitz/blitzmax-object-loader-module/</a><br><br>Bug reports (and patches) appreciated!<br><br>UPDATE: Added checks for saving TList and TMap objects properly. </td></tr><tr ><td class="cell"><pre class="code">' Loads and saves any objects to a stream using the reflection module.
+' Recursive - any and all objects referenced are also saved!
+' Use the metadata key "no_save" to mark fields not to be saved.
+
+SuperStrict
+
+
+Import BRL.Reflection
+
+
+'Saves an object to the stream specified
+Function SaveObject(o:Object, s:TStream, tid:TTypeId = Null) 
+	
+	'Null?
+	If o
+		s.WriteByte True
+	Else
+		s.WriteByte False
+		Return
+	End If
+	
+	'Get type Id
+	If tid = ObjectTypeId Then tid = TTypeId.ForObject(o)
+	If Not tid Then tid = TTypeId.ForObject(o)
+	
+	'Save type name
+	s.WriteInt tid.Name().length
+	s.WriteString tid.Name() 
+	
+	'DebugLog "Saving "+tid.Name()
+	
+	'Primitive type?
+	Select tid
+	'Integers
+	Case ByteTypeId
+		s.WriteByte	Byte(String(o) )
+		Return
+	Case ShortTypeId
+		s.WriteShort	Short(String(o) )
+		Return
+	Case IntTypeId
+		s.WriteInt	Int(String(o) )
+		Return
+	Case LongTypeId
+		s.WriteLong	Long(String(o) )
+		Return
+	'Floating Points
+	Case FloatTypeId
+		s.WriteFloat	Float(String(o) )
+		Return
+	Case DoubleTypeId
+		s.WriteDouble	Double(String(o) )
+		Return
+	'Strings
+	Case StringTypeId
+		s.WriteInt	String(o).length
+		s.WriteString	String(o)
+		Return
+	End Select
+	
+	'Array?
+	If tid.Name().EndsWith("[]")
+		'Save length
+		s.WriteInt tid.ArrayLength(o)
+		
+		'Element type
+		Local etid:TTypeId = TTypeId.ForName(tid.Name()[..tid.Name().length - 2]) 
+		
+		'Save elements
+		For Local i:Int = 0 To tid.ArrayLength(o)-1
+			SaveObject tid.GetArrayElement(o, i), s, etid
+		Next
+		Return
+	End If
+	
+	'Map?
+	If tid.Name()="TMap"
+		Local m:TMap = TMap(o)
+		
+		'Save length
+		Local l:Int = 0
+		For Local key:Object = EachIn m.Keys()
+			l:+1
+		Next
+		s.WriteInt l
+		
+		'Save key-value pairs
+		For Local node:TNode = EachIn m
+			SaveObject node.Key(), s
+			SaveObject node.Value(), s
+		Next
+		Return
+	End If
+	
+	'List?
+	If tid.Name()="TList"
+		Local l:TList = TList(o)
+		
+		'Save length
+		s.WriteInt l.Count()
+		
+		'Save contents
+		For Local obj:Object = EachIn l
+			SaveObject obj, s
+		Next
+		Return
+	End If
+	
+	'Save fields
+	For Local f:TField = EachIn tid.EnumFields()
+		If f.MetaData("no_save") Then Continue
+		SaveObject f.Get(o), s, f.TypeId()
+	Next
+	
+End Function
+
+'Reads an object to the stream specified
+Function LoadObject:Object(s:TStream) 
+	
+	'Null?
+	Select s.ReadByte() 
+	Case False
+		Return Null
+	Case True
+	Default
+		RuntimeError "Not an object"
+	End Select
+	
+	'Get type Id
+	Local tid:TTypeId = TTypeId.ForName(s.ReadString(s.ReadInt() ) )
+	
+	'DebugLog "Loading "+tid.Name()
+	
+	'Primitive type?
+	Select tid
+	'Integers
+	Case ByteTypeId
+		Return String.FromInt(s.ReadByte())
+	Case ShortTypeId
+		Return String.FromInt(s.ReadShort())
+	Case IntTypeId
+		Return String.FromInt(s.ReadInt())
+	Case LongTypeId
+		Return String.FromLong(s.ReadLong() ) 
+	'Floating point numbers
+	Case FloatTypeId
+		Return String.FromFloat(s.ReadFloat())
+	Case DoubleTypeId
+		Return String.FromDouble(s.ReadDouble() ) 
+	'Strings
+	Case StringTypeId
+		Return s.ReadString(s.ReadInt())
+	End Select
+	
+	Local o:Object
+	
+	'Array?
+	If tid.ElementType() 
+		'Get length
+		Local l:Int = s.ReadInt() 
+		
+		'Create array
+		o = tid.NewArray(l)
+		
+		'Load elements
+		For Local i:Int = 0 To l - 1
+			Local obj:Object = LoadObject(s)
+			If obj Then tid.SetArrayElement o, i, obj
+		Next
+		Return o
+	End If
+	
+	'Map?
+	If tid.Name()="TMap"
+		Local m:TMap = New TMap
+		
+		'Get length
+		Local l:Int = s.ReadInt()
+		
+		'Load key-value pairs
+		For Local i:Int = 0 To l - 1
+			Local key:Object = LoadObject(s)
+			Local value:Object = LoadObject(s)
+			m.Insert key, value
+		Next
+		Return m
+	End If
+	
+	'List?
+	If tid.Name()="TList"
+		Local l:TList = New TList
+		
+		'Get length
+		Local length:Int = s.ReadInt()
+		
+		'Load key-value pairs
+		For Local i:Int = 0 To length - 1
+			l.AddLast LoadObject(s)
+		Next
+		Return l
+	End If
+	
+	'Create the object
+	o = tid.NewObject()
+	
+	'Load fields
+	For Local f:TField = EachIn tid.EnumFields() 
+		If f.MetaData("no_save") Then Continue
+		Local obj:Object = LoadObject(s) 
+		If obj Then f.Set o, obj
+	Next
+	
+	Return o
+	
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Macguffin</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Hey Otus,<br><br>Thanks for the code!  It works great for me, with one exception - multidimensional arrays.<br><br>I'm currently bombing out on both custom type 2d arrays, and regular 2d int arrays... not sure what the deal is yet, but wanted to post in case you want to look at it. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Otus</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> I don't think reflection supports multidimensional arrays. Could be wrong though. Have you tried arrays of arrays? That's usually the answer to multidim. array problems. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Macguffin</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Good call - it doesn't.  Looks like reflection doesn't return a multidimensional array as a TField.<br><br>In my case, I wrapped my calls for saving out the 2d arrays with a function that took the 2d array, mapped it onto a 1d array, and then did the reverse when loading it.  My arrays are all equal in their x and y dimensions, so that went pretty easily.  I imagine that if people need this for non-square arrays, you could imbed data into the stream with that info. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >markcw</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> When trying to compile the module version of this I get an error.<br><br>Building test_module<br>Compiling:objload.bmx<br>Compile Error: Function can not return a value<br><br>Which is in this line but I don't understand what is going on, help?<br><pre class=code>'Compares two fields
+Function CompareFieldNames(o1:Object, o2:Object) 
+	Return TField(o1).Name().Compare(TField(o2).Name() ) ' ?
+End Function</pre> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Otus</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> markcw: Sorry, it should be <br><pre class=code>Function CompareFieldNames:Int(o1:Object, o2:Object)</pre><br>No idea how that slipped through... :p <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >markcw</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Oh great, thanks Otus. I was able to get it compiling by rem'ing them out and replacing the lines where they are called with the code here. Also, the update for TMap and TList is not in the module code. Must have slipped through eh? :) <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

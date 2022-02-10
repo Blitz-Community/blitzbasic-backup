@@ -1,0 +1,1269 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Help me optimise this!</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Help me optimise this!</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Help me optimise this!</a><br><br>
+<a name="1131490"></a>
+
+<a name="1131491"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jkrankie</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>I've been working on making a fast camera-aligned billboard sprite thing with OpenGL and minib3d. The target is to get as close to 100,000 scaled, rotated, blended quads with alpha rendering at 60fps as i can.<br><br>So far, i feel i'm getting pretty close to the target (100,000 at 27fps), but i think my maths brain is letting me down a little, thus i'm asking for some help!<br><br>I've got some relatively expensive stuff going on in the loop that generates the coords for the quad, and ideally i'd like to try and do away with some of it. The four points of the quad are calculated by getting the current modelview matrix, and getting an up and right vector. This bit is fairly quick i think, but to rotate the points i've been turning the matrix which is pretty slow due to sin, cos and atan2 calls, especially when it's being done 100,000 times per update.<br><br>What i *think* i should be able to do is rotate the points using the up and right vectors, or possibly the vectors for the quad points, but i've had no luck doing this so far.  Rotating the vectors i think is probably possible with minimal sin/cos calls, but i can't work out how to do it. It would also be cool to be able to offset the point of rotation with and x and y handle similar to max2d.<br><br>I'm also not using vertex arrays, which i imagine would speed things up a little too, but likely not as much as getting rid of the matrix rotation. <br><br>So my questions are:<br>•how can i rotate the points without rotating the matrix<br>•how can i offset the point of rotation with an x/y handle similar to max2d<br>•how do these vertex array things work anyway???<br><br>I'll post the code below, you'll need a version of minib3d to run it as i'm using it's camera class (i use warner's version which has proper rotations, you can grab it from the zip link towards the bottom of this page <a href="http://www.blitzbasic.com/codearcs/codearcs.php?code=2498" target="_blank">http://www.blitzbasic.com/codearcs/codearcs.php?code=2498</a> )<br><br>here's the code, you'll need to supply your own texture. when it's running you can use the arrows to spin around, and the a and z keys to move back and forward. I've commented it so it's a bit more understandable!<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+'import minib3d - you may have to change this line depending on which version you're using.
+Import warnersidesign.minib3d
+
+'1280*720 window at 60htz
+Graphics3D(1280, 720, 32, 2, 60)
+
+'you'll need to supply your own texture
+'load it and turn it into a gl texture.
+Local tx:TPixmap = LoadPixmap("blob.bmp")
+Global tex:Int = texfrompixmap(tx)
+
+'make a camera etc.
+Local centerpiv:TPivot = CreatePivot()
+Local cam:TCamera = CreateCamera(centerpiv)
+MoveEntity cam, 0, 0, -120
+CameraRange(cam, 0.1, 5000)
+Local light:TLight = CreateLight(, cam)
+
+'for some reason minib3d needs a tentity to be in view or alpha won't work properly
+'for non-minib3d drawing (haven't worked out why yet...), so add a cube in front of the camera and make it too small to see.
+Local cube:TMesh = CreateCube(cam)
+MoveEntity cube, 0, 0, 2
+ScaleEntity cube, 0.001, 0.001, 0.001
+
+'fps stuff
+Local timer:Int = 0
+Local old_ms:Int = MilliSecs()
+Local renders:Int = 0
+Local fps:Int
+
+'quad array
+Local quadpositions:quad[1000000]
+
+'quad class
+Type quad
+	Field x:Float, y:Float, z:Float
+	Field angle:Float = Rand(0, 359)
+	Field xscale:Float = 10, yscale:Float = 15
+	Field texx:Float = 0, texy:Float = 0, texw:Float = 1, texh:Float = 1
+	Field blend:Int = 1
+	Field xhandle:Float = 1, yhandle:Float = 1
+	Field v0:Int, v1:Int, v2:Int, v3:Int
+	Field r:Float = Rnd(1), g:Float = Rnd(1), b:Float = Rnd(1), Alpha:Float = 1
+	Field life:Float = 1
+	Field xv:Float, yv:Float, zv:Float
+EndType
+
+'make lots of quads
+For Local i:Int = 0 To 999999
+	quadpositions[i] = New quad
+	quadpositions[i].x = Rnd(-1000, 1000)
+	quadpositions[i].y = Rnd(-1000, 1000)
+	quadpositions[i].z = Rnd(-1000, 1000)
+	quadpositions[i].angle = Rand(359)
+	
+Next
+
+'variables to position, scale and rotate the quads
+Local mat:Float[16]'modelview matrix
+Local angMod:Float'
+Local Right:Float[3]'right vector
+Local up:Float[3]'up vector
+Local point0:Float[3]'vector
+Local point1:Float[3]'vector
+Local point2:Float[3]'vector
+Local point3:Float[3]'vector
+Local center:Float[3]'vector for center of quad
+Local v0:Float[3]'temporary vector
+Local m00:Float, m01:Float, m02:Float
+Local cos_ang:Float, sin_ang:Float
+
+While Not KeyHit(KEY_ESCAPE)
+	'rotate the center pivot and face the camera at the center of the world.
+	'using warner's minib3d as regular one doesn't have align to vector and rotations suffer from gimbal lock.
+	TurnEntity centerpiv, KeyDown(KEY_UP) - KeyDown(KEY_DOWN), KeyDown(KEY_LEFT) - KeyDown(KEY_RIGHT), 0
+	AlignToVector2(cam, 0, 0, 0, 3, 1)
+	
+	'If you're not using warner's minib3d, comment out the above line and un-comment the one below. the camera rotation won't work correctly though :(
+	'PointEntity cam,centerpiv
+	
+	'moce camera away/toward the center pivot
+	MoveEntity cam, 0, 0, (KeyDown(KEY_A) - KeyDown(KEY_Z)) * 10
+
+	'render world and calculate fps
+	RenderWorld
+	renders = renders + 1
+	If MilliSecs() - old_ms &gt;= 1000
+		old_ms=MilliSecs()
+		fps = renders
+		renders=0
+	EndIf
+	
+	'gl bits
+	glEnable(GL_TEXTURE_2D)
+	glEnable(GL_BLEND) ;
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE) ;
+	glDisable(GL_LIGHTING)
+	glEnable(GL_ALPHA)
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE) ;
+	glBindTexture(GL_TEXTURE_2D, tex)
+	glDisable(GL_DEPTH_TEST)
+	glEnable(GL_COLOR_MATERIAL)
+	glShadeModel(GL_SMOOTH) ;
+	glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+
+	'get the current modleview matrix and store it in our array so we can use it
+	glGetFloatv(GL_MODELVIEW_MATRIX, mat)
+
+	'begin drawing quads
+	glBegin(GL_QUADS)
+		'start looping! change the number here is you want more or less, don't worry about resizing the array above.
+                For Local i:Int = 0 To 99999
+		
+			'spin the quad!
+			quadpositions[i].angle:+2
+		
+			'get current matrix roll (or z axis) rotation
+			angMod:Float = ATan2(mat[4], mat[5])
+			
+			'get sin and cos values of the quad's angle taking into account what angle the matrix is already rotated to.
+			cos_ang:Float = Cos(quadpositions[i].angle - angMod)
+			sin_ang:Float = Sin(quadpositions[i].angle - angMod)
+			
+			'rotate matrix around z axis
+			m00:Float = (mat:Float[0] * cos_ang:Float) + (mat:Float[1] * sin_ang:Float)
+			m01:Float = (mat:Float[4] * cos_ang:Float) + (mat:Float[5] * sin_ang:Float)
+			m02:Float = (mat:Float[8] * cos_ang:Float) + (mat:Float[9] * sin_ang:Float)
+
+			mat[1] = (mat:Float[0] * - sin_ang:Float) + (mat:Float[1] * cos_ang:Float)
+			mat[5] = (mat:Float[4] * - sin_ang:Float) + (mat:Float[5] * cos_ang:Float)
+			mat[9] = (mat:Float[8] * - sin_ang:Float) + (mat:Float[9] * cos_ang:Float)
+	
+			mat[0] = m00:Float
+			mat[4] = m01:Float
+			mat[8] = m02:Float
+		
+			'set the up an right vectors to that of the matrix
+			vecSetPosition(Right, mat[0], mat[4], mat[8])
+			vecSetPosition(up, mat[1], mat[5], mat[9])
+			
+			'set the center vector to the x/y/z position to the quad's position
+			vecSetPosition(center, quadpositions[i].x, quadpositions[i].y, quadpositions[i].z)
+			
+			'scale the vectors according to the quad's x and y scale values
+			vecScale(Right, Right, quadpositions[i].xscale)
+			vecScale(up, up, quadpositions[i].yscale)
+					
+			'calculate point1
+			vecNegate(v0, Right)
+			vecSubtract(v0, v0, up)
+			vecAdd(point0, v0, center)
+			
+			'calculate point2
+			vecSubtract(v0, Right, up)
+			vecAdd(point1, v0, center)
+			
+			'calculate point3
+			vecAdd(v0, Right, up)
+			vecAdd(point2, v0, center)
+
+			'calculate point4
+			vecNegate(v0, Right)
+			vecAdd(v0, v0, up)
+			vecAdd(point3, v0, center)
+
+			'set the quad's color and alpha
+			glColor4f(quadpositions[i].r, quadpositions[i].g, quadpositions[i].b, quadpositions[i].Alpha:Float)
+			
+			'set tex coords and vertex positions
+			glTexCoord2d(quadpositions[i].texx + quadpositions[i].texw, quadpositions[i].texy + quadpositions[i].texh)
+			glVertex3f(point0[0], point0[1], point0[2])
+			
+			
+			glTexCoord2d(quadpositions[i].texx, quadpositions[i].texy + quadpositions[i].texh)
+			glVertex3f(point1[0], point1[1], point1[2])
+			
+			glTexCoord2d(quadpositions[i].texx, quadpositions[i].texy)
+			glVertex3f(point2[0], point2[1], point2[2])
+				
+			glTexCoord2d(quadpositions[i].texx + quadpositions[i].texw, quadpositions[i].texy)
+			glVertex3f(point3[0], point3[1], point3[2])
+		
+
+		Next
+	glEnd()
+	
+	
+	glEnable(GL_DEPTH_TEST)
+	
+	
+	BeginMax2D()
+		DrawText fps, 10, 10
+	EndMax2D()
+	Flip 0
+	
+	Cls
+
+
+Wend
+
+
+'a whole bunch of vector functions! These are mostly converted from minib3d's TVector.bmx.
+'the vector object in TVector.bmx creates a new object in most of it's methods, which is fine, but
+'a bit slow when being use in a large loop.
+'in most cases, the first parameter is given the result. for example, a=b+c would
+'translate to vecAdd(a,b,c) i.e, assign to  a the value of b+c. Or for a=a*b would be vecMultily(a,a,b).
+Function vecSetPosition(dest:Float[] Var, val1:Float, val2:Float, val3:Float)
+	dest[0] = val1
+	dest[1] = val2
+	dest[2] = val3
+End Function
+
+
+Function vecAdd(dest:Float[] Var, val:Float[], val2:Float[])
+	dest[0] = val[0] + val2[0]
+	dest[1] = val[1] + val2[1]
+	dest[2] = val[2] + val2[2]
+End Function
+
+Function vecSubtract(dest:Float[] Var, val:Float[], val2:Float[])
+	dest[0] = val[0] - val2[0]
+	dest[1] = val[1] - val2[1]
+	dest[2] = val[2] - val2[2]
+End Function
+
+Function vecNegate(dest:Float[] Var, val:Float[])
+	dest[0] = - val[0]
+	dest[1] = - val[1]
+	dest[2] = - val[2]
+End Function
+
+Function vecMultiply(dest:Float[] Var, val:Float[], val2:Float[])
+	dest[0] = val[0] * val2[0]
+	dest[1] = val[1] * val2[1]
+	dest[2] = val[2] * val2[2]
+End Function
+
+Function vecMultiplySingleValue(dest:Float[] Var, val:Float[], val2:Float)
+	dest[0] = val[0] * val2
+	dest[1] = val[1] * val2
+	dest[2] = val[2] * val2
+End Function
+
+Function vecDivide(dest:Float[] Var, val:Float[], val2:Float[])
+	dest[0] = val[0] / val2[0]
+	dest[1] = val[1] / val2[1]
+	dest[2] = val[2] / val2[2]
+EndFunction
+
+Function vecCopy(dest:Float[] Var, val:Float[])
+	dest[0] = val[0]
+	dest[1] = val[1]
+	dest[2] = val[2]
+End Function
+
+Function vecDotProduct:Float(val:Float[], val2:Float[])
+	Return (val[0] * val2[0]) + (val[1] * val2[1]) + (val[2] * val2[2])
+End Function
+
+Function vecCrossProduct(dest:Float[] Var, val:Float[], val2:Float[])
+	dest[0] = (val[1] * val2[2]) - (val[2] * val2[1])
+	dest[1] = (val[2] * val2[0]) - (val[0] * val2[2])
+	dest[2] = (val[0] * val2[1]) - (val[1] * val2[0])
+EndFunction
+
+Function vecNormalize(dest:Float[] Var)
+	Local d:Float = 1 / Sqr(dest[0] * dest[0] + dest[1] * dest[1] + dest[2] * dest[2])
+	dest[0] = dest[0] * d
+	dest[1] = dest[1] * d
+	dest[2] = dest[2] * d
+End Function
+
+Function vecLength:Float(dest:Float[])
+	Return Sqr(dest[0] * dest[0] + dest[1] * dest[1] + dest[2] * dest[2])
+End Function
+
+Function vecSquaredLength:Float(dest:Float[])
+	Return (dest[0] * dest[0] + dest[1] * dest[1] + dest[2] * dest[2])
+EndFunction
+
+Function vecSetLength(dest:Float[] Var, val:Float)
+	vecNormalize(dest)
+	dest[0] = dest[0] * val
+	dest[1] = dest[1] * val
+	dest[2] = dest[2] * val
+End Function
+
+Function vecCompare:Int(dest:Float[], val:Float[])
+	Const EPSILON:Float =.0001
+	If dest[0] - val[0] &gt; EPSILON Return 1
+	If val[0] - dest[0] &gt; EPSILON Return - 1
+	If dest[1] - val[1] &gt; EPSILON Return 1
+	If val[1] - dest[1] &gt; EPSILON Return - 1
+	If dest[2] - val[2] &gt; EPSILON Return 1
+	If val[2] - dest[2] &gt; EPSILON Return - 1
+	Return 0
+End Function
+
+Function vecYaw:Float(dest:Float[])
+	Return ATan2(-dest[0], dest[2])
+End Function
+
+Function vecPitch:Float(dest:Float[])
+	Local ang:Float = ATan2(Sqr(dest[0] * dest[0] + dest[2] * dest[2]), dest[1]) - 90.0
+	If ang:Float &lt;= 0.0001 And ang:Float &gt;= - 0.0001 Then ang:Float = 0
+	Return ang:Float
+End Function
+
+Function vecScale(dest:Float[] Var, val:Float[], Scale:Float)
+	dest[0] = val[0] * Scale
+	dest[1] = val[1] * Scale
+	dest[2] = val[2] * Scale
+End Function
+
+Function vecReflect(dest:Float[] Var, val:Float[])
+	Local f:Float = 2 * vecDotproduct(dest, val)
+	vecScale(val, val, f)
+	vecSubtract(dest, dest, val)
+End Function
+
+Function vecFloor(dest:Float[] Var, val:Float[])
+	If val[0] &lt; dest[0] Then dest[0] = val[0]
+	If val[1] &lt; dest[1] Then dest[1] = val[1]
+	If val[2] &lt; dest[2] Then dest[2] = val[2]
+End Function
+
+Function vecCeil(dest:Float[] Var, val:Float[])
+	If dest[0] &gt; val[0] Then dest[0] = val[0]
+	If dest[1] &gt; val[1] Then dest[1] = val[1]
+	If dest[2] &gt; val[2] Then dest[2] = val[2]
+End Function
+
+Function vecRotate(dest:Float[], angle:Float, center:Float[], point:Float[])
+	Local cosTheta:Float = Cos(angle), sinTheta:Float = Sin(angle)
+	
+	Local f:Float[3]
+	vecPerpendicular(f, point, center)
+	vecMultiplySingleValue(f, f, cosTheta)
+	
+	Local j:Float[3]
+	vecCrossProduct(j, center, point)
+	vecMultiplySingleValue(f, f, sinTheta)
+	
+	Local k:Float[3]
+	vecParralel(k, point, center)
+	
+	vecAdd(dest, f, j)
+	vecAdd(dest, dest, k)
+	
+	
+End Function
+
+Function vecPerpendicular(dest:Float[], val:Float[], val2:Float[])
+	Local f:Float[3]
+	vecParralel(f, val, val2)
+	vecSubtract(dest, val, f)
+End Function
+
+Function vecParralel(dest:Float[], val:Float[], val2:Float[])
+	vecMultiplySingleValue(dest, val2, vecDotProduct(val, val2))
+End Function
+
+
+'texture loading functions
+Function AdjustTexSize(width:Int Var, Height:Int Var)
+	Function Pow2Size:Int(N:Int)
+		Local Size:Int
+
+		Size = 1
+		While Size &lt; N
+			Size = Size Shl 1
+		Wend
+
+		Return Size
+	End Function
+
+	Width  = Pow2Size(Width)
+	Height = Pow2Size(Height)
+End Function
+
+Function TexFromPixmap:Int(pixmap:TPixmap, mipmap:Int = True)
+	If pixmap.format&lt;&gt;PF_RGBA8888 pixmap=pixmap.Convert( PF_RGBA8888 )
+	Local width:Int=pixmap.width,height:Int=pixmap.height
+	AdjustTexSize width,height
+	If width&lt;&gt;pixmap.width Or height&lt;&gt;pixmap.height pixmap=ResizePixmap( pixmap,width,height )
+	
+	Local old_name:Int,old_row_len:Int
+	glGetIntegerv GL_TEXTURE_BINDING_2D,Varptr old_name
+	glGetIntegerv GL_UNPACK_ROW_LENGTH,Varptr old_row_len
+
+	Local Name:Int
+	glGenTextures 1,Varptr name
+	glBindtexture GL_TEXTURE_2D,name
+	
+	Local mip_level:Int
+	Repeat
+		glPixelStorei GL_UNPACK_ROW_LENGTH,pixmap.pitch/BytesPerPixel[pixmap.format]
+		glTexImage2D(GL_TEXTURE_2D, mip_level, GL_RGBA8, Width, Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixmap.Pixels)
+		If Not mipmap Exit
+		If width=1 And height=1 Exit
+		If width&gt;1 width:/2
+		If height&gt;1 height:/2
+		pixmap=ResizePixmap( pixmap,width,height )
+		mip_level:+1
+	Forever
+	
+	glBindTexture GL_TEXTURE_2D,old_name
+	glPixelStorei GL_UNPACK_ROW_LENGTH,old_row_len
+
+	Return name
+End Function
+
+
+</textarea><br><br>Any help would be much appreciated! Even as it stands, it's waaaaaaaaay faster than rendering sprites with minib3d. Feel free to use it yourself in you own minib3d projects too! <br><br>Cheers<br>Charlie<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1131509"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Did you see this yet?<br><a href="http://blitzmax.com/Community/posts.php?topic=97172#1127059" target="_blank">http://blitzmax.com/Community/posts.php?topic=97172#1127059</a><br><br>you'd have to convert it over yourself from monkey. i intend do this soon, but haven't yet.<br><br>it uses minib3d surfaces, and each quad is added to a single surface, but maintains independent positioning, parenting, etc. therefore, it's only one glDrawElements() call for however many sprites you have. <br><br><br>As for your code above, since BlitzMax does not inline code, you would benefit most from that with vecSubtract, vecAdd,-- you should try to get the equation into one compact line for determining the quad vectors. <br><br>your questions:<br>1. rotating sprites: it'd be better with the matrix, easier to manage rotation if you are using a 3d camera. the way i approached the problem was to have a single point of origin, then draw the quad from that single point's matrix.<br><br>2. offset the sprite rotation origin: if sprites are treated as a single point, the quad is figured out by multiplying the corner points with the transform matrix. so you just move your corner points. example from the code from above link<br><pre class=code>
+			'p0 = mat_sp.TransformPoint(-1.0,-1.0,0.0)
+			p0 = [-m00 + -m10 + o[0] , -m01 + -m11 + o[1], m02 + m12 - o[2]]		
+			'p1 = mat_sp.TransformPoint(-1.0,1.0,0.0)		
+			p1 = [-m00 + m10 + o[0] , -m01 + m11 + o[1], m02 - m12 - o[2]]	
+			'p2 = mat_sp.TransformPoint(1.0,1.0,0.0)
+			p2 = [m00 + m10 + o[0] , m01 + m11 + o[1], -m02 - m12 - o[2]]			
+			'p3 = mat_sp.TransformPoint(1.0,-1.0,0.0)
+			p3 = [m00 - m10 + o[0] , m01 - m11 + o[1], -m02 + m12 - o[2]]
+</pre><br>i kept comments in there to show how i optimized from a matrix call to an inline calculation. but anyways, to offset the origin rotation, the quads corners are -1,-1 and 1,1, so the quad is centered. to offset to top left would be 0,0 and 2,2. to offset further top left would be 2,2 to 4,4. and so on<br><br>3. buffer arrays (assuming not vbo) are rather easy:<br><pre class=code>
+		glEnableClientState(GL_VERTEX_ARRAY)
+		glVertexPointer(3, GL_FLOAT, 0, FloatPtrToYourVertexArray )
+		
+		glDrawArrays(GL_TRIANGLES, 0, vertices.Length()/3) 
+		glDisableClientState(GL_VERTEX_ARRAY)
+</pre><br>the trick is setting the vertex and texture array correctly, but with quads it's an array of 6 vertices * xyz ( [x,y,z,  x,y,z,  x,y,z,   ..etc]) where z=0. but then you multiply your points through the matrix (optimized). <br><br></td></tr></table><br>
+<a name="1131512"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> more on buffer arrays and vbos:<br><a href="http://www.songho.ca/opengl/gl_vertexarray.html" target="_blank">http://www.songho.ca/opengl/gl_vertexarray.html</a> <br><br></td></tr></table><br>
+<a name="1131515"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Why aren't you using glRotate() and glTranslate() instead of trying to make your own matrix for rotation?<br><br>Also what is the fill rate for your graphics card and are you getting close to it? <br><br></td></tr></table><br>
+<a name="1131517"></a>
+
+<a name="1131518"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jkrankie</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> @adam, thanks. I've seen your code, but i've not ported it over to max. My experiments with single surface stuff in minib3d have not been anywhere near as quick as what i've got above. I'd be interested to know how fast yours is. Also, i guess i should say this isn't intended to be a replacement/optimisation for minib3d sprites.<br><br>I should probably qualify that i don't think that what i've written is slow per-se, just that i can't *quite* get the 100,000 quads with matrix rotation. If i turn the rotations off it runs 100,000 at 64fps, which is close, if i optimise with vertex+texcoord arrays i should get that number higher too leaving more room for the rotation calculation.<br><br>I'll definitely try generating the quad corner points via your method above, that should save a bit of time. I'm only using a single point to store the position. if i can offset things there too that's even better!<br><br>What kind of a speed boost would i likely get from using vertex arrays?<br><br><br>@ImaginaryHuman, i did a version using the build in matrix commands, but i couldn't get it going quick enough, and i had to generate and store the world positions of each of the quads corners so i could draw them all at once.<br><br>Don't know what the fill rate of my gfx card is (how would i find out????), but i'm getting close. as i mentioned above i can get 64fps with 100,000 scaled but unrotated quads.<br><br>Cheers<br>Charlie<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1131544"></a>
+
+<a name="1131546"></a>
+
+<a name="1131554"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> using vertex arrays and inlining functions:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+SuperStrict
+
+'import minib3d - you may have to change this line depending on which version you're using.
+Import warnersidesign.minib3d
+'Import "../minib3d/minib3d.bmx"
+
+'1280*720 window at 60htz
+Graphics3D(1024, 640, 32, 2, 60)
+
+'you'll need to supply your own texture
+'load it and turn it into a gl texture.
+Local tx:TPixmap = LoadPixmap("bot1.png")
+Global tex:Int = texfrompixmap(tx)
+
+'make a camera etc.
+Local centerpiv:TPivot = CreatePivot()
+Local cam:TCamera = CreateCamera(centerpiv)
+MoveEntity cam, 0, 0, -120
+CameraRange(cam, 0.1, 5000)
+Local light:TLight = CreateLight(, cam)
+
+'for some reason minib3d needs a tentity to be in view or alpha won't work properly
+'for non-minib3d drawing (haven't worked out why yet...), so add a cube in front of the camera and make it too small to see.
+Local cube:TMesh = CreateCube(cam)
+MoveEntity cube, 0, 0, 2
+ScaleEntity cube, 0.001, 0.001, 0.001
+
+'fps stuff
+Local timer:Int = 0
+Local old_ms:Int = MilliSecs()
+Local renders:Int = 0
+Local fps:Int
+
+
+Const TOTAL:Int = 100000
+
+'quad array
+Local quadpositions:quad[TOTAL]
+
+'quad class
+Type quad
+	Field x:Float, y:Float, z:Float
+	Field angle:Float = Rand(0, 359)
+	Field xscale:Float = 10, yscale:Float = 15
+	Field texx:Float = 0, texy:Float = 0, texw:Float = 1, texh:Float = 1
+	Field blend:Int = 1
+	Field xhandle:Float = 1, yhandle:Float = 1
+	Field v0:Int, v1:Int, v2:Int, v3:Int
+	Field r:Float = Rnd(1), g:Float = Rnd(1), b:Float = Rnd(1), Alpha:Float = 1
+	Field life:Float = 1
+	Field xv:Float, yv:Float, zv:Float
+	
+	Field newcolor:Int =1
+	Field newtex:Int = 1
+EndType
+
+'make lots of quads
+For Local i:Int = 0 To TOTAL-1
+	quadpositions[i] = New quad
+	quadpositions[i].x = Rnd(-1000, 1000)
+	quadpositions[i].y = Rnd(-1000, 1000)
+	quadpositions[i].z = Rnd(-1000, 1000)
+	quadpositions[i].angle = Rand(359)
+	
+Next
+
+'variables to position, scale and rotate the quads
+Local mat:Float[16]'modelview matrix
+Local angMod:Float'
+Local Right:Float[3]'right vector
+Local up:Float[3]'up vector
+Local point0:Float[3]'vector
+Local point1:Float[3]'vector
+Local point2:Float[3]'vector
+Local point3:Float[3]'vector
+Local center:Float[3]'vector for center of quad
+Local v0:Float[3]'temporary vector
+Local m00:Float, m01:Float, m02:Float
+Local cos_ang:Float, sin_ang:Float
+
+
+Local array_once:Int =1
+
+Local vert_array:Float[TOTAL*3*4] ''x,y,z for 4 verts (4=quads, 6=triangles)
+Local color_array:Float[TOTAL*4*4] ''rgba
+Local tex_array:Float[TOTAL*2*4] ''u,v for 4 tex coords 
+
+While Not KeyHit(KEY_ESCAPE)
+	'rotate the center pivot and face the camera at the center of the world.
+	'using warner's minib3d as regular one doesn't have align to vector and rotations suffer from gimbal lock.
+	TurnEntity centerpiv, KeyDown(KEY_UP) - KeyDown(KEY_DOWN), KeyDown(KEY_LEFT) - KeyDown(KEY_RIGHT), 0
+	'AlignToVector(cam, 0, 0, 0, 3, 1)
+	
+	'If you're not using warner's minib3d, comment out the above line and un-comment the one below. the camera rotation won't work correctly though :(
+	'PointEntity cam,centerpiv
+	
+	'moce camera away/toward the center pivot
+	MoveEntity cam, 0, 0, (KeyDown(KEY_A) - KeyDown(KEY_Z)) * 10
+
+	'render world and calculate fps
+	RenderWorld
+	renders = renders + 1
+	If MilliSecs() - old_ms &gt;= 1000
+		old_ms=MilliSecs()
+		fps = renders
+		renders=0
+	EndIf
+	
+	'gl bits
+	glEnable(GL_TEXTURE_2D)
+	glEnable(GL_BLEND) ;
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE) ;
+	glDisable(GL_LIGHTING)
+	glEnable(GL_ALPHA)
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE) ;
+	glBindTexture(GL_TEXTURE_2D, tex)
+	glDisable(GL_DEPTH_TEST)
+	glEnable(GL_COLOR_MATERIAL)
+	glShadeModel(GL_SMOOTH) ;
+	glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+
+	'get the current modleview matrix and store it in our array so we can use it
+	glGetFloatv(GL_MODELVIEW_MATRIX, mat)
+
+	'begin drawing quads
+	'glBegin(GL_QUADS)
+		'start looping! change the number here is you want more or less, don't worry about resizing the array above.
+                For Local i:Int = 0 To TOTAL-1
+			
+			
+			
+			'spin the quad!
+			quadpositions[i].angle:+2
+		
+			'get current matrix roll (or z axis) rotation
+			angMod:Float = ATan2(mat[4], mat[5])
+			
+			'get sin and cos values of the quad's angle taking into account what angle the matrix is already rotated to.
+			cos_ang:Float = Cos(quadpositions[i].angle - angMod)
+			sin_ang:Float = Sin(quadpositions[i].angle - angMod)
+			
+			'rotate matrix around z axis
+			m00:Float = (mat:Float[0] * cos_ang:Float) + (mat:Float[1] * sin_ang:Float)
+			m01:Float = (mat:Float[4] * cos_ang:Float) + (mat:Float[5] * sin_ang:Float)
+			m02:Float = (mat:Float[8] * cos_ang:Float) + (mat:Float[9] * sin_ang:Float)
+
+			mat[1] = (mat:Float[0] * - sin_ang:Float) + (mat:Float[1] * cos_ang:Float)
+			mat[5] = (mat:Float[4] * - sin_ang:Float) + (mat:Float[5] * cos_ang:Float)
+			mat[9] = (mat:Float[8] * - sin_ang:Float) + (mat:Float[9] * cos_ang:Float)
+	
+			mat[0] = m00:Float
+			mat[4] = m01:Float
+			mat[8] = m02:Float
+		
+			'set the up an right vectors to that of the matrix
+			'vecSetPosition(Right, mat[0], mat[4], mat[8])
+			Right[0]= mat[0]* quadpositions[i].xscale
+			Right[1]= mat[4]* quadpositions[i].xscale
+			Right[2]= mat[8]* quadpositions[i].xscale
+			'vecSetPosition(up, mat[1], mat[5], mat[9])
+			up[0]= mat[1]* quadpositions[i].yscale
+			up[1]= mat[5]* quadpositions[i].yscale
+			up[2]= mat[9]* quadpositions[i].yscale
+			
+			'set the center vector to the x/y/z position to the quad's position
+			'vecSetPosition(center, quadpositions[i].x, quadpositions[i].y, quadpositions[i].z)
+			center[0] = quadpositions[i].x
+			center[1] = quadpositions[i].y
+			center[2] = quadpositions[i].z
+			
+			'scale the vectors according to the quad's x and y scale values
+			'vecScale(Right, Right, quadpositions[i].xscale)
+			'vecScale(up, up, quadpositions[i].yscale)
+
+			
+
+			''for each vertex
+			Local i18:Int = i*12
+			
+			'calculate point1
+			'vecNegate(v0, Right)
+			'vecSubtract(v0, [-v0[0],-v0[1],-v0[2]], up)
+			'vecAdd(point0, v0, center)
+			
+			vert_array[i18+0] = -Right[0]-up[0]+center[0]'point0[0] 
+			vert_array[i18+1] = -Right[1]-up[1]+center[1]'point0[1]
+			vert_array[i18+2] = -Right[2]-up[2]+center[2]'point0[2]
+			
+			'calculate point2
+			'vecSubtract(v0, Right, up)
+			'vecAdd(point1, v0, center)
+			
+			vert_array[i18+3] = Right[0]-up[0]+center[0]'point1[0] 
+			vert_array[i18+4] = Right[1]-up[1]+center[1]'point1[1]
+			vert_array[i18+5] = Right[2]-up[2]+center[2]'point1[2]
+			
+			'calculate point3
+			'vecAdd(v0, Right, up)
+			'vecAdd(point2, v0, center)
+			
+			vert_array[i18+6] = Right[0]+up[0]+center[0]'point2[0]
+			vert_array[i18+7] = Right[1]+up[1]+center[1]'point2[1]
+			vert_array[i18+8] = Right[2]+up[2]+center[2]'point2[2]
+			
+			'calculate point4
+			'vecNegate(v0, Right)
+			'vecAdd(v0, [-v0[0],-v0[1],-v0[2]], up)
+			'vecAdd(point3, v0, center)
+			
+			vert_array[i18+9] = -Right[0]+up[0]+center[0]'point3[0]
+			vert_array[i18+10] = -Right[1]+up[1]+center[1]'point3[1]
+			vert_array[i18+11] = -Right[2]+up[2]+center[2]'point3[2]
+			
+			If quadpositions[i].newtex
+				Local i2:Int = i*8
+				
+				quadpositions[i].newtex=0
+				
+				tex_array[i2+0] = quadpositions[i].texx + quadpositions[i].texw
+				tex_array[i2+1] = quadpositions[i].texy + quadpositions[i].texh
+				'tex_array[i2+2] = 0
+				
+				tex_array[i2+2] = quadpositions[i].texx
+				tex_array[i2+3] = quadpositions[i].texy + quadpositions[i].texh
+				'tex_array[i2+5] = 0
+				
+				tex_array[i2+4] = quadpositions[i].texx 
+				tex_array[i2+5] = quadpositions[i].texy 
+				'tex_array[i2+8] = 0
+				
+				tex_array[i2+6] = quadpositions[i].texx + quadpositions[i].texw
+				tex_array[i2+7] = quadpositions[i].texy
+				'tex_array[i2+17] = 0
+			EndIf
+			
+			If quadpositions[i].newcolor
+				Local i4:Int = i*4*4
+				
+				quadpositions[i].newcolor=0
+				
+				color_array[i4+0] = quadpositions[i].r
+				color_array[i4+1] = quadpositions[i].g
+				color_array[i4+2] = quadpositions[i].b
+				color_array[i4+3] = quadpositions[i].Alpha
+				
+				color_array[i4+4] = quadpositions[i].r
+				color_array[i4+5] = quadpositions[i].g
+				color_array[i4+6] = quadpositions[i].b
+				color_array[i4+7] = quadpositions[i].Alpha
+				
+				color_array[i4+8] = quadpositions[i].r
+				color_array[i4+9] = quadpositions[i].g
+				color_array[i4+10] = quadpositions[i].b
+				color_array[i4+11] = quadpositions[i].Alpha
+				
+				color_array[i4+12] = quadpositions[i].r
+				color_array[i4+13] = quadpositions[i].g
+				color_array[i4+14] = quadpositions[i].b
+				color_array[i4+15] = quadpositions[i].Alpha
+		
+			EndIf
+			
+		Next
+
+			glEnableClientState(GL_VERTEX_ARRAY)
+			glEnableClientState(GL_COLOR_ARRAY)
+			glEnableClientState(GL_TEXTURE_COORD_ARRAY)
+			
+			glVertexPointer(3, GL_FLOAT, 0, Float Ptr(vert_array) )
+			glTexCoordPointer(2, GL_FLOAT, 0, Float Ptr(tex_array) )
+			glColorPointer(4, GL_FLOAT, 0, color_array )
+
+
+			glDrawArrays(GL_QUADS, 0, Int(TOTAL)*4 ) ''4 indices per quad
+			
+			'glDisableClientState(GL_VERTEX_ARRAY)
+			'glDisableClientState(GL_TEXTURE_COORD_ARRAY)
+			
+			'set the quad's color and alpha
+			'glColor4f(quadpositions[i].r, quadpositions[i].g, quadpositions[i].b, quadpositions[i].Alpha:Float)
+			
+			'set tex coords and vertex positions
+			'glTexCoord2d(quadpositions[i].texx + quadpositions[i].texw, quadpositions[i].texy + quadpositions[i].texh)
+			'glVertex3f(point0[0], point0[1], point0[2])
+			
+			
+			'glTexCoord2d(quadpositions[i].texx, quadpositions[i].texy + quadpositions[i].texh)
+			'glVertex3f(point1[0], point1[1], point1[2])
+			
+			'glTexCoord2d(quadpositions[i].texx, quadpositions[i].texy)
+			'glVertex3f(point2[0], point2[1], point2[2])
+				
+			'glTexCoord2d(quadpositions[i].texx + quadpositions[i].texw, quadpositions[i].texy)
+			'glVertex3f(point3[0], point3[1], point3[2])
+		
+
+		
+	'glEnd()
+	
+	
+	glEnable(GL_DEPTH_TEST)
+	
+	
+	BeginMax2D()
+		DrawText fps, 10, 10
+	EndMax2D()
+	Flip 0
+	
+	Cls
+
+
+Wend
+
+
+'a whole bunch of vector functions! These are mostly converted from minib3d's TVector.bmx.
+'the vector object in TVector.bmx creates a new object in most of it's methods, which is fine, but
+'a bit slow when being use in a large loop.
+'in most cases, the first parameter is given the result. for example, a=b+c would
+'translate to vecAdd(a,b,c) i.e, assign to  a the value of b+c. Or for a=a*b would be vecMultily(a,a,b).
+Function vecSetPosition(dest:Float[] Var, val1:Float, val2:Float, val3:Float)
+	dest[0] = val1
+	dest[1] = val2
+	dest[2] = val3
+End Function
+
+
+Function vecAdd(dest:Float[] Var, val:Float[], val2:Float[])
+	dest[0] = val[0] + val2[0]
+	dest[1] = val[1] + val2[1]
+	dest[2] = val[2] + val2[2]
+End Function
+
+Function vecSubtract(dest:Float[] Var, val:Float[], val2:Float[])
+	dest[0] = val[0] - val2[0]
+	dest[1] = val[1] - val2[1]
+	dest[2] = val[2] - val2[2]
+End Function
+
+Function vecNegate(dest:Float[] Var, val:Float[])
+	dest[0] = - val[0]
+	dest[1] = - val[1]
+	dest[2] = - val[2]
+End Function
+
+Function vecMultiply(dest:Float[] Var, val:Float[], val2:Float[])
+	dest[0] = val[0] * val2[0]
+	dest[1] = val[1] * val2[1]
+	dest[2] = val[2] * val2[2]
+End Function
+
+Function vecMultiplySingleValue(dest:Float[] Var, val:Float[], val2:Float)
+	dest[0] = val[0] * val2
+	dest[1] = val[1] * val2
+	dest[2] = val[2] * val2
+End Function
+
+Function vecDivide(dest:Float[] Var, val:Float[], val2:Float[])
+	dest[0] = val[0] / val2[0]
+	dest[1] = val[1] / val2[1]
+	dest[2] = val[2] / val2[2]
+EndFunction
+
+Function vecCopy(dest:Float[] Var, val:Float[])
+	dest[0] = val[0]
+	dest[1] = val[1]
+	dest[2] = val[2]
+End Function
+
+Function vecDotProduct:Float(val:Float[], val2:Float[])
+	Return (val[0] * val2[0]) + (val[1] * val2[1]) + (val[2] * val2[2])
+End Function
+
+Function vecCrossProduct(dest:Float[] Var, val:Float[], val2:Float[])
+	dest[0] = (val[1] * val2[2]) - (val[2] * val2[1])
+	dest[1] = (val[2] * val2[0]) - (val[0] * val2[2])
+	dest[2] = (val[0] * val2[1]) - (val[1] * val2[0])
+EndFunction
+
+Function vecNormalize(dest:Float[] Var)
+	Local d:Float = 1 / Sqr(dest[0] * dest[0] + dest[1] * dest[1] + dest[2] * dest[2])
+	dest[0] = dest[0] * d
+	dest[1] = dest[1] * d
+	dest[2] = dest[2] * d
+End Function
+
+Function vecLength:Float(dest:Float[])
+	Return Sqr(dest[0] * dest[0] + dest[1] * dest[1] + dest[2] * dest[2])
+End Function
+
+Function vecSquaredLength:Float(dest:Float[])
+	Return (dest[0] * dest[0] + dest[1] * dest[1] + dest[2] * dest[2])
+EndFunction
+
+Function vecSetLength(dest:Float[] Var, val:Float)
+	vecNormalize(dest)
+	dest[0] = dest[0] * val
+	dest[1] = dest[1] * val
+	dest[2] = dest[2] * val
+End Function
+
+Function vecCompare:Int(dest:Float[], val:Float[])
+	Const EPSILON:Float =.0001
+	If dest[0] - val[0] &gt; EPSILON Return 1
+	If val[0] - dest[0] &gt; EPSILON Return - 1
+	If dest[1] - val[1] &gt; EPSILON Return 1
+	If val[1] - dest[1] &gt; EPSILON Return - 1
+	If dest[2] - val[2] &gt; EPSILON Return 1
+	If val[2] - dest[2] &gt; EPSILON Return - 1
+	Return 0
+End Function
+
+Function vecYaw:Float(dest:Float[])
+	Return ATan2(-dest[0], dest[2])
+End Function
+
+Function vecPitch:Float(dest:Float[])
+	Local ang:Float = ATan2(Sqr(dest[0] * dest[0] + dest[2] * dest[2]), dest[1]) - 90.0
+	If ang:Float &lt;= 0.0001 And ang:Float &gt;= - 0.0001 Then ang:Float = 0
+	Return ang:Float
+End Function
+
+Function vecScale(dest:Float[] Var, val:Float[], Scale:Float)
+	dest[0] = val[0] * Scale
+	dest[1] = val[1] * Scale
+	dest[2] = val[2] * Scale
+End Function
+
+Function vecReflect(dest:Float[] Var, val:Float[])
+	Local f:Float = 2 * vecDotproduct(dest, val)
+	vecScale(val, val, f)
+	vecSubtract(dest, dest, val)
+End Function
+
+Function vecFloor(dest:Float[] Var, val:Float[])
+	If val[0] &lt; dest[0] Then dest[0] = val[0]
+	If val[1] &lt; dest[1] Then dest[1] = val[1]
+	If val[2] &lt; dest[2] Then dest[2] = val[2]
+End Function
+
+Function vecCeil(dest:Float[] Var, val:Float[])
+	If dest[0] &gt; val[0] Then dest[0] = val[0]
+	If dest[1] &gt; val[1] Then dest[1] = val[1]
+	If dest[2] &gt; val[2] Then dest[2] = val[2]
+End Function
+
+Function vecRotate(dest:Float[], angle:Float, center:Float[], point:Float[])
+	Local cosTheta:Float = Cos(angle), sinTheta:Float = Sin(angle)
+	
+	Local f:Float[3]
+	vecPerpendicular(f, point, center)
+	vecMultiplySingleValue(f, f, cosTheta)
+	
+	Local j:Float[3]
+	vecCrossProduct(j, center, point)
+	vecMultiplySingleValue(f, f, sinTheta)
+	
+	Local k:Float[3]
+	vecParralel(k, point, center)
+	
+	vecAdd(dest, f, j)
+	vecAdd(dest, dest, k)
+	
+	
+End Function
+
+Function vecPerpendicular(dest:Float[], val:Float[], val2:Float[])
+	Local f:Float[3]
+	vecParralel(f, val, val2)
+	vecSubtract(dest, val, f)
+End Function
+
+Function vecParralel(dest:Float[], val:Float[], val2:Float[])
+	vecMultiplySingleValue(dest, val2, vecDotProduct(val, val2))
+End Function
+
+
+'texture loading functions
+Function AdjustTexSize(width:Int Var, Height:Int Var)
+	Function Pow2Size:Int(N:Int)
+		Local Size:Int
+
+		Size = 1
+		While Size &lt; N
+			Size = Size Shl 1
+		Wend
+
+		Return Size
+	End Function
+
+	Width  = Pow2Size(Width)
+	Height = Pow2Size(Height)
+End Function
+
+Function TexFromPixmap:Int(pixmap:TPixmap, mipmap:Int = True)
+	If pixmap.format&lt;&gt;PF_RGBA8888 pixmap=pixmap.Convert( PF_RGBA8888 )
+	Local width:Int=pixmap.width,height:Int=pixmap.height
+	AdjustTexSize width,height
+	If width&lt;&gt;pixmap.width Or height&lt;&gt;pixmap.height pixmap=ResizePixmap( pixmap,width,height )
+	
+	Local old_name:Int,old_row_len:Int
+	glGetIntegerv GL_TEXTURE_BINDING_2D,Varptr old_name
+	glGetIntegerv GL_UNPACK_ROW_LENGTH,Varptr old_row_len
+
+	Local Name:Int
+	glGenTextures 1,Varptr name
+	glBindtexture GL_TEXTURE_2D,name
+	
+	Local mip_level:Int
+	Repeat
+		glPixelStorei GL_UNPACK_ROW_LENGTH,pixmap.pitch/BytesPerPixel[pixmap.format]
+		glTexImage2D(GL_TEXTURE_2D, mip_level, GL_RGBA8, Width, Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixmap.Pixels)
+		If Not mipmap Exit
+		If width=1 And height=1 Exit
+		If width&gt;1 width:/2
+		If height&gt;1 height:/2
+		pixmap=ResizePixmap( pixmap,width,height )
+		mip_level:+1
+	Forever
+	
+	glBindTexture GL_TEXTURE_2D,old_name
+	glPixelStorei GL_UNPACK_ROW_LENGTH,old_row_len
+
+	Return name
+End Function
+
+</textarea><br><br>EDIT: made a mistake, need to *4<br><br>19 fps  with an intel g41 IGP for TOTAL=100000.<br>*** not in DEBUG mode<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1131551"></a>
+
+<a name="1131552"></a>
+
+<a name="1131553"></a>
+
+<a name="1131560"></a>
+
+<a name="1131561"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> You could even skip odd/even sprites every other frame, if your sprites are in the background and not essential for smooth updates.<br><pre class=code>
+local alter:int =0
+alter = 1-alter
+	'begin drawing quads
+	'glBegin(GL_QUADS)
+		'start looping! change the number here is you want more or less, don't worry about resizing the array above.
+                For Local i:Int = alter To TOTAL-1 step 2
+
+''....etc....
+</pre><br><br>Do you need more optimizing? if so, I'd go opengl2.0 shaders.<br><br>P.S. interleaving draw arrays had no noticeable effect on my end<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1131565"></a>
+
+<a name="1131567"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jkrankie</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oooh, very nice! thanks very much :)<br><br>It's quite a bit quicker actually! Nearly double the speed here, up from 27fps to 51fps. <br><br>if i comment out the matrix rotation bit it gets up to 105fps, so rotating the matrix is definitely the slow bit. if i comment out the atan2 call that gets the current matrix rotation at the top of the loop, it goes over 60, i.e the goal! Is there a cheap way of rotating the z rotation to 0degrees/radian0 so that i can skip the atan2 call i wonder? <br><br>Which bit would i need to add the x and y handle values to to offset the rotation? i still can't work it out! i assume its the points as they're being calculated, but i've not had much luck here.<br><br>Thanks again :)<br><br>Cheers<br>Charlie<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1131573"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> offset handles would be subtracted from the center:<br><pre class=code>
+center[0] = quadpositions[i].x - handlex
+center[1] = quadpositions[i].y - handly
+center[2] = quadpositions[i].z
+</pre><br><br>as for speeding up atan2, cos, sin, i'd try lookup tables. <br><br></td></tr></table><br>
+<a name="1131598"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jkrankie</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ah, ok. I think i should have said offset the quad's center of rotation, does that make more sense?  The code above moves the centerpoint, rather than offsets the point around which the corners of the quad rotate.<br><br>Cheers<br>Charlie <br><br></td></tr></table><br>
+<a name="1131599"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jkrankie</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here's an example from an earlier test that had the x/y handles working. <br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+Import warnersidesign.minib3d
+
+Graphics3D(1280, 720, 32, 2, 60)
+
+Local tx:TPixmap = LoadPixmap("blob.bmp")
+'ApplyAlpha(tx)
+Global tex:Int = texfrompixmap(tx)
+
+Local cam:TCamera = CreateCamera()
+MoveEntity cam, 0, 0, -2
+CameraRange(cam, 0.1, 5000)
+Local light:TLight = CreateLight(, cam)
+
+Local cube:TMesh = CreateCube()
+ScaleEntity cube, 0.01, 0.01, 0.01
+
+
+
+Local timer:Int = 0
+Local old_ms:Int = MilliSecs()
+Local renders:Int = 0
+Local fps:Int
+
+Local quadpositions:quad[1000000]
+
+Type quad
+	Field x:Float, y:Float, z:Float
+	Field angle:Float = 0
+	Field xscale:Float = 10, yscale:Float = 10
+	Field texx:Float = 0, texy:Float = 0, texw:Float = 1, texh:Float = 1
+	Field blend:Int = 1
+	Field xhandle:Float = 0, yhandle:Float = 0.5
+	Field v0:Int, v1:Int, v2:Int, v3:Int
+	Field r:Float = 1, g:Float = 1, b:Float = 1, Alpha:Float = 1
+	
+	Field x1:Float, y1:Float, x2:Float, y2:Float
+	Field x3:Float, y3:Float, x4:Float, y4:Float
+	Field z1:Float, z2:Float, z3:Float, z4:Float
+EndType
+
+For Local i:Int = 0 To 999999
+	quadpositions[i] = New quad
+	quadpositions[i].x = Rnd(-1000, 1000)
+	quadpositions[i].y = Rnd(-1000, 1000)
+	quadpositions[i].z = Rnd(-1000, 1000)
+	quadpositions[i].angle = Rand(359)
+	
+Next
+
+While Not KeyHit(KEY_ESCAPE)
+	
+	TurnEntity cam, KeyDown(KEY_UP) - KeyDown(KEY_DOWN), KeyDown(KEY_LEFT) - KeyDown(KEY_RIGHT), 0
+	MoveEntity cam, 0, 0, (KeyDown(KEY_A) - KeyDown(KEY_Z)) * 3
+
+	RenderWorld
+	renders = renders + 1
+	If MilliSecs() - old_ms &gt;= 1000
+		old_ms=MilliSecs()
+		fps = renders
+		renders=0
+	EndIf
+	
+	
+	glEnable(GL_TEXTURE_2D)
+	glEnable(GL_BLEND) ;
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE) ;
+	glDisable(GL_LIGHTING)
+	glEnable(GL_ALPHA)
+	glEnable(GL_COLOR_MATERIAL)
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE) ;
+	glBindTexture(GL_TEXTURE_2D, tex)
+	glDisable(GL_DEPTH_BUFFER)
+	Local Pos:Float[3], camPos:Float[] = [EntityX(cam), EntityY(cam), EntityZ(cam)]
+		
+	For Local i:Int = 0 To 1999
+		glPushMatrix()
+		glTranslatef(quadpositions[i].x, quadpositions[i].y, quadpositions[i].z)
+		quadpositions[i].angle:+2
+		'Pos[0] = quadpositions[i].x;Pos[1] = quadpositions[i].y;Pos[2] = quadpositions[i].z;
+		Local worldpos:Float[3]
+		worldpos = billboard(worldpos, cam)
+		
+		Local w2:Float = quadpositions[i].xscale
+		Local h2:Float = quadpositions[i].yscale
+		
+		Local xr1:Float = -quadpositions[i].xhandle * w2
+		Local yr1:Float = -quadpositions[i].yhandle * h2
+		
+		Local xr2:Float = (1.0 - quadpositions[i].xhandle) * w2
+		Local yr2:Float = -quadpositions[i].yhandle * h2
+		
+		Local xr3:Float = (1.0 - quadpositions[i].xhandle) * w2
+		Local yr3:Float = (1.0 - quadpositions[i].yhandle) * h2
+		
+		Local xr4:Float = -quadpositions[i].xhandle * w2
+		Local yr4:Float = (1.0 - quadpositions[i].yhandle) * h2
+		
+	
+		'Local x1:Float, y1:Float, x2:Float, y2:Float
+		'Local x3:Float, y3:Float, x4:Float, y4:Float
+		If quadpositions[i].angle &lt;&gt; 0
+			Local sp:Float = Sin(quadpositions[i].angle)
+			Local cp:Float = Cos(quadpositions[i].angle)
+			quadpositions[i].x1 = xr1 * cp - yr1 * sp
+			quadpositions[i].y1 = xr1 * sp + yr1 * cp
+			quadpositions[i].x2 = xr2 * cp - yr2 * sp
+			quadpositions[i].y2 = xr2 * sp + yr2 * cp
+			quadpositions[i].x3 = xr3 * cp - yr3 * sp
+			quadpositions[i].y3 = xr3 * sp + yr3 * cp
+			quadpositions[i].x4 = xr4 * cp - yr4 * sp
+			quadpositions[i].y4 = xr4 * sp + yr4 * cp
+		Else
+			quadpositions[i].x1 = xr1
+			quadpositions[i].y1 = yr1
+			quadpositions[i].x2 = xr2
+			quadpositions[i].y2 = yr2
+			quadpositions[i].x3 = xr3
+			quadpositions[i].y3 = yr3
+			quadpositions[i].x4 = xr4
+			quadpositions[i].y4 = yr4
+		EndIf
+	
+		
+		glColor4f(quadpositions[i].r, quadpositions[i].g, quadpositions[i].b, quadpositions[i].Alpha:Float)
+		glBegin(GL_QUADS)
+		
+			glTexCoord2d(quadpositions[i].texx + quadpositions[i].texw, quadpositions[i].texy + quadpositions[i].texh)
+			'glVertex3f(x + ((Scale) * Cos((-Angle + 135) + rot)), -y + ((5 * Scale) * Sin((-Angle + 135) + rot)), 50)
+			glVertex3f(quadpositions[i].x1, quadpositions[i].y1, 0)
+			
+			'bottomleft
+			glTexCoord2d(quadpositions[i].texx, quadpositions[i].texy + quadpositions[i].texh)
+			'glVertex3f(x + ((5 * Scale) * Cos((-Angle + 225) + rot)), -y + ((5 * Scale) * Sin((-Angle + 225) + rot)), 50)
+			glVertex3f(quadpositions[i].x2, quadpositions[i].y2, 0)
+			'topleft
+			glTexCoord2d(quadpositions[i].texx, quadpositions[i].texy)
+			'glVertex3f(x + ((5 * Scale) * Cos((-Angle + 315) + rot)), -y + ((5 * Scale) * Sin((-Angle + 315) + rot)), 50)
+			glVertex3f(quadpositions[i].x3, quadpositions[i].y3, 0)
+			'topright	
+			glTexCoord2d(quadpositions[i].texx + quadpositions[i].texw, quadpositions[i].texy)
+			'glVertex3f(x + ((5 * Scale) * Cos((-Angle + 45) + rot)), -y + ((5 * Scale) * Sin((-Angle + 45) + rot)), 50)
+			glVertex3f(quadpositions[i].x4, quadpositions[i].y4, 0)
+			
+		
+		glEnd
+	
+	
+	glPopMatrix
+		glPopMatrix()
+	Next
+	
+	
+	
+	BeginMax2D()
+		DrawText fps, 10, 10
+	EndMax2D()
+	Flip
+	
+	Cls
+
+
+Wend
+
+Function billboard:Float[](worldpos:Float[], cam:TCamera)
+	Local modelview:Float[16]
+	
+	glPushMatrix()
+	
+	glGetFloatv(GL_MODELVIEW_MATRIX, modelview)
+	
+	worldpos[0] = EntityX(cam) + modelview[12] * modelview[0] + modelview[13] * modelview[1] + modelview[14] * modelview[2]
+	worldpos[1] = EntityY(cam) + modelview[12] * modelview[4] + modelview[13] * modelview[5] + modelview[14] * modelview[6]
+	worldpos[2] = EntityZ(cam) + modelview[12] * modelview[8] + modelview[13] * modelview[9] + modelview[14] * modelview[10]
+	
+	For Local i:Int = 0 To 2
+		For Local j:Int = 0 To 2
+			If i = j
+				modelview[i * 4 + j] = 1.0
+			Else
+				modelview[i * 4 + j] = 0.0
+			End If
+		Next
+	Next
+	
+
+	
+	
+	glLoadMatrixf(modelview)
+	
+	Return worldpos
+	
+End Function
+
+Function AdjustTexSize(width:Int Var, Height:Int Var)
+	Function Pow2Size:Int(N:Int)
+		Local Size:Int
+
+		Size = 1
+		While Size &lt; N
+			Size = Size Shl 1
+		Wend
+
+		Return Size
+	End Function
+
+	Width  = Pow2Size(Width)
+	Height = Pow2Size(Height)
+End Function
+
+Function TexFromPixmap:Int(pixmap:TPixmap, mipmap:Int = True)
+	If pixmap.format&lt;&gt;PF_RGBA8888 pixmap=pixmap.Convert( PF_RGBA8888 )
+	Local width:Int=pixmap.width,height:Int=pixmap.height
+	AdjustTexSize width,height
+	If width&lt;&gt;pixmap.width Or height&lt;&gt;pixmap.height pixmap=ResizePixmap( pixmap,width,height )
+	
+	Local old_name:Int,old_row_len:Int
+	glGetIntegerv GL_TEXTURE_BINDING_2D,Varptr old_name
+	glGetIntegerv GL_UNPACK_ROW_LENGTH,Varptr old_row_len
+
+	Local Name:Int
+	glGenTextures 1,Varptr name
+	glBindtexture GL_TEXTURE_2D,name
+	
+	Local mip_level:Int
+	Repeat
+		glPixelStorei GL_UNPACK_ROW_LENGTH,pixmap.pitch/BytesPerPixel[pixmap.format]
+		glTexImage2D(GL_TEXTURE_2D, mip_level, GL_RGBA8, Width, Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixmap.Pixels)
+		If Not mipmap Exit
+		If width=1 And height=1 Exit
+		If width&gt;1 width:/2
+		If height&gt;1 height:/2
+		pixmap=ResizePixmap( pixmap,width,height )
+		mip_level:+1
+	Forever
+	
+	glBindTexture GL_TEXTURE_2D,old_name
+	glPixelStorei GL_UNPACK_ROW_LENGTH,old_row_len
+
+	Return name
+End Function
+
+
+
+
+
+
+</textarea><br><br>Cheers<br>Charlie <br><br></td></tr></table><br>
+<a name="1132720"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jkrankie</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> I worked out how i could eliminate the atan2 call in the end. I made a copy of the modelview matrix, and used the copy to do the z-axis rotation, then reset the rotation by copying the appropriate bits of the original matrix into the copy. <br><br>100,000 billboards at 66fps! <br><br>Cheers<br>Charlie <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

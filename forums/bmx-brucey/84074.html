@@ -1,0 +1,235 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Possible rakVoice mod design issue</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Possible rakVoice mod design issue</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=124" >Brucey's Modules</a>/<a href="#bottom" >Possible rakVoice mod design issue</a><br><br>
+<a name="949391"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Retimer</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm finally looking through the raknetFmod source, and i'm slightly confused. It seems like the module does a bit too much work to simplify things for you, dropping some flexibility.<br><br>Maybe I missed something, but it seems like the module only allows for 1 on 1 voice communication, without any control over actually sending the audio buffers custom-wise.<br><br>Since i'm using your Raknet wrap now, I was hoping I could throw together a little voice chat feature into my lobby as well so users could submit audio to the server, and the server would send the audio to everyone in their channel, but I see no way of doing that without completely rewriting the module, or have I been flat out ignorant on that regard?<br><br>I'm aware of the alternative of having each client connect to the person who is hosting the audio, but i'm really against that type of network design since it kills the end users bandwidth and due to closed ports, firewalls, etc, and it's a security issue for the users connecting to the host user.<br><br>I'm not complaining at all, as this feature is absolutely amazing for blitzmax either way, I just would like to know if i'm wrong about the flexibility of the module. <br><br></td></tr></table><br>
+<a name="949434"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I can expose SendFrame(), IsSendingVoiceDataTo(), and ReceiveFrame() if you want.<br><br>Otherwise I'm not sure what the problem is, as I've exposed the Voice API as-is... or am I completely missing something? <br><br></td></tr></table><br>
+<a name="949452"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Retimer</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> as I've exposed the Voice API as-is <br></div><br><br>It works the same as-is, but the example isn't the conversion of the cpp version. The module is a 'wrap' of the fmod example it seems, not a conversion using a wrapped command set like the rest of your modules.<br><br><br>Like this:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;memory.h&gt;
+#include "RakPeerInterface.h"
+#include "MessageIdentifiers.h"
+#include "RakNetworkFactory.h"
+#include "FMODVoiceAdapter.h"
+#include "fmod_errors.h"
+
+
+/// To test sending to myself
+//#define _TEST_LOOPBACK
+
+
+// Number of RakVoice frames in the fmod sound
+#define FRAMES_IN_SOUND 4
+
+
+FMODVoiceAdapter FMODVoiceAdapter::instance;
+
+FMODVoiceAdapter::FMODVoiceAdapter(){
+	rakVoice=0;
+	fmodSystem = 0;
+	recSound=0;
+	sound=0;
+	channel=0;
+	mute=false;
+}
+
+FMODVoiceAdapter* FMODVoiceAdapter::Instance(){
+	return &amp;instance;
+}
+
+bool FMODVoiceAdapter::SetupAdapter(FMOD::System *fmodSystem, RakVoice *rakVoice)
+{
+	FMOD_RESULT fmodErr;
+
+	assert(fmodSystem);
+	assert(rakVoice);
+	// Make sure rakVoice was initialized
+	assert((rakVoice-&gt;IsInitialized())&amp;&amp;(rakVoice-&gt;GetRakPeerInterface()!=NULL));
+
+	this-&gt;fmodSystem = fmodSystem;
+	this-&gt;rakVoice = rakVoice;
+	lastPlayPos = 0;
+	lastRecordingPos = 0;
+
+	//
+	// Create the FMOD sound used to record
+	//
+	FMOD_CREATESOUNDEXINFO exinfo;
+	memset(&amp;exinfo, 0, sizeof(FMOD_CREATESOUNDEXINFO));
+	exinfo.cbsize           = sizeof(FMOD_CREATESOUNDEXINFO);
+	exinfo.numchannels      = 1;
+	exinfo.format           = FMOD_SOUND_FORMAT_PCM16;
+	exinfo.defaultfrequency = rakVoice-&gt;GetSampleRate();
+	exinfo.length			= rakVoice-&gt;GetBufferSizeBytes()*FRAMES_IN_SOUND;
+
+	fmodErr = fmodSystem-&gt;createSound(0, FMOD_2D | FMOD_SOFTWARE | FMOD_OPENUSER, &amp;exinfo, &amp;recSound);
+	if (fmodErr!=FMOD_OK)
+		return false;
+
+	// Create the FMOD sound used to play incoming sound data
+	fmodErr = fmodSystem-&gt;createSound(0, FMOD_2D | FMOD_SOFTWARE | FMOD_OPENUSER, &amp;exinfo, &amp;sound);
+	if (fmodErr!=FMOD_OK)
+		return false;
+
+	// Start playing the sound used for output
+	sound-&gt;setMode(FMOD_LOOP_NORMAL);
+	fmodErr= fmodSystem-&gt;playSound(FMOD_CHANNEL_REUSE, sound, false, &amp;channel);
+	if (fmodErr!=FMOD_OK)
+		return false;
+
+	// Start recording
+	fmodErr=fmodSystem-&gt;recordStart(recSound, true);
+	if (fmodErr!=FMOD_OK)
+		return false;
+
+	return true;
+}
+
+
+void FMODVoiceAdapter::Update(void)
+{
+	assert(fmodSystem);
+	UpdateSound(true);
+	UpdateSound(false);
+}
+
+void FMODVoiceAdapter::Release(void)
+{
+	FMOD_RESULT err;
+
+	if (fmodSystem==NULL) return;
+
+	// Stop recording
+	bool recording=false;
+	err = fmodSystem-&gt;isRecording(&amp;recording);
+	assert(err==FMOD_OK);
+	if (recording){
+		fmodSystem-&gt;recordStop();
+	}
+
+	// Stop what we hear
+	bool playing;
+	err = channel-&gt;isPlaying(&amp;playing);
+	assert(err==FMOD_OK);
+	if (playing){
+		channel-&gt;stop();
+	}
+
+	if (recSound!=NULL)
+	{
+		recSound-&gt;release();
+		recSound = NULL;
+	}
+
+	if (sound!=NULL)
+	{
+		sound-&gt;release();
+		sound = NULL;
+	}
+	
+}
+
+
+void FMODVoiceAdapter::SetMute(bool mute)
+{
+	this-&gt;mute = mute;
+}
+
+
+void FMODVoiceAdapter::UpdateSound(bool isRec)
+{
+	FMOD_RESULT fmodErr;
+	unsigned int soundLength;
+	const int sampleSize = 2;
+
+	FMOD::Sound *snd = (isRec) ? recSound : sound;
+	unsigned int&amp; lastPos = (isRec) ? lastRecordingPos : lastPlayPos;
+
+	// get current Play or recording position
+	unsigned int currPos;
+	if (isRec){
+		fmodErr=fmodSystem-&gt;getRecordPosition(&amp;currPos);
+		assert(fmodErr==FMOD_OK);
+	} else {
+		fmodErr=channel-&gt;getPosition(&amp;currPos, FMOD_TIMEUNIT_PCM);
+		assert(fmodErr==FMOD_OK);
+	}
+
+	// Get length of sound in samples
+	fmodErr=snd-&gt;getLength(&amp;soundLength, FMOD_TIMEUNIT_PCM);
+	assert(fmodErr==FMOD_OK);
+
+	// calculate some variables we'll need ahead
+	int bufferSizeBytes = rakVoice-&gt;GetBufferSizeBytes();
+
+	// Round down the current position to a multiple of buffer size in samples
+	currPos -= currPos % (bufferSizeBytes/sampleSize);
+
+	if ( ((!isRec)||(isRec &amp;&amp; !mute)) &amp;&amp; (currPos != lastPos) ) 	
+	{
+		void *ptr1, *ptr2;
+		unsigned int len1, len2;
+		int blockLength;
+	
+		blockLength = (int)currPos - (int)lastPos;
+		// Check for wrap around, and adjust
+		if (blockLength &lt; 0)
+		{
+			blockLength += soundLength;
+		}
+
+		// Lock to get access to the raw data
+		snd-&gt;lock(lastPos * sampleSize, blockLength * sampleSize, &amp;ptr1, &amp;ptr2, &amp;len1, &amp;len2);
+
+		//  Since the length and current position are both a multiple of bufferSizeBytes
+		// just treat treat one full buffer at a time
+		int numFrames = len1 / bufferSizeBytes;
+		while(numFrames--){
+			if (isRec) {
+				BroadcastFrame(ptr1);
+			} else {
+				rakVoice-&gt;ReceiveFrame(ptr1);
+			}
+			ptr1 = (char*)ptr1 + bufferSizeBytes;
+		}
+		numFrames = len2 / bufferSizeBytes;
+		while(numFrames--) {
+			if (isRec){
+				BroadcastFrame(ptr2);
+			} else {
+				rakVoice-&gt;ReceiveFrame(ptr2);
+			}
+			ptr2 = (char*)ptr2 + bufferSizeBytes;
+		}
+
+		snd-&gt;unlock(ptr1, ptr2, len1, len2);
+	}
+
+	lastPos = currPos;
+}
+
+
+
+void FMODVoiceAdapter::BroadcastFrame(void *ptr)
+{
+#ifndef _TEST_LOOPBACK
+	unsigned i;
+
+	unsigned int numPeers = rakVoice-&gt;GetRakPeerInterface()-&gt;GetMaximumNumberOfPeers();
+	for (i=0; i &lt; numPeers; i++)
+	{
+		rakVoice-&gt;SendFrame(rakVoice-&gt;GetRakPeerInterface()-&gt;GetSystemAddressFromIndex(i), ptr);
+	}
+#else
+	rakVoice-&gt;SendFrame(UNASSIGNED_SYSTEM_ADDRESS, ptr);
+#endif
+
+}
+</textarea><br><br>That being the c++ example, you wrote your own simplified (for our sake) workaround for it for the blitzmax example with the helper, which does the exact same thing in the end except there's no access to any of the core functions <b>(broadcast, sendframe, receiveframe, fmodlock/unlock, getRecordPosition,etc)</b>....it's only calling the actual c++ example it seems.<br><br>So we don't have access to do anything really different with the mod other then what's provided in the example. That's what I was trying to get at with the flexibility of the module, sorry for making everything confusing as hell for the millionth time. <br><br></td></tr></table><br>
+<a name="949457"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> I had just assumed everything would be more efficient if I left it all in C++<br><br>But... I've no problems with lifting everything up into BlitzMax if it helps you. <br><br></td></tr></table><br>
+<a name="949467"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Retimer</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Would really appreciate it :)<br><br>It's probobly more efficient, and definitely a lot more simple as there's less to understand with your version of the example, but unfortunately like I said, there's really no flexibility to do much else with the module.<br><br>If anyone else is using the module in a live project already and doesn't want it to change, I won't keep pushing for it and just try wrapping it up myself. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,278 @@
+<!DOCTYPE html><html lang="en" ><head ><title >B3D_AppBase.dll - Helps Prevent MAV</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >B3D_AppBase.dll - Helps Prevent MAV</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >B3D_AppBase.dll - Helps Prevent MAV</a><br><br>
+<a name="775956"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DGuy</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> It was requested that a DLL I had written to help prevent MAVs under Blitz3D be made available as a compiled DLL. To that end, I have emailed the compiled DLL w/ source code to a few Blitz3D community members who offered to host the files on their sites. When I get some download URLs, I'll post them here. In the mean while, below is the complete source code of the DLL.<br><br>This code can be used for whatever purpose.<br><br>If there are any question or comments, feel free to ask.<br><br>Hope this proves helpful,<br>David<br><br><pre class=code>
+/*
+  B3D_AppBase.cpp
+    - Blitz3D Helper DLL
+
+  For help preventing Memory Access Violations in Blitz3D,
+  particularly when running in windowed mode.
+  Tested under both WinXP and Vista.
+
+  To setup, place both the DLL and the *.decls file into the Blitz3D
+  '\userlibs' dir.
+
+  For usage, see comments within the code.
+
+  For 'B3D_AppBase.decls' file:
+  .lib "B3D_AppBase.dll"
+  app_init%(hwnd%):"_app_init@4"
+  app_uninit():"_app_uninit@0"
+  app_DDHook%(pDD7%):"_app_DDHook@4"
+  app_DDUnHook():"_app_DDUnHook@0"
+  app_DDWasLost%():"_app_DDWasLost@0"
+  app_possibleLogOut%():"_app_possibleLogOut@0"
+  app_clearPossibleLogOut():"_app_clearPossibleLogOut@0"
+
+  See the follow forum threads for more info:
+    <a href="http://www.blitzbasic.com/Community/posts.php?topic=67837" target="_blank">http://www.blitzbasic.com/Community/posts.php?topic=67837</a>
+    <a href="http://www.blitzbasic.com/Community/posts.php?topic=67841" target="_blank">http://www.blitzbasic.com/Community/posts.php?topic=67841</a>
+
+  Any questions or comments can be posted to the Blitz3D forums at
+  www.BlitzBasic.com.
+
+  - DGuy 05/2007
+*/
+#include &lt;windows.h&gt;
+#define DIRECTDRAW_VERSION 0x0700
+#include &lt;ddraw.h&gt;
+
+
+//========================================================== Constants
+#define BBDECL extern "C" _declspec(dllexport)
+#define BBCALL _stdcall
+
+
+//========================================================== Variables
+static BOOL                 _is_init;
+
+static LPDIRECTDRAW7        _b3d_pdd;
+static LPDIRECTDRAWSURFACE7 _b3d_pddsPrim;
+
+static HWND                 _b3d_hwnd;
+static WNDPROC              _b3d_windowProc;
+
+static BOOL                 _ctrlKeyIsDown;
+static BOOL                 _menuKeyIsDown;
+static BOOL                 _winKeyIsDown;
+static BOOL                 _possibleLogOut;
+
+
+//================================================== Private Functions
+/*--------------------------------------------------------------------
+ Finds the primary direct draw surface. Called by 'app_DDHook()'
+*/
+HRESULT WINAPI _surfaceEnumCallback_GetPrimary
+  (
+  LPDIRECTDRAWSURFACE7 lpDDSurface,
+  LPDDSURFACEDESC2 lpDDSurfaceDesc,
+  LPVOID /*lpContext*/
+  )
+  {
+  if( lpDDSurfaceDesc-&gt;ddsCaps.dwCaps &amp; DDSCAPS_PRIMARYSURFACE )
+    {
+    _b3d_pddsPrim = lpDDSurface;
+    return DDENUMRET_CANCEL;
+    }
+  lpDDSurface-&gt;Release();
+  return DDENUMRET_OK;
+  }
+
+/*--------------------------------------------------------------------
+ Intercepts and examines messages received by Blitz3D app
+*/
+LRESULT CALLBACK _AppBase_WindowProc
+  (
+  HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
+  )
+  {
+  switch( uMsg )
+    {
+    case WM_KEYDOWN:
+      {
+      switch( wParam )
+        {
+        case VK_CONTROL: _ctrlKeyIsDown = TRUE; break;
+        case VK_MENU: _menuKeyIsDown = TRUE; break;
+        case VK_LWIN: case VK_RWIN: _winKeyIsDown = TRUE; break;
+        }
+      }
+      break;
+
+    case WM_KEYUP:
+      {
+      switch( wParam )
+        {
+        case VK_CONTROL: _ctrlKeyIsDown = FALSE; break;
+        case VK_MENU: _menuKeyIsDown = FALSE; break;
+        case VK_LWIN: case VK_RWIN: _winKeyIsDown = FALSE; break;
+        }
+      }
+      break;
+
+    case WM_ACTIVATEAPP:
+      {
+      if( (wParam == FALSE) &amp;&amp; (lParam == 0x0) )
+        _possibleLogOut =
+          (_winKeyIsDown || (_ctrlKeyIsDown &amp;&amp; _menuKeyIsDown));
+
+      _winKeyIsDown = _ctrlKeyIsDown = _menuKeyIsDown = FALSE;
+      }
+      break;
+    }
+
+  return CallWindowProc( _b3d_windowProc, hwnd, uMsg, wParam, lParam );
+  }
+
+
+//=================================================== Public Functions
+/*--------------------------------------------------------------------
+ Sets-up helper DLL.
+ Should be called as soon as possible by Blitz3D App
+ Always returnd True.
+*/
+BBDECL BOOL BBCALL app_init( HWND hwnd )
+  {
+  if( !_is_init )
+    {
+    _b3d_hwnd = hwnd;
+    _b3d_windowProc =
+      (WNDPROC)SetWindowLong
+        (
+        _b3d_hwnd, GWL_WNDPROC, (LONG)_AppBase_WindowProc
+        );
+    _is_init = TRUE;
+    }
+  return TRUE;
+  }
+
+/*--------------------------------------------------------------------
+ Cleans up DLL.
+ Should be called before exiting Blitz3D App
+*/
+BBDECL void BBCALL app_uninit()
+  {
+  if( _is_init )
+    {
+    SetWindowLong( _b3d_hwnd, GWL_WNDPROC, (LONG)_b3d_windowProc );
+    _b3d_hwnd = 0;
+    _is_init = FALSE;
+    }
+  }
+
+/*--------------------------------------------------------------------
+ Obtains pointer to primary direct draw surface.
+ Should be called after graphics mode has been set.
+ Returns True on success, False on error
+ Usage:
+  Graphics3D ...
+  If Not app_DDHook() Then ;Error
+*/
+BBDECL BOOL BBCALL app_DDHook( LPDIRECTDRAW7 pDD )
+  {
+  if( _is_init )
+    {
+    if( pDD )
+      {
+      _b3d_pdd = pDD;
+      return (DD_OK == _b3d_pdd-&gt;EnumSurfaces(
+        DDENUMSURFACES_DOESEXIST | DDENUMSURFACES_ALL,
+        NULL, NULL, _surfaceEnumCallback_GetPrimary
+        ));
+      }
+    }
+  return FALSE;
+  }
+
+/*--------------------------------------------------------------------
+ Releases primary direct draw surfaces and cleans up.
+ Should be called before graphics mode is cleared or changed
+ Usage:
+  app_DDUnHook(): EndGraphics
+*/
+BBDECL void BBCALL app_DDUnHook()
+  {
+  if( _is_init )
+    {
+    if( _b3d_pddsPrim )
+      {
+      _b3d_pddsPrim-&gt;Release();
+      _b3d_pddsPrim = NULL;
+      _b3d_pdd = NULL;
+      }
+    }
+  }
+
+/*--------------------------------------------------------------------
+ Checks if primary direct draw surface has been lost.
+ Should be called before UpdateWorld and, probably, any direct (pixel
+ level) access of direct draw surfaces (ie. before LockBuffer, if the
+ buffer being locked may refer to a direct draw surface)
+ Returns True if lost, False if not
+
+ Usage:
+   If app_DDWasLost() Then ; reset display &amp; reload graphics
+   UpdateWorld
+   If app_possibleLogOut() Then
+     app_clearPossibleLogOut()
+     ; reset display &amp; reload graphics
+   Else
+     RenderWorld: Flip
+   EndIf
+*/
+BBDECL BOOL BBCALL app_DDWasLost()
+  {
+  return (_is_init &amp;&amp; _b3d_pddsPrim &amp;&amp; (_b3d_pddsPrim-&gt;IsLost() != DD_OK));
+  }
+
+/*--------------------------------------------------------------------
+ Checks for possible user log-out.
+ Returns True if user has possibly logged-out, False if not.
+ Usage:
+   See above
+*/
+BBDECL BOOL BBCALL app_possibleLogOut() { return _possibleLogOut; }
+
+/*--------------------------------------------------------------------
+  Clears possible-log-out flag.
+  Usage:
+    See above
+*/
+BBDECL void BBCALL app_clearPossibleLogOut()
+  {
+  _possibleLogOut = FALSE;
+  }
+
+
+//============================================================ DLLMain
+BOOL APIENTRY DllMain(
+  HANDLE /*hModule*/, DWORD ul_reason_for_call, LPVOID /*lpReserved*/
+  )
+  {
+    switch( ul_reason_for_call )
+    {
+    case DLL_PROCESS_ATTACH: break;
+    case DLL_THREAD_ATTACH: break;
+    case DLL_THREAD_DETACH: break;
+    case DLL_PROCESS_DETACH: break;
+    }
+  return TRUE;
+  }</pre> <br><br></td></tr></table><br>
+<a name="775998"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kev</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> DGuy<br><br>the compiled .dll is available direct from the clicky below.<br><br><a href="http://www.winblitz3d.co.uk/B3D_AppBase.zip" target="_blank">http://www.winblitz3d.co.uk/B3D_AppBase.zip</a><br><br>kev <br><br></td></tr></table><br>
+<a name="776000"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Knotz</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thx, nice stuff. <br><br></td></tr></table><br>
+<a name="776009"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >popcade</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks DGuy and Kev, mirrored this in<br><br><a href="http://icworx.org/_ext/B3D_AppBase.zip" target="_blank">http://icworx.org/_ext/B3D_AppBase.zip</a> <br><br></td></tr></table><br>
+<a name="776058"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >@rtur</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here is my mirror: <br><a href="http://www.master-of-defense.com/upload/B3D_AppBase.zip" target="_blank">http://www.master-of-defense.com/upload/B3D_AppBase.zip</a> <br><br></td></tr></table><br>
+<a name="776074"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >@rtur</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here is version with test.bb file:<br><a href="http://www.master-of-defense.com/upload/B3D_AppBase2.rar" target="_blank">http://www.master-of-defense.com/upload/B3D_AppBase2.rar</a> <br><br></td></tr></table><br>
+<a name="776148"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >John Blackledge</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is for that 'Vista loss of focus problem' is it? <br><br></td></tr></table><br>
+<a name="776177"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kev</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> @John, yes it fixes vista problem and the problem with blitz3d when the screensaver becomes active.<br><br>and heres a mirror of @rtur with test.bb file.<br><a href="http://www.winblitz3d.co.uk/B3D_AppBase2.rar" target="_blank">http://www.winblitz3d.co.uk/B3D_AppBase2.rar</a> <br><br></td></tr></table><br>
+<a name="776279"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DGuy</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for making this available for download guys ... :D<br><br>Also, thanks to @rtur for writing a simple test program so others can quickly check that it works.<br><br>BTW, if anyone comes across a <b>loss-of-focus</b> event that causes a Blitz3D MAV under WinXP or Vista, that is not prevented by this DLL, please let me know and I'll see about developing a work-around.<br><br>Thanks,<br>David <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

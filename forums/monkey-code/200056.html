@@ -1,0 +1,324 @@
+<!DOCTYPE html><html lang="en" ><head ><title >UTF8, Base64 and RLE functions</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >UTF8, Base64 and RLE functions</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >UTF8, Base64 and RLE functions</a><br><br>
+<a name="2000139"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skid</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> The following functions have not been totally stress tested but may be useful for those wanting to pack integer data into strings for use with SaveState command.<br><br>The RunLength32 encoding compresses 32 bit data by packing repeats of 4 or more similar integers.<br><br>The UTF8 functions pack 32 bit data into sequence of 8 bit bytes. Unlike standard 31 bit UTF8 negative / 32 bit values are supported.<br><br>The Base64 functions are standard Mime64 encoding of bytes minus the line breaks.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+' monkey data encoders by simon armstrong
+
+' functions to aid packing and unpacking integer array into packed ascii strings
+
+' to pack data into string 
+' pack$=Base64Encode(UTF8Encode(RunLength32Encode(data[])))
+
+' to unpack string into data: 
+' data[]=RunLength32Decode(UTFDecode(Base64Decode(pack$)))
+
+' RunLength32Encode
+' RunLength32Decode
+' UTF8Encode
+' UTF8Decode
+' Base64Encode
+' Base64Decode
+
+' runlength functions
+
+Function RunLength32Encode:Int[](data:Int[])
+	Local encode[]
+	Local count
+	Local seq
+	Local rept
+	Local prev
+	encode=New Int[data.Length+2]
+	prev=data[0]-1
+	seq=-1
+	For Local i=0 To data.Length-1
+		Local d=data[i]
+		If d=prev
+			rept+=1
+			If rept=3 And seq&gt;0
+				encode[count-seq-3]=seq
+				count+=1
+				seq=0
+			Endif
+		Else
+			prev=d
+			If rept&lt;3
+				seq+=1+rept
+			Else
+				encode[count-3]=-rept-1
+				count-=1
+			Endif
+			rept=0
+		Endif
+		If rept&lt;3
+			count+=1
+			encode[count]=d
+		Endif	
+	Next
+	If rept&gt;2
+		encode[count-3]=-rept-1
+		count-=2
+	Else
+		seq+=rept+1
+	Endif	
+	If seq&gt;0
+		encode[count-seq]=seq
+	Endif
+	Return encode.Resize(count+1)
+End
+
+Function RunLength32Decode:Int[](data:Int[])
+	Local decode[]
+	Local count
+	Local i
+	While i&lt;data.Length	
+		Local d=data[i]
+		If d&lt;0
+			count-=d
+			i=i+2
+		Else
+			count+=d
+			i=i+1+d
+		Endif
+	Wend
+	decode=New Int[count]
+	i=0
+	count=0
+	While i&lt;data.Length	
+		Local d=data[i]
+		i+=1
+		If d&lt;0
+			Local v=data[i]
+			i=i+1			
+			While d
+				decode[count]=v	
+				count+=1
+				d+=1
+			Wend
+		Else
+			While d
+				decode[count]=data[i]			
+				i+=1
+				count+=1
+				d-=1
+			Wend
+		Endif
+	Wend
+	Return decode
+End
+
+' utf8 functions
+
+Function UTF8Encode:Int[](data:Int[])
+	Local bytes[]
+	Local count
+	
+	bytes=New Int[data.Length*6]
+	For Local d=Eachin data
+		If d&lt;0 Or d&gt;=$4000000
+			bytes[count]=$FC|((d Shr 30)&amp;$3)
+			bytes[count+1]=$80|((d Shr 24)&amp;$3F)
+			bytes[count+2]=$80|((d Shr 18)&amp;$3F)
+			bytes[count+3]=$80|((d Shr 12)&amp;$3F)
+			bytes[count+4]=$80|((d Shr 6)&amp;$3F)
+			bytes[count+5]=$80|(d&amp;$3F)
+			count+=6
+			Continue
+		Endif
+		If d&lt;$80
+			bytes[count]=d
+			count+=1
+			Continue
+		Endif
+		If d&lt;$800
+			bytes[count]=$c0|((d Shr 6)&amp;$1F)
+			bytes[count+1]=$80|(d&amp;$3F)
+			count+=2
+			Continue
+		Endif
+		If d&lt;$10000
+			bytes[count]=$E0|((d Shr 12)&amp;$F)
+			bytes[count+1]=$80|((d Shr 6)&amp;$3F)
+			bytes[count+2]=$80|(d&amp;$3F)
+			count+=3
+			Continue			
+		Endif
+		If d&lt;$200000
+			bytes[count]=$F0|((d Shr 18)&amp;$7)
+			bytes[count+1]=$80|((d Shr 12)&amp;$3F)
+			bytes[count+2]=$80|((d Shr 6)&amp;$3F)
+			bytes[count+3]=$80|(d&amp;$3F)
+			count+=4
+			Continue			
+		Endif
+		If d&lt;$4000000
+			bytes[count]=$F8|((d Shr 24)&amp;$3)
+			bytes[count+1]=$80|((d Shr 18)&amp;$3F)
+			bytes[count+2]=$80|((d Shr 12)&amp;$3F)
+			bytes[count+3]=$80|((d Shr 6)&amp;$3F)
+			bytes[count+4]=$80|(d&amp;$3F)
+			count+=5
+			Continue			
+		Endif
+	Next	
+	Return bytes.Resize(count)
+End
+
+Function UTF8Decode:Int[](bytes:Int[])
+	Local data[]
+	Local in
+	Local out	
+	data=New Int[bytes.Length]	
+	While in&lt;bytes.Length
+		Local d=bytes[in]
+		If d&amp;$80=0 		
+			in+=1
+		Else If d&amp;$E0=$C0
+			d=((d&amp;$1F)Shl 6) | (bytes[in+1]&amp;$3F)
+			in+=2
+		Else If d&amp;$F0=$E0
+			d=((d&amp;$F) Shl 12) | ((bytes[in+1]&amp;$3F)Shl 6) | (bytes[in+2]&amp;$3F)
+			in+=3		
+		Else If d&amp;$F8=$F0
+			d=((d&amp;$7) Shl 18) | ((bytes[in+1]&amp;$3F)Shl 12) | ((bytes[in+2]&amp;$3F)Shl 6) | (bytes[in+3]&amp;$3F)
+			in+=4			
+		Else If d&amp;$FC=$F8
+			d=((d&amp;$3) Shl 24) | ((bytes[in+1]&amp;$3F)Shl 18) | ((bytes[in+2]&amp;$3F)Shl 12) | ((bytes[in+3]&amp;$3F)Shl 6) | (bytes[in+4]&amp;$3F)
+			in+=5					
+		Else
+			d=((d&amp;$3) Shl 30) | ((bytes[in+1]&amp;$3F)Shl 24) | ((bytes[in+2]&amp;$3F)Shl 18) | ((bytes[in+3]&amp;$3F)Shl 12) | ((bytes[in+4]&amp;$3F)Shl 6) | (bytes[in+5]&amp;$3F)
+			in+=6							
+		Endif		
+		data[out]=d	
+		out+=1
+	Wend	
+	Return data.Resize(out)
+End Function
+
+' base64 functions
+
+Global MIME$="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+Global Dime:Int[]
+
+Function Base64Encode$(bytes:Int[])
+	Local n=bytes.Length	
+	Local buffer$
+
+	For Local i=0 Until n Step 3	
+		Local b0,b1,b2,b24
+		Local pad$
+		b0=bytes[i]
+		If i+1&lt;n
+			b1=bytes[i+1]
+			If i+2&lt;n
+				b2=bytes[i+2]
+			Else
+				pad="="
+			Endif
+		Else
+			pad="=="
+		Endif		
+		b24=(b0 Shl 16) | (b1 Shl 8) | (b2)
+		buffer+=String.FromChar( MIME[(b24 Shr 18)&amp;63] )
+		buffer+=String.FromChar( MIME[(b24 Shr 12)&amp;63] )
+		buffer+=String.FromChar( MIME[(b24 Shr 6)&amp;63] )
+		buffer+=String.FromChar( MIME[(b24)&amp;63] )
+		If pad buffer+=pad	
+	Next	
+
+	Return buffer
+End
+
+Function Base64Decode:Int[](mime$)
+
+	If Not Dime
+		Dime=New Int[256]
+		For Local i=0 To 63
+			Dime[MIME[i]]=i
+		Next
+	Endif
+	
+	Local bytes:Int[]
+	Local length=mime.Length
+	Local pad
+	Local i,p
+	
+	If mime[length-1]="="[0] 
+		pad=1
+		If mime[length-2]="="[0]
+			pad=2
+		Endif
+	Endif	
+	
+	length=Int((length-pad)/4)*3	
+	bytes=New Int[length]
+	
+	While i&lt;length
+		Local b0=Dime[mime[p]]
+		Local b1=Dime[mime[p+1]]
+		Local b2=Dime[mime[p+2]]
+		Local b3=Dime[mime[p+3]]
+		Local b24=(b0 Shl 18)|(b1 Shl 12)|(b2 Shl 6)|b3		
+		bytes[i+0]=(b24 Shr 16)&amp;255	
+		bytes[i+1]=(b24 Shr 8)&amp;255	
+		bytes[i+2]=(b24)&amp;255	
+		p+=4
+		i+=3
+	Wend	
+	If pad
+		bytes=bytes.Resize(length-pad)
+	Endif	
+	Return bytes
+End
+</textarea> <br><br></td></tr></table><br>
+<a name="2000138"></a>
+
+<a name="2074121"></a>
+
+<a name="2074122"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sorry to revive, but just an FYI--<br><br>That base64 encoder gave me slightly different results when compared one-to-one with a decoded set. I think "0" was converted to "-1".<br>Here's the code I used and I know this works (tested):<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Function Encode$(bytes:Int[])
+		Local n=bytes.Length	
+		Local buffer:StringStack = New StringStack
+		Local blank:String = ""
+		Local i:Int
+		
+		For i=0 Until n Step 3	
+			Local b0=0,b1=0,b2=0
+			Local pad$=""
+			b0=bytes[i]
+			If i+1&lt;n
+				b1=bytes[i+1]
+				If i+2&lt;n
+					b2=bytes[i+2]
+				Else
+					pad="="
+				Endif
+			Else
+				pad="=="
+			Endif
+			'b0=255; b1=255; b2=255
+			Local a% = (b0 &amp; $00fc) Shr 2
+			Local b% = ((b0 &amp; $0003) Shl 4) | ((b1 &amp; $00f0) Shr 4)
+			Local c% = ((b1 &amp; $000f) Shl 2) | ((b2 &amp; $00c0) Shr 6)
+			Local d% = b2 &amp; $003f
+		
+			buffer.Push(String.FromChar( MIME[a] ) )
+			buffer.Push(String.FromChar( MIME[b] )  )
+			buffer.Push(String.FromChar( MIME[c] )  )
+			buffer.Push(String.FromChar( MIME[d] )  )
+			If pad&lt;&gt;"" Then buffer.Push(pad )	
+		Next	
+
+		'Print "buffer:"+bytes.Length()
+	
+		Return buffer.Join()
+	End
+</textarea> <br><br></td></tr></table><br>
+<a name="2074646"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Amanda Dearheart</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Are these memory saving functions?<br>If not, what use are these functions? <br><br></td></tr></table><br>
+<a name="2074647"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> base64 is an encoding scheme using alpha-numeric characters. useful in monkey for embedding data into monkey files.<br>it does not save memory, but rather uses 33% more memory.<br><br>RLE, on the other hand, is a simple compression scheme.<br><br>utf8 is a character encoding scheme for international languages. utf8 is automatic for most monkey strings. <br><br></td></tr></table><br>
+<a name="2077249"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skid</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Adam, I have tried to reproduce the issue but failed, What ever I throw at it your Encode function returns same string as my Base64Encode function. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

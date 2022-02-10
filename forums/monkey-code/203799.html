@@ -1,0 +1,198 @@
+<!DOCTYPE html><html lang="en" ><head ><title >httpgetter updated to receive php</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >httpgetter updated to receive php</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >httpgetter updated to receive php</a><br><br>
+<a name="2040577"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >OvineByDesign</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I noticed that the httpgetter in the examples only allowed you to grab 'web pages' where I always grab php code. (hiscores, sql results  etc ...)<br><br>The only real change is with GetPage, where now you supply the host url  then the actual page you require. <br><br><pre class=code>
+getter.GetPage "www.monkeycoder.co.nz", "/Community/posts.php?topic=3637#38950", 80, Self
+</pre><br><br>Im building up a string called "last_received" which will be populated upon page completion<br><br>Seeing that Im only ever receiving small data back there shouldn't be that much need for Async, but its nice to have an animation running whilst your waiting. <br><br>You'll notice im stripping out the header text from the server.  <br><br>So heres what im using :-<br><br><br><pre class=code>
+
+
+#If TARGET&lt;&gt;"glfw" And TARGET&lt;&gt;"android" And TARGET&lt;&gt;"ios"
+#Error "c++ or java Mojo target required"
+#Endif
+
+Import mojo
+
+Import brl.asynctcpstream
+
+'***** Hypothetical HTTP module *****
+
+Interface HTTPListener
+
+	Method OnHTTPConnected:Void( getter:HTTPGetter )
+
+	Method OnHTTPDataReceived:Void( data:DataBuffer,offset:Int,count:Int,getter:HTTPGetter )
+
+	Method OnHTTPPageComplete:Void( getter:HTTPGetter )
+
+End
+
+Class HTTPGetter Implements IOnConnectComplete,IOnReadComplete,IOnWriteComplete
+
+Field _page:String = ""
+Field Text:String = ""
+Field last_received:String = ""
+Field dataflag:Bool = False
+	
+	Method GetPage:Void(host:String, page:String, port:Int, listener:HTTPListener)
+		_host=host
+		_port=port
+		_listener=listener
+		_page = page
+		Text = ""
+		dataflag = False ' marker for start of web page data
+		_stream=New AsyncTcpStream
+		_stream.Connect _host, _port, Self
+		
+	End
+	
+	Method Update:Bool()
+		If _stream Return _stream.Update()
+		Return False
+	End
+	
+	Private
+	
+	
+	Method Finish:Void()
+		_listener.OnHTTPPageComplete Self
+		_strqueue.Clear
+		_stream.Close
+		_stream=Null
+	
+	End
+	
+	'start up another read op
+	Method ReadMore:Void()
+		'read another block
+		_stream.ReadAll _rbuf, 0, _rbuf.Length, Self
+	End
+
+	'start up another write op
+	Method WriteMore:Void()
+		If _strqueue.IsEmpty() Return
+		Local str:= _strqueue.RemoveFirst()
+		_wbuf.PokeString 0, str
+		_stream.WriteAll _wbuf, 0, str.Length, Self
+	End
+	
+	Method WriteString:Void( str:String )
+		_strqueue.AddLast str
+	End
+
+	Method OnConnectComplete:Void(connected:Bool, source:IAsyncEventSource)
+	
+		If Not connected
+			Finish
+			Return
+		Endif
+
+		' which page onthe website do you want 
+		WriteString "GET " + _page + " HTTP/1.0~r~n"
+		WriteString "Host: " + _host + "~r~n"
+		WriteString "~r~n"
+			
+		_listener.OnHTTPConnected Self
+
+		WriteMore
+		
+		ReadMore
+		
+	
+		
+	End
+
+	Method OnReadComplete:Void( buf:DataBuffer,offset:Int,count:Int,source:IAsyncEventSource )
+		If Not count	'EOF!
+			Finish
+			Return
+		Endif
+		_listener.OnHTTPDataReceived buf,offset,count,Self
+		ReadMore
+	End
+	
+	Method OnWriteComplete:Void( buf:DataBuffer,offset:Int,count:Int,source:IAsyncEventSource )
+		WriteMore
+	End
+	
+	Field _host:String
+	Field _port:Int	
+	Field _listener:HTTPListener
+	
+	Field _stream:AsyncTcpStream
+	Field _strqueue:=New StringList
+	Field _rbuf:= New DataBuffer(1024)	'thrash it!
+	Field _wbuf:=New DataBuffer( 256 )
+	
+End
+
+'***** The app! *****
+
+Class MyApp Extends App Implements HTTPListener
+
+	Field dataflag:Bool = False
+	Field getter:= New HTTPGetter
+
+	Method OnHTTPConnected:Void(getter:HTTPGetter)
+		'Print "HTTP connected!"
+	End
+	
+	Method OnHTTPDataReceived:Void( data:DataBuffer,offset:Int,count:Int,getter:HTTPGetter )
+	
+'		Print "HTTP data received! length="+count
+		Local str:= data.PeekString(offset, count)
+		For Local line:=Eachin str.Split( "~n" )
+
+			' have we already gone past the start of data marker ?
+			If getter.dataflag Then
+				getter.Text = getter.Text + line
+			Else
+				' we at the data marker for data?  (i.e. first blank line)
+				If line = "~r" Then
+					getter.dataflag = True  ' from here on in comes data !
+				EndIf
+			EndIf
+		Next
+	End
+	
+	Method OnHTTPPageComplete:Void( getter:HTTPGetter )
+
+			getter.last_received = getter.Text
+			getter.Text = ""
+		
+	End
+	
+	Method OnCreate()
+		
+		getter.GetPage "www.monkeycoder.co.nz", "/Community/posts.php?topic=3637#38950", 80, Self
+		SetUpdateRate 60
+	End
+	
+	Method OnUpdate()
+	
+		UpdateAsyncEvents
+
+	End
+
+	Method OnRender()
+	
+		Cls
+
+                ' we got any text ?
+		If getter.last_received &lt;&gt; "" Then
+			DrawText getter.last_received, 0, 0
+		EndIf
+		
+	End
+End
+
+Function Main()
+	New MyApp
+End
+
+
+</pre><br><br><br>/Stu <br><br></td></tr></table><br>
+<a name="2040576"></a>
+
+<a name="2050012"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raz</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for this :) Was struggling to get sub directory content <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

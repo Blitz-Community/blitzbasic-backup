@@ -1,0 +1,671 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Windows-specific C/C++: DLL access works, but...</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Windows-specific C/C++: DLL access works, but...</h1><a href="forums.php" >Monkey Targets Forums</a>/<a href="topics.php?forum=300" >Desktop</a>/<a href="#bottom" >Windows-specific C/C++: DLL access works, but...</a><br><br>
+<a name="2089712"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi all,<br><br>Wondering if anyone can help with this! I've wanted to access DLLs on Windows for a while, which requires C++ wrapper code, so I finally pieced together this example.<br><br>Please bear in mind that my C skills are minimal and my C++ skills non-existent, and take a look at this Monkey test and associated C++ code which would perhaps best be described as "execrable":<br><br><i>test.monkey</i>:<br><pre class=code>
+Import "test.cpp"
+
+Extern
+
+Function InitDLL:Int ()
+Function FreeDLL:Void ()
+
+Function TestFunc:Int () ' A test Win32 function, no DLL call involved
+
+' Attempt to call MessageBox (HWND hWnd, LPCTSTR lpText, LPCTSTR lpCaption, UINT uType)
+' from user32.dll:
+
+Function MsgBox (hWnd:Int, lpText:String, lpCaption:String, uType:Int)
+
+' OK, so I knew String wouldn't work, but how do I pass a pointer to a character array?!
+
+Public
+
+Function Main ()
+
+	If InitDLL ()								' Works!
+	
+		' MsgBox (0, "Hello", "Hello you", 0)	' No worky! Uncomment to try...
+		
+		'Print TestFunc ()						' Works! Uncomment for requester...
+		FreeDLL ()								' Works!
+	
+	Else
+		Print "Failed to open DLL!"
+	Endif
+	
+End
+</pre><br><br>Using skid's Steam example code, and hours of internet research to remember how to do even the simplest of C code, I managed to slowly put together something that seems to work, though I'm not really sure how all the C++ versus extern "C" stuff works...<br><br><i>test.cpp</i>:<br><pre class=code>
+
+// Think these do something... faster compiles... probably.
+
+#define VC_EXTRALEAN
+#define WIN32_LEAN_AND_MEAN
+
+#define BBDECL extern "C" // Stolen from skid's Steam code
+
+#include &lt;windows.h&gt;
+#include &lt;iostream&gt;
+
+// Just for cout &lt;&lt; "Hello" stuff...
+
+using namespace std;
+
+// Global DLL handle...
+
+HINSTANCE User32;
+
+// Typedef thingy for User32's MessageBox...
+
+BBDECL typedef int (*LPMSGBOX)(HWND hWnd, LPCTSTR lpText, LPCTSTR lpCaption, UINT uType);
+
+// MessageBox function pointer... thing...
+
+LPMSGBOX MsgBox;
+
+// Prototypes...
+
+BBDECL int InitDLL ();	// Open DLL and stick in global User32
+BBDECL void FreeDLL ();	// Close DLL
+
+// Functions...
+
+BBDECL int InitDLL ()
+{
+
+	User32 = LoadLibrary ("user32.dll");
+	
+	if (User32 != NULL)
+	{
+		// Point MsgBox to User32's MessageBox function...
+		
+		MsgBox = (LPMSGBOX)GetProcAddress ((HMODULE)User32, "MessageBox");
+		return 1;
+	}
+	else
+	{
+		return 0;
+	}
+	
+}
+
+BBDECL void FreeDLL ()
+{
+	if (User32 != NULL)
+	{
+		FreeLibrary (User32);
+	}
+}
+
+// Non-DLL test!
+
+BBDECL int TestFunc ()
+{
+	MessageBox( NULL, "Hello World!", "Hello", MB_OK );
+	return 1;
+}
+</pre><br><br>Anyway, that's all working, until I get to the MessageBox function, which I'm trying to dynamically obtain from user32.dll.<br><br>MessageBox is defined as MessageBox (HWND hWnd, LPCTSTR lpText, LPCTSTR lpCaption, UINT uType), and where it all falls down is when I try to use it from the Monkey side.<br><br>Because we can't use byte pointers, as I'd do in BlitzMax (or even a Blitz3D userlib), I don't know how to handle the function definition in Monkey in order to handle the LPCTSTRs, lpText and lpCaption:<br><br><pre class=code>
+Function MsgBox (hWnd:Int, lpText:String, lpCaption:String, uType:Int)
+</pre><br><br>Well, I knew that wouldn't work (still tried it!), but how would I pass a string to the Win32 function requiring a C string pointer? In BlitzMax it'd be easy -- "Hello world".ToCString () -- but I'm lost here!<br><br>If anyone can point me in the right direction, or even just comment on how this might be better laid out overall (or where I might be doing something stupid on the C++ side), it would be much appreciated! <br><br></td></tr></table><br>
+<a name="2089711"></a>
+
+<a name="2089714"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> in monkey/native/lang.cpp there is a string.ToCString() function in the String Class. (and ToNSString )<br>so you would need an inbetween function (glue code) to convert the cstring. <br><br></td></tr></table><br>
+<a name="2089721"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for looking into it, Adam... suspect this might be a little out of my C/C++ league (nice to discover there is at least a ToCString)... will have another look tomorrow, though... <br><br></td></tr></table><br>
+<a name="2089732"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nope, as I suspected, I haven't got a clue what to do with this!<br><br>I can see the ToCString thing (well, two of them... can't decipher what they mean!) and presumably I need to be writing a C++ function to 'receive' a Monkey String and then call the Win32 function with the output, which sounds do-able, but how do I actually access String/ToCString from an arbitrary C++ file?<br><br>I tried a straight #include but of course it's all duplicate identifiers! <br><br></td></tr></table><br>
+<a name="2089734"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pharmhaus</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Using Strings is a no brainer, but the LPCTSTR requires additional conversion.<br>Unfortunately there is no such function in Monkey and It complains when I try to pass other stuff to it...<br>This works but is a bit tedious<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import "test.cpp"
+
+Extern
+
+Function InitDLL:Int ()
+Function FreeDLL:Void ()
+
+Function TestFunc:Int () ' A test Win32 function, no DLL call involved
+
+' Attempt to call MessageBox (HWND hWnd, LPCTSTR lpText, LPCTSTR lpCaption, UINT uType)
+' from user32.dll:
+
+Function MessageBoxWrapper(hWnd:Int, lpText:String, lpCaption:String, uType:Int)
+
+' OK, so I knew String wouldn't work, but how do I pass a pointer to a character array?!
+
+Public
+
+Function Main ()
+
+	If InitDLL ()								' Works!
+		 MessageBoxWrapper(0, "Hello", "Hello you", 0)	' No worky! Uncomment to try...
+		
+		'Print TestFunc ()						' Works! Uncomment for requester...
+		FreeDLL ()								' Works!
+	
+	Else
+		Print "Failed to open DLL!"
+	Endif
+	
+End
+</textarea><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+// Think these do something... faster compiles... probably.
+
+#define VC_EXTRALEAN
+#define WIN32_LEAN_AND_MEAN
+
+#define BBDECL extern "C" // Stolen from skid's Steam code
+
+#include &lt;windows.h&gt;
+#include &lt;iostream&gt;
+
+// Just for cout &lt;&lt; "Hello" stuff...
+
+using namespace std;
+
+// Global DLL handle...
+
+HINSTANCE User32;
+
+// Typedef thingy for User32's MessageBox...
+
+BBDECL typedef int (*LPMSGBOX)(HWND hWnd, LPCTSTR lpText, LPCTSTR lpCaption, UINT uType);
+
+// MessageBox function pointer... thing...
+
+LPMSGBOX MsgBox;
+
+// Prototypes...
+
+BBDECL int InitDLL ();	// Open DLL and stick in global User32
+BBDECL void FreeDLL ();	// Close DLL
+
+// Functions...
+
+BBDECL int InitDLL ()
+{
+
+	User32 = LoadLibrary ("user32.dll");
+	
+	if (User32 != NULL)
+	{
+		// Point MsgBox to User32's MessageBox function...
+		
+		MsgBox = (LPMSGBOX)GetProcAddress ((HMODULE)User32, "MessageBox");
+		return 1;
+	}
+	else
+	{
+		return 0;
+	}
+	
+}
+
+BBDECL void FreeDLL ()
+{
+	if (User32 != NULL)
+	{
+		FreeLibrary (User32);
+	}
+}
+
+// Non-DLL test!
+
+BBDECL int TestFunc ()
+{
+	MessageBox( NULL, "Hello World!", "Hello", MB_OK );
+	return 1;
+}
+
+BBDECL void MessageBoxWrapper(HWND hWnd, String lpText, String lpCaption, UINT uType)
+{
+	MessageBox( NULL, lpText.ToCString&lt;char&gt;(), lpCaption.ToCString&lt;char&gt;(), MB_OK );
+}
+</textarea> <br><br></td></tr></table><br>
+<a name="2089738"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ah, thanks for that! I can work with this though it does seem a little clumsy as you suggest.<br><br>Is this using Monkey's own ToCString? [EDIT: Yes, it is.] Didn't realise I could just use it like that...<br><br>Hopefully this will be enough for me to do what I need, thanks both! <br><br></td></tr></table><br>
+<a name="2089737"></a>
+
+<a name="2089740"></a>
+
+<a name="2089741"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm, slight problem: if I try to call the DLL version, MsgBox, inside MessageBoxWrapper (instead of the static-linked MessageBox), then it crashes with a memory violation.<br><br>(MsgBox is obtained in InitDLL.)<br><br><pre class=code>
+BBDECL void MessageBoxWrapper(HWND hWnd, String lpText, String lpCaption, UINT uType)
+{
+	MsgBox( NULL, lpText.ToCString&lt;char&gt;(), lpCaption.ToCString&lt;char&gt;(), MB_OK );
+}
+
+' Also tried:
+
+BBDECL void MessageBoxWrapper(HWND hWnd, String lpText, String lpCaption, UINT uType)
+{
+	MsgBox( NULL, (LPCTSTR)lpText.ToCString&lt;char&gt;(), (LPCTSTR)lpCaption.ToCString&lt;char&gt;(), MB_OK );
+}
+
+' (Also tried changing the return type to int.)
+
+</pre><br><br>Any ideas?! As you can see, my grasp of C/C++ leaves a lot to be desired... <br><br></td></tr></table><br>
+<a name="2089739"></a>
+
+<a name="2089742"></a>
+
+<a name="2089743"></a>
+
+<a name="2089744"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Danilo</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> <a href="http://msdn.microsoft.com/en-us/library/windows/desktop/ms645505(v=vs.85).aspx" target="_blank"><u>MessageBox</u></a>:<br><div class="quote"> Unicode and ANSI names: <b>MessageBoxW</b> (Unicode) and <b>MessageBoxA</b> (ANSI) <br></div><br>And check the return value of GetProcAddress(). The 'A' and 'W' thing is for most functions that work with char/wchar strings. <br><br></td></tr></table><br>
+<a name="2089745"></a>
+
+<a name="2089746"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pharmhaus</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh, sorry my fault.<br>The Loading of the MessageBox function can never succeed becaused it is not called "MessageBox".<br>Replace "MessageBox" with "MesaageBoxA" because there are two versions of MessageBox (MessageBoxA and MessageBoxW).<br>And it works again!<br>MessageBox is just for lazy programmers and is one of the two underneath the hood, depending if you use unicode or not. <br><br></td></tr></table><br>
+<a name="2090314"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pharmhaus</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> I Just tested this which might me more of your interest.<br>I takes the messagebox stuff back to the Monkey-X Level (yay!).<br>It 'tricks' trans into believing that the MsgBox will need a String.<br>You only need to be careful what you pass to MsgBox because it still needs a CString.<br><br>EDIT: Just continued to hack around and seems more solid now. It now also abuses the type comparison of trans which prevents compilation errors<br><br>EDIT2: Made some minor changes to make it even safer.<br><br>EDIT3: resolved crash in release mode<br><br><a href="http://www.blitzbasic.com/Community/post.php?topic=102259&amp;post=1230286" target="_blank">How does this work?</a><br><br>Works pretty well so far:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import "test.cpp"
+
+Extern
+
+Function InitDLL:Int ()
+Function FreeDLL:Void ()
+Function MsgBox(hWnd:Int, lpText:CStringNative, lpCaption:CStringNative, uType:Int)
+
+'Converts String to CString, please note that there is no valid datatype in monkey so we use the CStringNative hack
+Function NativeCString:CStringNative(S:String)
+
+'This Class does not exist, it is only here to use trans type comparison to prevent us from passing strings to functions which expect Cstrings
+Class CStringNative Abstract
+End
+
+Public
+
+Function Main ()
+
+	If InitDLL()
+		MsgBox(0, NativeCString("Hello"), NativeCString("Hello you"), 0)
+		FreeDLL()
+	
+	Else
+		Print "Failed to open DLL!"
+	Endif
+	
+End
+</textarea><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+// Think these do something... faster compiles... probably.
+
+#define VC_EXTRALEAN
+#define WIN32_LEAN_AND_MEAN
+
+#define BBDECL extern "C" // Stolen from skid's Steam code
+
+#include &lt;windows.h&gt;
+#include &lt;iostream&gt;
+
+// Just for cout &lt;&lt; "Hello" stuff...
+
+using namespace std;
+
+// Global DLL handle...
+
+HINSTANCE User32;
+
+// Typedef thingy for User32's MessageBox...
+
+BBDECL typedef int (__stdcall *LPMSGBOX)(HWND hWnd, LPCTSTR lpText, LPCTSTR lpCaption, UINT uType);
+
+// MessageBox function pointer... thing...
+
+LPMSGBOX MsgBox;
+
+// Prototypes...
+
+BBDECL int InitDLL ();	// Open DLL and stick in global User32
+BBDECL void FreeDLL ();	// Close DLL
+
+// Functions...
+
+BBDECL int InitDLL ()
+{
+
+	User32 = LoadLibrary ("user32.dll");
+	
+	if (User32 != NULL)
+	{
+		// Point MsgBox to User32's MessageBox function...
+		
+		MsgBox = (LPMSGBOX)GetProcAddress ((HMODULE)User32, "MessageBoxA");
+
+		return 1;
+	}
+	else
+	{
+		return 0;
+	}
+	
+}
+
+BBDECL void FreeDLL ()
+{
+	if (User32 != NULL)
+	{
+		FreeLibrary (User32);
+	}
+}
+
+String::CString&lt;char&gt; NativeCString(const String &amp; S)
+{
+	return S.ToCString&lt;char&gt;();
+}
+</textarea> <br><br></td></tr></table><br>
+<a name="2089823"></a>
+
+<a name="2089767"></a>
+
+<a name="2089763"></a>
+
+<a name="2089762"></a>
+
+<a name="2089748"></a>
+
+<a name="2089749"></a>
+
+<a name="2089756"></a>
+
+<a name="2089760"></a>
+
+<a name="2089761"></a>
+
+<a name="2089770"></a>
+
+<a name="2089771"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks Pharmhaus! That does seem to work, though I found that it crashes in release mode <i>after</i> showing the messagebox, yet debug mode flags up no errors at all, so something's not quite right.<br><br>I also amended your first version to use MessageBoxA (I was aware of the A/W thing but apparently didn't even think of it) but that does exactly the same thing -- shows the messagebox but then crashes in release mode. I'll have to stick a few Prints in there and see if I can narrow it down -- the only code after that on the Monkey side is FreeDLL, but removing that shows it's not the cause.<br><br>(Also, good point, Danilo -- I did intend to get around to checking the GetProcAddress result, but... ahem!) <br><br></td></tr></table><br>
+<a name="2089777"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is weird... the messagebox displays, but it seems to be crashing only on exit, as Prints/couts anywhere on the Monkey/C++ side all get displayed. It's also nothing to do with the ToCString stuff, as this also crashes:<br><br><pre class=code>
+MsgBox( NULL, "Hello", "Hello again", MB_OK );
+</pre><br><br>I'm testing with the 'old' wrapper version, just because I understand that -- I've no idea how the NativeCString version works, though I'll probably switch to it once the crashes are sorted out!<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Import "test.cpp"
+
+Extern
+
+Function InitDLL:Int ()
+Function FreeDLL:Void ()
+
+Function TestFunc:Int () ' A test Win32 function, no DLL call involved
+
+' Attempt to call MessageBox (HWND hWnd, LPCTSTR lpText, LPCTSTR lpCaption, UINT uType)
+' from user32.dll:
+
+Function MsgBox (hWnd:Int, lpText:String, lpCaption:String, uType:Int)
+Function MessageBoxWrapper (hWnd:Int, lpText:String, lpCaption:String, uType:Int)
+
+' OK, so I knew String wouldn't work, but how do I pass a pointer to a character array?!
+
+Public
+
+Function Main ()
+
+	If InitDLL ()								' Works!
+	
+		Print "Wait for it..."
+		MessageBoxWrapper (0, "Hello", "Hello you", 0)	' No worky! Uncomment to try...
+		Print "Done"
+		
+		'Print TestFunc ()						' Works! Uncomment for requester...
+		FreeDLL ()								' Works!
+	
+	Else
+		Print "Failed to open DLL!"
+	Endif
+
+	Print "Didn't get here" ' Did!
+
+End
+</textarea><br><br><i>test.cpp...</i><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+// Think these do something... faster compiles... probably.
+
+#define VC_EXTRALEAN
+#define WIN32_LEAN_AND_MEAN
+
+#define BBDECL extern "C" // Stolen from skid's Steam code
+
+#include &lt;windows.h&gt;
+#include &lt;iostream&gt;
+
+// Just for cout &lt;&lt; "Hello" stuff...
+
+using namespace std;
+
+// Global DLL handle...
+
+HINSTANCE User32;
+
+// Typedef thingy for User32's MessageBox...
+
+BBDECL typedef int (*LPMSGBOX)(HWND hWnd, LPCTSTR lpText, LPCTSTR lpCaption, UINT uType);
+
+// MessageBox function pointer... thing...
+
+LPMSGBOX MsgBox;
+
+// Prototypes...
+
+BBDECL int InitDLL ();	// Open DLL and stick in global User32
+BBDECL void FreeDLL ();	// Close DLL
+
+// Functions...
+
+BBDECL int InitDLL ()
+{
+
+	User32 = LoadLibrary ("user32.dll");
+	
+	if (User32 != NULL)
+	{
+		// Point MsgBox to User32's MessageBox function...
+		
+		MsgBox = (LPMSGBOX)GetProcAddress ((HMODULE)User32, "MessageBoxA");
+		
+		if (MsgBox != NULL)
+		{
+			return 1;
+		}
+		else
+		{
+			return 0;
+		}
+	}
+	else
+	{
+		return 0;
+	}
+	
+}
+
+BBDECL void FreeDLL ()
+{
+	if (User32 != NULL)
+	{
+		FreeLibrary (User32);
+	}
+}
+
+// Non-DLL test!
+
+//BBDECL int TestFunc ()
+//{
+//	MessageBox( NULL, "Hello World!", "Hello", MB_OK );
+//	return 1;
+//}
+
+BBDECL int MessageBoxWrapper(HWND hWnd, String lpText, String lpCaption, UINT uType)
+{
+	MsgBox( NULL, lpText.ToCString&lt;char&gt;(), lpCaption.ToCString&lt;char&gt;(), MB_OK );
+//	MsgBox( NULL, "Hello", "Hello you", MB_OK );
+}
+</textarea> <br><br></td></tr></table><br>
+<a name="2089775"></a>
+
+<a name="2089776"></a>
+
+<a name="2089773"></a>
+
+<a name="2089774"></a>
+
+<a name="2089778"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pharmhaus</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> oh, I was using debug all the time :(<br>I will try to sort it out but I have to do some chores now. <br><br></td></tr></table><br>
+<a name="2089784"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Any help would be much appreciated, but there's no rush!<br><br>I did just hack in Kernel32's Sleep function in order to test that it wasn't crashing straight after the MessageBox call -- sure enough, the MB appears, and after closing it, the program sleeps for two seconds, <i>then</i> it crashes.<br><br>It only crashes if it calls MsgBox inside MessageBoxWrapper (regardless of whether or not you use ToCString), so that's definitely related, but the definitions do all appear to be correct, and as far as I can tell it's only on program exit.<br><br>Hmm, interesting... this crashed after the second messagebox appeared, so it's not necessarily at program exit (Delay is just Kernel32/Sleep):<br><br><pre class=code>
+BBDECL int MessageBoxWrapper(HWND hWnd, String lpText, String lpCaption, UINT uType)
+{
+	MsgBox( NULL, lpText.ToCString&lt;char&gt;(), lpCaption.ToCString&lt;char&gt;(), MB_OK );
+	Delay(2000);
+	MsgBox( NULL, lpText.ToCString&lt;char&gt;(), lpCaption.ToCString&lt;char&gt;(), MB_OK );
+	Delay(2000);
+	MsgBox( NULL, lpText.ToCString&lt;char&gt;(), lpCaption.ToCString&lt;char&gt;(), MB_OK );
+	Delay(2000);
+//	MsgBox( NULL, "Hello", "Hello you", MB_OK );
+}
+
+</pre><br><br>Hmm #2: removing the Delays, it sometimes gets through all before crashing... <br><br></td></tr></table><br>
+<a name="2089783"></a>
+
+<a name="2089782"></a>
+
+<a name="2089781"></a>
+
+<a name="2089786"></a>
+
+<a name="2089787"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pharmhaus</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm not sure if it works because everything is ok or if it is some kind of random-ness.<br>Try to replace your version with these lines:<br><pre class=code>
+// Typedef thingy for User32's MessageBox...
+
+BBDECL typedef int (__stdcall *LPMSGBOX)(HWND hWnd, LPCTSTR lpText, LPCTSTR lpCaption, UINT uType);
+
+</pre> <br><br></td></tr></table><br>
+<a name="2089818"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ah, perfect! I believe that's what was missing -- it's the equivalent of BlitzMax's "win32" calling type. Should have guessed, but I wouldn't have known how to actually apply it even if I did!<br><br>Thanks for all your help with this -- I've learned a lot just from this little exercise! Think I have enough to work with now. <br><br></td></tr></table><br>
+<a name="2089856"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Danilo</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> You may want to use UNICODE strings with WinAPI (MessageBoxW for example).<br>Monkey X defines the type "Char" at the beginning of C++ files, so if you use ToCString&lt;Char&gt;()<br>it uses Unicode.<br><br>MessageBox.cpp<br><pre class=code>#include &lt;windows.h&gt;
+
+namespace WinAPI {
+    inline int MessageBox(int a,String b,String c, int d) {
+        return MessageBoxW((HWND)a,b.ToCString&lt;Char&gt;(),c.ToCString&lt;Char&gt;(),d);
+    }
+}
+
+#define MsgBox(a,b,c,d)      MessageBoxW((HWND)a,b.ToCString&lt;Char&gt;(),c.ToCString&lt;Char&gt;(),d)
+#define MessageBox_(a,b,c,d) MessageBoxW((HWND)a,b.ToCString&lt;Char&gt;(),c.ToCString&lt;Char&gt;(),d)</pre><br>MessageBox.monkey<br><pre class=code>Import "MessageBox.cpp"
+
+Extern
+    Function MsgBox:Int(hWnd:Int, lpText:String, lpCaption:String, uType:Int)
+    Function MessageBox_:Int(hWnd:Int, lpText:String, lpCaption:String, uType:Int)
+    Class WinAPI Abstract
+        Function MessageBox:Int(hWnd:Int, lpText:String, lpCaption:String, uType:Int)
+    End
+Public
+
+Function Main:Int()
+    MsgBox(0, "Helloöäü - مرحبا", "Hello you", 0)
+    MessageBox_(0, "Helloöäü - مرحبا", "Hello you", 0)
+    WinAPI.MessageBox(0, "Helloöäü - مرحبا", "Hello you", 0)
+End</pre> <br><br></td></tr></table><br>
+<a name="2089855"></a>
+
+<a name="2089854"></a>
+
+<a name="2089853"></a>
+
+<a name="2089852"></a>
+
+<a name="2089850"></a>
+
+<a name="2089885"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks, Danilo, you're right, though I was mainly using MessageBox/user32.dll as a test for accessing 3rd-party DLLs.<br><br>However, that's an interesting approach you've taken there, so will study it -- and of course it is much better to be able to support other languages anyway! <br><br></td></tr></table><br>
+<a name="2090329"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Pharmhaus: Following on from the <a href="http://www.blitzbasic.com/Community/posts.php?topic=102259" target="_blank">Blitz Hardwired thread</a>, here's an initial version of the Monkey lib:<br><br><a href="http://www.hi-toro.com/monkey/wiredmonkey.zip" target="_blank">http://www.hi-toro.com/monkey/wiredmonkey.zip</a><br><br>I used your NativeCString hack (I "sort of" understand it from your explanation and it was the easiest way to handle it!), but for some reason my attempt to load a texture fails, and I assume it's related to the string:<br><br><pre class=code>
+texture	= dxLoadTexture (NativeCString ("boing.jpg"), 1)
+</pre><br><br>Would you mind taking a look to see where I'm going wrong? (The imports are based on Ploppy's latest release version.)<br><br>I'm wondering if it's an ASCII versus Unicode thing (Blitz3D was ASCII, and I'd assume Hardwired is the same given it's really made for Blitz3D)... ?<br><br>Also, not sure how to handle <i>returned</i> strings with this -- any ideas there?<br><br>Hopefully you can just tweak the included CPP/Monkey import files to test! <br><br></td></tr></table><br>
+<a name="2090340"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pharmhaus</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>I was actually a little uncomfortable using that method, though, mainly because I don't understand how it works! <br> <br></div><br>The problem in Monkey is that there is no CString like there was in Blitzmax (we agree on that).<br>So the magic questions that pop up are :<br>what kind of parameter does a function have if there is no cstring, but the function *needs* a cstring to work with?<br>Furthermore, what return type does a function have which likes to return a CString? (which does not exist in Monkey)<br><br>We use the Extern Keyword there.<br>With extern we tell Trans (the Monkey compiler) that there is a Function or Class somewhere outside of our Monkey files that we would like to use.<br>The magic trick: trans can't tell if we are a liar or not.<br>So you could write what ever you wanted inside extern and trans is going to believe that no matter how absurd, because It trusts you.<br>So we lie to trans : <br>This function returns an object of the Class CStringNative<br><pre class=code>
+'Converts String to CString, please note that there is no valid datatype in monkey so we use the CStringNative hack
+Function NativeCString:CStringNative(S:String)
+
+Class CStringNative Abstract
+End
+</pre><br>and trans will believe that.<br>This is a bit dangerous because we could trap ourself somewhere because of our lies.<br>e.g. we cannot create a new CStringNative, because there is no such class but a user could type "new CStringNative".<br>I fixed that by making Trans also believe that CStringNative is abstract (can't be build via new() ), so we cannot store the return type in a variable which would be deadly to ourself.<br>To make it work we also make trans believe that Messagebox needs an object of type CStringNative to work with.<br><pre class=code>
+Function MsgBox(hWnd:Int, lpText:CStringNative, lpCaption:CStringNative, uType:Int)
+</pre><br>You could replace the Messagebox code with something really absurd<br>e.g. lpText is of type int and the function NativeCString has int as return type.<br><br>This is still going to work because it doesn't change the code generated.<br>This is the major trick here: things in extern don't generate any code at all (because they already 'exist').<br>Trans will glue all the code together no matter if it makes sense or not.<br>What counts is the world from trans point of view and in trans world everything is fine (because int=int; CStringNative=CStringNative).<br><br>The reason the CStringNative Class approach is way safer is because trans will do type-checking now.<br>if we made lpText an 'int' we could pass normal ints to it because from trans view, this is fine.<br>By saying 'this needs to be a CStringNative' trans will do what it can to ensure that this rule is met.<br>So it only allows us to pass what we get back from the NativeCString function but no other things.<br>This way we can never generate code that is defect.<br><br>Even if i use the word 'lie' here it is nothing evil or forbidden that should never be done.<br>It simply ensures that the monkey enviroment works like you would expect it do to (Safety &amp; Typechecking).<br><br>hope that helps. <br><br></td></tr></table><br>
+<a name="2090335"></a>
+
+<a name="2090332"></a>
+
+<a name="2090341"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pharmhaus</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> OK, seems to work the half way now.<br>The image cannot be loaded because the path is wrong (took a while to realize that...).<br>fix:<br><pre class=code>
+		texture = dxLoadTexture(NativeCString(DataPath() + "\boing.jpg"), 1)
+</pre><br><br><pre class=code>
+Function DataPath:String()
+	#if HOST="winnt"
+		Return (os.ExtractDir(AppPath()) + "/data").Replace("/", "\")
+	#elseif HOST="macos"
+		Return os.ExtractDir(AppPath()) + "/data"
+	#elseif HOST="linux"
+		Return os.ExtractDir(AppPath()) + "/data"
+	#endif
+End
+</pre><br><br>This should work to get a String from CStrings.<br>FromCString:<br><pre class=code>
+String FromCString(const char* c)
+{
+	return String(&amp;c[0]);
+}
+</pre><br><br><pre class=code>
+
+Function NativeCString:CStringNative(S:String)
+Function FromCString:String(S:CStringNative)
+		
+Class CStringNative Abstract
+End
+	
+</pre><br>I tinkered a bit around around and i think that Poppy's Library does not return null terminated Strings, but I'm not sure.<br>It works fine to set the Window title and load your texture, but the returned Strings from the Dll are always corrupted (more random character than you put in).<br><pre class=code>
+Print FromCString(NativeCString("hello world!")) 'Works fine
+dxNameEntity(cube, NativeCString("Hello World!"))
+Print FromCString(dxEntityName(cube))' Cruel special characters appearing 
+</pre> <br><br></td></tr></table><br>
+<a name="2090339"></a>
+
+<a name="2090338"></a>
+
+<a name="2090363"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Danilo</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#22">[#22]</a></td></tr></table></td></tr><tr ><td class="posttext"> @DruggedBunny:<br>Modified your BlitzMax generator little bit, so you can use Monkey X Strings directly: <a href="http://www.filedropper.com/wiredmonkeynew" target="_blank">wiredmonkey_new.zip</a> (47k)<br><br>You can directly use:<br><pre class=code>texture = dxLoadTexture("data/boing.jpg", 1)</pre><br>instead<br><pre class=code>texture = dxLoadTexture(NativeCString ("data/boing.jpg"), 1)</pre><br>Works also with return values, for example:<br><pre class=code>Print dxGetWinVersion()</pre><br>Although the return strings seem still not to be 0-terminated correctly. <br><br></td></tr></table><br>
+<a name="2090362"></a>
+
+<a name="2090358"></a>
+
+<a name="2090359"></a>
+
+<a name="2090360"></a>
+
+<a name="2090361"></a>
+
+<a name="2090386"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pharmhaus</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#23">[#23]</a></td></tr></table></td></tr><tr ><td class="posttext"> I was just doing something similar but it looks like you were faster.<br>Sooo how about hard wired mojo next ? :D<br><br>EDIT: I will check some of the dll functions now.<br>EDIT2: There is a bug in danilos version download <a href="http://pharmhaus-software.de/hw/monkeyer.bmx" target="_blank">*This*</a> instead. <br><br></td></tr></table><br>
+<a name="2090369"></a>
+
+<a name="2090371"></a>
+
+<a name="2090372"></a>
+
+<a name="2090373"></a>
+
+<a name="2090374"></a>
+
+<a name="2090365"></a>
+
+<a name="2090388"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#24">[#24]</a></td></tr></table></td></tr><tr ><td class="posttext"> Whoa, thanks guys! Need to read all this to try and take it in...<br><br>Did something change with regards to paths, though? I thought Desktop still worked the same, ie. media files in a project.data folder don't need a path?<br><br><div class="quote"> <br>Sooo how about hard wired mojo next ? :D<br> <br></div><br>Ambitious!<br><br>I think the wrapper should stay pretty future-proof, anyway, given it's only reading the .decls file, and the format of that file is pretty much static... not looked at the changes yet, but it sounds like Pharmhaus's updated version is probably the 'final' version... ?<br><br>I also want to wrap Blitz3DSDK, but of course not very many people have access to that... :/<br><br>Also plan to port my crude BlitzMax code for accessing the Xbox360 pad's rumble effects via xinput.dll.<br><br>Thanks again, all, wanted to do this quite a while ago but found the C++ side way too daunting before! <br><br></td></tr></table><br>
+<a name="2090391"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pharmhaus</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#25">[#25]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>Did something change with regards to paths, though? I thought Desktop still worked the same, ie. media files in a project.data folder don't need a path?<br> <br></div><br>The problem is that Ploppy's dll is not a part of monkey and thus does not benefit from the internal monkey ability to manage that.<br><br><div class="quote"> <br>I think the wrapper should stay pretty future-proof, anyway, given it's only reading the .decls file, and the format of that file is pretty much static... not looked at the changes yet, but it sounds like Pharmhaus's updated version is probably the 'final' version... ?<br> <br></div><br>Danilo did the magic here, I only fixed a bug that he overlooked. But yes the version from my post is the final one.<br><br><div class="quote"> <br>Thanks again, all, wanted to do this quite a while ago but found the C++ side way too daunting before!<br> <br></div><br>It indeed is.... (Maybe because of the *good* documentation of mark's code?)<br><br>EDIT: please note that DataPath() should replace / with \ but the forum ate it. <br><br></td></tr></table><br>
+<a name="2090390"></a>
+
+<a name="2090389"></a>
+
+<a name="2090398"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#26">[#26]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>The problem is that Ploppy's dll is not a part of monkey and thus does not benefit from the internal monkey ability to manage that.<br> <br></div><br>Ahhh, well spotted! <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

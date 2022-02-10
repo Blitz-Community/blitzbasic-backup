@@ -1,0 +1,441 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Lossless UDP engine. Test please?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Lossless UDP engine. Test please?</h1><a href="forums.php" >Community Forums</a>/<a href="topics.php?forum=61" >Showcase</a>/<a href="#bottom" >Lossless UDP engine. Test please?</a><br><br>
+<a name="747809"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> UDP based lossless (optional) network engine. I'd appreciate if you could test it.<br><br>About server:<br>Every stream has it's own UDP port. First, client connects to server and then server will automatically redirect it to a new port.<br><br>I tested 22'000 packets in a row and it had no errors.<br><br>Functions:<br><pre class=code>
+server% = CreateUDPServer%([port%])
+stream% = AcceptUDPStream%(server%)
+stream% = OpenUDPStream%(ip$, port%, [localport%])
+inip_from% = ReceiveUDPMsg%(stream%) - 0 if no message has arrived
+result% = WriteUDPByte%(stream%, value%)
+result% = WriteUDPBytes%(bank%, stream%, offset%, count%)
+result% = WriteUDPLine%(stream%, txt$)
+result% = WriteUDPInt%(stream%, value%)
+result% = WriteUDPString%(stream%, txt$)
+value% = ReadUDPByte%(stream%)
+value% = ReadUDPBytes%(bank%, stream%, offset%, count%)
+value% = ReadUDPLine$(stream%)
+value% = ReadUDPInt%(stream%)
+value% = ReadUDPString$(stream%)
+remote_port% = UDPPort%(stream%)
+remote_intip% = UDPIP%(stream%)
+byte_count% = UDPReadAvail%(stream%)
+RemoveUDPStream%(stream%)
+</pre><br><br>Source:<br><pre class=code>
+Const UDPResponseDelay% = 2000, UDPRetries% = 5, LossLessUDP% = True
+
+Function CreateUDPServer%(port% = 0)
+	Local server% = CreateUDPStream(port%), bank%
+	If server%
+		bank% = CreateBank(4 * 3 + 1)
+		
+		PokeInt bank%, 0 * 4, server%
+		PokeInt bank%, 1 * 4, UDPStreamIP(server%)
+		PokeInt bank%, 2 * 4, UDPStreamPort(server%)
+		PokeByte bank%, 3 * 4, 1
+		
+		Return bank%
+	EndIf
+End Function
+
+Function AcceptUDPStream%(bank%)
+	Local accepted%
+	Local server% = PeekInt(bank%, 0 * 4)
+	Local ip% = PeekInt(bank%, 1 * 4)
+	Local port% = PeekInt(bank%, 2 * 4)
+	
+	Local from% = RecvUDPMsg(server%)
+	If from%
+		clientip% = UDPMsgIP(server%)
+		clientport% = UDPMsgPort(server%)
+		
+		value% = ReadInt(server%)
+		If value% =&gt; 12345 And value% =&lt; 23456 Then
+			; Create stream bank
+			bank% = CreateBank(4 * 3 + 1)
+			accepted% = CreateUDPStream()
+			PokeInt bank%, 0, accepted%
+			PokeInt bank%, 4, clientip%
+			PokeInt bank%, 8, clientport%
+			PokeByte bank%, 12, 0
+			
+			WriteInt accepted%, UDPStreamPort(accepted%)
+			SendUDPMsg accepted%, clientip%, clientport%
+			
+			Return bank%
+		Else
+			FreeBank bank%
+			CloseUDPStream accepted%
+			
+			Return False
+		EndIf
+	EndIf
+End Function
+
+Function OpenUDPStream%(ip$, port%, localport% = 0)
+	Local stream% = CreateUDPStream(localport%)
+	
+	Local bank% = CreateBank(4 * 3 + 1)
+	PokeInt bank%, 0, stream%
+	PokeInt bank%, 4, IntIP(ip$)
+	PokeInt bank%, 8, port%
+	PokeByte bank%, 12, 1
+	
+	validation% = Rand(12345, 23456)
+	WriteInt stream%, validation%
+	SendUDPMsg stream%, PeekInt(bank%, 4), PeekInt(bank%, 8)
+	
+	For i = 1 To UDPRetries%
+		tim% = MilliSecs()
+		Repeat
+			from% = RecvUDPMsg(stream%)
+		Until from% Or MilliSecs() - tim% &gt; UDPResponseDelay%
+		If from%
+			value% = ReadInt(stream%)
+			PokeInt bank%, 8, value%
+			
+			Return bank%
+		EndIf
+	Next
+	
+	; Failed
+	FreeBank bank%
+	CloseUDPStream stream%
+	
+	Return False
+End Function
+
+Function ReceiveUDPMsg%(bank%)
+	Local stream% = PeekInt(bank%, 0)
+	Local ip% = PeekInt(bank%, 4)
+	Local port% = PeekInt(bank%, 8)
+	Local msgindex% = PeekByte(bank%, 12)
+	
+	from% = RecvUDPMsg(stream%)
+	If from%
+		If UDPMsgIP(stream%) = ip% And UDPMsgPort(stream%) = port%
+			index% = ReadByte(stream%)
+			If LossLessUDP%
+				If Not index% = msgindex%
+					; Response to message
+					PokeByte bank%, 12, index%
+					
+					WriteByte stream%, index%
+					SendUDPMsg stream%, ip%, port%
+					
+					Return from%
+				Else
+					DebugLog "Invalid message index!"
+					
+					; Message already received
+					WriteByte stream%, index%
+					SendUDPMsg stream%, ip%, port%
+					
+					Return False
+				EndIf
+			Else
+				Return from%
+			EndIf
+		EndIf
+	EndIf
+End Function
+
+Function WriteUDPByte%(bank%, value%)
+	Local stream% = PeekInt(bank%, 0)
+	Local ip% = PeekInt(bank%, 4)
+	Local port% = PeekInt(bank%, 8)
+	Local msgindex% = PeekByte(bank%, 12)
+	
+	For i = 1 To UDPRetries%
+		; Send message
+		WriteByte stream%, msgindex%
+		WriteByte stream%, value%
+		SendUDPMsg stream%, ip%, port%
+		
+		If WaitUDPResponse(bank%) Then Return True
+	Next
+End Function
+
+Function ReadUDPByte%(bank%)
+	Local stream% = PeekInt(bank%, 0)
+	Local ip% = PeekInt(bank%, 4)
+	Local port% = PeekInt(bank%, 8)
+	Local msgindex% = PeekByte(bank%, 12)
+	
+	Return ReadByte(stream%)
+End Function
+
+Function WriteUDPBytes%(from%, bank%, offset%, count%)
+	Local stream% = PeekInt(bank%, 0)
+	Local ip% = PeekInt(bank%, 4)
+	Local port% = PeekInt(bank%, 8)
+	Local msgindex% = PeekByte(bank%, 12)
+	
+	For i = 1 To UDPRetries%
+		; Send message
+		WriteByte stream%, msgindex%
+		WriteBytes from%, stream%, offset%, count%
+		SendUDPMsg stream%, ip%, port%
+		
+		If WaitUDPResponse(bank%) Then Return True
+	Next
+End Function
+
+Function ReadUDPBytes%(from%, bank%, offset%, count%)
+	Local stream% = PeekInt(bank%, 0)
+	Local ip% = PeekInt(bank%, 4)
+	Local port% = PeekInt(bank%, 8)
+	Local msgindex% = PeekByte(bank%, 12)
+	
+	Return ReadBytes(from%, stream%, offset%, count%)
+End Function
+
+Function WriteUDPInt%(bank%, value%)
+	Local stream% = PeekInt(bank%, 0)
+	Local ip% = PeekInt(bank%, 4)
+	Local port% = PeekInt(bank%, 8)
+	Local msgindex% = PeekByte(bank%, 12)
+	
+	For i = 1 To UDPRetries%
+		; Send message
+		WriteByte stream%, msgindex%
+		WriteInt stream%, value%
+		SendUDPMsg stream%, ip%, port%
+		
+		If WaitUDPResponse(bank%) Then Return True
+	Next
+End Function
+
+Function ReadUDPInt%(bank%)
+	Local stream% = PeekInt(bank%, 0)
+	Local ip% = PeekInt(bank%, 4)
+	Local port% = PeekInt(bank%, 8)
+	Local msgindex% = PeekByte(bank%, 12)
+	
+	Return ReadInt(stream%)
+End Function
+
+Function WriteUDPString%(bank%, txt$)
+	Local stream% = PeekInt(bank%, 0)
+	Local ip% = PeekInt(bank%, 4)
+	Local port% = PeekInt(bank%, 8)
+	Local msgindex% = PeekByte(bank%, 12)
+	
+	For i = 1 To UDPRetries%
+		; Send message
+		WriteByte stream%, msgindex%
+		WriteString stream%, txt$
+		SendUDPMsg stream%, ip%, port%
+		
+		If WaitUDPResponse(bank%) Then Return True
+	Next
+End Function
+
+Function ReadUDPString$(bank%)
+	Local stream% = PeekInt(bank%, 0)
+	Local ip% = PeekInt(bank%, 4)
+	Local port% = PeekInt(bank%, 8)
+	Local msgindex% = PeekByte(bank%, 12)
+	
+	Return ReadString(stream%)
+End Function
+
+Function WriteUDPLine%(bank%, txt$)
+	Local stream% = PeekInt(bank%, 0)
+	Local ip% = PeekInt(bank%, 4)
+	Local port% = PeekInt(bank%, 8)
+	Local msgindex% = PeekByte(bank%, 12)
+	
+	For i = 1 To UDPRetries%
+		; Send message
+		WriteByte stream%, msgindex%
+		WriteLine stream%, txt$
+		SendUDPMsg stream%, ip%, port%
+		
+		If WaitUDPResponse(bank%) Then Return True
+	Next
+End Function
+
+Function ReadUDPLine$(bank%)
+	Local stream% = PeekInt(bank%, 0)
+	Local ip% = PeekInt(bank%, 4)
+	Local port% = PeekInt(bank%, 8)
+	Local msgindex% = PeekByte(bank%, 12)
+	
+	Return ReadLine(stream%)
+End Function
+
+Function UDPPort%(bank%)
+	Return PeekInt(bank%, 2 * 4)
+End Function
+
+Function UDPIP%(bank%)
+	Return PeekInt(bank%, 1 * 4)
+End Function
+
+Function UDPReadAvail%(bank%)
+	Return ReadAvail(PeekInt(bank%, 0 * 4))
+End Function
+
+Function RemoveUDPStream%(bank%)
+	Local stream% = PeekInt(bank%, 0)
+	Local ip% = PeekInt(bank%, 4)
+	Local port% = PeekInt(bank%, 8)
+	
+	CloseUDPStream stream%
+	FreeBank bank%
+End Function
+
+; NON-USER COMMANDS --------------------------------------------------------------------------------
+
+Function WaitUDPResponse%(bank%)
+	Local stream% = PeekInt(bank%, 0)
+	Local ip% = PeekInt(bank%, 4)
+	Local port% = PeekInt(bank%, 8)
+	Local msgindex% = PeekByte(bank%, 12)
+	
+	If LossLessUDP%
+		; Wait for replay
+		tim% = MilliSecs()
+		Repeat
+			from% = RecvUDPMsg(stream%)
+		Until from% Or MilliSecs() - tim% &gt; UDPResponseDelay%
+		If from%
+			If UDPMsgIP(stream%) = ip% And UDPMsgPort(stream%) = port%
+				; Message from same client
+				
+				index% = ReadByte(stream%)
+				
+				If index% = msgindex%
+					If msgindex% &lt; 250 Then PokeByte bank%, 12, msgindex% + 1 Else PokeByte bank%, 12, msgindex% - 250
+					Return True
+				EndIf
+			EndIf
+		EndIf
+	Else
+		Return True
+	EndIf
+End Function
+
+Function IntIP(ip$)
+	Local a = UDPSector$(ip$, ".", 0)
+	Local b = UDPSector$(ip$, ".", 1)
+	Local c = UDPSector$(ip$, ".", 2)
+	Local d = UDPSector$(ip$, ".", 3)
+	Return  (a Shl 24) + (b Shl 16) + (c Shl 8) + d
+End Function
+
+Function UDPSector$(txt$, separator$, sector%, toend% = False)
+	Local result$ = "", occ
+	For i = 1 To Len(txt$)
+		If Mid$(txt$, i, 1) = separator$
+			occ = occ + 1
+			If toend% And occ% &gt; sector% Then result$ = result$ + Mid$(txt$, i, 1)
+		Else
+			If occ =&gt; sector Then result$ = result$ + Mid$(txt$, i, 1)
+		EndIf
+		If Not toend% Then If occ &gt; sector Then Exit
+	Next
+	Return result$
+End Function
+
+Function UDPSectors%(txt$, needle$)
+	occ% = 0
+	For i = 1 To Len(txt$) Step 1
+		If Instr(txt$, needle$, i)
+			occ% = occ% + 1
+			i = Instr(txt$, needle$, i)
+		Else
+			Exit
+		EndIf
+	Next
+	Return occ%
+End Function
+</pre><br><br>Example:<br><pre class=code>
+; ------------Server--------------
+Include "udp.bb"
+
+Print "Creating UDP server..."
+server% = CreateUDPServer(2010)
+If server%
+	Print "Waiting for client..."
+	Repeat
+		stream% = AcceptUDPStream(server%)
+	Until stream%
+	Print "Client (" + DottedIP(UDPIP(stream%)) + ":" + UDPPort(stream%) + ") connected!"
+	
+	Repeat
+		If ReceiveUDPMsg%(stream%)
+			avail% = UDPReadAvail(stream%)
+			Print avail% + " bytes available!"
+			value$ = ReadUDPLine$(stream%)
+			Print "Message: " + value$
+		EndIf
+	Forever
+Else
+	Print "Failed to create server!"
+EndIf
+WaitKey
+; ------------Client--------------
+Include "udp.bb"
+
+Print "Connecting to server..."
+stream% = OpenUDPStream("127.0.0.1", 2010)
+If stream%
+	Print "Received access to " + DottedIP(UDPIP(stream%)) + ":" + UDPPort(stream%)
+	
+	For i = 1 To 1000
+		msg$ = "Hello message #" + i + "!"
+		If WriteUDPLine(stream%, msg$)
+			Print "Message: " + msg$
+		EndIf
+	Next
+Else
+	Print "Failed!"
+EndIf
+WaitKey
+</pre> <br><br></td></tr></table><br>
+<a name="747831"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Koriolis</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I haven't tested it (no time), but I have just one question. Did you make any benchmark to compare the speed with raw htpp streams? <br><br></td></tr></table><br>
+<a name="747836"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nope, i haven't benchmarked it yet. <br><br></td></tr></table><br>
+<a name="747841"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Stevie G</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just gave this a go and program froze without opening a server.  Is there something else I need to do for a router? <br><br></td></tr></table><br>
+<a name="747845"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Don't think so. I created it in BP so maybe B3D needs some changes in the example.<br><br>CreateUDPServer isn't anything more than:<br><pre class=code>Function CreateUDPServer%(port% = 0)
+	Local server% = CreateUDPStream(port%), bank%
+	If server%
+		bank% = CreateBank(4 * 3 + 1)
+		
+		PokeInt bank%, 0 * 4, server%
+		PokeInt bank%, 1 * 4, UDPStreamIP(server%)
+		PokeInt bank%, 2 * 4, UDPStreamPort(server%)
+		PokeByte bank%, 3 * 4, 1
+		
+		Return bank%
+	EndIf
+End Function</pre><br>basically only two functions: CreateUDPStream() and CreateBank() <br><br></td></tr></table><br>
+<a name="747901"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Vertex</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sounds nice, but I don't know:<br>Can packages change there order? For example, a package with index 5 comes before the package with index 4.<br><br>Is the using of banks faster than types ?<br><br>cu olli <br><br></td></tr></table><br>
+<a name="747955"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Gabriel</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Stevie G: you'll probably need to enable port forwarding for the port the example uses to open a server. I'm not big on net stuff, but I'm pretty sure I remember Surreal telling me that UDP communications don't get through a NAT firewall the way that TCP ones might. <br><br>I guess it wouldn't really do for a firewall to allow programs to start a server at will. <br><br></td></tr></table><br>
+<a name="747990"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Vertex: No! Packages are sent in order if LossLessUDP% is true.<br><br>I used for loop in the test and 22'000 packages were in order and none of them got lost.<br><br>Yes, IMO banks are faster, but if i'd request lost packet if a bigger index has been received it would be even faster. <br><br></td></tr></table><br>
+<a name="748018"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> I didn't test it, just some suggestions, in case you did not already add these features: there WILL be lost packets with UDP, or even packets with altered content. So if you did not already, you should implement an itegrity check of packets at a very low layer. EG: every packet is using a checksum in the header. So the receiver can see if the packet is integer and valid. If it isn't there must be some kind of reordering system. Something like "received packet number 1234 with corrupt data, please send again", as well as a basic handshake protocol to make the sender know if a packet was received successfully, so he can erase it from the stack of outgoing data.<br>Everything other than Acknowledge packets should then be acknowledged. (Cause acknowledging acknowledges would result in a endless loop of course)<br><br>To test this inegrity check and error correction etc. (also antispoofing btw.) you should use a utility that simulates lost and altered packets. This may be a little function in the test app, that will randomly "destroy" things. <br><br></td></tr></table><br>
+<a name="748084"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've read that the packages are always correct (if they are received) the only thing is that they might be received in wrong order or not at all. <br><br></td></tr></table><br>
+<a name="748242"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Not sure, UDP has no error detection, so in theory there could be some wrong bits, probably only on defect hardware/connections. Using a checksum will also make sure packets cannot be manipulated by a third party. A more or less secret checksum system could be used.<br>Wrong order may be caused by various routes of certain packets. That's why each packet header should also contain the sequence number of its stream.<br><br>You may even detect a missing packet by the sequence numbers, eg. when packet 1 and 3 were received, but packet 2 is still missing after some time.<br><br>These are of course only some thoughts, hope you don't mind. <br><br></td></tr></table><br>
+<a name="748244"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> No, not at all.<br>Currently it waits for response and then returns either true or false. These 22'000 packets were all non-corrupted.<br>I tested packets with LosslessUDP=false few times and it sent about 700 packets correctly and then about five of them got lost so only 1 packet doesn't disappear usually. <br><br></td></tr></table><br>
+<a name="748248"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> What clent/server connection did you use to test it? <br><br></td></tr></table><br>
+<a name="752950"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sorry for so late post.<br><br>What do you mean by client/server connection?<br>You mean my connection speeds? I have 1MB/s down and 80KB/s up.<br><br>While testing i even ran emule (50KB/s up, ~100KB/s down) and ftp client (20KB/s up) and it still gave no errors though it was extremely slow. <br><br></td></tr></table><br>
+<a name="752984"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> I meant, when you used to test it, did you use a real internet connection to an other machine, or 2 machines in a lan, or client and server on the same machine? <br><br></td></tr></table><br>
+<a name="753078"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> No not in lan, tested it twice, without running emule and ftp client the machine's distance was about 2KM, but while running them i used a machine's that's distance was about 200KMs <br><br></td></tr></table><br>
+<a name="753177"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >slenkar</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> thanks for the source <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

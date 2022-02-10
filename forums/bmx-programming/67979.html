@@ -1,0 +1,92 @@
+<!DOCTYPE html><html lang="en" ><head ><title >LoadImageFont from TStream - possible bug?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >LoadImageFont from TStream - possible bug?</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >LoadImageFont from TStream - possible bug?</a><br><br>
+<a name="759424"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ghost Dancer</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've been working on a a simple file packer which stores multiple data files in one external file. The app then extracts the required file(s) by loading them into a bank and then creating a BankStream. <br><br>Ths works fine with images &amp; sound, but does not seem to work with fonts. To break it down to it's simplest form, try the following (replace "myfont.ttf" with any font you have available):<br><br><pre class=code>
+Strict
+
+Graphics 1024, 768, 0
+SetBlend ALPHABLEND
+
+Local font1:TImageFont = LoadImageFont("myfont.ttf", 20)
+SetImageFont font1
+DrawText "Normal font load", 10, 10
+
+Local fontStream:TStream = ReadFile("myfont.ttf")
+Local font2:TImageFont = LoadImageFont(fontStream, 20)
+SetImageFont font2
+DrawText "Stream font load", 10, 40
+fontStream.Close
+
+Flip
+WaitKey
+
+End
+</pre><br><br>The first line is drawn in the correct font as expected, but the second line uses the default blitz font indicating that it did not load the front from the Stream (even though technically it is the same file).<br><br>Is this a bug/limitation of Blitz Max, or is there a way of getting this to work? (e.g. loading a font from memory) I seem to recall a while ago that a similar problem occurred with incbining fonts - incbin fonts now work but I wonder if it is a related problem?<br><br>I have tried doing it so the font is extracted to a temp file which is then loaded, however, the temp file can not be deleted (I think LoadImageFont does not release the file?). Even if I could get this method to work, I would still prefer to load directly from memory. <br><br></td></tr></table><br>
+<a name="759472"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> The problem is BRL.FreeTypeFont .. its loader only takes strings.<br>It should realy take streams/banks as the other stuff imho.<br><br>But you can easily fix that by adding your own loader.<br><br>I hacked this together for ya =) (ripped from BRL.FreeTypeLib)<br>Btw, dont forget to put the "AddFontLoader" line before any font loading.<br><pre class=code>
+Type TFreeTypeFontStream Extends TFreeTypeFont
+	Function LoadStream:TFreeTypeFontStream( src:TStream,size,style )
+		Global ft_lib:Byte Ptr
+		
+		If Not ft_lib
+			If FT_Init_FreeType( Varptr ft_lib ) Return
+		EndIf
+
+		Local buf:Byte Ptr,buf_size
+				
+		Local ft_face:Byte Ptr
+		
+		
+		buf_size=src.Size()
+		If Not buf_size Return
+		buf=MemAlloc( buf_size )
+		src.ReadBytes( buf, buf_size)
+		If FT_New_Memory_Face( ft_lib,buf,buf_size,0,Varptr ft_face )
+			MemFree buf
+			Return
+		EndIf
+		
+		While size
+			If Not FT_Set_Pixel_Sizes( ft_face,0,size ) Exit
+			size:-1
+		Wend
+		If Not size 
+			FT_Done_Face ft_face
+			Return
+		EndIf
+		
+		Local face:FTFace=New FTFace
+		MemCopy face,ft_face,SizeOf face
+		
+		Local metrics:FTMetrics=New FTMetrics
+		MemCopy metrics,face.metrics,SizeOf metrics
+		
+		Local font:TFreeTypeFontStream=New TFreeTypeFontStream
+		font._face=face
+		font._ft_face=ft_face
+		font._style=style
+		font._height=metrics.height Sar 6
+		font._ascend=metrics.ascend Sar 6
+		font._descend=metrics.descend Sar 6
+		font._glyphs=New TFreeTypeGlyph[face.numglyphs]
+		font._buf=buf
+		font._buf_size=buf_size
+		
+		Return font	
+	End Function
+
+End Type
+
+Type TFreeTypeFontLoaderStream Extends TFontLoader
+	Method LoadFont:TFreeTypeFont( url:Object,size,style )
+		If TStream(url) Then
+			Return TFreeTypeFontStream.LoadStream( TStream(url), size, style)
+		EndIf
+	EndMethod
+EndType
+
+AddFontLoader New TFreeTypeFontLoaderStream
+</pre><br><br>EDIT: Oh, i forgot to mention this reads the WHOLE stream. If you want to read sections of a stream, use banks instead so you can limit the amount to read. <br><br></td></tr></table><br>
+<a name="759497"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ghost Dancer</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice one, thank you very much :-)   I am using banks, so no problem there. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

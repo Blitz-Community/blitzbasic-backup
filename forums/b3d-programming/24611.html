@@ -1,0 +1,2439 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Verlet physics applied to a simple car model.</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Verlet physics applied to a simple car model.</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >Verlet physics applied to a simple car model.</a><br><br>
+<a name="255400"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Disclaimer: this code is not even close to finished. Dozens of things need to fixed/improved. I decided to put it up anyways because it will be weeks before I have the time to finish it. I works well enough to demonstrate how verlet physics can be applied to a real world object.<br><br><pre class=code>
+;work in progress!!!!!
+;its not optimized, friction is not completed, and about a dozen other things arent finished.
+;just putting this out there because its going to be weeks before i can finish these things.
+
+Graphics3D HEIGHT,WIDTH,16,2
+Const FPS=30
+Const HEIGHT=640					; graphics width
+Const WIDTH=480					; graphics height
+Const ACTIVE=1					; collision type
+Const VERLET=2					; collision Type
+Const FRONT_TIRE=0				; Vobject part name
+Const REAR_TIRE=1					; Vobject part name
+Const BODY=2						; Vobject part name
+Const CENTER=3					; Vobject part name
+Const SIZE#=8					; just a multiplier for how big the Vobject will be
+Const ITERATIONS = 2				; How many loops through the "relaxation" routine, Lower = speed up / lose accuracy
+Global DeltaTime#					; Time between physics calculations
+Global vGrav.Vector = Vector(0.0,9,0.0)	; Gravity. yes i know its a positive value. still dont know why this is but it works.
+Global vTemp1.Vector = Vector(0,0,0)	; Some temporary vectors for calculations
+Global vTemp2.Vector = Vector(0,0,0)
+Global world_friction#=0				; air resistance
+Global temp_turn#=0
+Global traction#=0
+Global roll#
+front_stiff=20						; This is actually the mass value for the front wheel. lower mass = less stiff. caution will collapse
+rear_stiff=30						; This is actually the mass value for the rear wheel. lower mass = less stiff. caution will collapse
+
+Type Vector
+	Field x#
+	Field y#
+	Field z#
+End Type
+
+Type VerletPack							
+	Field start_loc.vector					; Defines where this verlet started at so we can fix it when it gets to far out of place
+	Field current.Vector						; Current position
+	Field old.Vector						; Last position
+	Field gravity.Vector						; Accumulated forces
+	Field radius#							; Collider radius
+	Field mass.vector						; Point mass of this particular verlet
+	Field entity							; Pivot assigned to this verlet for both position and collision
+	Field mesh							; Mesh assigned to this verlet if any such as wheels or body parts
+	Field part								; Describes what verlet represents. example wheel or body part.
+	Field state							; Collideable status true/false	
+	Field contact_friction#					; When in contact with the ground how much friction is applied
+End Type
+
+Type Constraint							; Two verlets connected by a mutual spring
+	Field v1.VerletPack						; First verlet
+	Field v2.VerletPack						; Second verlet
+	Field d#								; Distance between verlets
+End Type
+
+Type Vobject								; This is the parent object that the verlets are associated with
+	Field v.VerletPack[8]					; The array of individual verlets
+	Field num_verlets						; Total number of verlets (array dim value)
+	Field player_pivot						; Pivot used to represent player. this pivot is dynamically controlled by player.
+	Field player							; Mesh used to represent the player. this mesh is parented to player_pivot
+	Field center.VerletPack					; Used to position player_pivot but not neccessarily parented to.
+	Field x1.VerletPack						; x1 and x2 are used to define a vector left/right to align player_pivot
+	Field x2.VerletPack
+	Field z1.VerletPack						; z1 and z2 are used to define a vector forward/aft to align player_pivot
+	Field z2.VerletPack
+	Field X_vec#							; vectors for calculations
+	Field Y_vec#
+	Field Z_vec#
+	Field mass#							; Mass for physics calculation on entire Vobject
+	Field horsepower#						; Force for physics calculations on entire Vobject
+	Field acceleration#						; Rate at which the Vobject accelerates
+	Field velocity#							; Velocity of entire Vobject
+	Field distance#						; Distance Vobject has travelled
+	Field position#							; Position is the distance accumulator
+End Type
+
+;***** make the vehicle ****************************************
+	tempx# = 0							;start location of vehicle
+	tempy# = 20							;start location of vehicle
+	tempz# = 150							;start location of vehicle
+	Global car.Vobject = New Vobject 			;initialize the Vobject type
+	car\player_pivot=CreatePivot()			;this is the master pivot that the player will contol
+	car\player=CreateCube(car\player_pivot)	;mesh that is assigned to player_pivot. in this case a simple cube for a car body
+	ScaleEntity car\player, 15,6,30			;get car body into postion and scaled etc
+	EntityColor car\player, 255,0,0
+	PositionEntity car\player, 0, 2, -6
+	car\num_verlets = 8						;total number of verlets in the Vobject. count from zero
+	car\mass=10							;this mass value is used for physics calculations on player_pivot.
+	car\horsepower = 200					;the force exerted on player_pivot
+	sx# = 1.9								;just a multiplier for the Vobject size
+	sy# = 1.2								;just a multiplier for the Vobject size
+	sz# = 2.65							;just a multiplier for the Vobject size
+	
+	;parameters   x,y,z,radius, mass, part,mesh,state,collision_type, contact_friction
+	a.VerletPack = Verlet(tempx - SIZE * sx, tempy - SIZE * sy, tempz - SIZE * sz,  7, front_stiff, FRONT_TIRE, CreateCylinder(12), True, VERLET, 0)
+	b.VerletPack = Verlet(tempx + SIZE * sx, tempy - SIZE * sy, tempz - SIZE * sz, 7, front_stiff, FRONT_TIRE, CreateCylinder(12), True, VERLET, 0)
+	c.VerletPack = Verlet(tempx + SIZE * sx, tempy + SIZE * sy, tempz - SIZE * sz, 7, 400.0, BODY, 0, True, VERLET, 0)
+	d.VerletPack = Verlet(tempx - SIZE * sx, tempy + SIZE * sy, tempz - SIZE * sz, 7, 400.0, BODY, 0, True, VERLET, 0)
+	e.VerletPack = Verlet(tempx - SIZE * sx, tempy - SIZE * sy, tempz + SIZE * sz, 9, rear_stiff, REAR_TIRE, CreateCylinder(12), True, VERLET, 0)
+	f.VerletPack = Verlet(tempx + SIZE * sx, tempy - SIZE * sy, tempz + SIZE * sz, 9, rear_stiff, REAR_TIRE, CreateCylinder(12), True, VERLET, 0)
+	g.VerletPack = Verlet(tempx + SIZE * sx, tempy + SIZE * sy, tempz + SIZE * sz, 7, 400.0, BODY, 0, True, VERLET, 0)
+	h.VerletPack = Verlet(tempx - SIZE * sx, tempy + SIZE * sy, tempz + SIZE * sz, 7, 400.0, BODY, 0, True, VERLET, 0)
+	i.VerletPack = Verlet(tempx, tempy + 5, tempz + 8, 7, 400.0, CENTER, 0, False, VERLET, 0)
+	
+	; Edges
+	Constraint2(a,b)
+	Constraint2(b,c)
+	Constraint2(a,d)
+	Constraint2(c,d)
+	Constraint2(e,f)	
+	Constraint2(f,g)
+	Constraint2(e,h)
+	Constraint2(g,h)
+	Constraint2(a,e)
+	Constraint2(b,f)
+	Constraint2(c,g)
+	Constraint2(d,h)
+
+	; Cross-faces
+	Constraint2(a,c)
+	Constraint2(b,d)
+	Constraint2(e,g)
+	Constraint2(f,h)
+	Constraint2(a,f)
+	Constraint2(a,h)
+	Constraint2(b,e)
+	Constraint2(b,g)
+	Constraint2(c,f)
+	Constraint2(c,h)
+	Constraint2(d,e)
+	Constraint2(d,g)
+
+	; Diagonals
+	Constraint2(a,g)
+	Constraint2(b,h)
+	Constraint2(c,e)
+	Constraint2(d,f)
+	
+	; Constraining the center sphere
+	Constraint2(a,i)
+	Constraint2(b,i)
+	Constraint2(c,i)
+	Constraint2(d,i)
+	Constraint2(e,i)
+	Constraint2(f,i)
+	Constraint2(g,i)
+	Constraint2(h,i)
+
+	; Assign individual verlets to the array	
+	car\v[0] = i
+	car\v[1] = a
+	car\v[2] = b
+	car\v[3] = c
+	car\v[4] = d
+	car\v[5] = e
+	car\v[6] = f
+	car\v[7] = g
+	car\v[8] = h
+	
+	; assign a verlet the center position
+	car\center=i
+	; Set up variables used for player mesh/pivot aligntovector. one is left to right, other is forward back.
+	car\x1=c
+	car\x2=d
+	car\z1=g
+	car\z2=c
+	
+	PositionEntity car\player_pivot, EntityX(car\center\entity),EntityY(car\center\entity),EntityZ(car\center\entity)
+;Next
+;***********************************************************************************************
+
+measure_pivots(car.Vobject, 0)
+
+;ClearTextureFilters
+;SetBuffer BackBuffer()
+Collisions VERLET,ACTIVE,2,2
+MoveMouse WIDTH/2,HEIGHT/2
+
+lgt = CreateLight()
+LightColor lgt,300,300,300
+RotateEntity lgt,35,0,0
+AmbientLight 94,94,80
+Global cam = CreateCamera()
+CameraFogMode cam,0
+CameraFogColor cam,128,128,180
+CameraClsColor cam,128,128,180
+CameraRange cam,1,4000
+CameraFogRange cam,500,3000
+CameraZoom cam,1
+
+
+bump=CreateCylinder(4)
+ScaleEntity bump, 5,600,20
+RotateEntity bump,0,0,90
+EntityType bump, ACTIVE
+EntityColor bump,0,255,0
+PositionEntity bump,0,0,-500
+PositionEntity CopyEntity(bump),0,0,-600
+PositionEntity CopyEntity(bump),0,0,-700
+PositionEntity CopyEntity(bump),0,0,-800
+PositionEntity CopyEntity(bump),0,0,-900
+
+jump=CreateCube()
+ScaleEntity jump,200,100,100
+RotateEntity jump,15,0,0
+PositionEntity jump,0,-70,-600
+EntityType jump,ACTIVE
+
+landing=CreateCube()
+ScaleEntity landing,200,100,100
+RotateEntity landing,15,180,0
+PositionEntity landing,0,-70,-1000
+EntityType landing,ACTIVE
+
+
+grid_tex=CreateTexture( 256,256,1+4+8 )
+SetBuffer TextureBuffer( grid_tex )
+ScaleTexture grid_tex,500,500
+Color 255,255,255:Rect 0,0,256,256,False
+grid_tex2=CreateTexture( 32,32,1+8 )
+SetBuffer TextureBuffer( grid_tex2 )
+ScaleTexture grid_tex2,50,50
+Color 0,0,255:Rect 0,0,32,32,False
+SetBuffer BackBuffer()
+flr=CreatePlane()
+EntityType flr,ACTIVE
+EntityTexture flr,grid_tex,0,1
+EntityTexture flr,grid_tex2,0,0
+TextureBlend grid_tex,3
+EntityBlend flr,1
+EntityAlpha flr,.6
+EntityFX flr,1
+PositionEntity flr,0,0,0
+
+
+ScaleEntity car\v[1]\mesh,car\v[1]\radius,car\v[1]\radius/2,car\v[1]\radius
+RotateEntity car\v[1]\mesh,0,0,90
+PositionEntity car\v[1]\mesh,0,0,0
+
+ScaleEntity car\v[2]\mesh,car\v[2]\radius,car\v[2]\radius/2,car\v[2]\radius
+RotateEntity car\v[2]\mesh,0,0,90
+PositionEntity car\v[2]\mesh,0,0,0
+
+ScaleEntity car\v[5]\mesh,car\v[5]\radius,car\v[5]\radius/2,car\v[5]\radius
+RotateEntity car\v[5]\mesh,0,0,90
+PositionEntity car\v[5]\mesh,0,0,0
+
+ScaleEntity car\v[6]\mesh,car\v[6]\radius,car\v[6]\radius/2,car\v[6]\radius
+RotateEntity car\v[6]\mesh,0,0,90
+PositionEntity car\v[6]\mesh,0,0,0
+
+;********* functions defined ********************************************
+
+; measure the start locations for each verlet so it can be fixed if it collapses
+Function measure_pivots(name.Vobject, center_element)
+	For count=1 To name\num_verlets
+		If name\v[count]\part &lt;&gt; CENTER Then
+			EntityParent name\v[count]\entity, name\v[center_element]\entity
+			name\v[count]\start_loc\x=EntityX(name\v[count]\entity)
+			name\v[count]\start_loc\y=EntityY(name\v[count]\entity)
+			name\v[count]\start_loc\z=EntityZ(name\v[count]\entity)
+			EntityParent name\v[count]\entity, 0
+		Else
+			name\v[count]\start_loc\x=0
+			name\v[count]\start_loc\y=0
+			name\v[count]\start_loc\z=0
+		End If
+	Next
+End Function
+
+; use this function to fix a collapsed Vobject
+Function fix_verlet(name.Vobject)
+	For count=1 To name\num_verlets
+		EntityParent name\v[count]\entity, name\center\entity
+		tempx# = name\v[count]\start_loc\x + name\center\current\x
+		tempy# = name\v[count]\start_loc\y + name\center\current\y
+		tempz# = name\v[count]\start_loc\z + name\center\current\z
+		PositionEntity name\v[count]\entity, tempx, tempy, tempz
+		name\v[count]\current\x = tempx
+		name\v[count]\current\y = tempy
+		name\v[count]\current\z = tempz
+		name\v[count]\old\x = tempx
+		name\v[count]\old\y = tempy
+		name\v[count]\old\z = tempz
+		EntityParent name\v[count]\entity, 0
+	Next
+End Function
+
+Global crash
+Function DoVerlet(name.Vobject, accelerator)
+	For count = 0 To name\num_verlets
+		If (name\v[count]\part = REAR_TIRE Or name\v[count]\part = FRONT_TIRE) And CountCollisions(name\v[count]\entity) &gt;0
+			TFormVector vgrav\x, vgrav\y,  vgrav\z, 0, name\player_pivot
+			tempvax# = TFormedX()
+			tempvay# = TFormedY()
+			tempvaz# = TFormedZ()
+			TFormVector name\v[count]\current\x, name\v[count]\current\y,  name\v[count]\current\z, 0, name\player_pivot
+			temptempx#= TFormedX()
+			temptempy#= TFormedY()
+			temptempz#= TFormedZ()
+			tempvmx# = TFormedX()
+			tempvmy# = TFormedY()
+			tempvmz# = TFormedZ()
+			TFormVector name\v[count]\old\x, name\v[count]\old\y,  name\v[count]\old\z, 0, name\player_pivot
+			tempvoldx# = TFormedX()
+			tempvoldy# = TFormedY()
+			tempvoldz# = TFormedZ()
+			TFormVector EntityX(name\v[count]\entity,True), EntityY(name\v[count]\entity,True),  EntityZ(name\v[count]\entity,True), 0, name\player_pivot
+			tempentityx# = TFormedX()
+			tempentityy# = TFormedY()
+			tempentityz# = TFormedZ()
+			;tempvmx is purposefully not computed so the wheels only travel up and down, and forward/back
+			tempvmy = tempvmy - (tempvoldy + (tempvay * (DeltaTime * DeltaTime))) + temptempy  
+			tempvmz = tempvmz - (tempvoldz + (tempvaz * (DeltaTime * DeltaTime))) + temptempz
+			tempvoldx = temptempx
+			tempvoldy = temptempy
+			tempvoldz = temptempz
+			TFormVector tempvmx, tempvmy,  tempvmz, name\player_pivot, 0
+			name\v[count]\current\x = TFormedX()
+			name\v[count]\current\y = TFormedY()
+			name\v[count]\current\z = TFormedZ()
+			TFormVector tempvoldx, tempvoldy,  tempvoldz, name\player_pivot, 0
+			name\v[count]\old\x = TFormedX()
+			name\v[count]\old\y = TFormedY()
+			name\v[count]\old\z = TFormedZ()
+			Else
+				name\v[count]\gravity\x = vgrav\x
+				name\v[count]\gravity\y = vgrav\y
+				name\v[count]\gravity\z = vgrav\z
+				tempx# = name\v[count]\current\x
+				tempy# = name\v[count]\current\y
+				tempz# = name\v[count]\current\z
+				name\v[count]\current\x = name\v[count]\current\x - (name\v[count]\old\x + (name\v[count]\gravity\x * (DeltaTime * DeltaTime))) + tempx
+				name\v[count]\current\y = name\v[count]\current\y - (name\v[count]\old\y + (name\v[count]\gravity\y * (DeltaTime * DeltaTime))) + tempy
+				name\v[count]\current\z = name\v[count]\current\z - (name\v[count]\old\z + (name\v[count]\gravity\z * (DeltaTime * DeltaTime))) + tempz
+				name\v[count]\old\x = tempx
+				name\v[count]\old\y = tempy
+				name\v[count]\old\z = tempz
+		End If
+		If name\v[count]\part = REAR_TIRE  Or  name\v[count]\part = FRONT_TIRE  Or name\v[count]\part = BODY Then
+			PositionEntity name\v[count]\entity, name\v[count]\current\x, name\v[count]\current\y, name\v[count]\current\z
+			EntityParent  name\v[count]\entity, name\player_pivot
+			name\acceleration = (-accelerator * name\horsepower * traction) / name\mass
+			name\velocity = (name\velocity - (name\velocity * world_friction)) + (DeltaTime# * name\acceleration)
+			name\distance =  DeltaTime# * DeltaTime# * name\acceleration * .5 * traction
+			name\position=name\position + name\distance	
+			MoveEntity name\player_pivot, 0, 0, name\distance
+			EntityParent  name\v[count]\entity, 0
+			If name\v[count]\part = FRONT_TIRE
+				PositionEntity name\v[count]\entity, name\v[count]\current\x, name\v[count]\current\y, name\v[count]\current\z
+				EntityParent  name\v[count]\entity, name\player_pivot
+				TurnEntity name\player_pivot, 0, temp_turn, 0
+				EntityParent  name\v[count]\entity, 0
+			End If	
+			Else 
+				PositionEntity name\v[count]\entity, name\v[count]\current\x, name\v[count]\current\y, name\v[count]\current\z
+		End If
+	Next
+	UpdateWorld
+	
+	crash=0
+	For count = 0 To name\num_verlets
+		If (name\v[count]\part = FRONT_TIRE Or REAR_TIRE) And Abs(Name\v[count]\current\y - EntityY(name\v[count]\Entity)) &gt;9 Then crash=crash+1
+	Next
+	If crash &gt;= 1 Then
+		For count = 0 To name\num_verlets
+			name\v[count]\current\y=name\v[count]\current\y + 5
+			name\v[count]\old\y=name\v[count]\current\y
+			PositionEntity name\v[count]\entity, name\v[count]\current\x, name\v[count]\current\y, name\v[count]\current\z
+		Next
+		UpdateWorld
+	End If
+
+	turn_rate = 0
+	traction = 0
+	For count = 0 To name\num_verlets
+		If CountCollisions(name\v[count]\entity) And name\v[count]\part = FRONT_TIRE Then
+			turn_rate = turn_rate + .7
+			traction = traction + .25
+		End If
+		If CountCollisions(name\v[count]\entity) And name\v[count]\part = REAR_TIRE Then
+			traction = traction + .25
+		End If
+		name\v[count]\current\x = EntityX(name\v[count]\entity)
+		name\v[count]\current\y = EntityY(name\v[count]\entity)
+		name\v[count]\current\z = EntityZ(name\v[count]\entity)
+	Next
+	For n = 1 To ITERATIONS
+		For c.Constraint = Each Constraint
+			setDistance(c\v1, c\v2, c\d)
+			c\v1\old\x = c\v1\old\x + (c\v1\current\x - c\v1\old\x) * (c\v1\contact_friction * DeltaTime)
+			c\v1\old\y = c\v1\old\y + (c\v1\current\y - c\v1\old\y) * (c\v1\contact_friction * DeltaTime)
+			c\v1\old\z = c\v1\old\z + (c\v1\current\z - c\v1\old\z) * (c\v1\contact_friction * DeltaTime)
+
+		Next
+	Next
+	;body and wheel stuff
+	PositionEntity name\player_pivot, EntityX(name\center\entity), EntityY(name\center\entity), EntityZ(name\center\entity)
+	name\X_vec = EntityX(name\x1\entity) - EntityX(name\x2\entity)
+	name\Y_vec = EntityY(name\x1\entity) - EntityY(name\x2\entity)
+	name\Z_vec = EntityZ(name\x1\entity) - EntityZ(name\x2\entity)
+	AlignToVector name\player_pivot, name\X_vec, name\Y_vec, name\Z_vec, 1
+	For count=0 To name\num_verlets
+		If name\v[count]\part = FRONT_TIRE Or name\v[count]\part = REAR_TIRE Then
+			AlignToVector name\v[count]\entity, name\X_vec, name\Y_vec, name\Z_vec, 1
+		End If
+	Next
+	name\X_vec = EntityX(name\z1\entity) - EntityX(name\z2\entity)
+	name\Y_vec = EntityY(name\z1\entity) - EntityY(name\z2\entity)
+	name\Z_vec = EntityZ(name\z1\entity) - EntityZ(name\z2\entity)
+	AlignToVector name\player_pivot, name\X_vec, name\Y_vec, name\Z_vec, 3
+	For count=0 To name\num_verlets
+		If name\v[count]\part = FRONT_TIRE Or name\v[count]\part = REAR_TIRE Then
+			AlignToVector name\v[1]\entity, name\X_vec, name\Y_vec, name\Z_vec, 3
+		End If
+	Next
+	;wheel spin isnt working right. blitz internal bug?
+	TFormVector name\v[0]\current\x - name\v[0]\old\x, name\v[0]\current\y - name\v[0]\old\y,  name\v[0]\current\z - name\v[0]\old\z, name\v[0]\entity, name\player_pivot
+	roll=roll+TFormedZ()
+	;TurnEntity name\v[1]\entity, roll * radius, 0, 0, False
+	TurnEntity name\v[1]\entity, TFormedZ() * name\v[1]\radius, 0, 0, False
+	TurnEntity name\v[2]\entity, TFormedZ() * name\v[2]\radius, 0, 0, False
+	TurnEntity name\v[5]\entity, TFormedZ() * name\v[5]\radius, 0, 0, False
+	TurnEntity name\v[6]\entity, TFormedZ() * name\v[6]\radius, 0, 0, False
+End Function
+
+Function SetDistance(v1.VerletPack,v2.VerletPack,dist#)	
+		vtemp1\x=v1\current\x - v2\current\x
+		vtemp1\y=v1\current\y - v2\current\y
+		vtemp1\z=v1\current\z - v2\current\z
+		deltalength# = Sqr((vTemp1\x * vTemp1\x) + (vTemp1\y * vTemp1\y) + (vTemp1\z * vTemp1\z))
+		If deltalength &lt;= 0.0 deltalength = 0.0000001
+		diff# = (deltalength - dist) / deltalength
+		txmass# =  v1\mass\x + v2\mass\x
+		tymass# =  v1\mass\y + v2\mass\y
+		tzmass# =  v1\mass\z + v2\mass\z
+
+		v1\current\x=v1\current\x - vtemp1\x * (diff * (v2\mass\x / txmass)); * (diff+1.2) 
+		v1\current\y=v1\current\y - vtemp1\y * (diff * (v2\mass\y / tymass))  * (diff+1)
+		v1\current\z=v1\current\z - vtemp1\z * (diff * (v2\mass\z / tzmass)); * (diff+1.2)
+		v2\current\x=v2\current\x + vtemp1\x *(diff * (v1\mass\x / txmass)); / (diff+1.2)
+		v2\current\y=v2\current\y + vtemp1\y *(diff * (v1\mass\y / tymass))  / (diff+1)
+		v2\current\z=v2\current\z + vtemp1\z *(diff * (v1\mass\z / tzmass)); / (diff+1.2)
+End Function
+
+Function Verlet.VerletPack(x#,y#,z#,radius#, mass#, part,mesh,state,collision_type, contact_friction#)
+	v.VerletPack = New VerletPack
+	v\current = Vector(x,y,z)	;current location
+	v\old = Vector(x,y,z)	;old location
+	v\start_loc = Vector(0,0,0) ; initalize with zeros to be filled later
+	v\part=part		;part identifier such as wheel or body
+	If radius &lt;= 0.0 radius = 0.01
+	v\radius = radius	;collision radius
+	If mass &lt;= 0.0 mass = 0.01
+	If v\part= FRONT_TIRE Or v\part= REAR_TIRE Then v\mass = Vector(100,mass,100) Else v\mass = Vector(400,400,400)
+	;v\mass\y = mass		;point mass
+	v\entity = CreatePivot()	;used as the collision element
+	PositionEntity v\entity,x,y,z,True
+	v\mesh=mesh		;mesh assigned if any
+	If mesh&lt;&gt;0 Then EntityParent  v\mesh, v\entity,True
+	v\state=state		;true for collideable, false for non collideable
+	If v\state=True Then
+		EntityType v\entity, collision_type
+		EntityRadius v\entity,radius#
+	End If
+	v\contact_friction=contact_friction#
+	v\gravity = Vector(0.0,0.0,0.0)
+	Return v
+End Function
+
+Function Constraint2.Constraint(v1.VerletPack,v2.VerletPack)
+	c.Constraint = New Constraint
+	c\v1 = v1
+	c\v2 = v2
+	c\d = Sqr((v2\current\x - v1\current\x)^2 + (v2\current\y - v1\current\y)^2 + (v2\current\z - v1\current\z)^2)
+	;Return c	; You may need this someday ... we don't for what we have here
+End Function
+
+;// Create a Vector
+Function Vector.Vector(x#=0.0,y#=0.0,z#=0.0)
+	v.Vector = New Vector
+	v\x=x
+	v\y=y
+	v\z=z
+	Return v
+End Function 
+
+;display directions
+While Not KeyHit(57)
+	RenderWorld
+	Text 20,20, "Tab changes view from mouse look modes to front/side views."
+	Text 20,35, "Arrow keys control vehicle.
+	Text 20,50, "Escape exits program."
+	Text 20,65, "Space bar resets vehicle"
+	Text 20,80, "Hit space bar to begin."
+	Flip False
+Wend
+
+;temp_Vobject2.Vobject = First Vobject
+Global turn_rate#=0
+DeltaTime#=.09
+HidePointer
+fRate = (1000/72) ;*set second number to desired frame rate
+;**************** main loop ***************************************	
+While Not KeyHit(1)
+	time1 = MilliSecs() ;time at start of processing loop
+	temp_turn#=0
+	accelerator=0
+	If KeyDown(203) temp_turn=turn_rate
+	If KeyDown(205) temp_turn=-turn_rate
+	If KeyDown(200) accelerator=1
+	If KeyDown(208) accelerator=-1
+	If KeyDown(57) Then 
+		vGrav\y=0
+		fix_verlet(car.Vobject) 
+		Else 
+			vGrav.Vector = Vector(0.0,9,0.0)
+	End If
+		DoVerlet(car.Vobject, accelerator)
+	If KeyHit(15) Then 
+		view=view+1
+		If view &gt;=3 Then view=0
+	End If
+	PositionEntity cam,EntityX(car\center\entity),EntityY(car\center\entity),EntityZ(car\center\entity)
+	tempmousex#=tempmousex-MouseXSpeed()
+	tempmousey#=tempmousey+MouseYSpeed()
+	Select view
+	Case 0 
+		RotateEntity cam, tempmousey+10 , tempmousex+180, 0
+	Case 1
+		RotateEntity cam,tempmousey , EntityYaw(car\player_pivot,True)+90, 0
+	Case 2
+		RotateEntity cam,tempmousey , EntityYaw(car\player_pivot,True)+180, 0
+	End Select
+	MoveEntity cam,0,0,-90
+	MoveMouse WIDTH/2,HEIGHT/2	
+	RenderWorld
+	Delay fRate - (MilliSecs() - time1) ;delay execution
+	Flip False
+Wend
+End
+</pre> <br><br></td></tr></table><br>
+<a name="255501"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Miracle</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> This "demo" is more fun than half the full-featured Blitz programs I've seen. :) Pleasant memories of playing Rush 2049 float through my mind. Very very very cool. <br><br></td></tr></table><br>
+<a name="255512"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> thank you for the comment. but more importantly thank you doing the original port. if you hadnt done that i would still be banging my head against the wall. <br><br></td></tr></table><br>
+<a name="255547"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> cool. Nice to see a good example of verlet physics in games! Car dynamics is a little off, but o well. as you said "work in progress". suspension is nice. it gives you a good feel of speed, and turning. <br><br></td></tr></table><br>
+<a name="255554"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Qcat</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is a Cool Demo I look forward to seeing it finished off <br><br></td></tr></table><br>
+<a name="255653"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jeremy Alessi</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Awesome!  Looks like it could be used to make a simple game right now.  Nice work. <br><br></td></tr></table><br>
+<a name="255891"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Wow. As far as I'm concerned, that's near perfect for arcade-y racers! <br><br></td></tr></table><br>
+<a name="255915"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bolo_Loco</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Great !!<br><br>I hope the final code will be also available for the community .<br><br>Bolo Loco <br><br></td></tr></table><br>
+<a name="256075"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Al Mackey</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Wow, that is great!!  Lots o' fun.  Kind of easy to roll..  must be an SUV! <br><br></td></tr></table><br>
+<a name="256113"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Al Mackey</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> I hope you don't mind me playing with the code a bit...<br><br>I had a model of a VolksWagen GTI (I think it's called the Lupo in Europe) that I had made for a friend many years back, just sitting on my HD.  So I imported it to B3D and slapped it into your verlet car code.  I also made a tiny stunt track.  The models (B3D) and code (bb, not exe) are in a zip here:<br><br>  <a href="http://www.almackey.com/verletvw.zip" target="_blank">http://www.almackey.com/verletvw.zip</a> <br><br></td></tr></table><br>
+<a name="256124"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dangerdave</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Great little car model Al!!<br><br>DMC -&gt; Good stuff. can't wait until the next version. <br><br></td></tr></table><br>
+<a name="256154"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> OMG i was laughing my ass off trying to get it up the ramps hahhaha.  Al good show man. i wanted to add a car body and and a track etc but i dont have any webhosting. so this is great im glad you did it. for one thing it shows what promise this system has, but it also is a much more rigorous test of its current failings.<br><br>most of the vehicle instability stems from the set distance function and how collision is being handled. those two areas need tons of work. also the friction model needs finishing, the frame work is laid down for 3 types of friction: world friction (think air resistance), rolling friction, and contact friction (commonly refered to as static friction).<br><br>other refinements that need to be done are...<br>constraining the tire to only move up and down.<br>adding wheel turn left/right tied to steering.<br>making the turn rate dependant on vehicle speed.<br>adding braking, tire slipping and skidding.<br>finding a way to stop the car from rolling as easily (most likely tied to no wheel slipping).<br>adding more verlets to more accuratly surround the vehicle body.<br>improve the integrity of the structure so it doesnt collapse as easily.<br><br>it goes on and on.<br><br>if anybody gets a creative spurt take the code and run wild. i unfortunatly have little time right now =( <br><br></td></tr></table><br>
+<a name="256560"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Tom</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> Very impressive!<br><br>I done this CRAZY stunt! :)<br><br>Remember that car jump in one of the bond movies, up the curvy twisty ramp in the red car with the cop in?<br><br>I hit the ramp with 2 wheels, done a 360 roll and landed perfect LOL!<br><br>This is fun, great work :)<br><br>Tom <br><br></td></tr></table><br>
+<a name="256697"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Mustang</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Huh! This was FUN! How could have I missed this thread so totally... GREAT stuff! Car flipped over quite easily though and then slided a loooong time, sometimes spinning bit oddly... but all in all, very promising! This should be a good start for any car game... who needs Havok or Karma, when you can code something like this with Blitz? :) <br><br></td></tr></table><br>
+<a name="256700"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Shagwana</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is indeed neat stuff. <br><br></td></tr></table><br>
+<a name="256838"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >elias_t</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> Excelent stuff!<br><br>If you add some friction into it , it will get more realistic. <br><br></td></tr></table><br>
+<a name="256975"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> Update: although i cant post the code change now, i have almost solved the lateral roll over problem. the problem was in fact caused by near infinite static friction for the wheels. so to put it simply the car was like a train on tracks. no give at all between the tire and the road. by allowing a simple linear 50 percent slip the car now will skid a little when turning to tightly. but if you still push it to hard it will roll. so its not perfect but its a step in the right direction. <br><br>if anyone is actually following this thread, just want to let ya know that although i will post updates like this, most likely i wont post actuall code changes until they are significant enough to post.<br><br>next on the agenda is fix the per verlet friction code and re-enable wind resitance. <br><br></td></tr></table><br>
+<a name="257003"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Al Mackey</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm definately interested in any and all updates.  I've also added a few more things to do in my stunt course.. if you're interested I can post that. <br><br></td></tr></table><br>
+<a name="257012"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> Al im interested in what ya come up with for sure. maybe if i ever find the time to get this thing a little more stable you could web host the code with the car? i dont have any way to web host with my current provider.<br><br>but whatever ya come up with unfortunatly i dont have a lot of time to work on this so updates will be slow. <br><br></td></tr></table><br>
+<a name="257047"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>I'm definately interested in any and all updates<br> <br></div><br>Me too! <br><br></td></tr></table><br>
+<a name="257048"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Vorderman</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> dmc: I've just tried modifying your code to make the car a bit more stable, and one way is to move just the wheels out from the body, so the 'springs' are not vertical but diagonal. This instantly makes it much less likely to roll over. Also I lowered the body a bit (or raised the wheels dep. upon how you look at it) to make to car less top-heavy, and made the wheels slightly smaller.<br><br>It still doesn't slide about, so I'd like to see the mods you made to allow the wheels to slide, but at least it doesn't flip over so often.<br><br>One thing I found with my ODE car was to add a pendulum weight way below the car (effectively underground, with no collision and invisible). This made a huge difference to the stability of the car. Maybe you could try this also? (I've not had time to understand all your code yet).<br><br>Very good work though - nice and stable, even in high speed impacts. <br><br></td></tr></table><br>
+<a name="257064"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Mustang</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#22">[#22]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> One thing I found with my ODE car was to add a pendulum weight way below the car (effectively underground, with no collision and invisible).  <br></div><br><br>If I remember correctly we/I used something like this in the 3Dmark2001 too, to get the truck "stabilized". <br><br></td></tr></table><br>
+<a name="257145"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#23">[#23]</a></td></tr></table></td></tr><tr ><td class="posttext"> Im pleased to see some folks getting interested in this, and possibly spend some time to improve it???<br>If thats the case then I think i should spend some time explaining a few things.<br><br>First the code is a mess still. There are alot of half finished ideas all thru it. The one area that is<br>especially messed up is the friction code. Now lets start by reaching an agreement what types of friction <br>we need and why.<br><br>lets start with a contact friction type that is a variable assigned to each verlet. Each verlet<br>represents a "part" of the car. So contact friction on chassis or "body" parts need to be very high.<br>So When the car rolls over or land on the roof it will decelerate rapidly. Body verlet friction will<br>not change so its rather simple to implement. Now the verlet contact friction for the wheels is much more<br>complex. It needs to have at least two values. The first is rolling friction. This value is used whenever<br>the direction of travel matches the rolling direction of the wheel. when in this state the friction will<br>be very very low. But each time the car turns forces are applied away from the rolling direction. In this<br>case a static friction model needs to be used. The tire needs to stick to the road until a critical point<br>is reached where the forces away from the direction of roll exceed the ability of the tire to stick to the<br>road. Then once the forces have exceeded that critical point they need to let loose with a much lower level<br>of friction. As the car slows and the forces diminish then the tire will need to "re-stick" to the road.<br><br>the second major friction type is world friction. Think of this as air resistance. Now there is a peculiar<br>effect with air resistance where its resitance is a product of the vehicles speed. At zero velocity air<br>resistance is zero. but at much higher velocities it reaches such a high value that the vehicle will reach<br>a state known as terminal velocity. Terminal velocity simply means that the vehicle has reached its maximum<br>velocity.<br><br>So as a first step here is a very simple change that will change the simulation from "a train on tracks" to a<br>linear slip allowed for the tires. remember this is not accurate because we need two states for the wheels<br>and since this is simply linear it means the wheels are allowed to slip all the time.<br>In the DoVerlet function change this line;<br>;tempvmx is purposefully not computed so the wheels only travel up and down, and forward/back<br>TO;<br>tempvmx = tempvmx - ((tempvoldx*.5) + (tempvax * (DeltaTime * DeltaTime))) + (temptempx * .5)<br>you will need to reduce the turn_rate variable, also located in DoVerlet, because now that the wheels <br>are allowed to slip the force applied to turn the vehicle is applied with much less resistance. I suggest<br>changing it from;<br>turn_rate = turn_rate + .7<br>To<br>turn_rate = turn_rate + .5<br>Now this change allows 50 percent of the forces that previously we entirely excluded to now be computed.<br>Note the car will still roll over if you push it hard.<br><br>Remember how we needed two states for the tire? Well this is a simple hack to illustrate how we can achieve<br>the those states.<br>In the DoVerlet function change this line;<br>;tempvmx is purposefully not computed so the wheels only travel up and down, and forward/back<br><br>To this;<br>If Abs(tempvmx - tempvoldx) &gt; 3 Then <br>tempvmx = tempvmx - ((tempvoldx*1) + (tempvax * (DeltaTime * DeltaTime))) + (temptempx * 1)<br>Else tempvmx = tempvmx - ((tempvoldx*.1) + (tempvax * (DeltaTime * DeltaTime))) + (temptempx * .1)<br>End If<br><br>And reduce the turn_rate, also located in DoVerlet, from;<br>turn_rate = turn_rate + .7<br>TO<br>turn_rate = turn_rate + .6 or even lower.<br><br>How this works is, it computes the difference from the old position to the new position. The difference is<br>effectively the force, or more accuratly the velocity change, exerted on the tire. when the difference is greater<br>than 3 the verlet is allowed to fully travel in all 3 axis with no friction. it wont look realistic but it will<br>prove that we can achieve two states.<br><br>Ok thats enough for now. Have fun. <br><br></td></tr></table><br>
+<a name="257149"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#24">[#24]</a></td></tr></table></td></tr><tr ><td class="posttext"> vorderman, cool, glad your looking at it. in a way i want the car design to be unstable so i can find the problems with the math. then i can correct the math to improve stability and later on refine the verlet structure so it more closely matches a real vehicle. later on when the math is more complete there will be many many changes to the verlet placement including placing more of them to more accuratly form to the shape of the vehicle.<br><br>hmm never though of a pendulum effect. thats a very interesting concept, and one i think i will use if i cant solve the unstability problems with better formulas. thanks for that!! <br><br></td></tr></table><br>
+<a name="257271"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#25">[#25]</a></td></tr></table></td></tr><tr ><td class="posttext"> ok heres a big update. lots of stuff fixed. read top of code for details.<br><br><pre class=code>
+;credit: miracle did the original port of verlet physics To BB. this code is based on that port.
+;aug 27 03
+;fixed per verlet friction contact friction
+;added slip state to tires
+;roll over in the ROLL axis problem much improved. still has problem with pitch roll over.
+;moved z axis force from pivot to per verlet calculation
+;cleaned up a bunch of junk code.
+;changed chase cam to be more exciting - well ok its not exciting but it move more lol. it does however have a problem when car is upside down.
+;fixed frozen front wheel.
+
+Graphics3D HEIGHT,WIDTH,16,2
+Const HEIGHT=640					; graphics width
+Const WIDTH=480					; graphics height
+Const ACTIVE=1					; collision type
+Const VERLET=2					; collision Type
+Const FRONT_TIRE=0				; Vobject part name
+Const REAR_TIRE=1					; Vobject part name
+Const BODY=2						; Vobject part name
+Const CENTER=3					; Vobject part name
+Const SIZE#=8					; just a multiplier for how big the Vobject will be
+Const ITERATIONS = 2				; How many loops through the "relaxation" routine, Lower = speed up / lose accuracy
+Global DeltaTime#					; Time between physics calculations
+Global vGrav.Vector = Vector(0.0,9,0.0)	; Gravity. yes i know its a positive value. still dont know why this is but it works.
+Global vTemp1.Vector = Vector(0,0,0)	; Some temporary vectors for calculations
+Global vTemp2.Vector = Vector(0,0,0)
+Global world_friction#=0				; air resistance
+Global temp_turn#=0
+front_stiff=20						; This is actually the mass value for the front wheel. lower mass = less stiff. caution will collapse
+rear_stiff=30						; This is actually the mass value for the rear wheel. lower mass = less stiff. caution will collapse
+
+Type Vector
+	Field x#
+	Field y#
+	Field z#
+End Type
+
+Type VerletPack							
+	Field start_loc.vector					; Defines where this verlet started at so we can fix it when it gets to far out of place
+	Field current.Vector						; Current position
+	Field old.Vector						; Last position
+	Field gravity.Vector						; Accumulated forces
+	Field radius#							; Collider radius
+	Field mass.vector						; Point mass of this particular verlet
+	Field entity							; Pivot assigned to this verlet for both position and collision
+	Field mesh							; Mesh assigned to this verlet if any such as wheels or body parts
+	Field part								; Describes what verlet represents. example wheel or body part.
+	Field state							; Collideable status true/false	
+	Field contact_friction#					; When in contact with the ground how much friction is applied
+	Field traction							; true if tire is sticking, false if its skidding
+End Type
+
+Type Constraint							; Two verlets connected by a mutual spring
+	Field v1.VerletPack						; First verlet
+	Field v2.VerletPack						; Second verlet
+	Field d#								; Distance between verlets
+End Type
+
+Type Vobject								; This is the parent object that the verlets are associated with
+	Field v.VerletPack[8]					; The array of individual verlets
+	Field num_verlets						; Total number of verlets (array dim value)
+	Field player_pivot						; Pivot used to represent player. this pivot is dynamically controlled by player.
+	Field player							; Mesh used to represent the player. this mesh is parented to player_pivot
+	Field center.VerletPack					; Used to position player_pivot but not neccessarily parented to.
+	Field x1.VerletPack						; x1 and x2 are used to define a vector left/right to align player_pivot
+	Field x2.VerletPack
+	Field z1.VerletPack						; z1 and z2 are used to define a vector forward/aft to align player_pivot
+	Field z2.VerletPack
+	Field X_vec#							; vectors for calculations
+	Field Y_vec#
+	Field Z_vec#
+	Field mass#							; Mass for physics calculation on entire Vobject
+	Field horsepower#						; Force for physics calculations on entire Vobject
+	Field acceleration#						; Rate at which the Vobject accelerates
+End Type
+
+;***** make the vehicle ****************************************
+	tempx# = 0							;start location of vehicle
+	tempy# = 20							;start location of vehicle
+	tempz# = 150							;start location of vehicle
+	Global car.Vobject = New Vobject 			;initialize the Vobject type
+	car\player_pivot=CreatePivot()			;this is the master pivot that the player will contol
+	car\player=CreateCube(car\player_pivot)	;mesh that is assigned to player_pivot. in this case a simple cube for a car body
+	ScaleEntity car\player, 15,6,30			;get car body into postion and scaled etc
+	EntityColor car\player, 255,0,0
+	PositionEntity car\player, 0, 2, -6
+	car\num_verlets = 8						;total number of verlets in the Vobject. count from zero
+	car\mass=10							;this mass value is used for physics calculations on player_pivot.
+	car\horsepower = 500					;the force exerted on z axis,local to pivot, of verlet
+	sx# = 1.9								;just a multiplier for the Vobject size
+	sy# = 1.2								;just a multiplier for the Vobject size
+	sz# = 2.65							;just a multiplier for the Vobject size
+	
+	;parameters   x,y,z,radius, mass, part,mesh,state,collision_type, contact_friction
+	a.VerletPack = Verlet(tempx - SIZE * sx, tempy - SIZE * sy, tempz - SIZE * sz,  7, front_stiff, FRONT_TIRE, CreateCylinder(12), True, VERLET, .01)
+	b.VerletPack = Verlet(tempx + SIZE * sx, tempy - SIZE * sy, tempz - SIZE * sz, 7, front_stiff, FRONT_TIRE, CreateCylinder(12), True, VERLET, .01)
+	c.VerletPack = Verlet(tempx + SIZE * sx, tempy + SIZE * sy, tempz - SIZE * sz, 7, 400.0, BODY, 0, True, VERLET, .07)
+	d.VerletPack = Verlet(tempx - SIZE * sx, tempy + SIZE * sy, tempz - SIZE * sz, 7, 400.0, BODY, 0, True, VERLET, .07)
+	e.VerletPack = Verlet(tempx - SIZE * sx, tempy - SIZE * sy, tempz + SIZE * sz, 9, rear_stiff, REAR_TIRE, CreateCylinder(12), True, VERLET, .01)
+	f.VerletPack = Verlet(tempx + SIZE * sx, tempy - SIZE * sy, tempz + SIZE * sz, 9, rear_stiff, REAR_TIRE, CreateCylinder(12), True, VERLET, .01)
+	g.VerletPack = Verlet(tempx + SIZE * sx, tempy + SIZE * sy, tempz + SIZE * sz, 7, 400.0, BODY, 0, True, VERLET, .07)
+	h.VerletPack = Verlet(tempx - SIZE * sx, tempy + SIZE * sy, tempz + SIZE * sz, 7, 400.0, BODY, 0, True, VERLET, .07)
+	i.VerletPack = Verlet(tempx, tempy + 5, tempz + 8, 7, 400.0, CENTER, 0, False, VERLET, 0)
+	
+	; Edges
+	Constraint2(a,b)
+	Constraint2(b,c)
+	Constraint2(a,d)
+	Constraint2(c,d)
+	Constraint2(e,f)	
+	Constraint2(f,g)
+	Constraint2(e,h)
+	Constraint2(g,h)
+	Constraint2(a,e)
+	Constraint2(b,f)
+	Constraint2(c,g)
+	Constraint2(d,h)
+
+	; Cross-faces
+	Constraint2(a,c)
+	Constraint2(b,d)
+	Constraint2(e,g)
+	Constraint2(f,h)
+	Constraint2(a,f)
+	Constraint2(a,h)
+	Constraint2(b,e)
+	Constraint2(b,g)
+	Constraint2(c,f)
+	Constraint2(c,h)
+	Constraint2(d,e)
+	Constraint2(d,g)
+
+	; Diagonals
+	Constraint2(a,g)
+	Constraint2(b,h)
+	Constraint2(c,e)
+	Constraint2(d,f)
+	
+	; Constraining the center sphere
+	Constraint2(a,i)
+	Constraint2(b,i)
+	Constraint2(c,i)
+	Constraint2(d,i)
+	Constraint2(e,i)
+	Constraint2(f,i)
+	Constraint2(g,i)
+	Constraint2(h,i)
+
+	; Assign individual verlets to the array	
+	car\v[0] = i
+	car\v[1] = a
+	car\v[2] = b
+	car\v[3] = c
+	car\v[4] = d
+	car\v[5] = e
+	car\v[6] = f
+	car\v[7] = g
+	car\v[8] = h
+	
+	; assign a verlet the center position
+	car\center=i
+	; Set up variables used for player mesh/pivot aligntovector. one is left to right, other is forward back.
+	car\x1=c
+	car\x2=d
+	car\z1=g
+	car\z2=c
+	
+	PositionEntity car\player_pivot, EntityX(car\center\entity),EntityY(car\center\entity),EntityZ(car\center\entity)
+	measure_pivots(car.Vobject, 0)
+;****** end make vehicle *******************************************************************
+
+
+Collisions VERLET,ACTIVE,2,2
+MoveMouse WIDTH/2,HEIGHT/2
+
+lgt = CreateLight()
+LightColor lgt,300,300,300
+RotateEntity lgt,35,0,0
+AmbientLight 94,94,80
+Global cam = CreateCamera()
+CameraFogMode cam,0
+CameraFogColor cam,128,128,180
+CameraClsColor cam,128,128,180
+CameraRange cam,1,4000
+CameraFogRange cam,500,3000
+CameraZoom cam,1.25
+
+bump=CreateCylinder(4)
+ScaleEntity bump, 5,600,20
+RotateEntity bump,0,0,90
+EntityType bump, ACTIVE
+EntityColor bump,0,255,0
+PositionEntity bump,0,0,-500
+PositionEntity CopyEntity(bump),0,0,-600
+PositionEntity CopyEntity(bump),0,0,-700
+PositionEntity CopyEntity(bump),0,0,-800
+PositionEntity CopyEntity(bump),0,0,-900
+
+jump=CreateCube()
+ScaleEntity jump,200,100,100
+RotateEntity jump,15,0,0
+PositionEntity jump,0,-70,-600
+EntityType jump,ACTIVE
+
+landing=CreateCube()
+ScaleEntity landing,200,100,100
+RotateEntity landing,15,180,0
+PositionEntity landing,0,-70,-1000
+EntityType landing,ACTIVE
+
+grid_tex=CreateTexture( 256,256,1+4+8 )
+SetBuffer TextureBuffer( grid_tex )
+ScaleTexture grid_tex,500,500
+Color 255,255,255:Rect 0,0,256,256,False
+grid_tex2=CreateTexture( 32,32,1+8 )
+SetBuffer TextureBuffer( grid_tex2 )
+ScaleTexture grid_tex2,50,50
+Color 0,0,255:Rect 0,0,32,32,False
+SetBuffer BackBuffer()
+flr=CreatePlane()
+EntityType flr,ACTIVE
+EntityTexture flr,grid_tex,0,1
+EntityTexture flr,grid_tex2,0,0
+TextureBlend grid_tex,3
+EntityBlend flr,1
+EntityAlpha flr,.6
+EntityFX flr,1
+PositionEntity flr,0,0,0
+
+ScaleEntity car\v[1]\mesh,car\v[1]\radius,car\v[1]\radius/2,car\v[1]\radius
+RotateEntity car\v[1]\mesh,0,0,90
+PositionEntity car\v[1]\mesh,0,0,0
+
+ScaleEntity car\v[2]\mesh,car\v[2]\radius,car\v[2]\radius/2,car\v[2]\radius
+RotateEntity car\v[2]\mesh,0,0,90
+PositionEntity car\v[2]\mesh,0,0,0
+
+ScaleEntity car\v[5]\mesh,car\v[5]\radius,car\v[5]\radius/2,car\v[5]\radius
+RotateEntity car\v[5]\mesh,0,0,90
+PositionEntity car\v[5]\mesh,0,0,0
+
+ScaleEntity car\v[6]\mesh,car\v[6]\radius,car\v[6]\radius/2,car\v[6]\radius
+RotateEntity car\v[6]\mesh,0,0,90
+PositionEntity car\v[6]\mesh,0,0,0
+
+;********* functions defined ********************************************
+
+; measure the start locations for each verlet so it can be fixed if it collapses
+Function measure_pivots(name.Vobject, center_element)
+	For count=1 To name\num_verlets
+		If name\v[count]\part &lt;&gt; CENTER Then
+			EntityParent name\v[count]\entity, name\v[center_element]\entity
+			name\v[count]\start_loc\x=EntityX(name\v[count]\entity)
+			name\v[count]\start_loc\y=EntityY(name\v[count]\entity)
+			name\v[count]\start_loc\z=EntityZ(name\v[count]\entity)
+			EntityParent name\v[count]\entity, 0
+		Else
+			name\v[count]\start_loc\x=0
+			name\v[count]\start_loc\y=0
+			name\v[count]\start_loc\z=0
+		End If
+	Next
+End Function
+
+; use this function to fix a collapsed Vobject
+Function fix_verlet(name.Vobject)
+	For count=1 To name\num_verlets
+		EntityParent name\v[count]\entity, name\center\entity
+		tempx# = name\v[count]\start_loc\x + name\center\current\x
+		tempy# = name\v[count]\start_loc\y + name\center\current\y
+		tempz# = name\v[count]\start_loc\z + name\center\current\z
+		PositionEntity name\v[count]\entity, tempx, tempy, tempz
+		name\v[count]\current\x = tempx
+		name\v[count]\current\y = tempy
+		name\v[count]\current\z = tempz
+		name\v[count]\old\x = tempx
+		name\v[count]\old\y = tempy
+		name\v[count]\old\z = tempz
+		EntityParent name\v[count]\entity, 0
+	Next
+End Function
+
+Global crash, debugx#
+Function DoVerlet(name.Vobject, accelerator)
+	For count = 0 To name\num_verlets
+		If (name\v[count]\part = REAR_TIRE Or name\v[count]\part = FRONT_TIRE) And CountCollisions(name\v[count]\entity) &gt;0
+			TFormVector vgrav\x, vgrav\y,  vgrav\z, 0, name\player_pivot
+			tempvax# = TFormedX()
+			tempvay# = TFormedY()
+			tempvaz# = TFormedZ()
+			TFormVector name\v[count]\current\x, name\v[count]\current\y,  name\v[count]\current\z, 0, name\player_pivot
+			temptempx#= TFormedX()
+			temptempy#= TFormedY()
+			temptempz#= TFormedZ()
+			tempvmx# = TFormedX()
+			tempvmy# = TFormedY()
+			tempvmz# = TFormedZ()
+			TFormVector name\v[count]\old\x, name\v[count]\old\y,  name\v[count]\old\z, 0, name\player_pivot
+			tempvoldx# = TFormedX()
+			tempvoldy# = TFormedY()
+			tempvoldz# = TFormedZ()
+			TFormVector EntityX(name\v[count]\entity,True), EntityY(name\v[count]\entity,True),  EntityZ(name\v[count]\entity,True), 0, name\player_pivot
+			tempentityx# = TFormedX()
+			tempentityy# = TFormedY()
+			tempentityz# = TFormedZ()
+			debugx=tempvmx - tempvoldx
+			If Abs(tempvmx - tempvoldx) &gt; 3 Then
+				name\v[count]\traction=False
+				tempvmx = tempvmx - ((tempvoldx*.9) + (tempvax * (DeltaTime * DeltaTime))) + (temptempx * .9)
+				tempvmy = tempvmy - ((tempvoldy * .9) + (tempvay * (DeltaTime * DeltaTime))) + (temptempy * .9)  
+				tempvmz = tempvmz - ((tempvoldz * .9) + ((tempvaz + (accelerator * name\horsepower / name\mass)) * (DeltaTime * DeltaTime))) + (temptempz * .9)
+				Else
+				name\v[count]\traction=True 
+				tempvmx = tempvmx - ((tempvoldx*.1) + (tempvax * (DeltaTime * DeltaTime))) + (temptempx * .1)
+				tempvmy = tempvmy - ((tempvoldy * (1- name\v[count]\contact_friction)) + (tempvay * (DeltaTime * DeltaTime))) + (temptempy * (1- name\v[count]\contact_friction))  
+				tempvmz = tempvmz - ((tempvoldz * (1- name\v[count]\contact_friction)) + ((tempvaz + (accelerator * name\horsepower / name\mass)) * (DeltaTime * DeltaTime))) + (temptempz * (1- name\v[count]\contact_friction))
+			End If
+			tempvoldx = temptempx
+			tempvoldy = temptempy
+			tempvoldz = temptempz
+			TFormVector tempvmx, tempvmy,  tempvmz, name\player_pivot, 0
+			name\v[count]\current\x = TFormedX()
+			name\v[count]\current\y = TFormedY()
+			name\v[count]\current\z = TFormedZ()
+			TFormVector tempvoldx, tempvoldy,  tempvoldz, name\player_pivot, 0
+			name\v[count]\old\x = TFormedX()
+			name\v[count]\old\y = TFormedY()
+			name\v[count]\old\z = TFormedZ()
+			Else
+				name\v[count]\gravity\x = vgrav\x
+				name\v[count]\gravity\y = vgrav\y
+				name\v[count]\gravity\z = vgrav\z
+				tempx# = name\v[count]\current\x
+				tempy# = name\v[count]\current\y
+				tempz# = name\v[count]\current\z
+				If CountCollisions(name\v[count]\entity) &gt;0 Then
+ 					name\v[count]\current\x = name\v[count]\current\x - ((name\v[count]\old\x * (1- name\v[count]\contact_friction)) + (name\v[count]\gravity\x * (DeltaTime * DeltaTime))) + (tempx * (1- name\v[count]\contact_friction))
+					name\v[count]\current\y = name\v[count]\current\y - ((name\v[count]\old\y * (1- name\v[count]\contact_friction)) + (name\v[count]\gravity\y * (DeltaTime * DeltaTime))) + (tempy * (1- name\v[count]\contact_friction))
+					name\v[count]\current\z = name\v[count]\current\z - ((name\v[count]\old\z * (1- name\v[count]\contact_friction)) + (name\v[count]\gravity\z * (DeltaTime * DeltaTime))) + (tempz * (1- name\v[count]\contact_friction))
+					Else
+						name\v[count]\current\x = name\v[count]\current\x - (name\v[count]\old\x + (name\v[count]\gravity\x * (DeltaTime * DeltaTime))) + tempx
+						name\v[count]\current\y = name\v[count]\current\y - (name\v[count]\old\y + (name\v[count]\gravity\y * (DeltaTime * DeltaTime))) + tempy
+						name\v[count]\current\z = name\v[count]\current\z - (name\v[count]\old\z + (name\v[count]\gravity\z * (DeltaTime * DeltaTime))) + tempz
+				End If	
+				name\v[count]\old\x = tempx
+				name\v[count]\old\y = tempy
+				name\v[count]\old\z = tempz
+		End If
+		If name\v[count]\part = FRONT_TIRE Then ;*** steering
+			PositionEntity name\v[count]\entity, name\v[count]\current\x, name\v[count]\current\y, name\v[count]\current\z
+			EntityParent  name\v[count]\entity, name\player_pivot
+			TurnEntity name\player_pivot, 0, temp_turn, 0
+			EntityParent  name\v[count]\entity, 0
+				
+			Else 
+				PositionEntity name\v[count]\entity, name\v[count]\current\x, name\v[count]\current\y, name\v[count]\current\z
+		End If
+	Next
+	UpdateWorld
+	
+	crash=0
+	For count = 0 To name\num_verlets
+		If (name\v[count]\part = FRONT_TIRE Or REAR_TIRE) And Abs(Name\v[count]\current\y - EntityY(name\v[count]\Entity)) &gt;9 Then crash=crash+1
+	Next
+	If crash &gt;= 1 Then
+		For count = 0 To name\num_verlets
+			name\v[count]\current\y=name\v[count]\current\y + 5
+			name\v[count]\old\y=name\v[count]\current\y
+			PositionEntity name\v[count]\entity, name\v[count]\current\x, name\v[count]\current\y, name\v[count]\current\z
+		Next
+		UpdateWorld
+	End If
+
+	turn_rate = 0
+	For count = 0 To name\num_verlets
+		If CountCollisions(name\v[count]\entity) And name\v[count]\part = FRONT_TIRE And name\v[count]\traction=True Then
+			turn_rate = turn_rate + .5
+		End If
+		name\v[count]\current\x = EntityX(name\v[count]\entity)
+		name\v[count]\current\y = EntityY(name\v[count]\entity)
+		name\v[count]\current\z = EntityZ(name\v[count]\entity)
+	Next
+	For n = 1 To ITERATIONS
+		For c.Constraint = Each Constraint
+			setDistance(c\v1, c\v2, c\d)
+		Next
+	Next
+	;body and wheel stuff
+	PositionEntity name\player_pivot, EntityX(name\center\entity), EntityY(name\center\entity), EntityZ(name\center\entity)
+	name\X_vec = EntityX(name\x1\entity) - EntityX(name\x2\entity)
+	name\Y_vec = EntityY(name\x1\entity) - EntityY(name\x2\entity)
+	name\Z_vec = EntityZ(name\x1\entity) - EntityZ(name\x2\entity)
+	AlignToVector name\player_pivot, name\X_vec, name\Y_vec, name\Z_vec, 1
+	For count=0 To name\num_verlets
+		If name\v[count]\part = FRONT_TIRE Or name\v[count]\part = REAR_TIRE Then
+			AlignToVector name\v[count]\entity, name\X_vec, name\Y_vec, name\Z_vec, 1
+		End If
+	Next
+	name\X_vec = EntityX(name\z1\entity) - EntityX(name\z2\entity)
+	name\Y_vec = EntityY(name\z1\entity) - EntityY(name\z2\entity)
+	name\Z_vec = EntityZ(name\z1\entity) - EntityZ(name\z2\entity)
+	AlignToVector name\player_pivot, name\X_vec, name\Y_vec, name\Z_vec, 3
+	TFormVector name\v[0]\current\x - name\v[0]\old\x, name\v[0]\current\y - name\v[0]\old\y,  name\v[0]\current\z - name\v[0]\old\z, name\v[0]\entity, name\player_pivot
+	TurnEntity name\v[1]\entity, TFormedZ() * name\v[1]\radius, 0, 0, False
+	TurnEntity name\v[2]\entity, TFormedZ() * name\v[2]\radius, 0, 0, False
+	TurnEntity name\v[5]\entity, TFormedZ() * name\v[5]\radius, 0, 0, False
+	TurnEntity name\v[6]\entity, TFormedZ() * name\v[6]\radius, 0, 0, False
+End Function
+
+Function SetDistance(v1.VerletPack,v2.VerletPack,dist#)	
+		vtemp1\x=v1\current\x - v2\current\x
+		vtemp1\y=v1\current\y - v2\current\y
+		vtemp1\z=v1\current\z - v2\current\z
+		deltalength# = Sqr((vTemp1\x * vTemp1\x) + (vTemp1\y * vTemp1\y) + (vTemp1\z * vTemp1\z))
+		If deltalength &lt;= 0.0 deltalength = 0.0000001
+		diff# = (deltalength - dist) / deltalength
+		txmass# =  v1\mass\x + v2\mass\x
+		tymass# =  v1\mass\y + v2\mass\y
+		tzmass# =  v1\mass\z + v2\mass\z
+
+		v1\current\x=v1\current\x - vtemp1\x * (diff * (v2\mass\x / txmass)); * (diff+1.2) 
+		v1\current\y=v1\current\y - vtemp1\y * (diff * (v2\mass\y / tymass))  * (diff+1)
+		v1\current\z=v1\current\z - vtemp1\z * (diff * (v2\mass\z / tzmass)); * (diff+1.2)
+		v2\current\x=v2\current\x + vtemp1\x *(diff * (v1\mass\x / txmass)); / (diff+1.2)
+		v2\current\y=v2\current\y + vtemp1\y *(diff * (v1\mass\y / tymass))  / (diff+1)
+		v2\current\z=v2\current\z + vtemp1\z *(diff * (v1\mass\z / tzmass)); / (diff+1.2)
+End Function
+
+Function Verlet.VerletPack(x#,y#,z#,radius#, mass#, part,mesh,state,collision_type, contact_friction#)
+	v.VerletPack = New VerletPack
+	v\current = Vector(x,y,z)	;current location
+	v\old = Vector(x,y,z)	;old location
+	v\start_loc = Vector(0,0,0) ; initalize with zeros to be filled later
+	v\part=part		;part identifier such as wheel or body
+	If radius &lt;= 0.0 radius = 0.01
+	v\radius = radius	;collision radius
+	If mass &lt;= 0.0 mass = 0.01
+	If v\part= FRONT_TIRE Or v\part= REAR_TIRE Then v\mass = Vector(100,mass,100) Else v\mass = Vector(400,400,400)
+	v\entity = CreatePivot()	;used as the collision element
+	PositionEntity v\entity,x,y,z,True
+	v\mesh=mesh		;mesh assigned if any
+	If mesh&lt;&gt;0 Then EntityParent  v\mesh, v\entity,True
+	v\state=state		;true for collideable, false for non collideable
+	If v\state=True Then
+		EntityType v\entity, collision_type
+		EntityRadius v\entity,radius#
+	End If
+	v\contact_friction=contact_friction#
+	v\gravity = Vector(0.0,0.0,0.0)
+	Return v
+End Function
+
+Function Constraint2.Constraint(v1.VerletPack,v2.VerletPack)
+	c.Constraint = New Constraint
+	c\v1 = v1
+	c\v2 = v2
+	c\d = Sqr((v2\current\x - v1\current\x)^2 + (v2\current\y - v1\current\y)^2 + (v2\current\z - v1\current\z)^2)
+	;Return c	; You may need this someday ... we don't for what we have here
+End Function
+
+;// Create a Vector
+Function Vector.Vector(x#=0.0,y#=0.0,z#=0.0)
+	v.Vector = New Vector
+	v\x=x
+	v\y=y
+	v\z=z
+	Return v
+End Function 
+
+;display directions
+While Not KeyHit(57)
+	RenderWorld
+	Text 20,20, "Tab changes view from mouse look modes to front/side views."
+	Text 20,35, "Arrow keys control vehicle.
+	Text 20,50, "Escape exits program."
+	Text 20,65, "Space bar resets vehicle"
+	Text 20,80, "Hit space bar to begin."
+	Flip False
+Wend
+
+;temp_Vobject2.Vobject = First Vobject
+Global turn_rate#=0
+DeltaTime#=.09
+HidePointer
+fRate = (1000/72) ;*set second number to desired frame rate
+view=2
+;**************** main loop ***************************************	
+While Not KeyHit(1)
+	time1 = MilliSecs() ;time at start of processing loop
+	temp_turn#=0
+	accelerator=0
+	If KeyDown(203) temp_turn=turn_rate
+	If KeyDown(205) temp_turn=-turn_rate
+	If KeyDown(200) accelerator=1
+	If KeyDown(208) accelerator=-1
+	If KeyDown(57) Then 
+		vGrav\y=0
+		fix_verlet(car.Vobject) 
+		Else 
+			vGrav.Vector = Vector(0.0,9,0.0)
+	End If
+		DoVerlet(car.Vobject, accelerator)
+	If KeyHit(15) Then 
+		view=view+1
+		If view &gt;=3 Then view=0
+	End If
+	PositionEntity cam,EntityX(car\center\entity),EntityY(car\center\entity),EntityZ(car\center\entity)
+	tempmousex#=tempmousex-MouseXSpeed()
+	tempmousey#=tempmousey+MouseYSpeed()
+	Select view
+	Case 0 
+		RotateEntity cam, tempmousey+10 , tempmousex+180, 0
+	Case 1
+		RotateEntity cam,tempmousey , EntityYaw(car\player_pivot,True)+90, 0
+	Case 2
+		RotateEntity cam,EntityPitch(car\player_pivot,True)/4 +15 , EntityYaw(car\player_pivot,True)+180, EntityRoll(car\player_pivot,True) /2
+	End Select
+	MoveEntity cam,0,0,-150
+	MoveMouse WIDTH/2,HEIGHT/2
+	
+	RenderWorld
+	Text 20,20, "lateral velocity: "+debugx
+	Delay fRate - (MilliSecs() - time1) ;delay execution
+	Flip False
+Wend
+End
+</pre> <br><br></td></tr></table><br>
+<a name="257273"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Al Mackey</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#26">[#26]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm, mine's went in a bit of a different direction, with a few textures, a new track, and my own chase cam.<br><br><a href="http://www.almackey.com/verletvw2.zip" target="_blank">http://www.almackey.com/verletvw2.zip</a><br><br>DMC, I can host files for you if you want, but keep in mind that they'll be hosted on my account on a friend's server sitting on a friend of a friend's bandwith pipe.  In other words, I can't personally guarantee it'll always be up. <br><br></td></tr></table><br>
+<a name="257276"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#27">[#27]</a></td></tr></table></td></tr><tr ><td class="posttext"> thanks for the offer al, but i dont know when ill have time to make a "prettier version". the only thing im concerned with right now is getting the math/functionality as correct/stable as possible. but maybe you could add your stuff to the new code. and keep your chase cam its pretty cool.<br><br>the updated code seems to handle a little bit better so im pleased with that.<br><br>personally i wish i had time to make a game out of this. but since i dont, i making it available so those that do can make there own racing game or whatever they want =) <br><br></td></tr></table><br>
+<a name="257281"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Al Mackey</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#28">[#28]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've been working on moving my B3Ds into your new code..  it's working well, but there's still a bug I notice in both the new and old versions of the code.  The front right tire doesn't spin!  It's mostly an asthetic thing, I guess, but it would be nice if it did... (and I can't make heads or tails of most of the physics stuff so I'm having a hard time tracking it down myself) <br><br></td></tr></table><br>
+<a name="257289"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bouncer</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#29">[#29]</a></td></tr></table></td></tr><tr ><td class="posttext"> hint:<br>You have one error in your code that makes the verlet structure unstabile.<br><br>In your setdistance function, where you calculate the springs...<br><br>diff# = (deltalength - dist) / deltalength<br>you should multiply the diff by 0.5<br><br>Because when you add vtemp*diff to other end of the spring and substract from the other end it makes the spring lenght wrong again, instead of correcting it.<br><br>to prove it:<br><br>x1=100:x2=150:dist=100<br>xs = x2-x1 = 50<br>deltalenght = sqr(xs*xs) = 50<br>diff# = (deltalength - dist) / deltalength = -1<br><br>x1 + xs*diff (50*-1) <br>x2 - xs*diff (50*-1)<br><br>-------&gt; x1 = 100-50 : x2 = 150+50 , so now the distance is 150 and it should be 100. <br><br></td></tr></table><br>
+<a name="257316"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#30">[#30]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm. bouncer, it appears that that is correct. I'm using the same method as dmc for my distance corrections, but I can't check it now cause I'll have to close the browser, since it slows down the computer. <br><br>Anyway, the new version is much better. corrects many of my previous gripes. as far as myself, I've been progressing my system pretty well. I have psionic's ninja model do a backflip and suddenly merge into verlet physics-continuing the motion in a physichal way. Still super messy though. my collisions have run into a simple mathamatical barrier that will make it so I can't have double sided flat quads. I can do single sided just fine, but oh well. I'm lazy.I'll do it tommorow. <br><br></td></tr></table><br>
+<a name="257335"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Vorderman</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#31">[#31]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm, that new version is much more stable.<br><br>However, it still seems that you end up with a car that will suddenly swap ends with no warning. This is exactly what I got with my ODE tests - because there is no simulation of the way rubber tyres mould to the road then the wheel is either touching the floor and gripping, or else it bounces slightly and all traction is lost.<br><br>I think that until a suitable tyre-dynamic is added that regulates the available grip/friction then creating a car model that can slide realistically and be controlled will be very difficult or impossible.<br><br>I really hope someone can prove me wrong though. <br><br></td></tr></table><br>
+<a name="257374"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#32">[#32]</a></td></tr></table></td></tr><tr ><td class="posttext"> dmc, this is really fantastic stuff. I've even started to understand how it works -- at first glance the code looks very complicated, but reading through it, it turns out to be fairly straightforward to follow, so I'm looking forward to experimenting more with this.<br><br>Still, there's tons I wouldn't have a clue how to implement (all that wheel friction, etc), so please keep updating it -- I've waited ages for someone to implement decent car physics in Blitz, so big thanks from me for all your hard work! <br><br></td></tr></table><br>
+<a name="257391"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Miracle</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#33">[#33]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm with James. I knew when I converted this verlet stuff it had a lot of potential --<br>nice to see that potential being realized. <br><br></td></tr></table><br>
+<a name="257392"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Vorderman</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#34">[#34]</a></td></tr></table></td></tr><tr ><td class="posttext"> Maybe someone is able to decipher the Pacejka tyre model that games like Racer use, as this seems to be a good way to model tyre forces and dynamics, and seems to be the missing piece in this (and the ODE) car physics systems.<br><br>I'm afraid it's a bit above me :( <br><br></td></tr></table><br>
+<a name="257396"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >CyBeRGoth</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#35">[#35]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is brilliant<br><br>I went up the loop-type thing so fast the wheels ended up on the roof :) <br><br></td></tr></table><br>
+<a name="257420"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#36">[#36]</a></td></tr></table></td></tr><tr ><td class="posttext"> BTW Miracle -- those thanks go to you too! <br><br></td></tr></table><br>
+<a name="257436"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >necky</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#37">[#37]</a></td></tr></table></td></tr><tr ><td class="posttext"> Will it be possible to do capsule to polygon collision with your system? Or better still polygon to polygon collision?<br><br>cya,<br>        Mike <br><br></td></tr></table><br>
+<a name="257448"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#38">[#38]</a></td></tr></table></td></tr><tr ><td class="posttext"> Vorderman, let me know what you think of this.....<br>i have a hunch that the quick flip in direction is being caused primarily by the mode switch code, from sticking to slipping, that is simply a binary decision. the verlets have lots of potential energy that is instantly released. what im trying to wrap my brain around is a way to allow the tire to start to slip gradually, and release enough energy before the car flips. all of this needs to happen over a small number of frames.<br><br>for a little proof of this concept, when i had the wheels using a constant 50 percent slip it never "flipped around".<br><br>the other contributing cause is the simple hack im using for steering. eventually i need to have a speed dependant steering method that will only allow for tight turns when velocity is slow and widen the allowable turn radius when velocity is very very high. <br><br></td></tr></table><br>
+<a name="257454"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#39">[#39]</a></td></tr></table></td></tr><tr ><td class="posttext"> bouncer, ill take a look at what ya said when i get more.<br><br>necky, i dont have the foggiest idea of how to code collision systems. but assuming somebody did know how, heres a way to get polygon to polygon fast...<br>in the older post i started about verlet physics that code uses the verlet coordinates as vertex coords to make a real time deformable collision mesh. so with that you have a low poly mesh to check against.<br><br>Al, the one tire that doesnt spin hes been that way forever. i swear its a bug internal to blitz. someday it will be fixed. <br><br></td></tr></table><br>
+<a name="257468"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Al Mackey</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#40">[#40]</a></td></tr></table></td></tr><tr ><td class="posttext"> I found it, I found it!!  There's a bit of code that looks like this:<br><br><pre class=code>
+	For count=0 To name\num_verlets
+		If name\v[count]\part = FRONT_TIRE Or name\v[count]\part = REAR_TIRE Then
+			AlignToVector name\v[1]\entity, name\X_vec, name\Y_vec, name\Z_vec, 3
+		End If
+	Next
+</pre><br><br>I'm not sure what it's supposed to be doing, but that AlignToVector is being performed on v[1] -- that front wheel -- and keeping it from spinning.  Comment this out and it does spin, and the car seems to drive the same. <br><br></td></tr></table><br>
+<a name="257479"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#41">[#41]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks Al!!!!!!!<br>you da man.<br><br>most recent code post is now corrected. <br><br></td></tr></table><br>
+<a name="257494"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Algo</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#42">[#42]</a></td></tr></table></td></tr><tr ><td class="posttext"> Excellent work guys, I can play with this stuff for ages.<br><br>Also I don't know if it's of any help or if you already know about this site but it has some good info that might be of use.<br><br><a href="http://www.miata.net/sport/Physics/" target="_blank">http://www.miata.net/sport/Physics/</a> <br><br></td></tr></table><br>
+<a name="257518"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Al Mackey</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#43">[#43]</a></td></tr></table></td></tr><tr ><td class="posttext"> My latest:<br><a href="http://www.almackey.com/verletvw3.zip" target="_blank">http://www.almackey.com/verletvw3.zip</a><br><br>I got sick of the tiny window, so it relies on some calls to User32 (decls file included) to get the desktop res.  An EXE is included if you don't want to install my decls file (if you do, it goes in Blitz3D/userlibs).  There's three of my own camera modes here, including a drivers-eye view. <br><br></td></tr></table><br>
+<a name="257519"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >CyBeRGoth</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#44">[#44]</a></td></tr></table></td></tr><tr ><td class="posttext"> Al Mackey, the latest version is cool :)<br><br>I have not had this much fun since stunt car racer on the Atari ST :) <br><br></td></tr></table><br>
+<a name="257522"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#45">[#45]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>I'm not sure what it's supposed to be doing, but that AlignToVector is being performed on v[1] -- that front wheel -- and keeping it from spinning. Comment this out and it does spin, and the car seems to drive the same. <br> <br></div><br>Yeah, that gets the wheel spinning, but it *looks* like that line should read:<br><br><pre class=code>
+AlignToVector name\v[count]\entity, name\X_vec, name\Y_vec, name\Z_vec, 3
+</pre><br><br>(Note 'count' in place of '1']<br><br>... however, this stops all wheels spinning! The AlignToVector is different (ends in ,3 -- z-axis alignment) so must have some purpose, even if there's no visible difference after a few quick tests...? <br><br></td></tr></table><br>
+<a name="257546"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#46">[#46]</a></td></tr></table></td></tr><tr ><td class="posttext"> BTW Al that new demo rocks! Only problem is the frame-limit code doesn't seem to work here. Although it runs reasonably on my laptop (fairly slow for 3D stuff), it runs unplayably fast on my brother's Athlon 1800/Geforce 4 machine... other than that, this has to be one of the coolest Blitz demos out there! <br><br></td></tr></table><br>
+<a name="257553"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#47">[#47]</a></td></tr></table></td></tr><tr ><td class="posttext"> Awesome!! Al's new graphics/level really makes it cool. although the potential already showed threw the original.<br><br>Sorry bouncer, but I believe that your fix is incorrect. Easy mistake to make, and hard to test. I had to do a cube with 1 iteration to distinctly show incorectness with the multiply by .5 thing. The reason it's incorrect, is that it is factored in under you nose. The verlet masses are usually =1, so you end up with a tmass# of 2. then v1mass#/tmass#=.5, which is then multiplied by the diff#. I noticed that dmc is now using different mass values on different axis. interesting. Probably specific to the car sim. I was just going to save dmc from wasting time on figuring this out. but still a good point bouncer. took a little while for me to work out the fact that it's false. <br><br></td></tr></table><br>
+<a name="257564"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >fredborg</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#48">[#48]</a></td></tr></table></td></tr><tr ><td class="posttext"> Fantastic stuff! Easily the best car simulation ever done in Blitz! Mark you should hire dmc to do a native Blitz physics library ;)<br><br>Fredborg <br><br></td></tr></table><br>
+<a name="257581"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#49">[#49]</a></td></tr></table></td></tr><tr ><td class="posttext"> i am homing in the on the problem where the cars rear end whips around after traction is lost. although the original does give us two states it just allows way to much potential energy to build up and when traction is lost the rear accelerates forward just like a rubber band. so heres what i got cookin.<br><br>speed dependant steering - as car goes faster the radius you can turn gets wider and wider. want to turn sharply slow down first.<br><br>for the tire traction code im adding a slip threshold and max value so i can fine tune exactly when the tires break loose and by how much. it is also specific to front or rear tires. my hope is i can get the rear to start to break early and cause a slower spin out rather than a snap.<br><br>bot builder i agree nothing is wrong with the way the distances are calculated. i didnt prove it out. just used the... "if it aint broke dont fix it theory" =) and since i wasnt having much problem with the structure being unstable i wasnt about to change it.<br><br>sometime soon i have to get terminal velocity working because that dang car just keeps going faster and faster and faster.....<br><br>ohh the reason im using different masses for each axis is i can control how much energy is transfered from one verlet to the other by changing the masses. so for the wheels, they have very low masses. the body has much higher mass. this makes for a squishy suspension.<br><br>now where was i.... oh yeah bleeding off potential energy hmmmm.<br><br>have fun <br><br></td></tr></table><br>
+<a name="257624"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#50">[#50]</a></td></tr></table></td></tr><tr ><td class="posttext"> hmmm. I'm interested in your method of minimizing number of verlets used by using individual verlets as wheels.<br>Definitly minimizes work, and probably allows you to do everything much faster.  I might consider adding<br>that to my own wishlist for my engine. In a little while, once my demo is cleaned up and I get my own<br>webspace to post stuff, I'll put it up.<br><br>Oh yeah, and I forgot to mention in my previous post that the ninja constraints were completely computer applied for comple ragdoll affect, which is a bad thing, as all the ninja's apendages could go throu himself, creating a very mishapen humanish lump on the ground. I have actually figured out a reasonably good method of algorithmically assigning joint limits. Simply rotate each joint in all angles until the mesh intersects its parent. then assign a constraint that only occurs at a minimum distance, the amount between the parents parent, and the current entity.<br><br>with my newest idea(of a long and extravagant series), and making sure the .5 thing was incorrect, I never got arround to the collision thing, which is looking to be fairly more difficult than I thought.<br><br>PS:if you do make a blitz-native physics system, please put updates and demos in the forums. I'd like to help as well, but I can't code much in anything but blitz. <br><br></td></tr></table><br>
+<a name="257625"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jeremy Alessi</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#51">[#51]</a></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>
+AlignToVector name\v[ count or "1" in orignial code ]\entity, name\X_vec, name\Y_vec, name\Z_vec, 3
+</pre><br><br>Replace "count" or "1" there with a 3 and it works right. <br><br></td></tr></table><br>
+<a name="257648"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Paul "Taiphoz"</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#52">[#52]</a></td></tr></table></td></tr><tr ><td class="posttext"> OMFG..<br><br>This is total class m8. Iv just spent the better part of an hour just reading through the code.<br><br>Its awsome .. I hope you dont mine me using it. cos its outstanding.. well done and good work.. <br><br></td></tr></table><br>
+<a name="257733"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bouncer</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#53">[#53]</a></td></tr></table></td></tr><tr ><td class="posttext"> bot builder: You are right!... just corrected the bug in my own engine as well ;) <br>If you didn't have weights then it would be correct, but the way point weights are calculated removes the need for multiplying by 0.5 <br><br></td></tr></table><br>
+<a name="257734"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Miracle</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#54">[#54]</a></td></tr></table></td></tr><tr ><td class="posttext"> To prevent tires from "springing" onto the top of the vehicle, you might try attaching each tire<br>to every verlet in the car body. Yeah, I know, that's a big mess o' constraints, but I think it'll<br>stop the tire pushing through to the top and then sticking there. <br><br></td></tr></table><br>
+<a name="257736"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#55">[#55]</a></td></tr></table></td></tr><tr ><td class="posttext"> miracle since i need a loose suspension im guessing that no matter how many constraints are involved that eventually a case will come up where impact force is greater than the spring tension. <br><br>my solution is to detect when the verlets have been moved to far and to back track in time until they are within acceptable range and then globally to the verlet system bleed off excess energy.<br><br>i already have a crude method in the code above that is working for most circumstances. it just needs to be refined. one of the many things on my to-do list.<br><br>that code is basically what allows the car to go off a jump and not "bounce" uncontrollably.<br><br>last bit: for you folks still looking at that frozen tire code error. just remove it. it was a fragment accidently left in from a different idea now abandoned. <br><br></td></tr></table><br>
+<a name="257738"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bouncer</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#56">[#56]</a></td></tr></table></td></tr><tr ><td class="posttext"> In my 2D rigidbody engine I use a kind of autospringing routine which assignes spring from every point to every other point in the object... I know that's alot of spring , but it's the only way to keep complex structures from collapsing. <br><br>The car in your example works pretty fine, because it's symmetric ... something less symmetric would collapse right away with small number of springs. <br><br></td></tr></table><br>
+<a name="257801"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#57">[#57]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmmm. Actually, in theory, each verlet should only need to connect to four others. Of course, the key is the selection of the four others. If you could do iterations until all constraints were satisfied, this would work perfectly. yet of course, being realtime engines, it would collapse on itself as soon as one constraint messed up. so if you add maybe 6 or 7 or 8 well selected constraints for each verlet, it should work.<br><br>Maybe once I get my collisions, I'll make a constraint evolver that might be ported to your system. It would be rather simple. have it evolve arrays, where each element was either 1 or zero(might optimize it to do binary). Each element represents whether a constraint between two verlets exists. Create 100 of these randomly assigned objects with different constraints, and see how well each maintains it's relationships. Here's the fitness factor I think i'll use:<br><br>fitness=constraints*coef#/amountwrong#<br><br>then take the top 10, replicate and mutate 5 times each, and then add 50 more randoms.<br><br>eventually, it should converge on a good constraint setup that you can put into a file in binary.<br><br>[EDIT: I forgot to mention that you should check my post on the code wizrds forum of blitzcoder. I posted an example of my physics system as well as a link to psionics ninja model.] <br><br></td></tr></table><br>
+<a name="257805"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bouncer</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#58">[#58]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes, in the ideal case not much springs is needed... but to calculate which ones are needed for structure stability is hard. Your method might work though.<br><br>Your link on blitzcoder isn't working btw. <br><br></td></tr></table><br>
+<a name="257830"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >IPete2</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#59">[#59]</a></td></tr></table></td></tr><tr ><td class="posttext"> Guys,<br><br>Ihave to tell you - you are gods! <br><br>I have been amazed in the last two weeks how this thread has developed, and now you have a terrific demo.<br><br>I just wish I could understand some of the underlying code so I could get to grips with it myself!<br><br>Great stuff - keep it up!<br><br>IPete2. <br><br></td></tr></table><br>
+<a name="257870"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#60">[#60]</a></td></tr></table></td></tr><tr ><td class="posttext"> much improved control. you must use als graphics<br><br><pre class=code>
+
+;credit: miracle did the original port of verlet physics To BB. this code is based on that port.
+
+;aug 27 03
+
+;fixed per verlet friction contact friction
+
+;added slip state to tires
+
+;roll over in the ROLL axis problem much improved. still has problem with pitch roll over.
+
+;moved z axis force from pivot to per verlet calculation
+
+;cleaned up a bunch of junk code.
+
+;changed chase cam to be more exciting - well ok its not exciting but it move more lol. it does however have a problem when car is upside down.
+
+
+	Graphics3D (WIDTH,HEIGHT,0,2)
+
+Const WIDTH=640
+
+Const HEIGHT=480
+
+Const ACTIVE=1					; collision type
+
+Const VERLET=2					; collision Type
+
+Const FRONT_TIRE=0				; Vobject part name
+
+Const REAR_TIRE=1					; Vobject part name
+
+Const BODY=2						; Vobject part name
+
+Const CENTER=3					; Vobject part name
+
+Const SIZE#=8					; just a multiplier for how big the Vobject will be
+
+Global DeltaTime#					; Time between physics calculations
+
+Global vGrav.Vector = Vector(0.0,9,0.0)	; Gravity. yes i know its a positive value. still dont know why this is but it works.
+
+Global vTemp1.Vector = Vector(0,0,0)	; Some temporary vectors for calculations
+
+Global vTemp2.Vector = Vector(0,0,0)
+
+Global world_friction#=0				; air resistance
+
+Global temp_turn#=0
+
+Global turn_allowed#=0
+
+front_stiff=20						; This is actually the mass value for the front wheel. lower mass = less stiff. caution will collapse
+rear_stiff=40						; This is actually the mass value for the rear wheel. lower mass = less stiff. caution will collapse
+
+Type Dust
+	Field Sprite				; The entity
+	Field VelX#, VelY#, VelZ#	; Momentum
+	Field Alpha#				; Transparency
+	Field FadeRate#				; Rate at which transparency decays
+	Field Size#, VelR#, SprRot#, Growth#, Friction#
+End Type
+Global DustSprite = LoadSprite("dust.png", 3)
+SpriteViewMode(DustSprite, 3)
+EntityBlend(DustSprite, 1)
+HideEntity(DustSprite)
+
+
+Type Vector
+
+	Field x#
+
+	Field y#
+
+	Field z#
+
+End Type
+
+
+
+Type VerletPack							
+
+	Field start_loc.vector					; Defines where this verlet started at so we can fix it when it gets to far out of place
+
+	Field current.Vector						; Current position
+
+	Field old.Vector						; Last position
+
+	Field gravity.Vector						; Accumulated forces
+
+	Field radius#							; Collider radius
+
+	Field mass.vector						; Point mass of this particular verlet
+
+	Field entity							; Pivot assigned to this verlet for both position and collision
+
+	Field mesh							; Mesh assigned to this verlet if any such as wheels or body parts
+
+	Field part								; Describes what verlet represents. example wheel or body part.
+
+	Field state							; Collideable status true/false	
+
+	Field contact_friction#					; When in contact with the ground how much friction is applied
+
+	Field traction							; true if tire is sticking, false if its skidding
+	
+	Field wheel_slip#[2]					; slip accumulator. needed to "smooth" out the slip value
+
+End Type
+
+
+
+Type Constraint							; Two verlets connected by a mutual spring
+
+	Field v1.VerletPack						; First verlet
+
+	Field v2.VerletPack						; Second verlet
+
+	Field d#								; Distance between verlets
+
+End Type
+
+
+
+Type Vobject								; This is the parent object that the verlets are associated with
+
+	Field v.VerletPack[8]					; The array of individual verlets
+
+	Field num_verlets						; Total number of verlets (array dim value)
+
+	Field player_pivot						; Pivot used to represent player. this pivot is dynamically controlled by player.
+
+	Field player							; Mesh used to represent the player. this mesh is parented to player_pivot
+
+	Field center.VerletPack					; Used to position player_pivot but not neccessarily parented to.
+
+	Field x1.VerletPack						; x1 and x2 are used to define a vector left/right to align player_pivot
+
+	Field x2.VerletPack
+
+	Field z1.VerletPack						; z1 and z2 are used to define a vector forward/aft to align player_pivot
+
+	Field z2.VerletPack
+
+	Field X_vec#							; vectors for calculations
+
+	Field Y_vec#
+
+	Field Z_vec#
+
+	Field mass#							; Mass for physics calculation on entire Vobject
+
+	Field horsepower#						; Force for physics calculations on entire Vobject
+
+	Field acceleration#						; Rate at which the Vobject accelerates
+	
+	Field velocity#							; a place to store how fast Vobject is going in the z direction(forward back)
+
+End Type
+
+
+
+;***** make the vehicle ****************************************
+
+	tempx# = 0							;start location of vehicle
+
+	tempy# = 20							;start location of vehicle
+
+	tempz# = 150							;start location of vehicle
+
+	Global car.Vobject = New Vobject 			;initialize the Vobject type
+
+	car\player_pivot=CreatePivot()			;this is the master pivot that the player will contol
+
+	car\player = LoadMesh("carbody.B3D", car\player_pivot)
+	Global CarInterior = LoadMesh("carinterior.B3D", car\player)
+	ScaleEntity(car\player, 2, 2, 2)
+
+	PositionEntity car\player, 0, 2, -6
+
+	car\num_verlets = 8						;total number of verlets in the Vobject. count from zero
+
+	car\mass=10							;this mass value is used for physics calculations on player_pivot.
+
+	car\horsepower = 500					;the force exerted on z axis,local to pivot, of verlet
+	
+	sx# = 1.9								;just a multiplier for the Vobject size
+
+	sy# = 1.2								;just a multiplier for the Vobject size
+
+	sz# = 2.65							;just a multiplier for the Vobject size
+
+	
+	;parameters   x,y,z,radius, massX, massY, massZ, part,mesh,state,collision_type, contact_friction
+
+	FrontTireSize# = 5 ; originally 7
+	RearTireSize# = 5 ; originally 9
+
+	tm = LoadMesh("tire.B3D", tire)
+	verleta.VerletPack = Verlet(tempx - SIZE * sx, tempy - SIZE * sy, tempz - SIZE * sz,  FrontTireSize, 100, front_stiff, 100, FRONT_TIRE, tm, True, VERLET, .01)
+	tm = LoadMesh("tire.B3D", tire)
+	RotateMesh(tm, 180, 0, 0)
+	verletb.VerletPack = Verlet(tempx + SIZE * sx, tempy - SIZE * sy, tempz - SIZE * sz, FrontTireSize, 100, front_stiff, 100, FRONT_TIRE, tm, True, VERLET, .01)
+
+	verletc.VerletPack = Verlet(tempx + SIZE * sx, tempy + SIZE * sy, tempz - SIZE * sz, 7, 400, 400, 400.0, BODY, 0, True, VERLET, .07)
+
+	verletd.VerletPack = Verlet(tempx - SIZE * sx, tempy + SIZE * sy, tempz - SIZE * sz, 7, 400, 400 ,400.0, BODY, 0, True, VERLET, .07)
+
+	tm = LoadMesh("tire.B3D", tire)
+	verlete.VerletPack = Verlet(tempx - SIZE * sx, tempy - SIZE * sy, tempz + SIZE * sz, RearTireSize, 100, rear_stiff, 100, REAR_TIRE, tm, True, VERLET, .01)
+
+	tm = LoadMesh("tire.B3D", tire)
+	RotateMesh(tm, 180, 0, 0)
+	verletf.VerletPack = Verlet(tempx + SIZE * sx, tempy - SIZE * sy, tempz + SIZE * sz, RearTireSize, 100, rear_stiff, 100, REAR_TIRE, tm, True, VERLET, .01)
+
+	verletg.VerletPack = Verlet(tempx + SIZE * sx, tempy + SIZE * sy, tempz + SIZE * sz, 7, 400, 400.0, 400, BODY, 0, True, VERLET, .07)
+
+	verleth.VerletPack = Verlet(tempx - SIZE * sx, tempy + SIZE * sy, tempz + SIZE * sz, 7, 400, 400.0, 400, BODY, 0, True, VERLET, .07)
+
+	verleti.VerletPack = Verlet(tempx, tempy + 5, tempz + 8, 7, 400, 400.0, 400, CENTER, 0, False, VERLET, 0)
+
+	; Edges
+
+	Constraint2(verleta,verletb)
+
+	Constraint2(verletb,verletc)
+
+	Constraint2(verleta,verletd)
+
+	Constraint2(verletc,verletd)
+
+	Constraint2(verlete,verletf)	
+
+	Constraint2(verletf,verletg)
+
+	Constraint2(verlete,verleth)
+
+	Constraint2(verletg,verleth)
+
+	Constraint2(verleta,verlete)
+
+	Constraint2(verletb,verletf)
+
+	Constraint2(verletc,verletg)
+
+	Constraint2(verletd,verleth)
+
+
+
+	; Cross-faces
+
+	Constraint2(verleta,verletc)
+
+	Constraint2(verletb,verletd)
+
+	Constraint2(verlete,verletg)
+
+	Constraint2(verletf,verleth)
+
+	Constraint2(verleta,verletf)
+
+	Constraint2(verleta,verleth)
+
+	Constraint2(verletb,verlete)
+
+	Constraint2(verletb,verletg)
+
+	Constraint2(verletc,verletf)
+
+	Constraint2(verletc,verleth)
+
+	Constraint2(verletd,verlete)
+
+	Constraint2(verletd,verletg)
+
+
+
+	; Diagonals
+
+	Constraint2(verleta,verletg)
+
+	Constraint2(verletb,verleth)
+
+	Constraint2(verletc,verlete)
+
+	Constraint2(verletd,verletf)
+
+	
+	; Constraining the center sphere
+
+	Constraint2(verleta,verleti)
+
+	Constraint2(verletb,verleti)
+
+	Constraint2(verletc,verleti)
+
+	Constraint2(verletd,verleti)
+
+	Constraint2(verlete,verleti)
+
+	Constraint2(verletf,verleti)
+
+	Constraint2(verletg,verleti)
+
+	Constraint2(verleth,verleti)
+
+
+
+	; Assign individual verlets to the array	
+
+	car\v[0] = verleti
+
+	car\v[1] = verleta
+
+	car\v[2] = verletb
+
+	car\v[3] = verletc
+
+	car\v[4] = verletd
+
+	car\v[5] = verlete
+
+	car\v[6] = verletf
+
+	car\v[7] = verletg
+
+	car\v[8] = verleth
+
+	
+	; assign a verlet the center position
+
+	car\center=verleti
+
+	; Set up variables used for player mesh/pivot aligntovector. one is left to right, other is forward back.
+
+	car\x1=verletc
+
+	car\x2=verletd
+
+	car\z1=verletg
+
+	car\z2=verletc
+
+	
+	PositionEntity car\player_pivot, EntityX(car\center\entity),EntityY(car\center\entity),EntityZ(car\center\entity)
+
+	measure_pivots(car.Vobject, 0)
+
+;****** end make vehicle *******************************************************************
+
+
+
+
+
+Collisions VERLET,ACTIVE,2,2
+
+
+SunLight = CreateLight()
+RotateEntity (SunLight, 50, 180+40, 0)
+LightColor (SunLight, 224, 221, 203)
+BakLight = CreateLight()
+RotateEntity (BakLight, 20, 40, 0)
+LightColor (BakLight, 94, 104, 103)
+AmbientLight (64, 59, 48)
+
+Global BkgObjs = CreatePivot()
+
+flare = LoadSprite("flare.png")
+EntityParent(flare, BkgObjs)
+RotateEntity(flare, 50, 180+40, 0)
+MoveEntity (flare, 0, 0, -8000)
+ScaleSprite(flare, 5000, 5000)
+EntityColor(flare, 255-128, 255-176, 255-235)
+SpriteViewMode(flare, 3)
+
+Global Sky = LoadMesh("sky.B3D")
+ScaleEntity(Sky, 3.8*9500, 5.6*9500, 3.8*9500)
+EntityFX(Sky, 1)
+
+Global cam1 = CreatePivot(car\player)
+PositionEntity (cam1, 2.8, 0.4, -1.8)
+RotateEntity (cam1, 0, 180, 0)
+
+Global cam2 = CreatePivot()
+
+Global Camera = CreateCamera(cam2)
+CameraZoom(Camera, 1.5)
+CameraClsColor Camera,128,176,235
+CameraRange Camera,0.5,10000
+PositionEntity (Camera, 0, 10, 0)
+camnul = CreatePivot()
+camtarget = CreatePivot()
+
+RearViewCam = CreateCamera(car\player)
+PositionEntity (RearViewCam, 0.5, 0.5, 10)
+TurnEntity (RearViewCam, 0, 0, 0)
+CameraZoom(RearViewCam, 0.7)
+CameraClsColor RearViewCam,128,176,235
+CameraRange RearViewCam,0.5,10000
+CameraViewport (RearViewCam, 0.55*ScrWidth, 0.05*ScrHeight, 0.4*ScrWidth, 0.15 * ScrHeight)
+HideEntity(RearViewCam)
+
+RearViewBlock = CreateCube(Camera)
+vratio# = 1.0 * ScrHeight / ScrWidth
+EntityColor(RearViewBlock, 0, 0, 0)
+PositionEntity(RearViewBlock, 7.65, 11.5 * vratio, 10.7)
+ScaleEntity(RearViewBlock, 6.3, 2.5 * vratio, 0.00001)
+EntityOrder(RearViewBlock, -1)
+HideEntity(RearViewBlock)
+
+track = LoadMesh("track.B3D")
+ScaleEntity (track, 70, 70, 70)
+EntityType (track, ACTIVE)
+
+
+ground_tex = LoadTexture("mud.png")
+ScaleTexture ground_tex,500,500
+Global flr=CreatePlane()
+EntityType flr,ACTIVE
+EntityTexture flr,ground_tex
+EntityFX flr,1
+PositionEntity flr,0,0,0
+
+
+
+ScaleEntity car\v[1]\mesh,car\v[1]\radius,car\v[1]\radius/2,car\v[1]\radius
+
+RotateEntity car\v[1]\mesh,0,0,90
+
+PositionEntity car\v[1]\mesh,0,0,0
+
+
+
+ScaleEntity car\v[2]\mesh,car\v[2]\radius,car\v[2]\radius/2,car\v[2]\radius
+
+RotateEntity car\v[2]\mesh,0,0,90
+
+PositionEntity car\v[2]\mesh,0,0,0
+
+
+
+ScaleEntity car\v[5]\mesh,car\v[5]\radius,car\v[5]\radius/2,car\v[5]\radius
+
+RotateEntity car\v[5]\mesh,0,0,90
+
+PositionEntity car\v[5]\mesh,0,0,0
+
+
+
+ScaleEntity car\v[6]\mesh,car\v[6]\radius,car\v[6]\radius/2,car\v[6]\radius
+
+RotateEntity car\v[6]\mesh,0,0,90
+
+PositionEntity car\v[6]\mesh,0,0,0
+
+
+
+;********* functions defined ********************************************
+
+
+
+; measure the start locations for each verlet so it can be fixed if it collapses
+
+Function measure_pivots(name.Vobject, center_element)
+
+	For count=1 To name\num_verlets
+
+		If name\v[count]\part &lt;&gt; CENTER Then
+
+			EntityParent name\v[count]\entity, name\v[center_element]\entity
+
+			name\v[count]\start_loc\x=EntityX(name\v[count]\entity)
+
+			name\v[count]\start_loc\y=EntityY(name\v[count]\entity)
+
+			name\v[count]\start_loc\z=EntityZ(name\v[count]\entity)
+
+			EntityParent name\v[count]\entity, 0
+
+		Else
+
+			name\v[count]\start_loc\x=0
+
+			name\v[count]\start_loc\y=0
+
+			name\v[count]\start_loc\z=0
+
+		End If
+
+	Next
+
+End Function
+
+
+
+; use this function to fix a collapsed Vobject
+
+Function fix_verlet(name.Vobject)
+
+	For count=1 To name\num_verlets
+
+		EntityParent name\v[count]\entity, name\center\entity
+
+		tempx# = name\v[count]\start_loc\x + name\center\current\x
+
+		tempy# = name\v[count]\start_loc\y + name\center\current\y
+
+		tempz# = name\v[count]\start_loc\z + name\center\current\z
+
+		PositionEntity name\v[count]\entity, tempx, tempy, tempz
+
+		name\v[count]\current\x = tempx
+
+		name\v[count]\current\y = tempy
+
+		name\v[count]\current\z = tempz
+
+		name\v[count]\old\x = tempx
+
+		name\v[count]\old\y = tempy
+
+		name\v[count]\old\z = tempz
+
+		EntityParent name\v[count]\entity, 0
+
+	Next
+
+End Function
+
+Function wheel_force#(name.VObject, count, threshold#, max#)
+	
+	TFormPoint EntityX(name\v[count]\entity,True), EntityY(name\v[count]\entity,True), EntityZ(name\v[count]\entity,True), 0,  name\player_pivot
+	
+	tempx# = TFormedX()
+	
+	tempy# = TFormedY()
+	
+	tempz# = TFormedZ()
+	
+	force# = Abs(name\v[count]\start_loc\x - tempx) - threshold
+	
+	debugx=Abs(name\v[count]\start_loc\x - tempx)
+	
+	If force &lt; 0 Then force=0
+	
+	temp#=Abs(threshold - max)
+	
+	name\v[count]\wheel_slip[0]=( (force / Sqr(force * force + temp * temp)) + name\v[count]\wheel_slip[1] + name\v[count]\wheel_slip[2])/3
+	
+	name\v[count]\wheel_slip[2]=name\v[count]\wheel_slip[1]
+	
+	name\v[count]\wheel_slip[1]=name\v[count]\wheel_slip[0]
+	
+	Return Sqr(name\v[count]\wheel_slip[0])
+
+End Function
+
+
+Global crash, debugx#, debugx2#, debugx3#
+
+Function DoVerlet(name.Vobject, accelerator#)
+
+	For count = 0 To name\num_verlets
+		If name\v[count]\part = CENTER Then
+			TFormVector name\v[count]\current\x, name\v[count]\current\y,  name\v[count]\current\z, 0, name\player_pivot
+			temptempx#= TFormedX()
+			temptempy#= TFormedY()
+			temptempz#= TFormedZ()
+ 			TFormVector name\v[count]\old\x, name\v[count]\old\y,  name\v[count]\old\z, 0, name\player_pivot
+			tempvoldx# = TFormedX()
+			tempvoldy# = TFormedY()
+			tempvoldz# = TFormedZ()
+			If Abs(temptempz - tempvoldz) &lt;.01 Then name\velocity=0 Else name\velocity =Abs(temptempz - tempvoldz)
+		End If
+
+		If (name\v[count]\part = REAR_TIRE Or name\v[count]\part = FRONT_TIRE) And CountCollisions(name\v[count]\entity) &gt;0
+
+			OnGround = 0
+			For n = 1 To CountCollisions(name\v[count]\entity)
+				If (CollisionEntity(name\v[count]\entity, n) = flr) OnGround = 1
+			Next
+			If (OnGround)
+				chance# = Abs(accelerator) * 0.4
+				If (Rnd(0,1) &lt; chance)
+					d.Dust = New Dust
+					d\Sprite = CopyEntity(DustSprite)
+					d\SprRot = Rnd(0,360)
+					e = name\v[count]\entity
+					PositionEntity(d\Sprite, EntityX(e,1), EntityY(e,1), EntityZ(e,1))
+					d\VelX = Rnd(-1, 1)
+					d\VelY = Rnd(0.3, 0.7)
+					d\VelZ = Rnd(-1, 1)
+					d\Alpha = 1
+					d\FadeRate = Rnd(0.01, 0.05)
+					d\Size = 6
+					d\Growth = Rnd(0.6, 2)
+					d\VelR = Rnd(-2, 2)
+					d\Friction = 0
+				End If
+			End If
+
+			TFormVector vgrav\x, vgrav\y,  vgrav\z, 0, name\player_pivot
+			tempvax# = TFormedX()
+			tempvay# = TFormedY()
+			tempvaz# = TFormedZ()
+			TFormVector name\v[count]\current\x, name\v[count]\current\y,  name\v[count]\current\z, 0, name\player_pivot
+			temptempx#= TFormedX()
+			temptempy#= TFormedY()
+			temptempz#= TFormedZ()
+			tempvmx# = TFormedX()
+			tempvmy# = TFormedY()
+			tempvmz# = TFormedZ()
+			TFormVector name\v[count]\old\x, name\v[count]\old\y,  name\v[count]\old\z, 0, name\player_pivot
+			tempvoldx# = TFormedX()
+			tempvoldy# = TFormedY()
+			tempvoldz# = TFormedZ()
+			TFormVector EntityX(name\v[count]\entity,True), EntityY(name\v[count]\entity,True),  EntityZ(name\v[count]\entity,True), 0, name\player_pivot
+			tempentityx# = TFormedX()
+			tempentityy# = TFormedY()
+			tempentityz# = TFormedZ()
+			name\v[count]\traction=True
+			If name\v[count]\part = REAR_TIRE Then
+				temp_slip#= wheel_force(name.vobject, count,1.5,1.9)
+				debugX2=temp_slip#
+				tempvmx = tempvmx - ((tempvoldx * temp_slip) + (tempvax * (DeltaTime * DeltaTime))) + (temptempx * temp_slip)
+				Else
+					temp_slip#= wheel_force(name.vobject, count,.9,1.2)
+					debugX3=temp_slip#
+					tempvmx = tempvmx - ((tempvoldx * temp_slip) + (tempvax * (DeltaTime * DeltaTime))) + (temptempx * temp_slip)
+			End If
+			tempvmy = tempvmy - ((tempvoldy * (1- name\v[count]\contact_friction)) + (tempvay * (DeltaTime * DeltaTime))) + (temptempy * (1- name\v[count]\contact_friction))  
+			tempvmz = tempvmz - ((tempvoldz * (1- name\v[count]\contact_friction)) + ((tempvaz + (accelerator * name\horsepower / name\mass)) * (DeltaTime * DeltaTime))) + (temptempz * (1- name\v[count]\contact_friction))
+			
+			tempvoldx = temptempx
+			tempvoldy = temptempy
+			tempvoldz = temptempz
+			TFormVector tempvmx, tempvmy,  tempvmz, name\player_pivot, 0
+			name\v[count]\current\x = TFormedX()
+			name\v[count]\current\y = TFormedY()
+			name\v[count]\current\z = TFormedZ()
+			TFormVector tempvoldx, tempvoldy,  tempvoldz, name\player_pivot, 0
+			name\v[count]\old\x = TFormedX()
+			name\v[count]\old\y = TFormedY()
+			name\v[count]\old\z = TFormedZ()
+			Else
+				name\v[count]\gravity\x = vgrav\x
+				name\v[count]\gravity\y = vgrav\y
+				name\v[count]\gravity\z = vgrav\z
+				tempx# = name\v[count]\current\x
+				tempy# = name\v[count]\current\y
+				tempz# = name\v[count]\current\z
+				If CountCollisions(name\v[count]\entity) &gt;0 Then
+ 					name\v[count]\current\x = name\v[count]\current\x - ((name\v[count]\old\x * (1- name\v[count]\contact_friction)) + (name\v[count]\gravity\x * (DeltaTime * DeltaTime))) + (tempx * (1- name\v[count]\contact_friction))
+					name\v[count]\current\y = name\v[count]\current\y - ((name\v[count]\old\y * (1- name\v[count]\contact_friction)) + (name\v[count]\gravity\y * (DeltaTime * DeltaTime))) + (tempy * (1- name\v[count]\contact_friction))
+					name\v[count]\current\z = name\v[count]\current\z - ((name\v[count]\old\z * (1- name\v[count]\contact_friction)) + (name\v[count]\gravity\z * (DeltaTime * DeltaTime))) + (tempz * (1- name\v[count]\contact_friction))
+					Else
+						name\v[count]\current\x = name\v[count]\current\x - (name\v[count]\old\x + (name\v[count]\gravity\x * (DeltaTime * DeltaTime))) + tempx
+						name\v[count]\current\y = name\v[count]\current\y - (name\v[count]\old\y + (name\v[count]\gravity\y * (DeltaTime * DeltaTime))) + tempy
+						name\v[count]\current\z = name\v[count]\current\z - (name\v[count]\old\z + (name\v[count]\gravity\z * (DeltaTime * DeltaTime))) + tempz
+				End If	
+				name\v[count]\old\x = tempx
+				name\v[count]\old\y = tempy
+				name\v[count]\old\z = tempz
+		End If
+		If name\v[count]\part = FRONT_TIRE Then ;*** steering
+			PositionEntity name\v[count]\entity, name\v[count]\current\x, name\v[count]\current\y, name\v[count]\current\z
+			EntityParent  name\v[count]\entity, name\player_pivot
+			TurnEntity name\player_pivot, 0, temp_turn, 0
+			EntityParent  name\v[count]\entity, 0
+				
+			Else 
+				PositionEntity name\v[count]\entity, name\v[count]\current\x, name\v[count]\current\y, name\v[count]\current\z
+		End If
+	Next
+	UpdateWorld
+	
+	crash=0
+	For count = 0 To name\num_verlets
+		If (name\v[count]\part = FRONT_TIRE Or REAR_TIRE) And Abs(Name\v[count]\current\y - EntityY(name\v[count]\Entity)) &gt;9 Then crash=crash+1
+	Next
+	If crash &gt;= 1 Then
+		For count = 0 To name\num_verlets
+			name\v[count]\current\y=name\v[count]\current\y + 5
+			name\v[count]\old\y=name\v[count]\current\y
+			PositionEntity name\v[count]\entity, name\v[count]\current\x, name\v[count]\current\y, name\v[count]\current\z
+		Next
+		UpdateWorld
+	End If
+
+	turn_allowed# = 0
+	For count = 0 To name\num_verlets
+		If CountCollisions(name\v[count]\entity) And name\v[count]\part = FRONT_TIRE And name\v[count]\traction=True Then
+			turn_allowed = turn_allowed + .7
+			If turn_allowed &gt; 1 Then turn_allowed=1
+		End If
+		name\v[count]\current\x = EntityX(name\v[count]\entity)
+		name\v[count]\current\y = EntityY(name\v[count]\entity)
+		name\v[count]\current\z = EntityZ(name\v[count]\entity)
+	Next
+	;For n = 1 To ITERATIONS
+		For c.Constraint = Each Constraint
+			setDistance(c\v1, c\v2, c\d)
+			setDistance(c\v2, c\v1, c\d)
+		Next
+	;Next
+	;body and wheel stuff
+	PositionEntity name\player_pivot, EntityX(name\center\entity), EntityY(name\center\entity), EntityZ(name\center\entity)
+	name\X_vec = EntityX(name\x1\entity) - EntityX(name\x2\entity)
+	name\Y_vec = EntityY(name\x1\entity) - EntityY(name\x2\entity)
+	name\Z_vec = EntityZ(name\x1\entity) - EntityZ(name\x2\entity)
+	AlignToVector name\player_pivot, name\X_vec, name\Y_vec, name\Z_vec, 1
+	For count=0 To name\num_verlets
+		If name\v[count]\part = FRONT_TIRE Or name\v[count]\part = REAR_TIRE Then
+			AlignToVector name\v[count]\entity, name\X_vec, name\Y_vec, name\Z_vec, 1
+		End If
+	Next
+	name\X_vec = EntityX(name\z1\entity) - EntityX(name\z2\entity)
+	name\Y_vec = EntityY(name\z1\entity) - EntityY(name\z2\entity)
+	name\Z_vec = EntityZ(name\z1\entity) - EntityZ(name\z2\entity)
+	AlignToVector name\player_pivot, name\X_vec, name\Y_vec, name\Z_vec, 3
+	
+	TFormVector name\v[0]\current\x - name\v[0]\old\x, name\v[0]\current\y - name\v[0]\old\y,  name\v[0]\current\z - name\v[0]\old\z, name\v[0]\entity, name\player_pivot
+	TurnEntity name\v[1]\entity, TFormedZ() * name\v[1]\radius, 0, 0, False 
+	TurnEntity name\v[2]\entity, TFormedZ() * name\v[2]\radius, 0, 0, False
+	TurnEntity name\v[5]\entity, TFormedZ() * name\v[5]\radius, 0, 0, False
+	TurnEntity name\v[6]\entity, TFormedZ() * name\v[6]\radius, 0, 0, False
+End Function
+
+
+
+Function SetDistance(v1.VerletPack,v2.VerletPack,dist#)	
+
+		vtemp1\x=v1\current\x - v2\current\x
+
+		vtemp1\y=v1\current\y - v2\current\y
+
+		vtemp1\z=v1\current\z - v2\current\z
+
+		deltalength# = Sqr((vTemp1\x * vTemp1\x) + (vTemp1\y * vTemp1\y) + (vTemp1\z * vTemp1\z))
+
+		If deltalength &lt;= 0.0 deltalength = 0.0000001
+
+		diff# = (deltalength - dist) / deltalength
+
+		txmass# =  v1\mass\x + v2\mass\x
+
+		tymass# =  v1\mass\y + v2\mass\y
+
+		tzmass# =  v1\mass\z + v2\mass\z
+
+		v1\current\x=v1\current\x - vtemp1\x * (diff * (v2\mass\x / txmass)); * (diff+1.2) 
+
+		v1\current\y=v1\current\y - vtemp1\y * (diff * (v2\mass\y / tymass))  * (diff+1)
+
+		v1\current\z=v1\current\z - vtemp1\z * (diff * (v2\mass\z / tzmass)); * (diff+1.2)
+
+		v2\current\x=v2\current\x + vtemp1\x *(diff * (v1\mass\x / txmass)); / (diff+1.2)
+
+		v2\current\y=v2\current\y + vtemp1\y *(diff * (v1\mass\y / tymass))  / (diff+1)
+
+		v2\current\z=v2\current\z + vtemp1\z *(diff * (v1\mass\z / tzmass)); / (diff+1.2)
+
+End Function
+
+Function Verlet.VerletPack(x#,y#,z#,radius#, massX#, massY#, massZ#, part,mesh,state,collision_type, contact_friction#)
+	
+	v.VerletPack = New VerletPack
+	
+	v\current = Vector(x,y,z)	;current location
+	
+	v\old = Vector(x,y,z)	;old location
+	
+	v\start_loc = Vector(0,0,0) ; initalize with zeros to be filled later
+	
+	v\mass = Vector(0,0,0) ;initialize mass
+	
+	v\part=part		;part identifier such as wheel or body
+	
+	If radius &lt;= 0.0 radius = 0.01
+	
+	v\radius = radius	;collision radius
+	
+	v\mass\x=massX
+	
+	v\mass\y=massY
+	
+	v\mass\z=massZ
+	
+	v\entity = CreatePivot()	;used as the collision element
+	
+	PositionEntity v\entity,x,y,z,True
+	
+	v\mesh=mesh		;mesh assigned if any
+	
+	If mesh&lt;&gt;0 Then EntityParent  v\mesh, v\entity,True
+	
+	v\state=state		;true for collideable, false for non collideable
+	
+	If v\state=True Then
+	
+		EntityType v\entity, collision_type
+	
+		EntityRadius v\entity,radius#
+	
+	End If
+	
+	v\contact_friction=contact_friction#
+	
+	v\gravity = Vector(0.0,0.0,0.0)
+	
+	Return v
+
+End Function
+
+Function Constraint2.Constraint(v1.VerletPack,v2.VerletPack)
+
+	c.Constraint = New Constraint
+
+	c\v1 = v1
+
+	c\v2 = v2
+
+	c\d = Sqr((v2\current\x - v1\current\x)^2 + (v2\current\y - v1\current\y)^2 + (v2\current\z - v1\current\z)^2)
+
+	;Return c	; You may need this someday ... we don't for what we have here
+
+End Function
+
+
+
+;// Create a Vector
+
+Function Vector.Vector(x#=0.0,y#=0.0,z#=0.0)
+
+	v.Vector = New Vector
+
+	v\x=x
+
+	v\y=y
+
+	v\z=z
+
+	Return v
+
+End Function 
+
+
+
+;display directions
+
+While Not KeyHit(57)
+
+	RenderWorld
+
+	Text 20,20, "Tab changes view."
+
+	Text 20,35, "Arrow keys control vehicle.
+
+	Text 20,50, "Escape exits program."
+
+	Text 20,65, "Space bar resets vehicle"
+
+	Text 20,80, "Hit space bar to begin."
+
+	Flip False
+
+Wend
+
+
+
+;temp_Vobject2.Vobject = First Vobject
+
+Global turn_rate#=0
+
+DeltaTime#=.09
+
+HidePointer
+
+fRate = (1000/72) ;*set second number to desired frame rate
+
+view=0
+
+;**************** main loop ***************************************	
+
+PrevCP# = 0
+PrevCY# = 0
+PrevCR# = 0
+CamHeight# = 20 ; camera height above player
+CamDist# = 150 ; camera dist from player
+CamLag# = 0.5 ; Tightness of camera to its target (1 = strongest)
+Global accelerator#=0
+While Not KeyHit(1)
+
+	time1 = MilliSecs() ;time at start of processing loop
+
+	maxturn=2.0	
+	If KeyDown(203) Then
+		temp_turn=(temp_turn + .1) / ((car\velocity/100)+1) * turn_allowed
+		;If temp_turn &gt;maxturn Then temp_turn = maxturn
+		If Abs(temp_turn) &gt;maxturn Then temp_turn = maxturn * Sgn(temp_turn)
+		Else If KeyDown(205) Then
+			temp_turn=(temp_turn - .1) / ((car\velocity/100)+1) * turn_allowed
+			If temp_turn &lt; -maxturn Then temp_turn = -maxturn
+			Else
+				;temp_turn=temp_turn/1.03
+				temp_turn = -(MouseXSpeed()/1) * turn_allowed
+				If Abs(temp_turn) &gt;maxturn Then temp_turn = maxturn * Sgn(temp_turn)
+				If temp_turn &gt; -.01 And temp_turn &lt; .01 Then temp_turn=0		
+	End If
+		
+	If car\velocity &lt;2.5 Then temp_turn=temp_turn * Sqr(Sqr(car\velocity * 2.5) /2.5)
+	
+	If KeyDown(200) Then
+		accelerator=accelerator + .01
+		If accelerator &gt;1 Then accelerator = 1
+		Else If KeyDown(208) Then
+			accelerator=accelerator - .01
+			If accelerator &lt; -1 Then accelerator = -1
+			Else
+				accelerator=accelerator/1.03
+				If accelerator &gt; -.01 And accelerator &lt; .01 Then accelerator=0		
+	End If
+
+	If KeyDown(57) Then 
+
+		vGrav\y=0
+
+		fix_verlet(car.Vobject) 
+
+		Else 
+
+			vGrav.Vector = Vector(0.0,9,0.0)
+
+	End If
+
+		DoVerlet(car.Vobject, accelerator)
+
+	If KeyHit(15) Then 
+
+		view=view+1
+
+		If view &gt;=3 Then view=0
+		
+		If (view = 0) Or (view = 2) ; Chase
+			CameraZoom(Camera, 1.5)
+			EntityParent(Camera, Cam2)
+			RotateEntity(Camera, 0, 0, 0)
+			HideEntity(RearViewCam)
+			EntityOrder(CarInterior, 0)
+			HideEntity(RearViewBlock)
+			If (view = 0)
+				CamHeight# = 20 ; camera height above player
+				CamDist# = 150 ; camera dist from player
+				CamLag# = 0.5 ; Tightness of camera to its target (1 = strongest)
+			Else
+				CamHeight# = 30 ; camera height above player
+				CamDist# = 70 ; camera dist from player
+				CamLag# = 0.02 ; Tightness of camera to its target (1 = strongest)
+				CamLag# = 0.01 ; Tightness of camera to its target (1 = strongest)
+			End If
+		Else If (view = 1) ; Internal
+			CameraZoom(Camera, 0.7)
+			EntityParent(Camera, Cam1)
+			RotateEntity(Camera, 0, 180, 0)
+			ShowEntity(RearViewCam)
+			EntityOrder(CarInterior, -1)
+			ShowEntity(RearViewBlock)
+		End If
+
+		PositionEntity(Camera, 0, 0, 0)
+	End If
+
+	; Move dust
+	For dst.Dust = Each Dust
+		dst\Alpha = dst\Alpha - dst\FadeRate
+		dst\Size = dst\Size + dst\Growth
+		If (dst\Alpha &lt;= 0) Or (dst\Size &lt;= 0)
+			FreeEntity(dst\Sprite)
+			Delete(dst)
+		Else
+			; Particles grow over time
+			dsize# = dst\Size * 0.5
+			ScaleSprite (dst\Sprite, dsize, dsize)
+
+			; Fade particles over time
+			alpha# = dst\Alpha
+			If (alpha &gt; 1) alpha = 1
+			
+			; Fade particles close to camera
+			dist# = EntityDistance(dst\Sprite, Camera)
+			If (dist &lt; dsize) And (dist &gt; 0) alpha = alpha * (dsize/dist)
+			EntityAlpha(dst\Sprite, alpha)
+
+			; Rotate particles over time
+			dst\SprRot = dst\SprRot + dst\VelR
+			RotateSprite (dst\Sprite, dst\SprRot)
+
+			If (dst\Friction &gt; 0)
+				fr# = 1-(dst\Friction)
+				dst\VelX = dst\VelX * fr
+				dst\VelY = dst\VelY * fr
+				dst\VelZ = dst\VelZ * fr
+			End If
+
+		EndIf
+	Next
+
+	; My chase cam
+	te = car\player_pivot
+	cyaw# = VectorYaw(EntityX(te,1) - EntityX(cam2), CamHeight + EntityY(te,1) - EntityY(cam2), EntityZ(te,1) - EntityZ(cam2))
+	cpit# = VectorPitch(EntityX(te,1) - EntityX(cam2), CamHeight + EntityY(te,1) - EntityY(cam2), EntityZ(te,1) - EntityZ(cam2))
+	maxpitch# = 70
+	If (cpit &gt; maxpitch) cpit = maxpitch
+	If (cpit &lt; -maxpitch) cpit = -maxpitch
+	PositionEntity(camnul, EntityX(te,1), EntityY(te,1), EntityZ(te,1))
+	RotateEntity(camnul, cpit, cyaw, 0)
+	MoveEntity(camnul, 0, 0, -CamDist)
+	camy# = EntityY(camnul,1) + CamHeight
+	If (camy &lt; 5) camy = 5
+	PositionEntity (CamTarget, EntityX(camnul,1), camy, EntityZ(camnul,1))
+	TranslateEntity(cam2, (EntityX(CamTarget)-EntityX(Cam2))*CamLag, (EntityY(CamTarget)-EntityY(Cam2))*CamLag, (EntityZ(CamTarget)-EntityZ(Cam2))*CamLag)
+	TurnEntity (cam2, DeltaPitch(cam2, te) * 0.5, DeltaYaw(cam2, te) * 0.5, -EntityRoll(cam2) * 0.05)
+
+	; My interior cam
+	thisCP# = CloseAngle(EntityPitch(car\player, 1), prevCP)
+	thisCY# = CloseAngle(EntityYaw(car\player, 1), prevCY)
+	thisCR# = CloseAngle(EntityRoll(car\player, 1), prevCR)
+	
+	fr# = 0.3 ; camera friction
+	afr# = 1.0 - fr
+
+	RotateEntity (cam1, (thisCP*fr)+(prevCP*afr), (thisCY*fr)+(prevCY*afr), (thisCR*fr)+(prevCR*afr), 1)
+
+	prevCP# = EntityPitch(cam1, 1)
+	prevCY# = EntityYaw(cam1, 1)
+	prevCR# = EntityRoll(cam1, 1)
+
+	PositionEntity(BkgObjs, EntityX(Camera, 1), EntityY(Camera, 1), EntityZ(Camera, 1))
+	PositionEntity(Sky, EntityX(Camera, 1), 0, EntityZ(Camera, 1))
+
+	RenderWorld
+	
+	Text 20,20, "Lateral velocity: "+debugx
+	Text 20,35, "Rear slip: "+debugx2
+	Text 20,50, "Front slip: "+debugx3
+	Text 20,65, "Velocity: "+car\velocity
+	MoveMouse WIDTH/2,HEIGHT/2
+	Delay fRate - (MilliSecs() - time1) ;delay execution
+
+	Flip False
+
+Wend
+
+End
+
+
+Function CloseAngle(source#, target#)
+	While (source &lt; target - 180)
+		source = source + 360
+	Wend
+	While (source &gt; target + 180)
+		source = source - 360
+	Wend
+	Return source
+End Function
+</pre> <br><br></td></tr></table><br>
+<a name="257879"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >LT</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#61">[#61]</a></td></tr></table></td></tr><tr ><td class="posttext"> Control is definitely better, but the wheels are very easily getting attached to the wrong place now.<br><br>Extremely cool demo, btw. <br><br></td></tr></table><br>
+<a name="257888"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#62">[#62]</a></td></tr></table></td></tr><tr ><td class="posttext"> solving one problem at a time LT. i know what it doesnt do well. in fact im reminded every time i post a change. <br><br></td></tr></table><br>
+<a name="257908"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#63">[#63]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey. I think I can solve the wheel problem. I'll use similar methods to the ones I used in my new collision code. No promises of course. I'll just have to give your code a good study. I haven't really looked at it yet. Anyway, my idea is to create a quad collision parented to the car that affects the wheels. it should stop the wheels from going on top.<br><br>Sorry about the broken link to the ninja model the proper one is<br><a href="http://www.psionic3d.co.uk/downloads/ninja_test.zip" target="_blank">http://www.psionic3d.co.uk/downloads/ninja_test.zip</a> <br><br>hmmm. I might be able to fix it. but you'll have to put me in the credits :) <br><br></td></tr></table><br>
+<a name="257911"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >HNPhan</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#64">[#64]</a></td></tr></table></td></tr><tr ><td class="posttext"> WOW, amazing! this is truly incredible, keep up the nice work guys :)<br><br>The only weird thing is the wheel going way off sometimes on trong collisions, hope u guys fix this soon :D <br><br></td></tr></table><br>
+<a name="257917"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#65">[#65]</a></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>
+TFormPoint name\v[count]\current\x, name\v[count]\current\y,  name\v[count]\current\z,0,name\player
+If (name\v[count]\part = REAR_TIRE Or name\v[count]\part = FRONT_TIRE) And TFormedY()&gt;-1 Then 
+ TFormPoint TFormedX(),-1,TFormedZ(),name\player,0
+ name\v[count]\current\x = TFormedX()
+ name\v[count]\current\y = TFormedY()
+ name\v[count]\current\z = TFormedZ()
+ ltu=cframe
+EndIf</pre><br><br>okay. Put this in the doverlet function, in the for...next loop. granted, the wheels still go insane on bad collisions, I haven't seen it not resolve the wheels yet though. fine tune the -1 value if you like. <br><br></td></tr></table><br>
+<a name="257932"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#66">[#66]</a></td></tr></table></td></tr><tr ><td class="posttext"> nevermind.... see above code <br><br></td></tr></table><br>
+<a name="257965"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bouncer</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#67">[#67]</a></td></tr></table></td></tr><tr ><td class="posttext"> There's no magical fix for it... You should just add more springs to it (the best case is from every verlet to every verlet ... not sure about the wheels though). Second you could add "invisible" verlets with certain weights to balance structure where needed.<br><br>No need to worry about the speed issues with more springs... they are fast to calc. <br><br></td></tr></table><br>
+<a name="258008"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#68">[#68]</a></td></tr></table></td></tr><tr ><td class="posttext"> Actually, I think their is. The problem is that I think the demo uses blitz collisions, and the wheels get stuck on top. however, my code creates a virtual infinite plain parented to the player that theoretically resists particles going above it. as you can see, it's fairly simple. <br><br>Did you try using it? it greatly reduces wheel problems. <br><br></td></tr></table><br>
+<a name="258009"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Al Mackey</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#69">[#69]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm, bot builder, I tried putting that code in and now the car won't move at all.  Where exactly is it supposed to go?  I've tried both near the beginning and near the end of the loop.<br><br>I have a suggestion, but I still don't understand much about the verlet code, so I don't know how to test it myself.  It looks to me as if any energy being transferred to a spring is moving the attached object in a fairly linear fasion.  Could this be changed to exponential?  If the energy coming in were raised to a fractional power between 0 and 1, small bumps would still make the tires bounce, but energy from large collisions might be largely absorbed. <br><br></td></tr></table><br>
+<a name="258010"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jhocking</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#70">[#70]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is too cool!  I played with the code and models some (improved camera control, adjusted friction, added shadow casting, etc.)  Now I’m going to whip up a quick racetrack to try playing on.  Here’s the racing demo thus far: www.moondoggieent.com/blitz_racer.zip<br><br>What do you guys think about turning this into a community project?  Note my download is called "Blitz Racer." <br><br></td></tr></table><br>
+<a name="258012"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#71">[#71]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm all for making it a blitz project. dmc/miracle credited a bunch of course... and al for the graphics.... jhocking for graphical improvements..... <br><br>hmmm. <br>is it like this?<br><pre class=code>
+Function DoVerlet(name.Vobject, accelerator#)
+
+	For count = 0 To name\num_verlets
+	    TFormPoint name\v[count]\current\x, name\v[count]\current\y,  name\v[count]\current\z,0,name\player
+        If (name\v[count]\part = REAR_TIRE Or name\v[count]\part = FRONT_TIRE) And TFormedY()&gt;-1 Then 
+ 			TFormPoint TFormedX(),-1,TFormedZ(),name\player,0
+ 			name\v[count]\current\x = TFormedX()
+ 			name\v[count]\current\y = TFormedY()
+ 			name\v[count]\current\z = TFormedZ()
+ 			ltu=cframe
+		EndIf
+</pre><br>that's how it's supposed to be. are you using dmc's latest version? <br><br></td></tr></table><br>
+<a name="258017"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#72">[#72]</a></td></tr></table></td></tr><tr ><td class="posttext"> Holy Carp! I was downloading jhockings mod while doing my last post. I hadn't realized how good the shadows were gonna be. Though for pople with slower computers this is kinda tough, maybe next time a screen res option would be good. THe shadow gives you much more realism.it feels alot more like a real car, as the physics movement affects the shadow. <br><br></td></tr></table><br>
+<a name="258018"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >NobodyInParticular</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#73">[#73]</a></td></tr></table></td></tr><tr ><td class="posttext"> Great work DMC, I have been hoping somebody would eventually create some car physics code, I had tried myself before but never really got anywhere.  I am glad it's a long weekend, I look forward to playing around with the code while I have some free time :) <br><br></td></tr></table><br>
+<a name="258109"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jhocking</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#74">[#74]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thank sswift for the pretty shadowcasting, I'm using his shadow system.  It's running at a pretty good framerate on my computer, and a 450MHz computer with an ATI Rage Fury Pro videocard is about as primitive a system as you should expect a 3D game to run on.  Any framerate hit would mostly be due to polygon count anyway; each tire is over 1,000 polygons and that VW actually has the VW logo modeled on the front!<br><br>I just updated my download (same location/link.)  To experiment with adding new graphics I added a second vehicle, a truck from one of Vorderman's ODE demos.  You select which vehicle you want from the start screen; the difference is entirely cosmetic as both handle the same.<br><br>The other addition I made is a lot more important.  I added a speedometer (okay, just a text display of your speed.)  Knowing how fast you're going makes driving a LOT easier.  For example, until I added the speed display I couldn't navigate the banked, raised turns.  Now I make it over almost every time; you want to hit the track going 55 because too fast and you fly off the top, too slow and you fall off the bottom. <br><br></td></tr></table><br>
+<a name="258111"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dangerdave</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#75">[#75]</a></td></tr></table></td></tr><tr ><td class="posttext"> Joe, I got a corrupt header error when trying to download blitz racer.<br><br>Trying again. <br><br></td></tr></table><br>
+<a name="258114"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dangerdave</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#76">[#76]</a></td></tr></table></td></tr><tr ><td class="posttext"> I successfully downloaded it. <br>(I'm thinking that maybe I interfered with your upload.)<br><br>Anyway, its good, but very slow compared to Al's or DMC's.<br>I ran it with the VW car. The play is smooth but just a lot slower.<br><br>I'm going to try the truck now.<br>------------------------------------<br>I tried it with the truck. I did seem to play a bit faster but not as well as the other versions. <br><br></td></tr></table><br>
+<a name="258117"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jhocking</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#77">[#77]</a></td></tr></table></td></tr><tr ><td class="posttext"> Do you mean the framerate is lower or that the car simply doesn't move as fast?  Because the former would be troubling while the latter I did on purpose.  I increased friction to reign in the vehicle's top speed.  To compensate I set CameraZoom at .75; a fish-eye lens makes it look like the scenery is flying past faster. <br><br></td></tr></table><br>
+<a name="258118"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dangerdave</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#78">[#78]</a></td></tr></table></td></tr><tr ><td class="posttext"> I guess it's the friction increase you did. It seems like I'm driving through something that is thicker than air.<br>I feel like I have to work harder to move.<br><br>I was hoping there was something else besides the shadows causing a slow down. <br><br></td></tr></table><br>
+<a name="258121"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#79">[#79]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey that's cool jhocking, most people don't show me what they're doing with my stuff, so it's fun to see something in action now and then since I haven't actually put it to any real use myself yet. :-)<br><br>I like this verlet code, but I wish it was commented more to explain how it works, and was encapsulated in it's own set of functions seperate from the program that's using it.<br><br>I'm gonna have to look this stuff up and learn how to do it myself cause you can get some really fun and useful physics with very little code apparently.<br><br>I wonder though... it sounds liek this simulates slip.  But is it really simulating torque and all that other stuff?  I mean it sure looks like it.  I don't see how the turning or accelerating works at a glance though, but when I tried to make the wheels so they could only move up or down it resulted in a car that moved forward only very slowly.  I didn't really make a concerted attempt to clean up and understand the code though.  I'll have to find that gamasutra article on this and give it another look.<br><br>If I understand right, the way this system works is by creating a mass which is made stiff using springs between the vertices.  I assume that to save processing speed you're using an invisible impostor object for the collisions.  I didn't check to see how you're actually determining if the vertices collide with a surface, though I would assume since the code is so simple that it's using Blitz's collision system.  I noticed that the front of the VW intersects things, so that lends credence to my theory that you're using impostors.<br><br>Btw, did you know that the only truly stable 3D construct is a tetrahedron?  That's a pyramid with a triangular bottom.  For example, if you contruct something out of straws with strings attaching them, only the terahedron will be stable.  A cube will not be.  An old russian mathematician told me that once. :-)<br><br>I wonder if that information would be useful in some way in constructing stable objects that require less processing power.  At the very least, it seems to me that you may not have to connect every verlet to every other one to create a trusly stable object, you may merely have to divide the object up into a set of connected tetrahedrons.<br><br>I'm not sure if that method requires the least number of springs though to make a truly stable object though. <br><br></td></tr></table><br>
+<a name="258124"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dangerdave</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#80">[#80]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote">  ... that it's using Blitz's collision system. <br></div><br><br>It is. <br><br></td></tr></table><br>
+<a name="258125"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#81">[#81]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yeah I noticed the slowdown too.  I think it's more fun with the higher acceleration.  Is air friction modeled?  If not, and what you did to reign in the speed was increasing the ground friction, then that's not really physically accurate.  If you increase the air friction then the car should accelerate at a high rate of speed and then suddenly stop accelerating.<br><br>I also noticed that the level seems to be smaller?  I used to be able to drive really far away from the stuff in the level.  Now you can't and with the increased friction it's impossible to jump the U pipe. <br><br></td></tr></table><br>
+<a name="258143"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Miracle</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#82">[#82]</a></td></tr></table></td></tr><tr ><td class="posttext"> It's actually quite entertaining to get in a huge accident, have all four wheels relocate to the roof, flip the car<br>over and keep driving. :)<br><br>I had a thought about how to keep the verlets from reversing like that. The way they're dealt with now, the <br>verlets get knocked around every which way, then the constraint routine pushes them apart or pulls them together <br>without particularly caring what the respective angles are at the time of correction. 99% of the time this works fine,<br>since other constraints will eventually pull the whole mess back into position after a few iterations, but if a <br>collision pushes one verlet *past* another, the constraint will "snap" in the wrong direction. Once it's past this <br>point of no return, the other constraints may not pull it back into its correct position.<br><br>This is a tough nut to crack. I've thought about polling constraints for their relative directions and building <br>a "consensus" for the orientation of the verlets; if one verlet seems to be pointing in the entirely wrong <br>direction, it's been inverted and needs to be put in its place.<br><br>I have other ideas too. More testing. <br><br></td></tr></table><br>
+<a name="258148"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#83">[#83]</a></td></tr></table></td></tr><tr ><td class="posttext"> hmmm. well Miracle, my code above does somthing like that, but I didn't really try to hard to make it good.<br>you could change it to:(code not functional)<br><pre class=code>
+TFormPoint name\v[count]\current\x, name\v[count]\current\y,  name\v[count]\current\z,0,name\player
+If (name\v[count]\part = REAR_TIRE Or name\v[count]\part = FRONT_TIRE) And TFormedY()&gt;-1 Then 
+ TFormPoint properwheelx,properwheely,properwheelz,name\player,0
+ name\v[count]\current\x = TFormedX()
+ name\v[count]\current\y = TFormedY()
+ name\v[count]\current\z = TFormedZ()
+ ltu=cframe
+EndIf
+</pre><br><br>I'm pretty sure this code detects a wheel above the car, but the problem is getting it back on the other side. I didn't really try to get them correctly positioned. <br><br>Sswift:a very very nice tutorial on verlet physics on gamasutra. <a href="http://www.gamasutra.com/resource_guide/20030121/" target="_blank">http://www.gamasutra.com/resource_guide/20030121/</a><br>has many sources. namely advanced charachter physics. <br><br></td></tr></table><br>
+<a name="258159"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#84">[#84]</a></td></tr></table></td></tr><tr ><td class="posttext"> i no longer have time to do any serious coding right now. so i wont be active as much on this project for a while.<br><br>i only have one wish. that this be kept a public project. <br><br></td></tr></table><br>
+<a name="258202"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >IPete2</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#85">[#85]</a></td></tr></table></td></tr><tr ><td class="posttext"> DMC,<br><br>From all who have been following this may I say thanks for your excellent input!<br><br>regards,<br><br>IPete2. <br><br></td></tr></table><br>
+<a name="258272"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jhocking</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#86">[#86]</a></td></tr></table></td></tr><tr ><td class="posttext"> "If you increase the air friction then the car should accelerate at a high rate of speed and then suddenly stop accelerating."<br><br>I'll have to look into that.  Another thing I should try is increasing the vehicle's horsepower.<br><br>"I also noticed that the level seems to be smaller? I used to be able to drive really far away from the stuff in the level."<br><br>Yup, much smaller (considering it used to be infinite.)  The original level was using an infinite plane for the ground but in order to cast shadows onto the ground it needed to be a mesh.  The size of the level is now pretty much exactly how far you need to drive in order to hit top speed (just over 85.)<br><br>"Now you can't and with the increased friction it's impossible to jump the U pipe."<br><br>Actually, I jump it all the time.  For the past couple hours I've made a game of trying to land upright after jumping the half-pipe.  Which ramp are you using?  I'm jumping off the banked turn right up against the half-pipe. <br><br></td></tr></table><br>
+<a name="258336"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#87">[#87]</a></td></tr></table></td></tr><tr ><td class="posttext"> sad to hear dmc. Oh well. I'm gonna have less time soon too. But I'm still gonna work on my engine. hopefully get some friction in(turned out to be alot harder than I thought with my custom collisions). <br><br>Jhocking:<br>where are the dust particles in your demo? Without them, it feels a little like floating. <br><br></td></tr></table><br>
+<a name="258341"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#88">[#88]</a></td></tr></table></td></tr><tr ><td class="posttext"> If you don't have air friction, then how do you have a top speed of 85?  Ground friction alone does not stop you from accelerating forever.<br><br>Ground friction slows down initial acceleration, and when the car is moving slowly, it makes it come to a halt quickly.  But it's a constant.  Ie, a reduction in speed by 10 miles per hour, per second.  Always.  This is why it will never stop you from going after.<br><br>Air friction is expoential.  It increases exponentially as your speed increases, so at some point the air friction becomes so great that you can't accelerate any more.<br><br>With ground friction alone, the car would accelerate forever.  With air friction alone, the car would accelerate and then suddenly slow it's acceleration and maintain a constant speed, but if you let off the gas it would slow down a bit, and then coast along forveer losing speed only very very slowly.  Like a spacecraft.<br><br>"Which ramp are you using? I'm jumping off the banked turn right up against the half-pipe."<br><br>I meant jump it the LONG way. :-)  And there's only two ramps for that. :-)<br><br>And Ifigured the original level was an infinite plane.  I thought maybe the opriginal level had regular ground and then an infinite plane as well.  I didn't know it only had the infinite plane.  Okay then, well then scale your quad up to twice the size, and while you're at it increase the camera's range cause I noticed you can't get very far from the world geometry without it getting clipped. :-) <br><br></td></tr></table><br>
+<a name="258631"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bolo_Loco</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#89">[#89]</a></td></tr></table></td></tr><tr ><td class="posttext"> A little Track and a new car ( WIP )<br><br><img src="http://www.boteco.de/bolo/upload1/Track1.jpg"><br><br><img src="http://www.boteco.de/bolo/upload1/Track2.jpg"><br><br>Download (  4.56 Mb ! ) here :<br><br><a href="http://www.boteco.de/bolo/upload1/WXRace1.zip" target="_blank">http://www.boteco.de/bolo/upload1/WXRace1.zip</a><br><br>Bolo Loco <br><br></td></tr></table><br>
+<a name="258679"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#90">[#90]</a></td></tr></table></td></tr><tr ><td class="posttext"> whoah! cool! Perhaps we can make a car selection screen, and choose between Bolo Loco's and Al's cars. <br><br>Also, Bolo loco, Try inserting my code into the top of the doverlet function(right under the for statement). It'll make the wheels-on-wrong-side-problem decrease signifigantly.<br><pre class=code>
+TFormPoint name\v[count]\current\x, name\v[count]\current\y,  name\v[count]\current\z,0,name\player
+   		If (name\v[count]\part = REAR_TIRE Or name\v[count]\part = FRONT_TIRE) And TFormedY()&gt;-1 Then 
+ 			TFormPoint TFormedX(),-1,TFormedZ(),name\player,0
+ 			name\v[count]\current\x = TFormedX()
+ 			name\v[count]\current\y = TFormedY()
+ 			name\v[count]\current\z = TFormedZ()
+ 			ltu=cframe
+		EndIf
+</pre> <br><br></td></tr></table><br>
+<a name="258705"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#91">[#91]</a></td></tr></table></td></tr><tr ><td class="posttext"> very nice work bolo.<br><br>there a few places in the code you can mess around with change the handling characteristics of the car.<br><br>the variables front_stiff and rear_stiff control how squishy the suspension is. this is the y axis (up and down) mass value for the wheel verlets. but this foes deeper. each verlet has a 3 mass values. so lets say you want more or less roll in the chassis. change the x axis mass values. you can even change the body verlets mass values to give a different feel to the car.<br><br>also calls made to this function,<br>Function wheel_force#(name.VObject, count, threshold#, max#)<br>where threshold# is the low value that defines when a tire will begin to slip. and max# defines the point at which the tire gives way completely (.999999).<br><br>then the last area is the code that gives the player the keybaord/mouse control. this is a weak area that could use mucho improvement, but look for values that control how tight the car can turn and there is a velocity based turn limiter that has a number to divide the velocity by. increase that number to allow the car to turn sharper at high speeds.<br><br><br>once again excellent work bolo. really nicely done.<br>im impressed. <br><br></td></tr></table><br>
+<a name="258729"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#92">[#92]</a></td></tr></table></td></tr><tr ><td class="posttext"> Damn, that looks cool, Bolo. Gotta try this tonight! <br><br></td></tr></table><br>
+<a name="258801"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jhocking</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#93">[#93]</a></td></tr></table></td></tr><tr ><td class="posttext"> That is nice.  That's pretty much what I'm working on right now, a more realistic track for the demo.  Mind if I throw your stuff together with what I have?  This'll kick off the community project good and proper.<br><br>I'm suddenly concerned this is occupying more time for me than I have to give.  Oh well, might as well ride this until the inertia peters out. <br><br></td></tr></table><br>
+<a name="258849"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sigi</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#94">[#94]</a></td></tr></table></td></tr><tr ><td class="posttext"> That`s really nice.<br>Please add sound to the car for more fun. <br><br></td></tr></table><br>
+<a name="258858"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jhocking</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#95">[#95]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hopefully this wasn't presumptuous of me to do (considering Bolo hasn't given permission yet) but I added his track to my WIP demo and it is fun to race around.  I made some minor alterations (mostly scaled it larger) and now you can select Al's arena or Bolo's track at startup.<br><br>Oh yeah, same download. <br><br></td></tr></table><br>
+<a name="258862"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bolo_Loco</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#96">[#96]</a></td></tr></table></td></tr><tr ><td class="posttext"> @jhocking - as long as the stuff belongs to this thread<br>everyone can use and modify my work .<br><br>Bolo loco <br><br></td></tr></table><br>
+<a name="258879"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Shagwana</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#97">[#97]</a></td></tr></table></td></tr><tr ><td class="posttext"> Can i say what fine outstanding members of this comunity you fellas are, top work!. <br><br></td></tr></table><br>
+<a name="259022"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#98">[#98]</a></td></tr></table></td></tr><tr ><td class="posttext"> I think I now understand how verlets work.  I had a hard time wrapping my head around the concept of moving things around without using velocity, but I now understand that while there is no velocity, the velocity is implicity defined by the previous and next verlet positions, and as the acceleration is used to change the verlet position, it is in essence changing the velocity of the verlet that is implied by the difference between it's position from frame to frame.<br><br>Anyhow...  I think I might have a solution to the problem of the wheels snapping out of place, and maybe I even have a solution to the problem of keeping objects stable.<br><br>My solution is this:<br><br>Copy the mesh.  Keep this mesh static.  Attach each of the vertices of the deformable mesh to this static mesh with a spring.  Somehow move and rotate this mesh with the verlet model.  Perhaps by calculating the way to best fit it to the current verlet data.  <br><br>Or, alternatively,<br><br>Create a spring between a verlet's position before a collision and the verlet itself.  Perhaps this will need to be it's position relative to other verlets, because I imagine it will need to move and rotate with them.  <br><br>Anyhow I haven't thought this all through yet.  But the idea is that let's take the simplest case.  A triangle.<br><br>Let us assume that the wheel is the top point of the triangle.  You move the triangle upwards, and this point smashes so hard into the surface that it bounces down to the point that it moves between the other two points of the triangle and is then below them.  <br><br>If this happens, then the springs that connect that point with the others will then push it AWAY from those points, so now the triangle will remain inverted.<br><br>However, what if you could make a stiff spring between where the verlet is supposed to be, and where it is?<br><br>Then you would have a fourth spring extending down to the point which is on the other side of bottom side of the triangle, from this imaginary point where the point should spring back to.  If this spring is strong enough, it should be able to pull the point back to where it is supposed to be.<br><br>I suppose this spring would be like a constraint which does not allow verlets to get too far from their correct location, but allows them to at least go a certain distance from it.<br><br>This might in theory allow an object to deform and srping back into shape.  Like a rubber ball, IF that's what you want it to do.  And in theory it could do this without you needing to have a hundred springs inside the object all pushing the object away from eachother.  You'd just need one spring per verlet connecting it to this special model that moves and rotates to maintain it's orientation realtive to all the verlets as they move around.<br><br><br>So the question is, how would one take a cube, make a copy of it, randomly perturb the points in the copy, and then figure out how to position and rotate the cube to minimize the error?<br><br>Or would you need to?<br><br>Maybe if each of the verlets used it's spring to pull on the parent object, which cannot deform, and you did that once or more times for each verlet, you would converge on the solution?  But I think you'd have to calculate how to rotate the object too in addition to just moving it.<br><br>Hm....<br><br>Anyhow, in theory this would make any object spring back to it's original shape after colliding with something, with no way to screw it up and get vertices in positions where they can't snap back.  And it might even greatly reduce the number of springs one needs to make a model stiff. <br><br></td></tr></table><br>
+<a name="259023"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#99">[#99]</a></td></tr></table></td></tr><tr ><td class="posttext"> sigh. why does nobody listen to my fix? I haven't even heard if it works or not. oh well. <br><br>Sound and music is definatly a good thing to add in the future. Some tire bounce sounds, crash sounds, engine sounds, "Go!!!!" voice, horn, and wheel sqreech sounds outa do. Maybe some cheery but not annoingly cheery "speed up" music.<br><br>To bad I suck at making media. Oh well. I guess I can always work on my physics sim. Implement some friction maybe. Then finish the collision types up. <br><br></td></tr></table><br>
+<a name="259026"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#100">[#100]</a></td></tr></table></td></tr><tr ><td class="posttext"> swift lets assume that your idea in its basic form doesnt have any problems with velocity being corruped by a rigid verlet. in the code i have a function called measure_verlets that will store off the original coordinates when the structure is first created. these coordinates are relative to the main player pivot which is tied to the center verlet. note: the player pivot already rotates and moves with the structure, thats how the vehicle body is being moved/rotated. all it would require is a secondary pass thru the set distance function with some transform commands so that the spring calcs are relative to the player pivot.<br><br>but here is where i think the whole thing falls apart. the current and old xyz values serve two purposes. they are the position the verlet is drawn at AND its velocity, not acceleration. there is no acceleration in verlet integrators. its all velocity. how can we prove this? acceleration takes into account mass and force. during the movement calcs mass does not come into play. since we now know that it is using velocity for both position and implied forces, having a rigid verlet will effectively have zero velocity. since the velocity is used to "power" all the other verlets the whole thing will either slow down or not move at all.<br><br>so ok lets make the rigid verlets move around then right? well how will you constrain it so it doesn flop around? any method of constraint will screw up the velicity that is used to power the whole thing.<br><br>like i have suggested before (and it was totally ignored) solve the problem right at the root which is how collision is being handled. we can easily detect the distance any verlet has moved by measuring the position relative to the player pivot and referencing the start_loc values as defined by the measure_pivot function. if the collision has caused the verlet to move beyond its acceptable distance then we simply move the simulation back using a subdivision of distance until it no longer is collided and bleed off some energy.<br><br>this is already being done in a very crude form for the y axis only on the wheel verlets. with out this code the car would flip inside even on the smallest fall because the wheel mass is over 300 lower than the body mass. all that needs to be done is to take this crude system and refine it.<br><br>unfortunatly i dont have time to do this. <br><br></td></tr></table><br>
+<a name="259027"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#101">[#101]</a></td></tr></table></td></tr><tr ><td class="posttext"> bot builder i saw it, wasnt ignoring it. just dont have much time to test stuff. almost all of the posting i do is at work lol. dont have time at home. <br><br></td></tr></table><br>
+<a name="259028"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#102">[#102]</a></td></tr></table></td></tr><tr ><td class="posttext"> lots of people are focused on trying to fix the inside-out problem of the verlets. i dont think this is a big issue. its one that im confident i could fix when i get more time to code.<br><br>heres the part i would love to see some really smart people try to tackle. vorderman hit the nail on the head when he pointed out that there is no realistic tire simulation going on. i put together a quickly constructed hack for the two states needed for the wheels to simulate static friction but it has some flaws that i cannot figure out how to solve. thats where we need to focus on in my humble opinion.<br><br>#1 get it working<br>#2 get it working right (the stage we are at)<br>#3 get it working stable (after we get it working right)<br>#4 get it working fast. <br><br></td></tr></table><br>
+<a name="259035"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#103">[#103]</a></td></tr></table></td></tr><tr ><td class="posttext"> "there is no acceleration in verlet integrators."<br><br><br><a href="http://www.ioi.dk/Homepages/thomasj/publications/gdc2001.htm" target="_blank">http://www.ioi.dk/Homepages/thomasj/publications/gdc2001.htm</a><br><br><br>"2          Verlet integration<br><br>The heart of the simulation is a particle system. Typically, in implementations of particle systems, each particle has two main variables: Its position x and its velocity v. Then in the time-stepping loop, the new position x’ and velocity v’ are often computed by applying the rules<br><br><img src="http://www.ioi.dk/Homepages/thomasj/publications/gdc2001_files/image002.gif"><br><br>where Dt is the time step, and a is the acceleration computed using Newton’s law f=ma (where f is the accumulated force acting on the particle). This is simple Euler integration."<br><br><br>That looks like acceleration to me! <br><br></td></tr></table><br>
+<a name="259037"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#104">[#104]</a></td></tr></table></td></tr><tr ><td class="posttext"> "since the velocity is used to "power" all the other verlets the whole thing will either slow down or not move at all."<br><br><br>I think I see what you're saying...<br><br>You're saying that if I stop one verlet, the springs from it will tug on all the other verlets and slow them down?<br><br>But I'm not really suggesting you stop any verlets.  I'm just suggesting you move them all to fit a model more closely, over time.<br><br>If you had a solid cube, moving to the left, and a verlet cube attached to it, the verlets on the left side would move less than the verlets on the right would move to catch up to the cube because it's tugging on them.  I think the difference would mean that the overall momentum of the system would be conserved.<br><br><br>I realised though that there's a problem with my model.  Though with some modifications so that verlets only move to be in the correct positions relative to the other local verlets maybe the issue could be overcome.<br><br>Consider a rubber rectangular solid.  Fix one end the floor, and push on the other end.  It bends.  It moves move at the tip, than at the center, but inididually, the space between all verlets in it changes by roughly the same amount.<br><br>However, in comparison to a rigid version of the rubber rectangle, the verlets on the end would move a LOT more than those in the middle.<br><br>If all verlets use the same spring strength, and are attached to a rigid copy of the mode, then I think that the resulting deformation with such a model would be incorrect.<br><br><br>However... if you could subdivide the model into a set of tetrahedrons each of which tried to remain rigid...  Then perhaps it might be an adequate simulation.  Maybe.<br><br><br>Another idea I just had was that if you subdivide your object up into tetrahedrons, then I think all you need to do to make sure that a verlet doesn't snap wrong is to check to see if it is on the right side of the plane formed by the other three verlets in it's terahedron.  If so, then you push it back to lie on the plane.  Though I don't know if the springs will handle the situation right if the point is on the saem plane as them, so you might have to push it out a little bit to help the springs figure out which way to push it. <br><br></td></tr></table><br>
+<a name="259038"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#105">[#105]</a></td></tr></table></td></tr><tr ><td class="posttext"> You know this thread would be a lot easier to read if people posted the code above to their website with a link instead of posting it in the forum where it messes up all the formatting. :-) <br><br></td></tr></table><br>
+<a name="259042"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Miracle</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#106">[#106]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm. Perhaps verlets could have a "maximum safe spring distance per iteration" value. That would be pretty easy to do,<br>especially if you just took the square of that distance and compared it to the x^2 + y^2 + z^2 of the current offset.<br>Compare that number to the projected position of where the verlet would have been without collisions.<br><br>Finding this minimum safe distance would require some preprocessing to find the height of the smallest triangle<br>formed between any verlet and two of its contiguous verlets. Ideally, too, you'd have to increase the number of<br>iterations in the loop to compensate for the smaller bounce distances per iteration. All this stuff takes processing<br>time away from the rest of the program, unfortunately. <br><br></td></tr></table><br>
+<a name="259046"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dangerdave</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#107">[#107]</a></td></tr></table></td></tr><tr ><td class="posttext"> The following is in the DoVerlet function, near the middle.<br><br>Question<br><pre class=code>
+		If name\v[count]\part = REAR_TIRE Then
+				temp_slip#= wheel_force(name.vobject, count,1.5,1.9)
+				debugX2=temp_slip#
+				tempvmx = tempvmx - ((tempvoldx * temp_slip) + (tempvax * (DeltaTime * DeltaTime))) + (temptempx * temp_slip)
+				Else
+					temp_slip#= wheel_force(name.vobject, count,.9,1.2)
+					debugX3=temp_slip#
+					tempvmx = tempvmx - ((tempvoldx * temp_slip) + (tempvax * (DeltaTime * DeltaTime))) + (temptempx * temp_slip)
+			End If
+</pre><br><br>Should it be?:<br><pre class=code>
+		If name\v[count]\part = REAR_TIRE Then
+				temp_slip#= wheel_force(name.vobject, count,1.5,1.9)
+				debugX2=temp_slip#
+				tempvmx = tempvmx - ((tempvoldx * temp_slip) + (tempvax * (DeltaTime * DeltaTime))) + (temptempx * temp_slip)
+				Else
+                                  if name\v[count]\part = FRONT_TIRE Then
+					temp_slip#= wheel_force(name.vobject, count,.9,1.2)
+					debugX3=temp_slip#
+					tempvmx = tempvmx - ((tempvoldx * temp_slip) + (tempvax * (DeltaTime * DeltaTime))) + (temptempx * temp_slip)
+       			            End If
+			End If
+</pre> <br><br></td></tr></table><br>
+<a name="259058"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#108">[#108]</a></td></tr></table></td></tr><tr ><td class="posttext"> You know, progress would be made a lot quicker on this if someone took the latest version of the code and cleaned it up.  A lot.<br><br>It's current state is insanely written.  There's global variables created between function declarations and main is down at the bottom of the code with the functions at the top, and most zany of all is how the whole thing starts off:<br><br>Graphics3D (WIDTH,HEIGHT,0,2)<br>Const WIDTH=640<br>Const HEIGHT=480<br><br>My GOD man! :-)<br><br><br>Aside from just basic code cleanup moving all the declarations to the top of the code, removing whitepsace, duplicate comments, and grouping variables together by function, it would also be wise to seperate the verlet stuff from the main code into a library, and set up the verlet types so they contain fields to define which types of physics are applied to what.  For example, doverlet should not check to see if the object is a "rear tire", it should simply check to see if sliding/sticking friction is enabled or something.<br><br>That can come later, but at least clean up the code, and post links to the code instead of posting it on the forum cause the code messes up the forum, and the forum messes up the code formatting badly. <br><br></td></tr></table><br>
+<a name="259062"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Al Mackey</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#109">[#109]</a></td></tr></table></td></tr><tr ><td class="posttext"> Pff.  What, do you have something against horizontal scrollbars? :&gt;<br><br>This thing is pretty amazing as it is, and I can't wait to see where it goes.  Bolo's road course is really awesome!  Unfortunately I don't understand the code well enough to give it the proper cleanup and comments it deserves. <br><br></td></tr></table><br>
+<a name="259065"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#110">[#110]</a></td></tr></table></td></tr><tr ><td class="posttext"> heh. sswift, I agree on the cleanup thing. The whole verlet system is being messed up through spetialization towards having a car model.  <br><br>That sounds right, dangerdave. It woulod be silly to measure the slippage of the main body.<br><br>Also, The whole "verlet systems don't have acceleration" is not true. in the article off gamasutra, it specificly creates a vector called force that is for accelerations. Yet most of the time this would remain constant at gravity, unless you added like gravity warp fields and stuff hehehe. just because the doverlets loop doesn't have anything using mass doesn't mean it doesn't have acceleration. Mass has NOTHING tro do with acceleration unless you are writing a sim that bases it's acceleration off mass. a space sim for instance.<br> <br>[update]<br>Oh yeah, and made some small friction attempts. It's pretty slick. just take the friction coefficient multiplied by penetration distance multiplied by the Tangential velocity of the verlet. I've only implemented it in my XZ collision quads, but the rest are next......... I'm also going to implement my newest idea-pivots. another speed up idea that allows for collisions at an angle go uber fast.<br>[/update] <br><br></td></tr></table><br>
+<a name="259077"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmc</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#111">[#111]</a></td></tr></table></td></tr><tr ><td class="posttext"> "there is no acceleration in verlet integrators." <br>i worded that badly. let me rephrase that. acceleration is used your right. but it is only used when the player adds nails the accelerator or with gravity. your post was concerning stability issues, not control issues. stability and the spring stuff is purely driven by velocity. acceleration doesnt come into play. so basically were both right, just not communicating clearly.<br><br>about your stability idea. it may work.... hmmm really need to see the code to tell for sure. personally i wouldnt do it that way. but hey this is for everyone. so go for it.<br><br>"You know, progress would be made a lot quicker on this if someone took the latest version of the code and cleaned it up. A lot. "<br>did i hear you just volunteer for the job? =)<br><br>btw keep this in mind swift. i didnt put the code up because it was pretty and nicely finished. i put it up because i wont have time to do any serious work on it for weeks, and rather than have it sit on my hard drive doing NOTHING i decided that someone out there may find it interesting. <br><br></td></tr></table><br>
+<a name="259100"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#112">[#112]</a></td></tr></table></td></tr><tr ><td class="posttext"> "did i hear you just volunteer for the job? =)"<br><br>Actually, I already cleaned up one version of the code<br>partially, and then I realsied there was another version<br>already out.  I don't even know what the latest version is,<br>or who has it.<br><br>Also, the physics keeps changing in big ways with no way to<br>know how older versions differed.  I happened to like version<br>3's tendancy to whip the rear end of the car around when you<br>turned too sharply.  But I didn't like how when I went over a<br>jump, for some reason the car would just drop straight down<br>practically instead of flying up in an arc like in the<br>version with the truck, which had no source code included.<br><br>If the code was a lot cleaner then we'd be able to see what<br>is causing these changes to occur so we can make the driving<br>models which we like best! <br><br></td></tr></table><br>
+<a name="259152"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Beaker</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#113">[#113]</a></td></tr></table></td></tr><tr ><td class="posttext"> Has anyone worked out how to get the vehicle to reverse in the right direction yet?  :)<br><br>/me runs away! <br><br></td></tr></table><br>
+<a name="259154"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#114">[#114]</a></td></tr></table></td></tr><tr ><td class="posttext"> It DOES reverse in the right direction.  haven't you ever drivien a car before? :-) <br><br></td></tr></table><br>
+<a name="259202"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#115">[#115]</a></td></tr></table></td></tr><tr ><td class="posttext"> It doesn't turn in the right direction when reversing. Minor matter though! <br><br></td></tr></table><br>
+<a name="259243"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Vorderman</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#116">[#116]</a></td></tr></table></td></tr><tr ><td class="posttext"> No, it turns in the opposite (ie. wrong) direction when reversing, which is very confusing. I guess you can just reverse the steering force when going backwards to correct it. <br><br></td></tr></table><br>
+<a name="259266"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2003)</font>&nbsp;<a href="#117">[#117]</a></td></tr></table></td></tr><tr ><td class="posttext"> Vorder:<br>Whoops, my bad, you're right, it does turn wrong.  That explains why it felt so weird turning around! <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

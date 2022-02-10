@@ -1,0 +1,242 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Sound Effect Implementation Question?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Sound Effect Implementation Question?</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Sound Effect Implementation Question?</a><br><br>
+<a name="580105"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sean Doherty</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> The following is a simple sound example for a basic shooter when you fire a weapon:<br><br>-----------------------------------<br>Method Fire()<br><br>Local pTMissileFiringSound:TSound	<br>	<br>			<br>pTMissileFiringSound = LoadSound("Sounds/Firing/Shot.wav")<br>pTMissileFiringSound.Play()<br><br>End Method<br>-------------------------<br><br>Couple of questions:<br><br>1) When the pTMissileFiringSound pointer goes out of scope at the end of the method why does the sound continue to play?<br><br>2) Is there anything wrong with this implementation; should I be using a TList to queue the sounds to avoid memory allocation issues?  For example, what if the instance of the Type/Class that created the sound was detroyed before the sound finished?<br><br>3) If I want units in the distance to sound further away sould I use SetPan and SetDepth?<br><br>4) Is there a limit to the number of sound channels and are they automatically cleaned up at the end of the sound?<br><br>Thanks <br><br></td></tr></table><br>
+<a name="580181"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TartanTangerine (was Indiepath)</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi Sean,<br><br>I hope this code helps, its a multi-channel sound system I developed for BMax that allows queing, overlapping, no-overlapping. It will support as many channels as you want and any queue depth. It will also clean up after itself.<br><br>This code is based on something done for Blitz3D some years ago by someone else - no idea who.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+' And Indiepath Production by Tim Fisher (c)2005 Indiepath LTd
+DebugLog "MOD_SFX_Engine.bmx"
+
+Const CH_ANY 	= -1
+Const CH_1		= 1				'Brick Sounds 
+Const CH_2		= 2				'Score Sounds
+Const CH_3		= 3				'Powerup Sounds
+Const CH_4		= 4				'Incidential Sounds
+Const CH_5		= 5				
+Const CH_6		= 6				' Diamond Sounds
+Const CH_7		= 7				' Chords
+Const CH_8		= 8				' Vox
+Const CH_9		= 9				' GUI Sounds
+Const CH_10		= 10			' BG Music
+Const CH_11		= 11			' Score Sounds
+
+' ---------------------------------------------------------------------
+
+Global ChannelTList:TList = New TList
+
+Type ActiveChannel
+	Field SampleID	:Int
+	Field Address	:TChannel
+	Field FadeTime	:Double
+	Field FadeStart	:Double
+	Field CreateTime:Int
+	Field Volume	:Double
+	Field VolumeS	:Double
+	Field Queue		:TSound[8]
+	Field VolQ		:Double[8]
+	Field Qcount	:Double
+	
+		Method New ()
+            	If ChannelTList = Null Then ChannelTList = New TList
+            	ChannelTList.AddLast Self
+    	End Method		
+
+		'----------------------------------------------------------------
+		
+		Function Destroy (a:ActiveChannel)
+				Local b:Int
+				a.Address = Null
+				For b = 0 To 7
+					a.Queue[b] = Null
+				Next
+				ChannelTList.Remove a
+				a = Null
+				FlushMem
+        End Function
+
+		'----------------------------------------------------------------
+		
+		Function MusicQueueState(ID:Int)
+				Local c:ActiveChannel
+				For c:ActiveChannel = EachIn ChannelTList
+					If c.SampleID = ID Then Return Int(c.QCount)
+				Next
+		End Function
+
+		'----------------------------------------------------------------
+	
+		Function PlaySample(add:TSound,ID:Int=-1,Vol:Double=1,Queue:Byte=False,overlap:Byte=False,rate:Double=1)
+		
+				Local Channel:ActiveChannel
+				Local Simultaneous:Byte = False
+				Local Playing:Byte = False
+				
+				If ID &lt;0 Then Simultaneous = True
+				
+				For Channel:ActiveChannel = EachIn ChannelTList
+				
+					If Channel.SampleID = ID
+						If Queue = True
+							Channel.Qcount = Channel.Qcount + 1
+							If Channel.Qcount &gt; 1 Then 
+								Channel.QCount = 1
+								DebugLog "**SFX Queue Overload!"
+								Return
+							EndIf
+							Channel.Queue[Channel.Qcount] = add
+							Channel.VolQ[Channel.Qcount] = vol
+							Playing = True
+
+						Else
+							Playing = True
+						EndIf
+						
+						If overlap And (MilliSecs() - Channel.Createtime &gt; 100) Then Playing = False
+									
+					EndIf
+					
+					If Not ChannelPlaying(Channel.Address) Then 
+						StopChannel(Channel.Address)
+						Destroy(Channel)
+					EndIf
+				
+				Next
+				
+				If Not (Simultaneous = False And Playing = True)
+				
+					Channel:ActiveChannel = New ActiveChannel
+					Channel.SampleID = ID
+					Channel.Address = AllocChannel()
+					Channel.Volume = Vol
+					Channel.VolumeS = Vol
+					SetChannelVolume(Channel.Address,Channel.Volume)
+					PlaySound(Add,Channel.Address)
+					Channel.FadeTime = 0
+					Channel.CreateTime = MilliSecs()
+					SetChannelRate(Channel.Address,rate)
+					
+				EndIf	
+		
+		End Function
+		
+		'----------------------------------------------------------------
+
+		Method Update()
+		
+				Local a:Int
+		
+				If Not ChannelPlaying(self.Address)
+					If self.Qcount = 0
+						StopChannel(self.address)
+						Destroy(Self)
+						Return
+					Else
+						SetChannelVolume(self.address,self.volQ[1])
+						PlaySound(self.queue[1],self.address)
+						For a = 1 To self.qCount - 1
+							self.queue[a] = self.queue[a+1]
+							self.volQ[a] = self.volQ[a+1]
+						Next
+						self.Queue[self.Qcount] = Null
+						self.Qcount = self.Qcount - 1
+					EndIf
+				EndIf
+				
+				If Self.FadeTime
+					If self.Volume &lt;= 0 Then
+						If self.Qcount = 0
+							StopChannel(self.address)
+							Destroy(Self)
+						Else
+							Self.FadeTime = 0
+							Self.Volume = self.volQ[1]
+							SetChannelVolume(self.address,self.volQ[1])
+							PlaySound(self.queue[1],self.address)
+							For a = 1 To self.qCount - 1
+								self.queue[a] = self.queue[a+1]
+								self.volQ[a] = self.volQ[a+1]
+							Next
+							self.Queue[self.Qcount] = Null
+							self.Qcount = self.Qcount - 1
+						EndIf
+						
+					Else
+						Self.Volume = self.VolumeS - Float(MilliSecs() - self.FadeStart) / self.fadetime
+						SetChannelVolume(self.address,self.volume)
+					EndIf
+				EndIf		
+				
+		End Method
+		
+		'----------------------------------------------------------------
+
+		Function UpdateAll()
+				Local c:ActiveChannel
+				For c:ActiveChannel = EachIn ChannelTList
+					c.Update()
+				Next
+		End Function
+		
+		'----------------------------------------------------------------
+		
+		Function SoundOff()
+				Local c:ActiveChannel
+				For c:ActiveChannel = EachIn ChannelTList
+					StopChannel(c.address)
+					Destroy(c)
+				Next
+		End Function
+		
+		'----------------------------------------------------------------
+		
+		Function SetVolume(ID:Int,Vol:Double)
+				Local c:ActiveChannel
+				For c:ActiveChannel = EachIn ChannelTList
+					If c.SampleID = ID Then SetChannelVolume(c.address,vol)
+				Next
+		End Function
+		
+		
+		
+		'----------------------------------------------------------------
+		
+		Function Playing(ID:Int)
+				Local c:ActiveChannel
+				For c:ActiveChannel = EachIn ChannelTList
+					If c.SampleID = ID And ChannelPlaying(c.address) Then Return True
+				Next
+				Return False
+		End Function
+		
+		'----------------------------------------------------------------
+		
+		Function ReleaseSample(ID:Int,Timeout:Double)
+				Local c:ActiveChannel
+				For c:ActiveChannel = EachIn ChannelTList
+					If Not c.FadeTime
+						If c.SampleID = ID Then
+							If Timeout
+								c.FadeTime = Timeout
+								c.FadeStart = MilliSecs()
+							Else
+								StopChannel(c.Address)
+								destroy(c)
+							EndIf
+						EndIf
+					EndIf
+				Next
+		End Function
+</textarea> <br><br></td></tr></table><br>
+<a name="580247"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sean Doherty</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey Indiepath,<br><br>Thanks for the code!<br><br>Questions: Is there anything wrong with the way I was doing it above?  What advantage does this offer; just curious because I am new to Blitz Sound. <br><br></td></tr></table><br>
+<a name="580268"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TartanTangerine (was Indiepath)</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi Sean,<br><br>Your code looks sound (no pun intended), if you want maximum control over the sound then you really do need to go the channel route. Using Channels allows you to change pitch on the fly, volume on the fly etc.. You'll also find that with my code you can just chuck stuff at the channels and it'll decide what to do with the sound - no more overloading the soundcard when 20 explosions all happen simultaneously.<br><br>Cheers, Tim.<br><br>PS. How come you've not got my games on your site :P <br><br></td></tr></table><br>
+<a name="580283"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >tonyg</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> I don't think you should be using loadsound each time you fire. <br>An attempt to answer some questions (some guessing going on here)...<br>1) The variables out of scope but 'play' has automatically created a TChannel which still exists.<br>2)  Destroy method could check whether the channel is playing and stop using stopchannel.<br>3) Setpan, SetDepth *and* Setvolume. There's an example in the docs. <br>4) Don't think there's a limit as each channel is an TChannel Object. I guess, once these are out of scope, flushmem will remove them.<br>&lt;edit&gt; I reserve the right to be very wrong <br><br></td></tr></table><br>
+<a name="580557"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sean Doherty</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Tim,<br><br>GameSlammers primary focus is action/arcade and shooters.  Also, you are using esellerate where generally I target Plimus, RegNow, or Share-It games.  Altough, there are games on the site without any affiliate program in play.  That said, I may be changing the affilate program we use in the next few weeks. <br><br></td></tr></table><br>
+<a name="580559"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sean Doherty</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> tonyg,<br><br>I ran accross one null exception error when setting using the channel.  At the time, I was thinking that there were not channels remaining.  Also, I have had no luch with SetDepth?  I set the depth to -1 and the sound still comes out the front speakers; reverse is true for +1.<br><br>Presently, I am using a singleton to load all my sounds then I just allocate the channel and set the volume of the sound based on the distance of the sound from the camera (center of the screen).  <br><br>I have not really had a chance to look at Tim's code in detail as of yet. <br><br></td></tr></table><br>
+<a name="580569"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sean Doherty</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Tim,<br><br>Looking at your code but I can't see how to use it?  How do I setup/queue a new sound?  Do you have a sample of how you are using it?<br><br>Sean <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

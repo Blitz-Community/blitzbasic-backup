@@ -1,0 +1,1498 @@
+<!DOCTYPE html><html lang="en" ><head ><title >GLSL + FBO experiment (crystal balls)</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >GLSL + FBO experiment (crystal balls)</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=103" >OpenGL Module</a>/<a href="#bottom" >GLSL + FBO experiment (crystal balls)</a><br><br>
+<a name="1009882"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Alright, so here's my FBO test to see where this kind of routine works and where not as well as what we can do about it.<br><br>Nvidia and ATI seem to be biting each other in openGL, but I might just do things mildly wrong and ATI is simply more sensitive to that.<br><br>Anyway, here are a few crystal balls (well, arbitrary refraction, really) on a background that is rendered into an FBO first and then drawn and given to the GLSL shaders of the balls.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Framework brl.GLMax2D
+Import pub.glew
+'===================================== SHADERS ====================================
+'------------------------- Shader01
+Global Shader01_vert:String 
+Shader01_vert = ..
+"varying vec2 vTexCoord;"+..
+"varying vec3 N;"+..
+"varying vec3 v;"+..
+"void main(void) {"+..
+"	v = gl_Vertex;"+..
+"	N = gl_Normal;"+..
+"	vTexCoord = gl_MultiTexCoord0.xy;"+..
+"	gl_Position = ftransform();"+..
+"	gl_FrontColor = gl_Color;"+..
+"}"
+
+Global Shader01_frag:String 
+Shader01_frag = ..
+"uniform sampler2D colorTexture;" +..
+"uniform sampler2D BG;" +..
+"varying vec2 vTexCoord;" +..
+"varying vec2 N;" +..
+"varying vec2 v;" +..
+"void main (void){" +..
+"	vec4 color = texture2D(colorTexture, vTexCoord.st);"+..
+"	vec3 norm = vec3(-1.0+color.r*2,-1.0+color.g*2.0,1.0-color.b);"+..
+"	vec3 vdir = vec3(-(v.x-512),-(v.y-384),1000-norm.z*20);"+..
+"	vec3 ldir = vec3(-(v.x-512),-(v.y-384),(300-norm.z*20));"+..
+"	ldir = normalize(ldir);"+..
+"	vdir = normalize(vdir);"+..
+"	vec3 R = reflect(ldir,norm);"+..
+"	float spec = max(dot(-R,vdir),0.0);"+..
+"	float lite = dot(norm,ldir)*0.3;"+..
+"	vec4 colorBG = texture2D(BG, vec2(v.x/1024,v.y/768)+refract(vdir,norm,1.03).st/(vdir.z*10.0));"+..
+"	gl_FragColor = gl_Color*lite+colorBG*norm.z+0.5*pow(spec,80.0);"+..
+"	gl_FragColor.a = color.a;"+..
+"}" 
+
+'==================================================================================
+AppTitle="GLSL + FBO"
+
+SetGraphicsDriver GLMax2DDriver()
+Global Width:Int =	1024
+Global Height:Int =	768
+Global hWidth:Int=Width*0.5
+Global hHeight:Int=Height*0.5
+GLGraphics (Width,Height,0)
+
+glewInit()
+
+Local size:Int = 128; Local hsize:Int = 0.5*size
+Local image_pix:TPixmap = CreatePixmap(size,size,PF_RGBA8888)
+For Local y:Int =0 Until size
+	For Local x:Int = 0 Until size
+		Local xp:Float = Float(x-hsize)/hsize
+		Local yp:Float = Float(y-hsize)/hsize
+		Local zp:Float = 1.0
+		Local dot:Float = xp^2+yp^2
+		
+		Local alp:Int = 0
+		If dot And dot &lt;= 1.0
+			zp = 1.0-Sqr(1.0-dot)
+			dot = Sqr(dot)
+			
+			alp = (1.0-dot)^0.25*512
+			If alp&gt;255 Then alp=255
+			
+			dot = Sqr(xp^2+yp^2+zp^2)
+			dot = (1.0/dot)^0.025
+			xp:*dot
+			yp:*dot
+		End If
+		If dot = 0 Then alp=255
+		WritePixel(image_pix,x,y,alp Shl 24|Int(128+xp*127)Shl 16|Int(128+yp*127)Shl 8|Int(zp*256))
+	Next
+Next
+
+glOrtho (0, Width, Height, 0, -100, 100)
+
+glEnable(GL_ALPHA_TEST)
+glAlphaFunc(GL_NOTEQUAL,0)           
+glEnable (GL_BLEND);
+	
+glEnable( GL_TEXTURE_2D )
+Local txtID:Int
+	glGenTextures(1, Varptr txtID)
+	glBindTexture(GL_TEXTURE_2D, txtID)
+	glTexImage2D(GL_TEXTURE_2D, 0, 4, image_pix.Width, image_pix.Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_pix.pixels)
+	
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S , GL_REPEAT)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T , GL_REPEAT)
+
+'========================== create Shader01 program =================================
+Local shader01_vert_id:Int = glCreateShader(GL_VERTEX_SHADER)
+Local sptr:Byte Ptr = Shader01_vert.ToCString()
+Local slen:Int = Shader01_vert.Length
+	glShaderSource(shader01_vert_id,1, Varptr sptr, Varptr slen)
+	glCompileShader(shader01_vert_id)
+Local shader01_frag_id:Int = glCreateShader(GL_FRAGMENT_SHADER)
+	sptr = Shader01_frag.ToCString()
+	slen = Shader01_frag.Length
+	glShaderSource(shader01_frag_id,1, Varptr sptr, Varptr slen)
+	glCompileShader(shader01_frag_id)
+	
+Local Shader01:Int = glCreateProgram()
+	glAttachShader(Shader01, shader01_vert_id)
+	glAttachShader(Shader01, shader01_frag_id)
+	
+	glLinkProgram(Shader01)
+	glUseProgram(Shader01)
+'------------------------------------------------------------------------------------
+Global gl_location_color:Int	=glGetUniformLocation(Shader01, "colorTexture")
+Global gl_location_BG:Int	=glGetUniformLocation(Shader01, "BG")
+If gl_location_color &lt;&gt; -1 Then glUniform1i(gl_location_color, 0)
+If gl_location_BG &lt;&gt; -1 Then glUniform1i(gl_location_BG, 1)
+'------------------------------------------------------------------------------------
+rem
+'========================== create Shader01 programARB ==============================
+Local Shader01:Int = glCreateProgramObjectARB()
+Local shader01_vert_id:Int = glCreateShaderObjectARB(GL_VERTEX_SHADER)
+Local sptr:Byte Ptr = Shader01_vert.ToCString()
+Local slen:Int = Shader01_vert.Length
+	glShaderSourceARB(shader01_vert_id,1, Varptr sptr, Varptr slen)
+	glCompileShaderARB(shader01_vert_id)
+	glAttachObjectARB(Shader01, shader01_vert_id)
+Local shader01_frag_id:Int = glCreateShaderObjectARB(GL_FRAGMENT_SHADER)
+	sptr = Shader01_frag.ToCString()
+	slen = Shader01_frag.Length
+	glShaderSourceARB(shader01_frag_id,1, Varptr sptr, Varptr slen)
+	glCompileShaderARB(shader01_frag_id)
+	glAttachObjectARB(Shader01, shader01_frag_id)
+	
+	glLinkProgramARB(Shader01)
+	glUseProgramObjectARB(Shader01)
+
+endrem
+
+Local fbotex:Int
+glGenTextures(1,Varptr fbotex)
+glBindTexture(GL_TEXTURE_2D, fbotex)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT)
+glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, Width, Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, Null)
+glBindTexture(GL_TEXTURE_2D, 0)
+
+'create framebuffer 
+Local fboID:Int
+glGenFramebuffersEXT(1, Varptr fboID)
+glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fboID)
+glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, fbotex, 0)
+
+'create renderbuffer depth
+Local rboID:Int
+glGenRenderbuffersEXT(1, Varptr rboID)
+glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, rboID)
+glRenderbufferStorageEXT(GL_RENDERBUFFER_EXT, GL_DEPTH_COMPONENT, Width, Height)
+glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT, rboID)
+
+Local FBOuse:Int = glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
+
+glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, 0)
+glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0)
+
+'###################################################################################
+'							A	C	T	I	O	N (mainloop) 	
+'###################################################################################	
+	'HideMouse()
+While Not (KeyHit(KEY_ESCAPE) Or AppTerminate())
+	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)
+	
+	glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fboID)
+	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)
+	
+	glBlendFunc (GL_SRC_ALPHA,GL_SRC_COLOR) 
+
+	glUseProgram(0)
+		
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, 0)
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, 0)
+	Gradient(0.05,0.1,0.5,0,0,0)
+
+	glColor4f(0.2,0.4,0.7,0.5)
+	Checkers()
+	
+	glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0)
+
+	glBlendFunc (GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA) 	
+
+	glUseProgram(0)
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, fbotex)
+	
+	glColor4f(1.0,1.0,1.0,1.0)
+	glBegin (GL_QUADS)
+		glTexCoord2f(0,1); glVertex3f(0,0,0)
+		glTexCoord2f(0,0); glVertex3f(0,Height,0)
+		glTexCoord2f(1,0); glVertex3f(Width,Height,0)
+		glTexCoord2f(1,1); glVertex3f(Width,0,0)
+	glEnd
+	
+	glUseProgram(Shader01)
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, txtID)
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, fbotex)
+	
+	For Local n:Int = 0 Until 50
+		Local nf:Float = Float(n)/50
+		glColor4f(nf,1.0,1.0,1.0)
+		Quad(hWidth+nf*400*Sin(Double(MilliSecs())*0.1+nf*n*20.0),hHeight+250*Sin(Double(MilliSecs())*0.2+n*10.0),16+n*2)	
+	Next
+	
+	Flip 1
+Wend
+	'ShowMouse()
+  glDeleteTextures(1, Varptr fbotex);
+  glDeleteRenderbuffersEXT(1, Varptr rboID);
+  glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+  glDeleteFramebuffersEXT(1, Varptr fboID);
+End
+'##################################################################################	
+'==================================================================================
+'##################################################################################	
+
+
+
+'============================== FUNCTIONS ================================
+Function Quad(x:Float,y:Float,size:Float)
+	Local x0:Float = x
+	Local x1:Float = x+size
+	Local y0:Float = y
+	Local y1:Float = y+size
+	glBegin (GL_QUADS)
+		glTexCoord2f(0,0); glVertex3f(x0,y0,0)
+		glTexCoord2f(0,1); glVertex3f(x0,y1,0)
+		glTexCoord2f(1,1); glVertex3f(x1,y1,0)
+		glTexCoord2f(1,0); glVertex3f(x1,y0,0)
+	glEnd
+End Function
+
+Function Checkers()
+	Local cs:Float = 128
+	Local hcs:Float = cs*0.5
+	glBegin (GL_QUADS)
+		For Local i:Float = 0 Until 16
+			glVertex2f(i*cs,0);glVertex2f(i*cs,Height);glVertex2f(i*cs+hcs,Height);glVertex2f(i*cs+hcs,0)
+		Next
+		For Local i:Float = 0 Until 8
+			glVertex2f(0,i*cs);glVertex2f(0,i*cs+hcs);glVertex2f(Width,i*cs+hcs);glVertex2f(Width,i*cs)
+		Next
+	glEnd
+End Function
+
+Function Gradient(r0:Float,g0:Float,b0:Float,r1:Float,g1:Float,b1:Float)
+	glBegin (GL_QUADS)
+		glColor4f(r0,g0,b0,1.0)
+		glVertex3f(0,0,0)
+		glVertex3f(Width,0,0)
+		glColor4f(r1,g1,b1,1.0)
+		glVertex3f(Width,Height,0)
+		glVertex3f(0,Height,0)
+	glEnd
+	
+End Function
+</textarea><br><br>...or like this (pfff, I'm goofing around! THE KILT!)<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Framework brl.GLMax2D
+Import pub.glew
+'===================================== SHADERS ====================================
+'------------------------- Shader01
+Global Shader01_vert:String 
+Shader01_vert = ..
+"varying vec2 vTexCoord;"+..
+"varying vec3 N;"+..
+"varying vec3 v;"+..
+"void main(void) {"+..
+"	v = gl_Vertex;"+..
+"	N = gl_Normal;"+..
+"	vTexCoord = gl_MultiTexCoord0.xy;"+..
+"	gl_Position = ftransform();"+..
+"	gl_FrontColor = gl_Color;"+..
+"}"
+
+Global Shader01_frag:String 
+Shader01_frag = ..
+"uniform sampler2D colorTexture;" +..
+"uniform sampler2D BG;" +..
+"varying vec2 vTexCoord;" +..
+"varying vec2 N;" +..
+"varying vec2 v;" +..
+"void main (void){" +..
+"	vec4 color = texture2D(colorTexture, vTexCoord.st);"+..
+"	vec3 norm = vec3(-1.0+color.r*2,-1.0+color.g*2.0,1.0-color.b);"+..
+"	vec3 vdir = vec3(-(v.x-512),-(v.y-384),2000-norm.z*20);"+..
+"	vec3 ldir = vec3(-(v.x-512),-(v.y-84),(100-norm.z*20));"+..
+"	ldir = normalize(ldir);"+..
+"	vdir = normalize(vdir);"+..
+"	vec3 R = reflect(ldir,norm);"+..
+"	float spec = max(dot(-R,vdir),0.0);"+..
+"	float lite = dot(norm,ldir)*0.3;"+..
+"	norm.y *= -1.0;"+..
+"	vec4 colorBG = texture2D(BG, vec2(v.x/1024,1.0-v.y/768)+refract(-vdir,-norm,1.08).st/(vdir.z*10.0));"+..
+"	gl_FragColor = gl_Color*lite+colorBG*norm.z+0.5*pow(spec,33.3);"+..
+"	gl_FragColor.a = color.a;"+..
+"}" 
+
+'==================================================================================
+AppTitle="GLSL + FBO"
+
+SetGraphicsDriver GLMax2DDriver()
+Global Width:Int =	1024
+Global Height:Int =	768
+Global hWidth:Int=Width*0.5
+Global hHeight:Int=Height*0.5
+GLGraphics (Width,Height,0)
+
+glewInit()
+
+Local size:Int = 256; Local hsize:Int = 0.5*size
+Local image_pix:TPixmap = CreatePixmap(size,size,PF_RGBA8888)
+For Local y:Int =0 Until size
+	For Local x:Int = 0 Until size
+		Local xp:Float = Float(x-hsize)/hsize
+		Local yp:Float = Float(y-hsize)/hsize
+		Local zp:Float = 1.0
+		Local dot:Float = xp^2+yp^2
+		
+		Local alp:Int = 0
+		If dot And dot &lt;= 1.0
+			zp = 1.0-Sqr(1.0-dot)
+			dot = Sqr(dot)
+			
+			alp = (1.0-dot)^0.25*512
+			If alp&gt;255 Then alp=255
+			
+			dot = Sqr(xp^2+yp^2+zp^2)
+			dot = (1.0/dot)^0.025
+			xp:*dot
+			yp:*dot
+		End If
+		If dot = 0 Then alp=255
+		WritePixel(image_pix,x,y,alp Shl 24|Int(128+xp*127)Shl 16|Int(128+yp*127)Shl 8|Int(zp*256))
+	Next
+Next
+
+glOrtho (0, Width, Height, 0, -100, 100)
+
+glEnable(GL_ALPHA_TEST)
+glAlphaFunc(GL_NOTEQUAL,0)           
+glEnable (GL_BLEND);
+	
+glEnable( GL_TEXTURE_2D )
+Local txtID:Int
+	glGenTextures(1, Varptr txtID)
+	glBindTexture(GL_TEXTURE_2D, txtID)
+	glTexImage2D(GL_TEXTURE_2D, 0, 4, image_pix.Width, image_pix.Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_pix.pixels)
+	
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S , GL_REPEAT)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T , GL_REPEAT)
+
+'========================== create Shader01 program =================================
+Local shader01_vert_id:Int = glCreateShader(GL_VERTEX_SHADER)
+Local sptr:Byte Ptr = Shader01_vert.ToCString()
+Local slen:Int = Shader01_vert.Length
+	glShaderSource(shader01_vert_id,1, Varptr sptr, Varptr slen)
+	glCompileShader(shader01_vert_id)
+Local shader01_frag_id:Int = glCreateShader(GL_FRAGMENT_SHADER)
+	sptr = Shader01_frag.ToCString()
+	slen = Shader01_frag.Length
+	glShaderSource(shader01_frag_id,1, Varptr sptr, Varptr slen)
+	glCompileShader(shader01_frag_id)
+	
+Local Shader01:Int = glCreateProgram()
+	glAttachShader(Shader01, shader01_vert_id)
+	glAttachShader(Shader01, shader01_frag_id)
+	
+	glLinkProgram(Shader01)
+	glUseProgram(Shader01)
+'------------------------------------------------------------------------------------
+Global gl_location_color:Int	=glGetUniformLocation(Shader01, "colorTexture")
+Global gl_location_BG:Int	=glGetUniformLocation(Shader01, "BG")
+If gl_location_color &lt;&gt; -1 Then glUniform1i(gl_location_color, 0)
+If gl_location_BG &lt;&gt; -1 Then glUniform1i(gl_location_BG, 1)
+'------------------------------------------------------------------------------------
+rem
+'========================== create Shader01 programARB ==============================
+Local Shader01:Int = glCreateProgramObjectARB()
+Local shader01_vert_id:Int = glCreateShaderObjectARB(GL_VERTEX_SHADER)
+Local sptr:Byte Ptr = Shader01_vert.ToCString()
+Local slen:Int = Shader01_vert.Length
+	glShaderSourceARB(shader01_vert_id,1, Varptr sptr, Varptr slen)
+	glCompileShaderARB(shader01_vert_id)
+	glAttachObjectARB(Shader01, shader01_vert_id)
+Local shader01_frag_id:Int = glCreateShaderObjectARB(GL_FRAGMENT_SHADER)
+	sptr = Shader01_frag.ToCString()
+	slen = Shader01_frag.Length
+	glShaderSourceARB(shader01_frag_id,1, Varptr sptr, Varptr slen)
+	glCompileShaderARB(shader01_frag_id)
+	glAttachObjectARB(Shader01, shader01_frag_id)
+	
+	glLinkProgramARB(Shader01)
+	glUseProgramObjectARB(Shader01)
+
+endrem
+
+Local fbotex:Int
+glGenTextures(1,Varptr fbotex)
+glBindTexture(GL_TEXTURE_2D, fbotex)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT)
+glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, Width, Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, Null)
+glBindTexture(GL_TEXTURE_2D, 0)
+
+'create framebuffer 
+Local fboID:Int
+glGenFramebuffersEXT(1, Varptr fboID)
+glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fboID)
+glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, fbotex, 0)
+
+'create renderbuffer depth
+Local rboID:Int
+glGenRenderbuffersEXT(1, Varptr rboID)
+glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, rboID)
+glRenderbufferStorageEXT(GL_RENDERBUFFER_EXT, GL_DEPTH_COMPONENT, Width, Height)
+glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT, rboID)
+
+Local FBOuse:Int = glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
+
+glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, 0)
+glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0)
+
+'###################################################################################
+'							A	C	T	I	O	N (mainloop) 	
+'###################################################################################	
+	HideMouse()
+While Not (KeyHit(KEY_ESCAPE) Or AppTerminate())
+	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)
+	
+	glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fboID)
+	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)
+	
+	glBlendFunc (GL_SRC_COLOR,GL_SRC_COLOR) 
+
+	glUseProgram(0)
+		
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, 0)
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, 0)
+	Gradient(0.5,0.6,0.1,0.0,0.1,0.0)
+
+	glColor4f(0.5,0.2,0.1,1.0)
+	Checkers()
+	
+	glColor4f(1.0,1.0,1.0,1.0)
+	Quad(MouseX(),MouseY(),100)
+	glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0)
+
+	glBlendFunc (GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA) 	
+
+	glUseProgram(0)
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, fbotex)
+	
+	glColor4f(1.0,1.0,1.0,1.0)
+	glBegin (GL_QUADS)
+		glTexCoord2f(0,1); glVertex3f(0,0,0)
+		glTexCoord2f(0,0); glVertex3f(0,Height,0)
+		glTexCoord2f(1,0); glVertex3f(Width,Height,0)
+		glTexCoord2f(1,1); glVertex3f(Width,0,0)
+	glEnd
+	
+	glUseProgram(Shader01)
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, txtID)
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, fbotex)
+	
+	For Local n:Int = 0 Until 50
+		Local nf:Float = Float(n)/50
+		glColor4f(nf,1.0,1.0,1.0)
+		Quad(12*n+nf*400*Sin(Double(MilliSecs())*0.05+nf*n*20.0),hHeight+250*Sin(Double(MilliSecs())*0.1+n*10.0),16+n*2.5)	
+	Next
+	
+	Flip 1
+Wend
+	ShowMouse()
+  glDeleteTextures(1, Varptr fbotex);
+  glDeleteRenderbuffersEXT(1, Varptr rboID);
+  glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+  glDeleteFramebuffersEXT(1, Varptr fboID);
+End
+'##################################################################################	
+'==================================================================================
+'##################################################################################	
+
+
+
+'============================== FUNCTIONS ================================
+Function Quad(x:Float,y:Float,size:Float)
+	Local x0:Float = x
+	Local x1:Float = x+size
+	Local y0:Float = y
+	Local y1:Float = y+size
+	glBegin (GL_QUADS)
+		glTexCoord2f(0,0); glVertex3f(x0,y0,0)
+		glTexCoord2f(0,1); glVertex3f(x0,y1,0)
+		glTexCoord2f(1,1); glVertex3f(x1,y1,0)
+		glTexCoord2f(1,0); glVertex3f(x1,y0,0)
+	glEnd
+End Function
+
+Function Checkers()
+	Local cs:Float = 128
+	Local hcs:Float = cs*0.5
+	glBegin (GL_QUADS)
+		For Local i:Float = 0 Until 16
+			glVertex2f(i*cs,0);glVertex2f(i*cs,Height);glVertex2f(i*cs+hcs,Height);glVertex2f(i*cs+hcs,0)
+		Next
+		For Local i:Float = 0 Until 8
+			glVertex2f(0,i*cs);glVertex2f(0,i*cs+hcs);glVertex2f(Width,i*cs+hcs);glVertex2f(Width,i*cs)
+		Next
+	glEnd
+End Function
+
+Function Gradient(r0:Float,g0:Float,b0:Float,r1:Float,g1:Float,b1:Float)
+	glBegin (GL_QUADS)
+		glColor4f(r0,g0,b0,1.0)
+		glVertex3f(0,0,0)
+		glVertex3f(Width,0,0)
+		glColor4f(r1,g1,b1,1.0)
+		glVertex3f(Width,Height,0)
+		glVertex3f(0,Height,0)
+	glEnd
+	
+End Function
+</textarea> <br><br></td></tr></table><br>
+<a name="1009926"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >beanage</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Uh, am I missing something? Are there Images to copy? A quick test leaves me to this:<br><img src="http://www.beanage.bplaced.net/QuickImageUpload/GLSL_FBO.jpg"><br>Though I am currently on my mobile system, hardware should be more than appropriate, and i GOT latest NV drivers... mmmh It's 00:45 here, maybe i'll add shader log printing tomorrow [lets say T+10h, ok?], but for T+0 thats enough :) <br><br></td></tr></table><br>
+<a name="1009928"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >beanage</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>#version XXX</pre> might be missing on top of your shader code.. GN8 <br><br></td></tr></table><br>
+<a name="1009929"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ah, curious! Oh my god I so hope we'll actually figure this out! :D<br>I don't know what you mean by #version XXX, though. I'm already excited about tomorrow!<br><br>It should look like this....<br><img src="http://www.taron.de/Storage/blitzmax/Kilt_snap01.jpg"><br><br>- it creates an FBO<br>- then draws the background checkers into it.<br>- then draws the FBO texture as background Quad<br>- then draws the balls with normal map in texture0 and FBO in texture1<br>(the fragment shader uses the normals to do lighting and reads the FBO through refracted coordinates!)<br><br>Thanks for checking into it, it means tremendously much to me!<br><br>As I was waiting for feedback I had some fun with it already and wrote a pong game. I've never written that and am just amazed how super primitiv this can be. I made it a little fancier, but it still fits in a jpg header, hahahaha. Wonderful fun and kind of crazy...<br><br>(title) AWESOME GLASS PONG DUDE<br><img src="http://www.taron.de/Storage/blitzmax/AwesomeGlassPong_snp01.jpg"> <br><br></td></tr></table><br>
+<a name="1010000"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >beanage</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> This finally works platform-indept.:<br>Added:<br>- "#version 120~r~n"+.. to frag as vert<br>- some equally named varyings had different types! (vec2 &lt;&gt; vec3)<br>- shader log printing<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+'Framework brl.GLMax2D
+'Import pub.glew
+'===================================== SHADERS ====================================
+'------------------------- Shader01
+Global Shader01_vert:String 
+Shader01_vert = ..
+"#version 120~r~n"+..
+"varying vec2 vTexCoord;~r~n"+..
+"varying vec3 N;~r~n"+..
+"varying vec3 v;~r~n"+..
+"void main(void) {~r~n"+..
+"	v = gl_Vertex.xyz;~r~n"+..
+"	N = gl_Normal;~r~n"+..
+"	vTexCoord = gl_MultiTexCoord0.xy;~r~n"+..
+"	gl_Position = ftransform();~r~n"+..
+"	gl_FrontColor = gl_Color;~r~n"+..
+"}~r~n"
+
+Global Shader01_frag:String 
+Shader01_frag = ..
+"#version 120~r~n"+..
+"uniform sampler2D colorTexture~r~n;" +..
+"uniform sampler2D BG~r~n;" +..
+"varying vec2 vTexCoord~r~n;" +..
+"varying vec3 N~r~n;" +..
+"varying vec3 v~r~n;" +..
+"void main (void){~r~n" +..
+"	vec4 color = texture2D(colorTexture, vTexCoord);~r~n"+..
+"	vec3 norm = vec3(-1.0+color.r*2,-1.0+color.g*2.0,1.0-color.b);~r~n"+..
+"	vec3 vdir = vec3(-(v.x-512),-(v.y-384),2000-norm.z*20);~r~n"+..
+"	vec3 ldir = vec3(-(v.x-512),-(v.y-84),(100-norm.z*20));~r~n"+..
+"	ldir = normalize(ldir)~r~n;"+..
+"	vdir = normalize(vdir)~r~n;"+..
+"	vec3 R = reflect(ldir,norm);~r~n"+..
+"	float spec = max(dot(-R,vdir),0.0);~r~n"+..
+"	float lite = dot(norm,ldir)*0.3;~r~n"+..
+"	norm.y *= -1.0;~r~n"+..
+"	vec4 colorBG = texture2D(BG, vec2(v.x/1024,1.0-v.y/768)+refract(-vdir,-norm,1.08).st/(vdir.z*10.0));~r~n"+..
+"	gl_FragColor = gl_Color*lite+colorBG*norm.z+0.5*pow(spec,33.3);~r~n"+..
+"	gl_FragColor.a = color.a;~r~n"+..
+"}~r~n" 
+
+'==================================================================================
+AppTitle="GLSL + FBO"
+
+SetGraphicsDriver GLMax2DDriver()
+Global Width:Int =	1024
+Global Height:Int =	768
+Global hWidth:Int=Width*0.5
+Global hHeight:Int=Height*0.5
+GLGraphics (Width,Height,0)
+
+glewInit()
+
+Local size:Int = 256; Local hsize:Int = 0.5*size
+Local image_pix:TPixmap = CreatePixmap(size,size,PF_RGBA8888)
+For Local y:Int =0 Until size
+	For Local x:Int = 0 Until size
+		Local xp:Float = Float(x-hsize)/hsize
+		Local yp:Float = Float(y-hsize)/hsize
+		Local zp:Float = 1.0
+		Local dot:Float = xp^2+yp^2
+		
+		Local alp:Int = 0
+		If dot And dot &lt;= 1.0
+			zp = 1.0-Sqr(1.0-dot)
+			dot = Sqr(dot)
+			
+			alp = (1.0-dot)^0.25*512
+			If alp&gt;255 Then alp=255
+			
+			dot = Sqr(xp^2+yp^2+zp^2)
+			dot = (1.0/dot)^0.025
+			xp:*dot
+			yp:*dot
+		End If
+		If dot = 0 Then alp=255
+		WritePixel(image_pix,x,y,alp Shl 24|Int(128+xp*127)Shl 16|Int(128+yp*127)Shl 8|Int(zp*256))
+	Next
+Next
+
+glOrtho (0, Width, Height, 0, -100, 100)
+
+glEnable(GL_ALPHA_TEST)
+glAlphaFunc(GL_NOTEQUAL,0)           
+glEnable (GL_BLEND);
+	
+glEnable( GL_TEXTURE_2D )
+Local txtID:Int
+	glGenTextures(1, Varptr txtID)
+	glBindTexture(GL_TEXTURE_2D, txtID)
+	glTexImage2D(GL_TEXTURE_2D, 0, 4, image_pix.Width, image_pix.Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_pix.pixels)
+	
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S , GL_REPEAT)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T , GL_REPEAT)
+
+'========================== create Shader01 program =================================
+Const SHADER_INFLOG_SIZE :Int = 2048
+
+Function PrintShaderInfoLog( shaid_:Int )
+	If Not glIsShader( shaid_ ) Then Return
+	Local log_		:TBank	= CreateBank( SHADER_INFLOG_SIZE )
+	Local loglen_	:Int		= 0
+	glGetShaderInfoLog	shaid_, SHADER_INFLOG_SIZE, Varptr loglen_, BankBuf( log_ )
+	PrintBank			log_, loglen_
+End Function
+
+Function PrintBank( data_:TBank, len_:Int= -1 )
+	Local stream_	:TStream	= CreateBankStream( data_ )
+	While ( ( len_= -1 ) Or ( StreamPos( stream_ )&lt; ( len_- 1 ) ) ) And Not Eof( stream_ )
+		Print ReadLine( stream_ )
+	
+	Wend
+	CloseStream stream_
+End Function
+
+Local shader01_vert_id:Int = glCreateShader(GL_VERTEX_SHADER)
+Local sptr:Byte Ptr = Shader01_vert.ToCString()
+Local slen:Int = Shader01_vert.Length
+	glShaderSource(shader01_vert_id,1, Varptr sptr, Varptr slen)
+	glCompileShader(shader01_vert_id)
+	PrintShaderInfoLog shader01_vert_id
+	
+Local shader01_frag_id:Int = glCreateShader(GL_FRAGMENT_SHADER)
+	sptr = Shader01_frag.ToCString()
+	slen = Shader01_frag.Length
+	glShaderSource(shader01_frag_id,1, Varptr sptr, Varptr slen)
+	glCompileShader(shader01_frag_id)
+	PrintShaderInfoLog shader01_frag_id
+	
+Local Shader01:Int = glCreateProgram()
+	glAttachShader(Shader01, shader01_vert_id)
+	glAttachShader(Shader01, shader01_frag_id)
+	glLinkProgram(Shader01)
+	glUseProgram(Shader01)
+	Local proglog_	:TBank	= CreateBank( SHADER_INFLOG_SIZE )
+	Local progloglen_	:Int		= 0
+	glGetProgramInfoLog	Shader01, SHADER_INFLOG_SIZE, Varptr progloglen_, BankBuf( proglog_ )
+	PrintBank	proglog_, progloglen_
+	
+'------------------------------------------------------------------------------------
+Global gl_location_color:Int	=glGetUniformLocation(Shader01, "colorTexture")
+Global gl_location_BG:Int	=glGetUniformLocation(Shader01, "BG")
+If gl_location_color &lt;&gt; -1 Then glUniform1i(gl_location_color, 0)
+If gl_location_BG &lt;&gt; -1 Then glUniform1i(gl_location_BG, 1)
+'------------------------------------------------------------------------------------
+Rem
+'========================== create Shader01 programARB ==============================
+Local Shader01:Int = glCreateProgramObjectARB()
+Local shader01_vert_id:Int = glCreateShaderObjectARB(GL_VERTEX_SHADER)
+Local sptr:Byte Ptr = Shader01_vert.ToCString()
+Local slen:Int = Shader01_vert.Length
+	glShaderSourceARB(shader01_vert_id,1, Varptr sptr, Varptr slen)
+	glCompileShaderARB(shader01_vert_id)
+	glAttachObjectARB(Shader01, shader01_vert_id)
+Local shader01_frag_id:Int = glCreateShaderObjectARB(GL_FRAGMENT_SHADER)
+	sptr = Shader01_frag.ToCString()
+	slen = Shader01_frag.Length
+	glShaderSourceARB(shader01_frag_id,1, Varptr sptr, Varptr slen)
+	glCompileShaderARB(shader01_frag_id)
+	glAttachObjectARB(Shader01, shader01_frag_id)
+	
+	glLinkProgramARB(Shader01)
+	glUseProgramObjectARB(Shader01)
+
+endrem
+
+Local fbotex:Int
+glGenTextures(1,Varptr fbotex)
+glBindTexture(GL_TEXTURE_2D, fbotex)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT)
+glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, Width, Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, Null)
+glBindTexture(GL_TEXTURE_2D, 0)
+
+'create framebuffer 
+Local fboID:Int
+glGenFramebuffersEXT(1, Varptr fboID)
+glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fboID)
+glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, fbotex, 0)
+
+'create renderbuffer depth
+Local rboID:Int
+glGenRenderbuffersEXT(1, Varptr rboID)
+glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, rboID)
+glRenderbufferStorageEXT(GL_RENDERBUFFER_EXT, GL_DEPTH_COMPONENT, Width, Height)
+glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT, rboID)
+
+Local FBOuse:Int = glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
+
+glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, 0)
+glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0)
+
+'###################################################################################
+'							A	C	T	I	O	N (mainloop) 	
+'###################################################################################	
+	HideMouse()
+While Not (KeyHit(KEY_ESCAPE) Or AppTerminate())
+	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)
+	
+	glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fboID)
+	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)
+	
+	glBlendFunc (GL_SRC_COLOR,GL_SRC_COLOR) 
+
+	glUseProgram(0)
+		
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, 0)
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, 0)
+	Gradient(0.5,0.6,0.1,0.0,0.1,0.0)
+
+	glColor4f(0.5,0.2,0.1,1.0)
+	Checkers()
+	
+	glColor4f(1.0,1.0,1.0,1.0)
+	Quad(MouseX(),MouseY(),100)
+	glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0)
+
+	glBlendFunc (GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA) 	
+
+	glUseProgram(0)
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, fbotex)
+	
+	glColor4f(1.0,1.0,1.0,1.0)
+	glBegin (GL_QUADS)
+		glTexCoord2f(0,1); glVertex3f(0,0,0)
+		glTexCoord2f(0,0); glVertex3f(0,Height,0)
+		glTexCoord2f(1,0); glVertex3f(Width,Height,0)
+		glTexCoord2f(1,1); glVertex3f(Width,0,0)
+	glEnd
+	
+	glUseProgram(Shader01)
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, txtID)
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, fbotex)
+	
+	For Local n:Int = 0 Until 50
+		Local nf:Float = Float(n)/50
+		glColor4f(nf,1.0,1.0,1.0)
+		Quad(12*n+nf*400*Sin(Double(MilliSecs())*0.05+nf*n*20.0),hHeight+250*Sin(Double(MilliSecs())*0.1+n*10.0),16+n*2.5)	
+	Next
+	
+	Flip 1
+Wend
+	ShowMouse()
+  glDeleteTextures(1, Varptr fbotex);
+  glDeleteRenderbuffersEXT(1, Varptr rboID);
+  glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+  glDeleteFramebuffersEXT(1, Varptr fboID);
+End
+'##################################################################################	
+'==================================================================================
+'##################################################################################	
+
+
+
+'============================== FUNCTIONS ================================
+Function Quad(x:Float,y:Float,size:Float)
+	Local x0:Float = x
+	Local x1:Float = x+size
+	Local y0:Float = y
+	Local y1:Float = y+size
+	glBegin (GL_QUADS)
+		glTexCoord2f(0,0); glVertex3f(x0,y0,0)
+		glTexCoord2f(0,1); glVertex3f(x0,y1,0)
+		glTexCoord2f(1,1); glVertex3f(x1,y1,0)
+		glTexCoord2f(1,0); glVertex3f(x1,y0,0)
+	glEnd
+End Function
+
+Function Checkers()
+	Local cs:Float = 128
+	Local hcs:Float = cs*0.5
+	glBegin (GL_QUADS)
+		For Local i:Float = 0 Until 16
+			glVertex2f(i*cs,0);glVertex2f(i*cs,Height);glVertex2f(i*cs+hcs,Height);glVertex2f(i*cs+hcs,0)
+		Next
+		For Local i:Float = 0 Until 8
+			glVertex2f(0,i*cs);glVertex2f(0,i*cs+hcs);glVertex2f(Width,i*cs+hcs);glVertex2f(Width,i*cs)
+		Next
+	glEnd
+End Function
+
+Function Gradient(r0:Float,g0:Float,b0:Float,r1:Float,g1:Float,b1:Float)
+	glBegin (GL_QUADS)
+		glColor4f(r0,g0,b0,1.0)
+		glVertex3f(0,0,0)
+		glVertex3f(Width,0,0)
+		glColor4f(r1,g1,b1,1.0)
+		glVertex3f(Width,Height,0)
+		glVertex3f(0,Height,0)
+	glEnd
+	
+End Function
+</textarea> <br><br></td></tr></table><br>
+<a name="1010019"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Doesn't work here.<br>Plus, for some reason the "codebox" in your post doesn't work? Bizarre...<br><br>It can't handle the "version" command or whatever it is? (unsupported version, it says in your log printing)<br>Can you make another screenshot and post it? <br>I'm very scared of the possiblity that this would work anywhere else, to be honest. Something would be utterly wrong with my install or my system altogether, hehe.<br><br>I know, you've been already diving into it so wonderfully, I'm really grateful. By all means I want you to know how much I appreciate what you're doing! My reaction could sound a little funny, but it just shows my frowning forehead, hehe. Behind it is pure gratitude along side the confusion. :}<br><br>(oops! - section...)<br>- oh dear, vec2/vec3 mixups, sorry about those.<br><br>(really? - section...)<br>- ~r~n are hopefully not necessary!? <br><br></td></tr></table><br>
+<a name="1010031"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> No go here too.<br>The debug output showed this: <br><br><pre class=code>
+Vertex shader was successfully compiled to run on hardware.
+Fragment shader was successfully compiled to run on hardware.
+Fragment shader(s) linked, vertex shader(s) linked. 
+</pre><br><br>But all I got was the window, and it's content was *empty*!<br>I'm here on a ATI Mobility Radeon X1300, Win XP. <br><br></td></tr></table><br>
+<a name="1010051"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Samichan</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> BeAnAge's code in post #5 works fine here. <br><br></td></tr></table><br>
+<a name="1010063"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> And...uhm....openGL still exists? I'm kind of fascinated with that. And I'm inches away from giving up, honestly. Does anyone have anything to instill some hope for a middleground that works on Nvidia, ATI and Intel alike?<br><br>Oh, does it work for you without the "#version..." line?<br><br>I feel as if somebody was watching all this and grinning his head off, having the solution but too much fun watching us squirm. Well, please, have some mercy and give us a hint. <br><br>Aside from all that, why must one become such an expert before anything starts working on more than one machine. I find that very anti-evolution, devolutionary, so to say.<br><br>However, THANK YOU for checking into this, SLotman and Samichan! Can't wait for all of us to enjoy the same fun, no matter which monster computer we have. (OH how I long for the Amiga simplicity...pffff) <br><br></td></tr></table><br>
+<a name="1010068"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Floyd</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Plus, for some reason the "codebox" in your post doesn't work?  <br></div><br>That's because he tried to use a "codeox". It's fixed now. <br><br></td></tr></table><br>
+<a name="1010071"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Uh, thanks, Floyd! Can you fix the openGL issues, too?!?  :}}}<br>Never mind, just kidding...<br><br>Doesn't surprise me much that I've missed that, looking at the sloppy mistakes I do in my code. Although, it ain't all that bad....<br><br>Thanks again! <br><br></td></tr></table><br>
+<a name="1010072"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmaz</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> I see exactly the same thing as BeAnAge and his mod then does work correctly on my system. <br><br></td></tr></table><br>
+<a name="1010073"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmaz</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> btw, has anybody tested either version intel gfx, which works there? <br><br></td></tr></table><br>
+<a name="1010079"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> the first shaderline<br>"#version 120...<br>doesn't work for my system!<br><br>If you take it out, will it still work for you?<br><br>like so...<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+'Framework brl.GLMax2D
+'Import pub.glew
+'===================================== SHADERS ====================================
+'------------------------- Shader01
+Global Shader01_vert:String 
+Shader01_vert = ..
+"varying vec2 vTexCoord;~r~n"+..
+"varying vec3 v;~r~n"+..
+"void main(void) {~r~n"+..
+" v = gl_Vertex.xyz;~r~n"+..
+" vTexCoord = gl_MultiTexCoord0.xy;~r~n"+..
+" gl_Position = ftransform();~r~n"+..
+" gl_FrontColor = gl_Color;~r~n"+..
+"}"
+
+Global Shader01_frag:String 
+Shader01_frag = ..
+"uniform sampler2D colorTexture~r~n;" +..
+"uniform sampler2D BG~r~n;" +..
+"varying vec2 vTexCoord~r~n;" +..
+"varying vec3 v~r~n;" +..
+"void main (void){~r~n" +..
+" vec4 color = texture2D(colorTexture, vTexCoord);~r~n"+..
+" vec3 norm = vec3(-1.0+color.r*2,-1.0+color.g*2.0,1.0-color.b);~r~n"+..
+" vec3 vdir = vec3(-(v.x-512),-(v.y-384),2000-norm.z*20);~r~n"+..
+" vec3 ldir = vec3(-(v.x-512),-(v.y-84),(100-norm.z*20));~r~n"+..
+" ldir = normalize(ldir)~r~n;"+..
+" vdir = normalize(vdir)~r~n;"+..
+" vec3 R = reflect(ldir,norm);~r~n"+..
+" float spec = max(dot(-R,vdir),0.0);~r~n"+..
+" float lite = dot(norm,ldir)*0.3;~r~n"+..
+" norm.y *= -1.0;~r~n"+..
+" vec4 colorBG = texture2D(BG, vec2(v.x/1024,1.0-v.y/768)+refract(-vdir,-norm,1.08).st/(vdir.z*10.0));~r~n"+..
+" gl_FragColor = gl_Color*lite+colorBG*norm.z+0.5*pow(spec,33.3);~r~n"+..
+" gl_FragColor.a = color.a;~r~n"+..
+"}" 
+
+'==================================================================================
+AppTitle="GLSL + FBO"
+
+SetGraphicsDriver GLMax2DDriver()
+Global Width:Int = 1024
+Global Height:Int = 768
+Global hWidth:Int=Width*0.5
+Global hHeight:Int=Height*0.5
+GLGraphics (Width,Height,0)
+
+glewInit()
+
+Local size:Int = 256; Local hsize:Int = 0.5*size
+Local image_pix:TPixmap = CreatePixmap(size,size,PF_RGBA8888)
+For Local y:Int =0 Until size
+For Local x:Int = 0 Until size
+Local xp:Float = Float(x-hsize)/hsize
+Local yp:Float = Float(y-hsize)/hsize
+Local zp:Float = 1.0
+Local dot:Float = xp^2+yp^2
+
+Local alp:Int = 0
+If dot And dot &lt;= 1.0
+zp = 1.0-Sqr(1.0-dot)
+dot = Sqr(dot)
+
+alp = (1.0-dot)^0.25*512
+If alp&gt;255 Then alp=255
+
+dot = Sqr(xp^2+yp^2+zp^2)
+dot = (1.0/dot)^0.025
+xp:*dot
+yp:*dot
+End If
+If dot = 0 Then alp=255
+WritePixel(image_pix,x,y,alp Shl 24|Int(128+xp*127)Shl 16|Int(128+yp*127)Shl 8|Int(zp*256))
+Next
+Next
+
+glOrtho (0, Width, Height, 0, -100, 100)
+
+glEnable(GL_ALPHA_TEST)
+glAlphaFunc(GL_NOTEQUAL,0) 
+glEnable (GL_BLEND);
+
+glEnable( GL_TEXTURE_2D )
+Local txtID:Int
+glGenTextures(1, Varptr txtID)
+glBindTexture(GL_TEXTURE_2D, txtID)
+glTexImage2D(GL_TEXTURE_2D, 0, 4, image_pix.Width, image_pix.Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_pix.pixels)
+
+glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S , GL_REPEAT)
+glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T , GL_REPEAT)
+
+'========================== create Shader01 program =================================
+Local shader01_vert_id:Int = glCreateShader(GL_VERTEX_SHADER)
+Local sptr:Byte Ptr = Shader01_vert.ToCString()
+Local slen:Int = Shader01_vert.Length
+glShaderSource(shader01_vert_id,1, Varptr sptr, Varptr slen)
+glCompileShader(shader01_vert_id)
+
+Local shader01_frag_id:Int = glCreateShader(GL_FRAGMENT_SHADER)
+sptr = Shader01_frag.ToCString()
+slen = Shader01_frag.Length
+glShaderSource(shader01_frag_id,1, Varptr sptr, Varptr slen)
+glCompileShader(shader01_frag_id)
+
+Local Shader01:Int = glCreateProgram()
+glAttachShader(Shader01, shader01_vert_id)
+glAttachShader(Shader01, shader01_frag_id)
+glLinkProgram(Shader01)
+glUseProgram(Shader01)
+
+'------------------------------------------------------------------------------------
+Global gl_location_color:Int =glGetUniformLocation(Shader01, "colorTexture")
+Global gl_location_BG:Int =glGetUniformLocation(Shader01, "BG")
+If gl_location_color &lt;&gt; -1 Then glUniform1i(gl_location_color, 0)
+If gl_location_BG &lt;&gt; -1 Then glUniform1i(gl_location_BG, 1)
+'------------------------------------------------------------------------------------
+Rem
+'========================== create Shader01 programARB ==============================
+Local Shader01:Int = glCreateProgramObjectARB()
+Local shader01_vert_id:Int = glCreateShaderObjectARB(GL_VERTEX_SHADER)
+Local sptr:Byte Ptr = Shader01_vert.ToCString()
+Local slen:Int = Shader01_vert.Length
+glShaderSourceARB(shader01_vert_id,1, Varptr sptr, Varptr slen)
+glCompileShaderARB(shader01_vert_id)
+glAttachObjectARB(Shader01, shader01_vert_id)
+Local shader01_frag_id:Int = glCreateShaderObjectARB(GL_FRAGMENT_SHADER)
+sptr = Shader01_frag.ToCString()
+slen = Shader01_frag.Length
+glShaderSourceARB(shader01_frag_id,1, Varptr sptr, Varptr slen)
+glCompileShaderARB(shader01_frag_id)
+glAttachObjectARB(Shader01, shader01_frag_id)
+
+glLinkProgramARB(Shader01)
+glUseProgramObjectARB(Shader01)
+
+endrem
+
+Local fbotex:Int
+glGenTextures(1,Varptr fbotex)
+glBindTexture(GL_TEXTURE_2D, fbotex)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT)
+glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, Width, Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, Null)
+glBindTexture(GL_TEXTURE_2D, 0)
+
+'create framebuffer 
+Local fboID:Int
+glGenFramebuffersEXT(1, Varptr fboID)
+glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fboID)
+glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, fbotex, 0)
+
+'create renderbuffer depth
+Local rboID:Int
+glGenRenderbuffersEXT(1, Varptr rboID)
+glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, rboID)
+glRenderbufferStorageEXT(GL_RENDERBUFFER_EXT, GL_DEPTH_COMPONENT, Width, Height)
+glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT, rboID)
+
+Local FBOuse:Int = glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
+
+glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, 0)
+glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0)
+
+'###################################################################################
+' A C T I O N (mainloop) 
+'################################################################################### 
+HideMouse()
+While Not (KeyHit(KEY_ESCAPE) Or AppTerminate())
+glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)
+
+glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fboID)
+glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)
+
+glBlendFunc (GL_SRC_COLOR,GL_SRC_COLOR) 
+
+glUseProgram(0)
+
+glActiveTexture(GL_TEXTURE0);
+glBindTexture(GL_TEXTURE_2D, 0)
+glActiveTexture(GL_TEXTURE1);
+glBindTexture(GL_TEXTURE_2D, 0)
+Gradient(0.5,0.6,0.1,0.0,0.1,0.0)
+
+glColor4f(0.5,0.2,0.1,1.0)
+Checkers()
+
+glColor4f(1.0,1.0,1.0,1.0)
+Quad(MouseX(),MouseY(),100)
+glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0)
+
+glBlendFunc (GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA) 
+
+glUseProgram(0)
+glActiveTexture(GL_TEXTURE0);
+glBindTexture(GL_TEXTURE_2D, fbotex)
+
+glColor4f(1.0,1.0,1.0,1.0)
+glBegin (GL_QUADS)
+glTexCoord2f(0,1); glVertex3f(0,0,0)
+glTexCoord2f(0,0); glVertex3f(0,Height,0)
+glTexCoord2f(1,0); glVertex3f(Width,Height,0)
+glTexCoord2f(1,1); glVertex3f(Width,0,0)
+glEnd
+
+glUseProgram(Shader01)
+glActiveTexture(GL_TEXTURE0);
+glBindTexture(GL_TEXTURE_2D, txtID)
+glActiveTexture(GL_TEXTURE1);
+glBindTexture(GL_TEXTURE_2D, fbotex)
+
+For Local n:Int = 0 Until 50
+Local nf:Float = Float(n)/50
+glColor4f(nf,1.0,1.0,1.0)
+Quad(12*n+nf*400*Sin(Double(MilliSecs())*0.05+nf*n*20.0),hHeight+250*Sin(Double(MilliSecs())*0.1+n*10.0),16+n*2.5) 
+Next
+
+Flip 1
+Wend
+ShowMouse()
+glDeleteTextures(1, Varptr fbotex);
+glDeleteRenderbuffersEXT(1, Varptr rboID);
+glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+glDeleteFramebuffersEXT(1, Varptr fboID);
+End
+'################################################################################## 
+'==================================================================================
+'################################################################################## 
+
+
+
+'============================== FUNCTIONS ================================
+Function Quad(x:Float,y:Float,size:Float)
+Local x0:Float = x
+Local x1:Float = x+size
+Local y0:Float = y
+Local y1:Float = y+size
+glBegin (GL_QUADS)
+glTexCoord2f(0,0); glVertex3f(x0,y0,0)
+glTexCoord2f(0,1); glVertex3f(x0,y1,0)
+glTexCoord2f(1,1); glVertex3f(x1,y1,0)
+glTexCoord2f(1,0); glVertex3f(x1,y0,0)
+glEnd
+End Function
+
+Function Checkers()
+Local cs:Float = 128
+Local hcs:Float = cs*0.5
+glBegin (GL_QUADS)
+For Local i:Float = 0 Until 16
+glVertex2f(i*cs,0);glVertex2f(i*cs,Height);glVertex2f(i*cs+hcs,Height);glVertex2f(i*cs+hcs,0)
+Next
+For Local i:Float = 0 Until 8
+glVertex2f(0,i*cs);glVertex2f(0,i*cs+hcs);glVertex2f(Width,i*cs+hcs);glVertex2f(Width,i*cs)
+Next
+glEnd
+End Function
+
+Function Gradient(r0:Float,g0:Float,b0:Float,r1:Float,g1:Float,b1:Float)
+glBegin (GL_QUADS)
+glColor4f(r0,g0,b0,1.0)
+glVertex3f(0,0,0)
+glVertex3f(Width,0,0)
+glColor4f(r1,g1,b1,1.0)
+glVertex3f(Width,Height,0)
+glVertex3f(0,Height,0)
+glEnd
+
+End Function
+
+</textarea> <br><br></td></tr></table><br>
+<a name="1010083"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >beanage</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> If you take it out, will it still work for you? <br></div><br>Yup, great, it does! Oh and thanks for fixing that typo for me, Floyd :)<br><br>I would not expect that shader stugff to work flawlessly anywhere.. see I got OpenGL 3.2 installed, but, assuming you are currently on your apple device (OOOOh 8 cores you got no idea of how jealous I am), you got OpenGL 2.1 (Crappy OSX driver issues, <a href="http://leadwerks.com/werkspace/index.php?/blog/1/entry-86-apple-adopting-opengl3/page__s__85a4d3bac5c5efe0d38245466da3d29a#comments" target="_blank">Leadwerks</a> had the same problem, but it seems being fixed as I'm making typos here), which means... something even below GLSL 1.2?! Wow... <br><br></td></tr></table><br>
+<a name="1010086"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> OMG...does this work for you then, too?<br><a href="http://www.taron.de/Storage/blitzmax/AwesomeGlassPongDude.rar" target="_blank">AwesomeGlassPongDude (99kb)</a><br><br>That would be such a joy!<br>(I'm so nervous!) <br><br></td></tr></table><br>
+<a name="1010144"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmaz</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> like so... <br></div> yes, this works for me....<br><br><div class="quote"> OMG...does this work for you then, too? <br></div> nope <br><br></td></tr></table><br>
+<a name="1010154"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >beanage</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> Awesome Glass Pog Dude works for me either! Great! It's OpenGL all over again! <br><br></td></tr></table><br>
+<a name="1010175"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ugh, now I'm confused again. <br><br>dmaz - Pong doesn't work on your machine? (sure it's not an openAL issue?)<br>BeAnAge - Pong works on yours? <br><br>I was asking for hope, I've got hope again! :}<br>Great start for a day, that's for sure...my mission now: Making it work on dmaz' system! <br><br></td></tr></table><br>
+<a name="1010210"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_JIM</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> Taron, your code from #14 works here (XP SP3, GeForce 8800GS). I'll try it when I get home on ATI and if there's issues I'll see if I can fix 'em.<br><br>Also, this is VERY interesting :) Too bad FBOs and shaders aren't supported on stone-age GPUs :( <br><br></td></tr></table><br>
+<a name="1010213"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks, Andrei!<br>Have you tried the Pong game (#16)? <br><br></td></tr></table><br>
+<a name="1010216"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_JIM</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#22">[#22]</a></td></tr></table></td></tr><tr ><td class="posttext"> I did now. I can confirm it's awesome :) <br><br></td></tr></table><br>
+<a name="1010222"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#23">[#23]</a></td></tr></table></td></tr><tr ><td class="posttext"> :} HAHAHA! THANKS! :))) <br><br></td></tr></table><br>
+<a name="1010296"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmaz</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#24">[#24]</a></td></tr></table></td></tr><tr ><td class="posttext"> the code from #14 works on my system... pong runs and there is sound but I get a yellow background with a green sphere in the middle. <br><br></td></tr></table><br>
+<a name="1010322"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#25">[#25]</a></td></tr></table></td></tr><tr ><td class="posttext"> AH, that means that I'm doing something iffi with the GLSL shaders on it. Let's see if I can track it down...<br><br>Does this work for you...<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+'Framework brl.GLMax2D
+'Import pub.glew
+'===================================== SHADERS ====================================
+'------------------------- Shader01
+Global Shader01_vert:String 
+Shader01_vert = ..
+"varying vec2 vTexCoord;~r~n"+..
+"varying vec3 v;~r~n"+..
+"void main(void) {~r~n"+..
+" v = gl_Vertex.xyz;~r~n"+..
+" vTexCoord = gl_MultiTexCoord0.xy;~r~n"+..
+" gl_Position = ftransform();~r~n"+..
+" gl_FrontColor = gl_Color;~r~n"+..
+"}"
+
+Global Shader01_frag:String 
+Shader01_frag = ..
+"uniform sampler2D colorTexture;~r~n" +..
+"uniform sampler2D BG;~r~n" +..
+"varying vec2 vTexCoord;~r~n" +..
+"varying vec3 v;~r~n" +..
+"void main (void){~r~n" +..
+" vec4 color = texture2D(colorTexture, vTexCoord.st);~r~n"+..
+" vec3 norm = vec3(-1.0+color.r*2,-1.0+color.g*2.0,1.0-color.b);~r~n"+..
+" vec3 vdir = vec3(-(v.x-512),-(v.y-384),2000-norm.z*20);~r~n"+..
+" vec3 ldir = vec3(-(v.x-512),-(v.y-84),(100-norm.z*20));~r~n"+..
+" norm = normalize(norm);~r~n"+..
+" ldir = normalize(ldir);~r~n"+..
+" vdir = normalize(vdir);~r~n"+..
+" vec3 R = reflect(ldir,norm);~r~n"+..
+" float spec = max(dot(-R,vdir),0.0);~r~n"+..
+" float lite = dot(norm,ldir)*0.3;~r~n"+..
+" norm.y *= -1.0;~r~n"+..
+" vec4 colorBG = texture2D(BG, vec2(v.x/1024,1.0-v.y/768)+refract(-vdir,-norm,0.98).st/(vdir.z*10.0));~r~n"+..
+" gl_FragColor = gl_Color*lite+colorBG*norm.z+0.75*pow(spec,25.0);~r~n"+..
+" gl_FragColor.a = color.a;~r~n"+..
+"}" 
+
+'==================================================================================
+AppTitle="GLSL + FBO"
+
+SetGraphicsDriver GLMax2DDriver()
+Global Width:Int = 1024
+Global Height:Int = 768
+Global hWidth:Int=Width*0.5
+Global hHeight:Int=Height*0.5
+GLGraphics (Width,Height,0)
+
+glewInit()
+
+Local size:Int = 256; Local hsize:Int = 0.5*size
+Local image_pix:TPixmap = CreatePixmap(size,size,PF_RGBA8888)
+For Local y:Int =0 Until size
+	For Local x:Int = 0 Until size
+		Local xp:Float = Float(x-hsize)/hsize
+		Local yp:Float = Float(y-hsize)/hsize
+		Local zp:Float = 1.0
+		Local dot:Float = xp^2+yp^2
+		
+		Local alp:Int = 0
+		If dot And dot &lt;= 1.0
+		zp = 1.0-Sqr(1.0-dot)
+		dot = Sqr(dot)
+		
+		alp = (1.0-dot)^0.25*512
+		If alp&gt;255 Then alp=255
+		
+		dot = Sqr(xp^2+yp^2+zp^2)
+		dot = (1.0/dot)^0.025
+		xp:*dot
+		yp:*dot
+		End If
+		If dot = 0 Then alp=255
+		WritePixel(image_pix,x,y,alp Shl 24|Int(128+xp*127)Shl 16|Int(128+yp*127)Shl 8|Int(zp*256))
+	Next
+Next
+
+Local bg_pix:TPixmap = CreatePixmap(Width, Height,PF_RGBA8888)
+For Local y:Double = 0 Until Height
+	For Local x:Double = 0 Until Width
+		Local nx:Float = Sin(x*2)*0.725
+		Local ny:Float = Cos(y*2)*0.725
+		Local nz:Float = 1.0-(1.0-(nx^2+ny^2))
+		
+		WritePixel(bg_pix,x,y,255 Shl 24| Int(128+nx*128)Shl 16|Int(128+ny*128)Shl 8|Int(nz))
+	Next
+Next
+glOrtho (0, Width, Height, 0, -100, 100)
+
+glEnable(GL_ALPHA_TEST)
+glAlphaFunc(GL_NOTEQUAL,0) 
+glEnable (GL_BLEND);
+
+glEnable( GL_TEXTURE_2D )
+Local txtID:Int
+	glGenTextures(1, Varptr txtID)
+	glBindTexture(GL_TEXTURE_2D, txtID)
+	glTexImage2D(GL_TEXTURE_2D, 0, 4, image_pix.Width, image_pix.Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_pix.pixels)
+	
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S , GL_REPEAT)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T , GL_REPEAT)
+
+Local txt02ID:Int
+	glGenTextures(1, Varptr txt02ID)
+	glBindTexture(GL_TEXTURE_2D, txt02ID)
+	glTexImage2D(GL_TEXTURE_2D, 0, 4, Width, Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, bg_pix.pixels)
+	
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S , GL_REPEAT)
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T , GL_REPEAT)
+
+'========================== create Shader01 program =================================
+Local shader01_vert_id:Int = glCreateShader(GL_VERTEX_SHADER)
+Local sptr:Byte Ptr = Shader01_vert.ToCString()
+Local slen:Int = Shader01_vert.Length
+	glShaderSource(shader01_vert_id,1, Varptr sptr, Varptr slen)
+	glCompileShader(shader01_vert_id)
+Local shader01_frag_id:Int = glCreateShader(GL_FRAGMENT_SHADER)
+	sptr = Shader01_frag.ToCString()
+	slen = Shader01_frag.Length
+	glShaderSource(shader01_frag_id,1, Varptr sptr, Varptr slen)
+	glCompileShader(shader01_frag_id)
+
+Local Shader01:Int = glCreateProgram()
+	glAttachShader(Shader01, shader01_vert_id)
+	glAttachShader(Shader01, shader01_frag_id)
+	glLinkProgram(Shader01)
+	glUseProgram(Shader01)
+
+'------------------------------------------------------------------------------------
+Global gl_location_color:Int =glGetUniformLocation(Shader01, "colorTexture")
+Global gl_location_BG:Int =glGetUniformLocation(Shader01, "BG")
+If gl_location_color &lt;&gt; -1 Then glUniform1i(gl_location_color, 0)
+If gl_location_BG &lt;&gt; -1 Then glUniform1i(gl_location_BG, 1)
+'------------------------------------------------------------------------------------
+
+Local fbotex:Int
+glGenTextures(1,Varptr fbotex)
+glBindTexture(GL_TEXTURE_2D, fbotex)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT)
+glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT)
+glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, Width, Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, Null)
+glBindTexture(GL_TEXTURE_2D, 0)
+
+'create framebuffer 
+Local fboID:Int
+glGenFramebuffersEXT(1, Varptr fboID)
+glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fboID)
+glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, fbotex, 0)
+
+'create renderbuffer depth
+Local rboID:Int
+glGenRenderbuffersEXT(1, Varptr rboID)
+glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, rboID)
+glRenderbufferStorageEXT(GL_RENDERBUFFER_EXT, GL_DEPTH_COMPONENT, Width, Height)
+glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT, rboID)
+
+Local FBOuse:Int = glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
+
+glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, 0)
+glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0)
+
+'###################################################################################
+' A C T I O N (mainloop) 
+'################################################################################### 
+HideMouse()
+While Not (KeyHit(KEY_ESCAPE) Or AppTerminate())
+	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)
+	
+	glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fboID)
+	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)
+	
+	glBlendFunc (GL_SRC_COLOR,GL_SRC_COLOR) 
+	
+	glUseProgram(0)
+	
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, 0)
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, 0)
+	Gradient(0.5,0.6,0.1,0.0,0.1,0.0)
+	
+	glColor4f(0.5,0.2,0.1,1.0)
+	Checkers()
+	
+	glColor4f(1.0,1.0,1.0,1.0)
+	Quad(MouseX(),MouseY(),100)
+	glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0)
+	
+	glBlendFunc (GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA) 
+	
+	glUseProgram(0)
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, fbotex)
+	
+	glColor4f(1.0,1.0,1.0,1.0)
+	glBegin (GL_QUADS)
+		glTexCoord2f(0,1); glVertex3f(0,0,0)
+		glTexCoord2f(0,0); glVertex3f(0,Height,0)
+		glTexCoord2f(1,0); glVertex3f(Width,Height,0)
+		glTexCoord2f(1,1); glVertex3f(Width,0,0)
+	glEnd
+	
+	glUseProgram(Shader01)
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, txt02ID)
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, fbotex)
+	glBegin (GL_QUADS)
+		glTexCoord2f(0,1); glVertex3f(0,0,0)
+		glTexCoord2f(0,0); glVertex3f(0,Height,0)
+		glTexCoord2f(1,0); glVertex3f(Width,Height,0)
+		glTexCoord2f(1,1); glVertex3f(Width,0,0)
+	glEnd
+	
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, txtID)
+	For Local n:Int = 0 Until 50
+		Local nf:Float = Float(n)/50
+		glColor4f(nf,1.0,1.0,1.0)
+		Quad(12*n+nf*400*Sin(Double(MilliSecs())*0.05+nf*n*20.0),hHeight+250*Sin(Double(MilliSecs())*0.1+n*10.0),16+n*2.5) 
+	Next
+	
+	Flip 1
+Wend
+ShowMouse()
+glDeleteTextures(1, Varptr fbotex);
+glDeleteRenderbuffersEXT(1, Varptr rboID);
+glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+glDeleteFramebuffersEXT(1, Varptr fboID);
+End
+'################################################################################## 
+'==================================================================================
+'################################################################################## 
+
+
+
+'============================== FUNCTIONS ================================
+Function Quad(x:Float,y:Float,size:Float)
+	Local x0:Float = x
+	Local x1:Float = x+size
+	Local y0:Float = y
+	Local y1:Float = y+size
+	glBegin (GL_QUADS)
+		glTexCoord2f(0,0); glVertex3f(x0,y0,0)
+		glTexCoord2f(0,1); glVertex3f(x0,y1,0)
+		glTexCoord2f(1,1); glVertex3f(x1,y1,0)
+		glTexCoord2f(1,0); glVertex3f(x1,y0,0)
+	glEnd
+End Function
+	
+Function Checkers()
+	Local cs:Float = 128
+	Local hcs:Float = cs*0.5
+	glBegin (GL_QUADS)
+		For Local i:Float = 0 Until 16
+			glVertex2f(i*cs,0);glVertex2f(i*cs,Height);glVertex2f(i*cs+hcs,Height);glVertex2f(i*cs+hcs,0)
+		Next
+		For Local i:Float = 0 Until 8
+			glVertex2f(0,i*cs);glVertex2f(0,i*cs+hcs);glVertex2f(Width,i*cs+hcs);glVertex2f(Width,i*cs)
+		Next
+	glEnd
+End Function
+
+Function Gradient(r0:Float,g0:Float,b0:Float,r1:Float,g1:Float,b1:Float)
+	glBegin (GL_QUADS)
+		glColor4f(r0,g0,b0,1.0)
+		glVertex3f(0,0,0)
+		glVertex3f(Width,0,0)
+		glColor4f(r1,g1,b1,1.0)
+		glVertex3f(Width,Height,0)
+		glVertex3f(0,Height,0)
+	glEnd
+End Function
+
+
+</textarea> <br><br></td></tr></table><br>
+<a name="1010386"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_JIM</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#26">[#26]</a></td></tr></table></td></tr><tr ><td class="posttext"> I finally had time to actually power up my home PC. All of this works (#14, glass pong and #25) without any problem. <br><br></td></tr></table><br>
+<a name="1010392"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#27">[#27]</a></td></tr></table></td></tr><tr ><td class="posttext"> SWEEEET! Oh my...hope...there's hope...lemony fresh hope!<br>Alright, I'm very scared to hear what dabz has to report, but also can't wait...grrr. :}}}<br>(I know, one of these days I'll shake my lowered head in memory of this difficult birth, jeeez.)<br><br>I have a hunch that ATI really has no tolerance for writing a vec4 variable into a vec3. Nvidia eats it up with no complains, knowing that it can only mean 3 floats are wanted. ATI says:"I don't care if you can't program, shit's not gonna run...basta!". LOL. Thanks... :P<br><br>Eitherway: THANK YOU, Andrei, you're making me very happy and are helping me so much the whole way! I really hope I can make you feel some pride with what I slowly become able to put together. <br><br></td></tr></table><br>
+<a name="1010432"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Samichan</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#28">[#28]</a></td></tr></table></td></tr><tr ><td class="posttext"> "AwesomeGlassPongDude (99kb)" in post #16 did not work for me, shows "openAL ready..." and freezes. Code in #25 worked fine.<br>GTX295 + Win7 x64 <br><br></td></tr></table><br>
+<a name="1010452"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#29">[#29]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sounds rather like an openAL problem, actually. OpenGL really becomes tighter after the background creations. BUT, OMG, #25 works for you on an INTEL?!? WOW! That's one heck of a beautiful "good morning" present to me! Thank you! :)<br><br>To be sure I will later compile a version without sound. The last thing I need is more confusion for all of us, hehe. <br><br></td></tr></table><br>
+<a name="1010456"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#30">[#30]</a></td></tr></table></td></tr><tr ><td class="posttext"> <a href="http://www.taron.de/Storage/blitzmax/AwesomeGlassPongDude_noAudio.rar" target="_blank"> AwesomeGlassPongDude_noAudio.rar</a><br><br>There! Hopefully that does it?! <br><br></td></tr></table><br>
+<a name="1010462"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_JIM</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#31">[#31]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>BUT, OMG, #25 works for you on an INTEL?!?<br> <br></div><br><br>I don't see any mention of Intel GPUs. GTX295 is actually very high-end nVidia if that's what got you confused :) <br><br></td></tr></table><br>
+<a name="1010466"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#32">[#32]</a></td></tr></table></td></tr><tr ><td class="posttext"> OH...nevermind... i saw the name Intel and my hope got the best of me... LOL. Thanks for bringing me back down to reality! :oP ...haha.<br><br>I've uploaded a new version with audio, too. So much fun making sound effects! <br><br></td></tr></table><br>
+<a name="1010469"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Samichan</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#33">[#33]</a></td></tr></table></td></tr><tr ><td class="posttext"> AwesomeGlassPongDude_noAudio.rar works and looks like <a href="http://i711.photobucket.com/albums/ww120/Samwais007/AwesomeGlassPongDude_noAudio_ss_Sam.jpg" target="_blank">this</a>, needs some more awesomeglass imo.<br>Every other openAL app has ran fine on this machine. <br><br></td></tr></table><br>
+<a name="1010487"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#34">[#34]</a></td></tr></table></td></tr><tr ><td class="posttext"> YAY! That's great already...more glass to come! There's already a goody box appearing, but it'll get more, I believe...haha!<br><br>Man, I'm so tired of all the "open" things already, pffff. It's the first report I know of, that the openAL I've implemented has troubles. I think it's leadwerk's "TSource" Type I'm using, if that was him making it?! Felt like a good start and worked well so far. It may not be that which causes the problems... tough to track down, I'm afraid.<br><br>Can you download <a href="http://www.taron.de/Storage/blitzmax/AwesomeGlassPongDude.rar" target="_blank">AwesomeGlassPongDude.rar</a> again and try now. It shows the generation of the sounds and might help find where it fails! Maybe it's not even openAL... <br><br></td></tr></table><br>
+<a name="1010498"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Samichan</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#35">[#35]</a></td></tr></table></td></tr><tr ><td class="posttext"> AwesomeGlassPongDude.rar version in post #34 works 100%!<br><br>At first I thought it froze again at "openAL ready...generating sounds", but this time around I didn't have loud music playing and I actually heard my hard-drives spinning up and waited for them. After 10 seconds the app continued happily.<br>No idea why your app would want to spin up my hard-drives, my OS is on an SSD and it's always "spinning".<br>The app was in my firefox downloads folder which is on my SSD.<br>The first version might have worked too if I would have known to wait for the hard-drives. <br><br></td></tr></table><br>
+<a name="1010506"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#36">[#36]</a></td></tr></table></td></tr><tr ><td class="posttext"> AH......sweet! Thank god!<br>Well, not sure why it does, but it might have something to do with memory, since I'm allocating a fair amount for the sounds. Maybe it's pagefile gets some extra...hehe. Not sure, though. <br><br>Eitherway... IT WORKS, YAAHEEHAAA! (the joy!)<br><br>Thanks for checking again, Samichan! <br><br></td></tr></table><br>
+<a name="1010597"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmaz</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#37">[#37]</a></td></tr></table></td></tr><tr ><td class="posttext"> #25 and #34 finally work for me as well!  looks great! <br><br></td></tr></table><br>
+<a name="1010600"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#38">[#38]</a></td></tr></table></td></tr><tr ><td class="posttext"> &lt;sigh&gt; ...I'm so happy and tired. This will be a brilliant good night sleep. Thanks, dmaz! New version is up, too... hit space to get rid of the logo! <br><br></td></tr></table><br>
+<a name="1013187"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nawi</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#39">[#39]</a></td></tr></table></td></tr><tr ><td class="posttext"> Pong works pretty good under GNU/Linux with wine too. And so does the crystal balls. <br><br></td></tr></table><br>
+<a name="1013784"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#40">[#40]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ah, excellent! Thanks, nawi! ...now I just gotta get my "SirPenta" to work. :P <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

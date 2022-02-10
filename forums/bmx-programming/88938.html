@@ -1,0 +1,324 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Threads and load pixmap causing problems</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Threads and load pixmap causing problems</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Threads and load pixmap causing problems</a><br><br>
+<a name="1009813"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>I've been struggling over this problem where I've been trying to load in images as a thumbnail and get them to display. I've created the code so that the loop is in it's own thread, so as we're loading the images in a folder, the code can go and do something else. Seems to work fine sometimes, and other times it will crash randomly on me. Seems to crash less in Debug mode.<br><br>I've spent long hours isolating the problem, and I've come up with that it's something in the LoadPixmap. I've tried playing with streams but those seem to be ok. I've played with image size-- smaller files seem to do ok. Files over 500kb or so (family albums) tend to crash after a little while.<br><br>I've set up this code, and things are really screwy on my system (WinVista64)-- so I'm sure there's mistakes, but the problem still exists.<br><br>I've also noticed that if I add more garbage collectors, I can sometimes make the problem more isolated.<br><br>Anyways, I think there's a problem that's beyond my code.<br>I've also tried  using Brucey's FreeImage, and I get the same random crashes.<br><br>The crashes are usually the code locking up with no errors. In debug mode, the code sometimes works (at least crashes less often).<br><br>I'd appreciate any help, and any suggestions for what the problem may be. It'd clear my sanity to get this working without random crashes.<br><br>The code (excuse the mess):<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+'' threaded
+
+SuperStrict
+
+'' 
+Framework BRL.Max2D
+Import brl.GLMax2d
+Import brl.Standardio
+Import BRL.EventQueue
+Import BRL.Event
+Import BRL.Timer
+Import brl.threads
+Import brl.GLGraphics
+Import brl.jpgloader
+Import brl.pngloader
+Import brl.bmploader
+'Import brl.Pixmap
+
+'SetGraphicsDriver D3D9Max2DDriver()
+'SetGraphicsDriver GLMax2DDriver()
+Global g:TGraphics = GLGraphics( 950, 600, 0, 60, GRAPHICS_BACKBUFFER )
+Global canvas:TMax2DGraphics = TMax2DGraphics.Create( g,GLMax2DDriver() )
+
+Global desktopw:Int = 950
+Global desktoph:Int = 600
+
+
+Global iconSize:Int = 50 ''size of icons
+
+Global filelist:String[]
+Local startnum:Int =0
+
+Global storedimage:TStoredimage = New TStoredimage
+
+Global thumbmutex:TMutex = CreateMutex()
+Global threadthumb:TThread = New TThread
+Global mainmutex:TMutex = CreateMutex()
+
+Global stopthread:Int=0
+
+''
+''___TYPES
+Global storedpixmap:TPixmap[] = New TPixmap[150]
+
+Type TStoredimage
+	''only one needed
+	Field total:Int
+	Field name:String[]
+	Field pixmap:TPixmap[]
+	Field threadload:Int[]
+	Field threadon:Int
+	Global thismutex:TMutex
+	
+	Method addPixmap(p:TPixmap,i:Int)
+		''use for threaded
+		''adding mutex doesn't stop the exception access error
+		
+		If( i&gt;=total)
+			pixmap = pixmap[..total+2]
+			'storedpixmap = storedpixmap[..total+2]
+			threadload = threadload[..total+2]
+			total :+1
+		EndIf
+		
+		If(p)
+			pixmap[i] = New TPixmap
+			pixmap[i] = p
+			threadload[i]=1 ''now its loaded
+		EndIf
+		
+	EndMethod
+	Method getPixmap:TPixmap(i:Int)
+		If(pixmap[i])
+			Return pixmap[i]
+		EndIf
+	EndMethod
+	Method isValid:Int(i:Int)
+		''drawit doesn't like mutexes
+		If(i&gt;=total) Return 0
+		If(pixmap[i] And threadload[i])
+			Return 1
+		Else
+			Return 0
+		EndIf
+
+	EndMethod
+	Method  resetAll()
+		total =0
+		name=New String[1]
+                pixmap = New TPixmap[1]
+		'storedpixmap=New TPixmap[1]
+		threadload=New Int[1]
+	EndMethod
+	Method  New:TStoredimage()
+		thismutex= CreateMutex()
+		resetAll()
+		threadon=0
+	EndMethod
+EndType
+
+''____main loop
+Local i:Int=0
+Local ii:Int =0
+Local begin:Int =0
+Local startdir:String =CurrentDir()
+Repeat
+	'WaitSystem()
+	PollSystem()
+
+	If (PollEvent()) Then
+		''Print EventID()
+		Select EventID()
+		Case EVENT_APPTERMINATE
+			stopthread=1
+			End
+		Case EVENT_WINDOWCLOSE
+			stopthread=1
+			End
+		Case EVENT_KEYDOWN
+			Select EventData()
+			Case( KEY_ESCAPE)
+				stopthread=1
+				End
+			Case( KEY_SPACE)
+				begin=1
+				stopthread =1
+			Case( KEY_N)
+				begin =1
+				stopthread=1
+				startdir = "G:/_pix/_Personal_photos/Hawaii_Oct_2009"
+			EndSelect
+
+		EndSelect		
+	EndIf
+
+	''my refresher
+	ii:+1
+	If( ii&gt;50000)
+		If(begin)
+			stopthread=0
+			GetThumb(startdir)
+			begin=0
+		EndIf
+		DrawIt()
+		ii=0
+		GCCollect() ''something is eating up memory, this keeps it lean and faster too
+	EndIf
+Forever
+End
+
+''
+''____DRAWIT in our main thread
+''
+Function DrawIt()
+	Local isize:Int = iconSize+5
+	Local p:TPixmap
+	Local img:TImage =CreateImage(iconSize,iconSize,0,DynamicIMAGE)
+	Local border:Int = 5
+	Local x:Int=0, y:Int=0
+	Local xnew:Int, ynew:Int
+	Local width:Int = desktopw - 5
+	Local height:Int = desktoph - 5
+	Local n:Int
+	
+	SetGraphics ( canvas )
+		SetClsColor(0,0,0)
+		Cls
+		
+		For n=0 To (height*width/isize)
+			If (y*isize &gt; height-isize) Exit
+			If (x*isize &gt; width-isize) 
+				y=y+1
+				x=0
+				If (y*isize &gt; height-isize) 
+					Exit
+				EndIf
+			EndIf
+
+			xnew = x*isize 
+			ynew = y*isize
+			 
+			If(storedimage.isvalid(n))
+				xnew = xnew + (iconSize -storedimage.getPixmap(n).width)*0.5
+				ynew = ynew + (iconSize -storedimage.getPixmap(n).height)*0.5
+				'p = storedimage.getPixmap(n)
+				'DrawPixmap(p, xnew+border, ynew +border) ''why is this eating up memory?
+
+				SetColor (255,255,255)
+				SetBlend SOLIDBLEND
+				DrawImage LoadImage(storedimage.getPixmap(n)), xnew+border, ynew +border
+
+			Else
+				SetColor 30,30,30
+				DrawRect(xnew+border, ynew +border, iconSize,iconSize)
+			EndIf
+			x=x+1
+		Next
+		Flip
+
+EndFunction
+
+''
+''_____ GET THUMB
+Function GetThumb(cd:String)
+
+	WaitThread2(threadthumb)
+	
+	Local files:String[]
+	Local list:String[]
+	Local a:String
+	Local supersize:Int = 50
+	Local lx:Int=0
+
+	
+	files=LoadDir(cd)
+	lx = files.length
+	list = New String[lx*supersize+1]
+	
+	Local i:Int=0
+	For Local j:Int = 0 To supersize-1 ''make a really long list
+		For a = EachIn files
+			'Print a
+			If (CheckFileType(cd+"/"+a) )
+				list[i] = cd+"/"+a
+				i=i+1
+			EndIf
+		Next
+	Next
+	
+	If(Not list) Return
+
+	'''''___________threaded
+	If(Not ThreadRunning (threadthumb))
+		Print "thread"
+		storedimage.threadon=1
+		threadthumb=CreateThread( GetThumbThread, list )
+		DetachThread(threadthumb)
+	EndIf
+
+EndFunction
+
+''____our loader thread
+Function GetThumbThread:Object(obj:Object)
+	'LockMutex (thumbmutex)
+	Local list:String[] = String[](obj)
+	
+	Local num:Int =0
+	For num = 0 To list.length-1
+		If (stopthread) Exit
+		If (list[num])		
+				'storedpixmap[num] = GetThumbStream(list[num])		
+				''store the image here
+				storedimage.addPixmap(GetThumbStream(list[num]) ,num)
+		EndIf		
+	Next
+
+	'UnlockMutex thumbmutex
+
+	Return Null
+EndFunction
+
+
+Function GetThumbStream:TPixmap(file:String=Null)
+	If(Not file) Return Null
+	
+	Local p:TPixmap=New TPixmap
+	Local fi:TPixmap = New TPixmap	
+	Local st:Int = MilliSecs()
+	Local bank:TBank = New TBank
+
+Print"load "+file
+
+	bank=LoadBank(file)
+	'fi = LoadPixmap(file)
+
+Print "loaded "+file
+
+	fi = LoadPixmap(Bank)
+Print "inbank"
+
+	If(Not fi) Return Null
+	
+	p = ResizePixmap(fi,iconSize,iconSize)
+
+	'GCCollect()
+Print"GC"
+	
+	LockMutex ThumbMutex
+	Print "timer:"+ (MilliSecs() - st)
+	UnlockMutex ThumbMutex
+	
+	Return p
+EndFunction
+
+
+Function CheckFileType:Int (url:String)
+	Local v:Int=1
+	Local s:String
+	s = ExtractExt(url)
+	If s="png" Or s="jpg" Or s="gif" Or s="bmp" Or s="jpeg"
+		v=1
+	Else
+		v=0
+	EndIf
+	Return v
+End Function
+
+''does mutex work? does waitthread work?
+Function WaitThread2:Int(t:TThread)
+	While (ThreadRunning (t))
+		'
+	Wend
+	Return 0
+EndFunction
+
+
+
+
+</textarea><br><br>If there are mistakes caught in the code (I consolidated and trimmed this code from other files) I'll update the above code, but even in my cleaner code I had random crashes. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

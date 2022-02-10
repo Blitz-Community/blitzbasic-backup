@@ -1,0 +1,821 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Photon Mapping Raytracer</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Photon Mapping Raytracer</h1><a href="forums.php" >Monkey Archive Forums</a>/<a href="topics.php?forum=511" >Monkey Projects</a>/<a href="#bottom" >Photon Mapping Raytracer</a><br><br>
+<a name="2044393"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> <img src="http://i295.photobucket.com/albums/mm144/adamredwoods/photon_mapper_ss.jpg"><br><br>You can also click on the spheres and light and move them.<br><br>source:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+'' Ray Tracing &amp; Photon Mapping
+'' (C) Grant Schindler, 2007
+''
+'' to monkey by AdamRedwoods, 2012
+
+#GLFW_WINDOW_WIDTH=512
+#GLFW_WINDOW_HEIGHT=512+48
+
+Import mojo
+
+
+
+Function Main()
+	Local myApp:= New PhotonApp()
+End
+
+'' ----- Scene Description -----
+Class Scene
+	Field szImg:Int = 512                  ''Image Size
+	Const nrTypes:Int = 2                  ''2 Object Types (Sphere = 0, Plane = 1)
+	Field nrObjects:Int[] = [2,5]          ''2 Spheres, 5 Planes
+	Const gAmbient:Float = 0.2             ''Ambient Lighting
+	Field gOrigin:Float[] = [0.0,0.0,0.0]  ''World Origin For Convenient Re-Use Below (Constant)
+	Field light:Float[] = [0.0,1.2,3.75]   ''Point Light-Source Position
+	Field spheres:Float[][] = [[1.0,0.0,4.0,0.5],[-0.6,-1.0,4.5,0.5]]         ''Sphere Center &amp; Radius
+	Field planes:Float[][]  = [[0.0, 1.5],[1.0, -1.5],[0.0, -1.5],[1.0, 1.5],[2.0,5.0]] ''Plane Axis &amp; Distance-To-Origin
+	Field colors:Int[][] = [[$00ffffff,$00ffffff],
+			[$0000ff00,$00ffffff,$00ff0000,$00ffffff,$00ffffff]] '' nrType,color
+End
+
+'' ----- Photon Mapping -----
+Class Photons
+	
+	Const nrPhotons:Int = 1000             ''Number of Photons Emitted
+	Const nrBounces:Int = 3                ''Number of Times Each Photon Bounces
+	Field lightPhotons:Int = True      ''Enable Photon Lighting?
+	Const sqRadius:Float = 0.8             ''Photon Integration Area (Squared For Efficiency)
+	Const exposure:Float = 50.0            ''Number of Photons Integrated at Brightest Pixel
+	Field numPhotons:Int[][] = [[0,0],[0,0,0,0,0]]              ''Photon Count For Each Scene Object
+	Field photons:Float[][][][][] '' = New Float[3][6][5001][4][3]
+	Global shadow:Float[]  = [-0.15,-0.15,-0.15]
+	
+	
+	Global raytracer:RayTracer
+	
+	Method New()
+		photons = AllocateFloatArray(3,6,nrPhotons+2,4,3)
+
+	End
+	
+	Method SetRaytracer(r:RayTracer)
+		raytracer = r
+	End
+	
+	''---------------------------------------------------------------------------------------
+	''Photon Mapping ------------------------------------------------------------------------
+	''---------------------------------------------------------------------------------------
+	
+	Method GatherPhotons:Float[] (sc:Scene, p:Float[], Typ:Int, id:Int)
+		Local energy:Float[] = [0.0,0.0,0.0] 
+		Local N:Float[] = raytracer.SurfaceNormal(Typ, id, p, sc.gOrigin)                   ''Surface Normal at Current Point
+		For Local i:Int = 0 Until numPhotons[Typ][id] Step 1                    ''Photons Which Hit Current Object
+			Local pt:Float[] = [photons[Typ][id][i][0][0],photons[Typ][id][i][0][1],photons[Typ][id][i][0][2]]
+			Local gSqu:Float = gatedSqDist3(p,pt,sqRadius)
+			If (gSqu)           ''Is Photon Close To Point?
+				Local ptd:Float[] = [photons[Typ][id][i][1][0],photons[Typ][id][i][1][1],photons[Typ][id][i][1][2]]
+				Local pte:Float[] = [photons[Typ][id][i][2][0],photons[Typ][id][i][2][1],photons[Typ][id][i][2][2]]
+				Local weight:Float = Max(0.0, -dot3(N, ptd ))   ''Single Photon Diffuse Lighting
+				weight *= (1.0 - Sqrt(gSqu)) / exposure                    ''Weight by Photon-Point Distance
+				energy = add3(energy, mul3c(pte, weight)) ''Add Photon's Energy to Total
+			Endif
+		Next
+		Return energy
+	End
+
+	Method EmitPhotons(sc:Scene, view3D:Bool=False)
+		If Not sc Then Return
+	
+		Local bounce:BounceType = New BounceType
+		Seed=0			                               ''Ensure Same Photons Each Time
+		For Local t:Int = 0 Until sc.nrTypes Step 1            ''Initialize Photon Count To Zero For Each Object
+		  	For Local i:Int = 0 Until sc.nrObjects[t] Step 1
+		    	numPhotons[t][i] = 0
+		  	Next
+		Next 
+	
+		Local test:Int = nrPhotons
+		If (view3D) test = nrPhotons * 3.0  ''Draw 3x Photons For Usability
+		For Local i:Int = 0 To test-1 
+			Local bounces:Int = 1
+			Local rgb:Float[] = [1.0,1.0,1.0]               ''Initial Photon Color is White
+			Local ray:Float[] = normalize3( rand3(1.0) )    ''Randomize Direction of Photon Emission
+			Local prevPoint:Float[] = sc.light                 ''Emit From Point Light Source
+			
+			''Spread Out Light Source, But Don't Allow Photons Outside Room/Inside Sphere
+			While (prevPoint[1] &gt;= sc.light[1])
+				prevPoint = add3(sc.light, mul3c(normalize3(rand3(1.0)), 0.75))
+			Wend
+			If (Abs(prevPoint[0]) &gt; 1.5 Or Abs(prevPoint[1]) &gt; 1.2 Or
+				gatedSqDist3(prevPoint,sc.spheres[0],sc.spheres[0][3]*sc.spheres[0][3])) Then bounces = nrBounces+1
+			
+			bounce =raytracer.Raytrace(ray, prevPoint, bounce.point)                          ''Trace the Photon's Path
+			
+			While (bounce.intersect And bounces &lt;= nrBounces)        ''Intersection With New Object
+				bounce.point = add3( mul3c(ray,bounce.dist), prevPoint)   ''3D Point of Intersection
+				rgb = mul3c (raytracer.GetColorRGB(rgb,bounce.iType,bounce.index), 1.0/Sqrt(bounces))
+				StorePhoton(bounce.iType, bounce.index, bounce.point, ray, rgb)  ''Store Photon Info 
+				''drawPhoton(rgb, bounce.point)                       ''Draw Photon, not needed
+				ShadowPhoton(ray, bounce)                             ''Shadow Photon
+				ray = raytracer.Reflect(ray,prevPoint, bounce.iType, bounce.index, bounce.point)                  ''Bounce the Photon
+				bounce = raytracer.Raytrace(ray, bounce.point, bounce.point)                         ''Trace It To Next Location
+				prevPoint = bounce.point
+				bounces += 1
+			Wend
+		Next
+	End
+
+	Method StorePhoton(Typ:Int, id:Int, location:Float[], direction:Float[], energy:Float[] )
+		'MemCopy(copy,array,SizeOf(array))
+		photons[Typ][id][numPhotons[Typ][id]][0][0] = location[0]  ''Location
+		photons[Typ][id][numPhotons[Typ][id]][0][1] = location[1]  ''Location
+		photons[Typ][id][numPhotons[Typ][id]][0][2] = location[2]  ''Location
+		photons[Typ][id][numPhotons[Typ][id]][1][0] = direction[0] ''Direction
+		photons[Typ][id][numPhotons[Typ][id]][1][1] = direction[1] ''Direction
+		photons[Typ][id][numPhotons[Typ][id]][1][2] = direction[2] ''Direction
+		photons[Typ][id][numPhotons[Typ][id]][2][0] = energy[0]    ''Attenuated Energy (Color)
+		photons[Typ][id][numPhotons[Typ][id]][2][1] = energy[1]    ''Attenuated Energy (Color)
+		photons[Typ][id][numPhotons[Typ][id]][2][2] = energy[2]    ''Attenuated Energy (Color)
+		numPhotons[Typ][id] += 1
+		If numPhotons[Typ][id]&gt; nrPhotons Then numPhotons[Typ][id] = nrPhotons
+	End
+
+	Method ShadowPhoton(ray:Float[], bounce:BounceType )                               ''Shadow Photons
+		
+		'Local tPoint:Float[]  = gPoint 
+		'Local tType:Int = t, tIndex:Int = i                         ''Save State
+		
+		Local bumpedPoint:Float[] = add3(bounce.point,mul3c(ray,0.00001))      ''Start Just Beyond Last Intersection
+		Local sBounce:BounceType = raytracer.Raytrace(ray, bumpedPoint, bounce.point)                                 ''Trace To Next Intersection (In Shadow)
+		Local shadowPoint:Float[] = add3( mul3c(ray,sBounce.dist), bumpedPoint) ''3D Point
+		StorePhoton(sBounce.iType, sBounce.index, shadowPoint, ray, shadow)
+		'gPoint = tPoint gType = tType gIndex = tIndex            ''Restore State
+	End
+
+End
+
+'' ----- Raytracing Globals -----
+
+Class BounceType
+	Field intersect:Int =0			''For Latest Raytracing Call... Was Anything Intersected by the Ray?
+	Field iType:Int =0			''... Index of the Intersected Object (Which Sphere/Plane Was It?)
+	Field index:Int =0
+	Field dist:Float = -1.0			''... Distance from Ray Origin To Intersection
+	Field point:Float[] = [0.0, 0.0, 0.0]			''... Point At Which the Ray Intersected the Object
+End
+
+
+
+''---------------------------------------------------------------------------------------
+''Ray-Geometry Intersections  -----------------------------------------------------------
+''---------------------------------------------------------------------------------------
+
+Class RayTracer
+	
+	Field sc:Scene
+	Field photons:Photons
+	
+	Method New()
+		photons = New Photons()
+		photons.SetRaytracer(Self)
+	End
+	
+	Method SetScene(s:Scene)
+		sc = s
+	End
+	
+	Method EmitPhotons(view3d:Bool=False)
+		photons.EmitPhotons(sc,view3d)
+	End
+	
+	Method RaySphere:Float(idx:Int, r:Float[], o:Float[]) ''Ray-Sphere Intersection: r=Ray Direction, o=Ray Origin
+		Local s:Float[] = sub3(sc.spheres[idx],o)  ''s=Sphere Center Translated into Coordinate Frame of Ray Origin
+		Local radius:Float = sc.spheres[idx][3]    ''radius=Sphere Radius
+		Local bounce:BounceType
+		
+		''Intersection of Sphere And Line     =       Quadratic Function of Distance
+		Local A:Float = dot3(r,r)                       '' Remember This From High School? :
+		Local B:Float = -2.0 * dot3(s,r)                ''    A x^2 +     B x +               C  = 0
+		Local C:Float = dot3(s,s) - (radius*radius)          '' (r'r)x^2 - (2s'r)x + (s's - radius^2) = 0
+		Local D:Float = B*B - 4.0*A*C                     '' Precompute Discriminant
+		
+		If (D &gt; 0.0)                              ''Solution Exists only If sqrt(D) is Real (Not Imaginary)
+			Local sign:Float
+			If (C &lt; -0.00001) Then sign= 1.0 Else sign= -1.0    ''Ray Originates Inside Sphere If C &lt; 0
+			Local lDist:Float = (-B + sign*Sqrt(D))/(2.0*A) ''Solve Quadratic Equation For Distance To Intersection
+			Return lDist             
+		
+		Endif
+		
+		Return 0.0
+	End
+
+	Method RayPlane:Float(idx:Int, r:Float[], o:Float[]) ''Ray-Plane Intersection
+		Local axis:Int = sc.planes[idx][0]            ''Determine Orientation of Axis-Aligned Plane
+		If (r[axis] &lt;&gt; 0.0)                        ''Parallel Ray -&gt; No Intersection
+		  	Local lDist:Float = (sc.planes[idx][1] - o[axis]) / r[axis] ''Solve Linear Equation (rx = p-o)
+			Return lDist
+		Endif
+		Return 0.0
+	End
+
+
+
+	Method CheckDistance:Float(lDist:Float, gDist:Float)
+		Local newDist:Float = gDist
+		If (lDist &lt; gDist And lDist &gt; 0.0) ''Closest Intersection So Far in Forward Direction of Ray?
+
+			newDist = lDist
+		Endif
+		Return newDist
+	End
+
+	''---------------------------------------------------------------------------------------
+	'' Lighting -----------------------------------------------------------------------------
+	''---------------------------------------------------------------------------------------
+	
+	Method  LightDiffuse:Float (N:Float[], P:Float[])  ''Diffuse Lighting at Point P with Surface Normal N
+		Local L:Float[] = normalize3( sub3(sc.light,P) ) ''Light Vector (Point To Light)
+		Return dot3(N,L)                        ''Dot Product = Cos (Light-To-Surface-Normal Angle)
+	End
+	
+	Method  SphereNormal:Float[] (idx:Int, P:Float[])
+		Return normalize3(sub3(P,sc.spheres[idx])) ''Surface Normal (Center To Point)
+	End
+	
+	Method  PlaneNormal:Float[] (idx:Int, P:Float[], O:Float[])
+		Local axis:Int = Int(sc.planes[idx][0])
+		Local N:Float[] = [0.0,0.0,0.0]
+		N[axis] = O[axis] - sc.planes[idx][1]      ''Vector From Surface To Light
+		Return normalize3(N)
+	End
+	
+	Method  SurfaceNormal:Float[] (Typ:Int, index:Int, P:Float[], Inside:Float[])
+		If (Typ = 0)
+			Return SphereNormal(index,P)
+		Else
+			Return PlaneNormal(index,P,Inside)
+		Endif
+	End
+
+	Method  LightObject:Float(typ:Int, idx:Int, P:Float[], lightAmbient:Float)
+		Local i:Float = LightDiffuse( SurfaceNormal(typ, idx, P, sc.light) , P )
+		Return Min(1.0, Max(i, lightAmbient))   ''Add in Ambient Light by Constraining Min Value
+	End
+	
+	Method  Reflect:Float[](ray:Float[], fromPoint:Float[], t:Int, i:Int, gPoint:Float[])                ''Reflect Ray
+		Local N:Float[] = SurfaceNormal(t, i, gPoint, fromPoint)  ''Surface Normal
+		Return normalize3(sub3(ray, mul3c(N,(2.0 * dot3(ray,N)))))     ''Approximation To Reflection
+	End
+	
+''---------------------------------------------------------------------------------------
+'' Raytracing ---------------------------------------------------------------------------
+''---------------------------------------------------------------------------------------
+
+	Method Raytrace:BounceType(ray:Float[] , origin:Float[], oldpoint:Float[] )
+		Local bounce:BounceType = New BounceType
+	
+		bounce.point = oldpoint
+		bounce.intersect = 0 ''No Intersections Along This Ray Yet
+		Local dist:Float=0.0	
+		bounce.dist = 999999.9   ''Maximum Distance To Any Object
+		
+		For Local t:Int = 0 Until sc.nrTypes Step 1 ''test all types
+			For Local idx:Int = 0 Until sc.nrObjects[t] Step 1 ''test all objects per type
+				''throw ray
+				If (t = 0)
+					dist =RaySphere(idx,ray,origin)
+				Else
+					dist =RayPlane(idx,ray,origin)
+				Endif
+				'' save successful ray info
+				'If(dist)
+				If (dist &lt; bounce.dist And dist &gt; 0.0) ''Closest Intersection So Far in Forward Direction of Ray?
+					''Save Intersection in Global State
+					bounce.dist = dist
+					bounce.index = idx
+					bounce.iType = t
+					bounce.intersect = True
+				Endif
+				'EndIf
+			Next
+		Next
+		Return bounce '' keep the previous bounce information
+		
+	End
+
+	Method ComputePixelColor:Int (x:Float,y:Float, lightPhotons:Int=0)
+		
+		If Not sc Then Print "** No scene assigned"; Return
+		
+		Local bounce:BounceType = New BounceType
+		Local intrgb:Int =0
+		Local rgb:Float[] = [0.0,0.0,0.0]
+		Local ray:Float[] = [  x/sc.szImg - 0.5 ,      ''Convert Pixels To Image Plane Coordinates
+		               -(y/sc.szImg - 0.5), 1.0] ''Focal Length = 1.0
+	
+		bounce = Raytrace(ray, sc.gOrigin, [0.0,0.0,0.0])  ''Raytrace!!! - Intersected Objects are Stored in Global State
+	
+		If (bounce.intersect)                       ''Intersection                    
+			bounce.point = mul3c(ray, bounce.dist)           ''3D Point of Intersection
+			
+			If (bounce.iType = 0 And bounce.index = 1)      ''Mirror Surface on This Specific Object
+				ray = Reflect(ray,sc.gOrigin, bounce.iType, bounce.index, bounce.point)        ''Reflect Ray Off the Surface
+				bounce = Raytrace(ray, bounce.point, bounce.point)             ''Follow the Reflected Ray
+				If (bounce.intersect) bounce.point = add3( mul3c(ray,bounce.dist), bounce.point) ''3D Point of Intersection
+			Endif
+			
+			If (lightPhotons)                   ''Lighting via Photon Mapping
+				rgb = photons.GatherPhotons(sc, bounce.point,bounce.iType,bounce.index)
+			Else                                ''Lighting via Standard Illumination Model (Diffuse + Ambient)
+
+				Local tType:Int = bounce.iType
+				Local tIndex:Int = bounce.index ''Remember Intersected Object
+				Local i:Float = sc.gAmbient                ''If in Shadow, Use Ambient light
+				bounce = Raytrace( sub3(bounce.point, sc.light) , sc.light, bounce.point)  ''Raytrace from Light To Object
+				
+				If (tType = bounce.iType And tIndex = bounce.index) ''Ray from Light-&gt;Object Hits Object First?
+			  		i = LightObject(bounce.iType, bounce.index, bounce.point, sc.gAmbient) ''Not In Shadow - Compute Lighting
+				Else
+					''compute soft shadow
+					Local bounce2:BounceType = New BounceType
+					'i = gAmbient
+					i = LightObject(bounce.iType, bounce.index, bounce.point, 0.1)
+					For Local j:Int=0 To 3
+						''spiral vector test
+						''create ray to point to light and gradually angle it away in a spiral
+						'' for each miss, divide the light power in half
+						ray = sub3( bounce.point, sc.light) '' light to object vector, to create random point on plane
+						Local lightpoint:Float[] = mul3c(sc.light, 1.0+Rnd()*0.1 ) ''random point on light plane
+						'lightpoint = mul3(lightpoint, Light) ''random point on light plane
+						''Print lightpoint[1]
+						'ray = sub3( lightpoint,bounce.point) '' new ray
+						bounce2 = Raytrace( ray,lightpoint, bounce.point)
+						'Print bounce2.point[1]
+						If(bounce2.iType =0) ''we hit a sphere
+						'i=i*0.99 
+						'Print"hit "+j
+						Endif
+					Next
+				Endif
+				
+				rgb[0]=i
+				rgb[1]=i
+				rgb[2]=i
+				'''rgb = mul3c(GetColorRGB(rgb,tType,tIndex), 255.0)
+				rgb = GetColorRGB(rgb,tType,tIndex)
+			
+			Endif
+		Endif
+		
+		'' return int rgb
+		Local red:Int = Int(rgb[2]*255.0) 
+		If red&lt;0 Then red=0
+		If red&gt;255 Then red=255
+		'Local clamp:Int = red &amp;-(Int(red &gt;= 0))
+  		'red= clamp | ((255 - clamp) Shr 31)
+		Local grn:Int = Int(rgb[1]*255.0) 
+		If grn&lt;0 Then grn=0
+		If grn&gt;255 Then grn=255
+		Local blu:Int = Int(rgb[0]*255.0)  
+		If blu&lt;0 Then blu=0
+		If blu&gt;255 Then blu=255
+		intrgb =  ($ff000000 | (red Shl 16) | (grn Shl 8) | blu)
+	
+	
+		Return intrgb
+		'Return Null
+	End
+	
+
+	Function RandomNormal:Float[](ray:Float[])
+	
+		Local alpha:Float=Rnd()*2*Pi
+		Local a:Float[] =cross3([1.0,0.0,0.0],ray)
+		Local l:Float=dot3(a,a) '' squared length
+		'' check For special Case when our direction is very close To 1,0,0
+		If(l&lt;0.00001) Return [0.0,Float(Sin(alpha)),Float(Cos(alpha))]
+		'' else
+		a = normalize3(a) ''normalize a - really needed For uniformness 
+		Local b:Float[]= cross3(a,ray)
+		'' b should be unit-length
+		Return normalize3(add3( mul3c(a, Sin(alpha)), mul3c(b,Cos(alpha)) ) )
+		'' And result must be quite close To unit-length, but If you want,renormalize - there's roundoff errors, etc...}
+	End
+	
+	Method GetColorRGB:Float[] (rgbIn:Float[], Typ:Int, index:Int) ''Specifies Material Color of Each Object
+		
+		Local c0# = Int(sc.colors[Typ][index] &amp; $0000ff)*0.0039215686274509803921568627451 ''1/255
+		Local c1# = Int((sc.colors[Typ][index] &amp; $00ff00) Shr 8)*0.0039215686274509803921568627451
+		Local c2# = Int((sc.colors[Typ][index] &amp; $ff0000) Shr 16)*0.0039215686274509803921568627451
+
+		Return FilterColor(rgbIn, c0,c1,c2) 
+
+	
+	End
+	
+	Function FilterColor:Float[] (rgbIn:Float[], r:Float, g:Float, b:Float) ''e.g. White Light Hits Red Wall
+		Local rgbOut:Float[] = [r,g,b]
+		For Local c:Int=0 To 2 
+			rgbOut[c] = Min(rgbOut[c],rgbIn[c]) ''Absorb Some Wavelengths (R,G,B)
+		Next
+		Return rgbOut
+	End
+	
+End
+
+
+
+
+
+
+
+
+''---------------------------------------------------------------------------------------
+''Vector Operations ---------------------------------------------------------------------
+''---------------------------------------------------------------------------------------
+
+Function normalize3:Float[] (v:Float[] )        ''Normalize 3-Vector
+	Local L:Float = Sqrt(dot3(v,v))
+	Return mul3c(v, 1.0/L)
+End
+
+Function sub3:Float[] (a:Float[] , b:Float[] )   ''Subtract 3-Vectors
+	Local result:Float[] = [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+	Return result
+End
+
+Function add3:Float[] (a:Float[] , b:Float[] )   ''Add 3-Vectors
+	Local result:Float[] = [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+	Return result
+End
+
+Function mul3c:Float[] ( a:Float[] , c:Float)    ''Multiply 3-Vector with Scalar
+	Local result:Float[] = [c*a[0], c*a[1], c*a[2]]
+	Return result
+End
+
+Function mul3:Float[] ( a:Float[] , b:Float[] )     ''multiply vectors
+	Local x:Float, y:Float, z:Float
+	x = a[0] * b[0]
+	y = a[1] * b[1]
+	z = a[2] * b[2]
+	Return [x , y , z ]
+End
+
+Function dot3:Float ( a:Float[] , b:Float[] )     ''Dot Product 3-Vectors
+	Return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+End
+
+Function cross3:Float[] (a:Float[] , b:Float[] )
+	Return [ a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0] ]
+End
+
+Function rand3:Float[] (s:Float )               ''Random 3-Vector
+	Local s2:Float = s*2
+	Return [Rnd()*s2-s,Rnd()*s2-s,Rnd()*s2-s]
+	
+	'Return [sfRnd()*s2-s,sfRnd()*s2-s,sfRnd()*s2-s]
+End
+
+
+
+Function gatedSqDist3:Float(a:Float[] , b:Float[], sqradius:Float) ''Gated Squared Distance
+	Local c:Float = a[0] - b[0]          ''Efficient When Determining If Thousands of Points
+	Local d:Float = c*c                  ''Are Within a Radius of a Point (And Most Are Not!)
+	If (d &gt; sqradius) Return 0 ''Gate 1 - If this dimension alone is larger than
+	c = a[1] - b[1]                ''         the search radius, no need To Continue
+	d += c*c
+	If (d &gt; sqradius) Return 0 ''Gate 2
+	c = a[2] - b[2]
+	d += c*c
+	If (d &gt; sqradius) Return 0 ''Gate 3
+	'gSqDist = d      
+	Return d  ''Squared Distance
+End
+
+Function odd:Int(x:Int)
+	'If (x Mod 2) Return 1 ''else return 0
+	Return x &amp; 1
+End
+
+
+
+''---------------------------------------------------------------------------------------
+'' User Interaction And Display ---------------------------------------------------------
+''---------------------------------------------------------------------------------------
+
+Class PhotonRender
+
+	Field empty:Int = 1
+	Field view3D:Bool ''Stop Drawing, Switch Views
+	Field lightPhotons:Int
+
+	Field pRow:Int, pCol:Int, pIteration:Int, pMax:Int     ''Pixel Rendering Order
+	Field iterations:Int
+	Field img:Image
+	
+	Field width:Int, height:Int
+	
+	Field raytracer:RayTracer
+	
+	Field xx:Int, yy:Int, ms:Int
+	
+	
+	Method New()
+		
+		'' setup
+		
+		view3D = False ''true = view photons only, false = view normal
+		lightPhotons = 1 ''true = use photons, false= raytrace
+		empty = True
+		raytracer = New RayTracer
+		
+	End
+	
+	Method SetScene(sc:Scene, w:Int, h:Int)
+		width=w
+		height = h
+		raytracer.SetScene(sc)
+		Reset()
+		img = CreateImage(width, height ) ''important
+
+	End
+	
+	Method DrawScene(w:Int, h:Int,quick:Int=0) 
+		
+		width = w; height = h
+
+		 
+		If (view3D)
+			If (empty)
+
+				raytracer.EmitPhotons(view3D)
+				empty = False ''Emit &amp; Draw Photons
+				
+			Endif
+		Elseif (empty)
+			If Render(quick)&gt;0
+				xx +=1
+	
+				If(xx &gt; pRow)
+					xx=0
+					yy+=1
+					Print pMax+" "+pRow+" "+(Millisecs()-ms)
+				Endif
+			Endif
+		Endif
+	End
+
+
+	Method Render:Int(quick:Int=0) ''Render Several Lines of Pixels at Once Before Drawing
+		Local x:Int =0
+		Local y:Int
+		Local tindex:Int =0, pxl:Int
+		Local px#, py#, rgb%
+		
+		Local pmaxsize:Int
+		
+		Local imax:Int = 16 'Max(pMax, 16)
+
+		
+		'While (iterations &lt;= imax) '' keep a minimum
+		
+			''Render Pixels Out of Order With Increasing Resolution: 2x2, 4x4, 16x16... 512x512
+			'If (pCol &gt;= pMax)
+				pRow+=1
+				pCol = 0 
+				If (pRow &gt;= pMax)
+					pIteration+=1
+					pRow = 0
+					pMax = Int(Pow(2,pIteration))
+	
+				Endif
+			'Endif
+			
+			pmaxsize = width/pMax
+			y = pRow * pmaxsize
+			
+			If pmaxsize =0 Then Return -1
+			
+			For Local px:Int = 0 To pMax
+				
+				Local pNeedDrawing:Int = 0
+				If (pIteration = 1 Or odd(pRow) Or ((Not odd(pRow)) And odd(px))) Then pNeedDrawing = 1
+				
+				
+				'x = pCol * pmaxsize
+				x = px * pmaxsize 
+				 
+	
+				If (pNeedDrawing)
+	
+					pNeedDrawing = 0
+					iterations +=1
+					
+					rgb = raytracer.ComputePixelColor(x,y,lightPhotons) ''All the Magic Happens in Here!	
+					
+					
+					Local psize:Int = pmaxsize
+					Local m:Int =0, cc[psize*psize+psize]
+					
+					For Local n:Int = 0 To (psize)*(psize)
+						cc[n] = rgb
+					Next
+
+					img.WritePixels(cc, x,y,psize,psize)
+					
+					
+				Endif
+	
+			Next
+			'pCol+=1 'pmaxsize
+			
+		'Wend
+		
+		
+		If (pRow = height-1) Then empty = False
+		iterations = 0
+		
+		Return 1
+	End
+	
+	
+	
+	Method Reset() ''Reset Rendering Variables
+		pRow=0
+		pCol=0
+		pIteration=1
+		pMax=8
+		empty=True
+		If (lightPhotons And Not view3D) raytracer.EmitPhotons(view3D)
+		ms = Millisecs()
+	End
+
+	Function DrawPhoton(rgb:Float[], p:Float[] )           ''Photon Visualization
+		If (view3D And p[2] &gt; 0.0)                       ''Only Draw If In Front of Camera
+			Local x:Int = (szImg/2) + Int(szImg *  p[0]/p[2]) ''Project 3D Points into Scene
+			Local y:Int = (szImg/2) + Int(szImg * -p[1]/p[2]) ''Don't Draw Outside Image
+			If (y &lt;= szImg) 
+				'SetColor (255.0*rgb[0],255.0*rgb[1],255.0*rgb[2])
+				'Plot(x,y)
+				img.WritePixels([rgb], x,y,1,1)
+			Endif
+		Endif
+	End
+
+End
+
+
+''---------------------------------------------------------------------------------------
+''Mouse And Keyboard Interaction --------------------------------------------------------
+''---------------------------------------------------------------------------------------
+
+Class PhotonApp Extends App
+
+	Global prevMouseX:Int = -9999, prevMouseY:Int = -9999, sphereIndex:Int = -1
+	Global s:Float = 130.0 ''Arbitary Constant Through Experimentation
+	Global mouseDragging:Int = 0
+
+	Field render:PhotonRender
+	Field sc:Scene
+
+	Method OnCreate()
+		
+		SetUpdateRate(1280000)
+		
+		render = New PhotonRender()
+		sc = New Scene()
+		render.SetScene(sc, sc.szImg, sc.szImg+48)
+
+	End
+
+	Method OnUpdate()
+
+		If(KeyHit(KEY_SPACE))
+			Print "reset" 
+			render.Reset()
+		Endif
+		If (KeyHit(KEY_1))
+			render.lightPhotons = 1
+		Endif
+		If (KeyHit(KEY_1))
+			render.lightPhotons = 0
+		Endif
+		
+		If(MouseDown())
+			If (Not mouseDragging)
+			
+				GrabObject()
+			Else If ( prevMouseX &lt;&gt; MouseX Or prevMouseY &lt;&gt; MouseY )
+			
+				DragObject()
+			Endif
+		Else
+			prevMouseX = -9999
+			prevMouseY = -9999
+			mouseDragging = False
+		Endif
+
+		'render.Render(sc, mouseDragging)
+		render.DrawScene(sc.szImg, sc.szImg+48, mouseDragging)
+		
+	End
+	
+	Method OnRender()
+		
+		Cls
+		SetColor 255,255,255
+		DrawImage render.img,0,0
+		
+	End
+
+
+	Method GrabObject()
+	
+		sphereIndex = 2 ''Click Spheres
+		Local mx:Float = (MouseX() - sc.szImg/2.0)/s
+		Local my:Float = -(MouseY() - sc.szImg/2.0)/s
+	  	Local mouse3:Float[] = [mx, my, (0.5*(sc.spheres[0][2] + sc.spheres[1][2])) ]
+	  	If (gatedSqDist3(mouse3,sc.spheres[0],sc.spheres[0][3]))
+			sphereIndex = 0
+	  	Else If (gatedSqDist3(mouse3,sc.spheres[1],sc.spheres[1][3]))
+			sphereIndex = 1
+		Endif
+		
+		Print "sphere:"+sphereIndex
+		
+		mouseDragging = True
+		
+	End
+
+	Method DragObject()
+		If (prevMouseX &gt; -9999 And sphereIndex &gt; -1)
+			If (sphereIndex &lt; sc.nrObjects[0]) ''Drag Sphere
+				sc.spheres[sphereIndex][0] += (MouseX() - prevMouseX)/s
+				sc.spheres[sphereIndex][1] -= (MouseY() - prevMouseY)/s
+			Else ''Drag Light
+				sc.light[0] += (MouseX() - prevMouseX)/s
+				sc.light[0] = Max(Min(sc.light[0],1.4),-1.4)
+				sc.light[1] -= (MouseY() - prevMouseY)/s
+				sc.light[1] = Max(Min(sc.light[1],1.2),-0.4)
+			Endif
+			
+			render.Reset()
+			
+		Endif
+		prevMouseX = MouseX()
+		prevMouseY = MouseY()
+		mouseDragging = True
+	End
+
+End
+
+
+''
+'' Helper Functions
+''
+
+Function AllocateFloatArray:Float[][]( i:Int, j:Int)
+    Local arr:Float[][] = New Float[i][]
+    For Local ind = 0 Until i
+        arr[ind] = New Float[j]
+    Next
+    Return arr		
+End
+
+Function AllocateFloatArray:Float[][][][][]( i:Int, j:Int, k:Int, l:Int, m:Int)
+    Local arr:Float[][][][][] = New Float[i][][][][]
+    For Local ind:= 0 Until i
+        arr[ind] = New Float[j][][][]
+        For Local ind2:= 0 Until j
+	    	arr[ind][ind2] = New Float[k][][]
+			For Local ind3:= 0 Until k
+	    		arr[ind][ind2][ind3] = New Float[l][]
+				For Local ind4:= 0 Until l
+		    		arr[ind][ind2][ind3][ind4] = New Float[m]
+				Next
+			Next
+       	 Next
+    Next
+    Return arr		
+End
+
+
+
+</textarea> <br><br></td></tr></table><br>
+<a name="2043967"></a>
+
+<a name="2043966"></a>
+
+<a name="2043968"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >MikeHart</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> NICE!!! <br><br></td></tr></table><br>
+<a name="2043971"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Amon</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Now that's cool!<br><br>Some crazy coders on these boards. :) <br><br></td></tr></table><br>
+<a name="2043979"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >samowitsch</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Wow! <br><br></td></tr></table><br>
+<a name="2043987"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Supertino</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Show off :p <br><br></td></tr></table><br>
+<a name="2043989"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Skn3</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice! <br><br></td></tr></table><br>
+<a name="2043990"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Interesting to see the performance differences across platforms -- shockingly, HTML5 (in Chrome) was possibly the fastest here, or very close to GLFW!<br><br>XNA gives me a load of errors, though: "The rectangle is too large or too small for this resource."<br><br>Have to see what my humble Android phone makes of this... <br><br></td></tr></table><br>
+<a name="2044052"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kauffy</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> That's very cool. Man, I remember when a render like that would take several days. :) <br><br></td></tr></table><br>
+<a name="2044380"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dragon</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> interesting, but something is not realistic...<br><br>another free examples<br><br><a href="http://madebyevan.com/webgl-path-tracing/" target="_blank">http://madebyevan.com/webgl-path-tracing/</a><br><br><a href="http://kevinbeason.com/smallpt/" target="_blank">http://kevinbeason.com/smallpt/</a> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

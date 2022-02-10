@@ -1,0 +1,296 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Super-simple C-style preprocessor</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Use #define, #ifdef, #include etc. with any file, language=bb, category=File Utilities'><meta name='author' content='Yasha'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=8>File Utilities</a>/Super-simple C-style preprocessor</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2656.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Super-simple C-style preprocessor by Yasha</td><td align="right">2010 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This is the preprocessor I originally tried to force on top of my <a href="http://www.blitzbasic.com/Community/posts.php?topic=84763" target="_blank">failed QuakeC implementation</a>. It's since found its way into my other projects, including <a href="http://www.blitzbasic.com/Community/posts.php?topic=87642" target="_blank">Objective-B3D</a>. It's not actually all that useful (<b>no macros!</b>), and nowadays many people (read: Java users) are opposed to this sort of thing altogether, but here it is if anyone wants it. Bear in mind that this doesn't include any way to preserve line numbering or file names (useful for error messages), which is why I've stopped using it.<br><br>(taken from the code below)<br>;Commands:<br>;	#define NAME CONSTANT - replace all occurences of NAME with CONSTANT. Cannot refer to other #defines<br>;	#undef NAME - remove a #defined constant so it isn't replaced any more<br>;	#if EXPRESSION - either compare a constant to another constant (literal or #defined) or assert that it's nonzero<br>;	#ifdef NAME - include the following block of code only if NAME has been #defined<br>;	#ifndef NAME - include the following block of code only if NAME has not been #defined<br>;	#elif EXPRESSION - short for ElseIf<br>;	#else - if the last check evaluated false, do this instead<br>;	#endif - mark the end of a conditional inclusion block. These are allowed to nest<br>;	#include FILE - copy the entire contents of the specified filename (quotemarks optional)<br>;	#option OPTION - does nothing: add language-relevant options here<br>;	#error ERR - issues error ERR via error handler. Best used with a condition check...!<br><br>;Notes:<br>;	- #define does not create macros, only simple substitution constants<br>;	- commands must be the first text on their line<br>;	- any text after a command will potentially be considered part of it, or at best ignored </td></tr><tr ><td class="cell"><pre class="code">;General-purpose C-like directive processor
+;==========================================
+
+
+;Not very useful by itself, but you can plug it in to a code processor or script compiler easily
+
+
+;Commands:
+;	#define NAME CONSTANT - replace all occurences of NAME with CONSTANT. Cannot refer to other #defines
+;	#undef NAME - remove a #defined constant so it isn't replaced any more
+;	#if EXPRESSION - either compare a constant to another constant (literal or #defined) or assert that it's nonzero
+;	#ifdef NAME - include the following block of code only if NAME has been #defined
+;	#ifndef NAME - include the following block of code only if NAME has not been #defined
+;	#elif EXPRESSION - short for ElseIf
+;	#else - if the last check evaluated false, do this instead
+;	#endif - mark the end of a conditional inclusion block. These are allowed to nest
+;	#include FILE - copy the entire contents of the specified filename (quotemarks optional)
+;	#option OPTION - does nothing: add language-relevant options here
+;	#error ERR - issues error ERR via error handler. Best used with a condition check...!
+
+;Notes:
+;	- #define does not create macros, only simple substitution constants
+;	- commands must be the first text on their line
+;	- any text after a command will potentially be considered part of it, or at best ignored
+
+
+;Replace these with tokens that match your language
+Const PP_LINECOMMENT$ = "//"		;Single-line comment
+Const PP_BLOCKCOMMENTSTART$ = "/*"	;Start of block-comment
+Const PP_BLOCKCOMMENTEND$ = "*/"	;End of block-comment
+Const PP_ESCAPECHR$ = "\"			;Escape character (to allow " to appear in strings)
+
+Type PP_Macro			;As defined with #define. No regular expressions, just cut and paste
+	Field tok$		;Constant token to use in source
+	Field def$		;Definition
+End Type
+
+Function PP_Preprocess(inputFilename$,outputFilename$)		;Loads the source from file and applies preprocessor commands
+	Local m.PP_Macro,n.PP_Macro,pos,ptr,i
+	Local com,sep,skip,debugout,srcline$,remain$
+	Local inquote,incomment,cfile,filelist=CreateBank(4)
+	Local sourceBank=CreateBank(4),iStack=CreateBank(0)
+	
+	cfile=ReadFile(inputFilename)
+	PokeInt(filelist,0,cfile)
+	Repeat
+		srcline=ReadLine(cfile)
+		
+		If Left(Trim(srcline),1)="#"
+			srcline=Replace(srcline,Chr(9)," ")
+			com=Instr(srcline,PP_BLOCKCOMMENTSTART)
+			If com&gt;0
+				remain=Right(srcline,Len(srcline)-(com-1))		;Rescue comments with /* as otherwise there will be parse errors later
+				
+				ResizeBank sourceBank,BankSize(sourceBank)+Len(remain)+2
+				For ptr=0 To Len(remain)-1
+					PokeByte sourceBank,pos+ptr,Asc(Mid(remain,ptr+1,1))
+				Next
+				PokeShort sourceBank,pos+ptr,$A0D		;CR+LF - end of line
+				pos=pos+ptr+2
+				
+				srcline=Left(srcline,com-1)
+			EndIf
+			
+			com=Instr(srcline,PP_LINECOMMENT)
+			If com&gt;0 Then srcline=Left(srcline,com-1)
+			srcline=Trim(srcline)+" "	;Force control line to end in a space
+			
+			Select True
+				Case Lower(Left(srcline,8))="#define "				;Add a macro
+					If skip=0
+						m=New PP_Macro
+						srcline=Trim(Mid(srcline,8))
+						sep=Instr(srcline," ")
+						
+						If sep
+							m\tok=Trim(Left(srcline,sep))
+							m\def=Trim(Mid(srcline,sep+1))
+						Else
+							m\tok=srcline
+							m\def=""
+						EndIf
+						
+						For n=Each PP_Macro
+							If n&lt;&gt;m And m\tok=n\tok Then PP_Error("Token "+m\tok+" is already defined")
+						Next
+					EndIf
+					
+				Case Lower(Left(srcline,7))="#undef "				;Remove a macro
+					If skip=0
+						srcline=Trim(Mid(srcline,7))
+						For m=Each PP_Macro
+							If m\tok=srcline Then Delete m:Exit
+						Next
+						If m=Null Then PP_Error("token "+Chr(34)+srcline+Chr(34)+" does not exist")
+					EndIf
+					
+				Case Lower(Left(srcline,4))="#if "					;Conditional compilation by value
+					srcline=Trim(Mid(srcline,4))
+					If skip=0
+						ResizeBank iStack,BankSize(iStack)+1
+						skip=skip+(Not(PP_EvalDirective(srcline)))
+						PokeByte iStack,BankSize(iStack)-1,Not(skip)
+					Else
+						skip=skip+1
+					EndIf
+					
+				Case Lower(Left(srcline,7))="#ifdef "				;Conditional compilation by definition
+					srcline=Trim(Mid(srcline,7))
+					If skip=0
+						ResizeBank iStack,BankSize(iStack)+1
+						skip=skip+1
+						For m=Each PP_Macro
+							If m\tok=srcline Then skip=skip-1:Exit
+						Next
+						PokeByte iStack,BankSize(iStack)-1,Not(skip)
+					Else
+						skip=skip+1
+					EndIf
+					
+				Case Lower(Left(srcline,8))="#ifndef "				;Conditional lack of compilation by definition
+					srcline=Trim(Mid(srcline,8))
+					If skip=0
+						ResizeBank iStack,BankSize(iStack)+1
+						For m=Each PP_Macro
+							If m\tok=srcline Then skip=skip+1:Exit
+						Next
+						PokeByte iStack,BankSize(iStack)-1,Not(skip)
+					Else
+						skip=skip+1
+					EndIf
+					
+				Case Lower(Left(srcline,6))="#elif "				;Alternate condition check
+					If skip=1
+						srcline=Trim(Mid(srcline,6))
+						If PeekByte(iStack,BankSize(iStack)-1)=0	;Only try if this #if level hasn't done anything yet
+							If PP_EvalDirective(srcline)
+								PokeByte iStack,BankSize(iStack)-1,1
+								skip=0
+							EndIf
+						Else
+							skip=1
+						EndIf
+					EndIf
+					
+				Case Lower(Left(srcline,6))="#else "				;Default condition
+					If skip=1
+						If PeekByte(iStack,BankSize(iStack)-1)=0 Then skip=0
+					ElseIf skip=0
+						skip=1
+					EndIf
+					
+				Case Lower(Left(srcline,7))="#endif "				;End of conditional compilation block
+					If skip&gt;0 Then skip=skip-1
+					If skip=0
+						If BankSize(iStack) Then ResizeBank iStack,BankSize(iStack)-1
+					EndIf
+					
+				Case Lower(Left(srcline,9))="#include "				;Include files
+					If skip=0
+						srcline=Trim(Mid(srcline,9))
+						If Left(srcline,1)=Chr(34) And Right(srcline,1)=Chr(34) Then srcline=Mid(srcline,2,Len(srcline)-2)	;Cut off quote marks
+						cfile=ReadFile(srcline)
+						If cfile=0 Then PP_Error "file "+Chr(34)+srcline+Chr(34)+" does not exist"
+						ResizeBank(filelist,BankSize(filelist)+4)
+						PokeInt filelist,BankSize(filelist)-4,cfile
+					EndIf
+					
+				Case Lower(Left(srcline,8))="#option "				;Set compilation options
+					If skip=0
+						srcline=Trim(Mid(srcline,8))
+						Select srcline
+							;Left empty for future expansion
+							Default:PP_Error("unrecognised compiler option")
+						End Select
+					EndIf
+					
+				Case Lower(Left(srcline,7))="#error "
+					If skip=0
+						srcline=Trim(Mid(srcline,7))
+						PP_Error(srcline)
+					EndIf
+					
+				Default
+					PP_Error("unrecognised preprocessor command: "+Chr(34)+srcline+Chr(34))
+			End Select
+		Else
+			If skip=0
+				If First PP_Macro&lt;&gt;Null		;Replace #defined tokens
+					inquote=0
+					For ptr=1 To Len(srcline)
+						If Mid(srcline,ptr,2)=PP_LINECOMMENT Then Exit
+						If Mid(srcline,ptr,1)=Chr(34)
+							If inquote=0
+								inquote=True
+							Else
+								If Mid(srcline,ptr-1,1)&lt;&gt;PP_ESCAPECHR Then inquote=False
+							EndIf
+						EndIf
+						If Mid(srcline,ptr,2)=PP_BLOCKCOMMENTSTART Then incomment=True:ElseIf Mid(srcline,ptr,2)=PP_BLOCKCOMMENTEND Then incomment=False
+						If inquote=False And incomment=False
+							For m=Each PP_Macro
+								If ptr&gt;1 Then i=Asc(Mid(srcline,ptr-1,1)):Else i=0
+								If Not((i&gt;47 And i&lt;58) Or (i&gt;64 And i&lt;91) Or i=95 Or (i&gt;96 And i&lt;123))
+									i=Asc(Mid(srcline,ptr+Len(m\tok),1))
+									If Not((i&gt;47 And i&lt;58) Or (i&gt;64 And i&lt;91) Or i=95 Or (i&gt;96 And i&lt;123))
+										If Mid(srcline,ptr,Len(m\tok))=m\tok
+											srcline=Left(srcline,ptr-1)+m\def+Right(srcline,Len(srcline)-(ptr-1)-Len(m\tok))
+										EndIf
+									EndIf
+								EndIf
+							Next
+						EndIf
+					Next
+				EndIf
+				
+				ResizeBank sourceBank,BankSize(sourceBank)+Len(srcline)+2
+				For ptr=0 To Len(srcline)-1
+					PokeByte sourceBank,pos+ptr,Asc(Mid(srcline,ptr+1,1))
+				Next
+				PokeShort sourceBank,pos+ptr,$A0D		;CR+LF - end of line
+				pos=pos+ptr+2
+			EndIf
+		EndIf
+		
+		If Eof(cfile)
+			CloseFile cfile
+			ResizeBank filelist,BankSize(filelist)-4
+			If BankSize(filelist)=0 Then Exit:Else cfile=PeekInt(filelist,BankSize(filelist)-4)
+		EndIf
+	Forever
+	
+	;Dump out a copy of the source to be read by the tokeniser
+	debugout=WriteFile(outputFilename)
+	WriteBytes(sourceBank,debugout,0,BankSize(sourceBank))
+	CloseFile debugout
+	
+	FreeBank filelist		;Tidy up
+	FreeBank sourceBank
+	FreeBank iStack
+	Delete Each PP_Macro
+End Function
+
+Function PP_EvalDirective(directive$)	;Evaluate an #if directive
+	Local lArg$,op$,rArg$,i,m.PP_Macro
+	
+	i=Instr(directive," ")
+	lArg=Trim(Left(directive,i))
+	directive=Trim(Mid(directive,i))
+	
+	i=Instr(directive," ")
+	op=Trim(Left(directive,i))
+	rArg=Trim(Mid(directive,i))
+	
+	For m=Each PP_Macro
+		If m\tok=lArg Then lArg=m\def
+		If m\tok=rArg Then rArg=m\def
+	Next
+	
+	Select op
+		Case "=","=="		;On tests for equality, strings will be compared directly so "6.0" != "6" - must be converted if floats are involved
+			If Instr(lArg,".") Or Instr(rArg,".")
+				Return (Float(lArg) = Float(rArg))
+			Else
+				Return lArg=rArg
+			EndIf
+			
+		Case "&lt;&gt;","!="
+			If Instr(lArg,".") Or Instr(rArg,".")
+				Return (Float(lArg) &lt;&gt; Float(rArg))
+			Else
+				Return lArg &lt;&gt; rArg
+			EndIf
+			
+		Case "&lt;"			;On tests that imply numerical value, strings will be automagically converted!
+			Return lArg &lt; rArg
+			
+		Case "&gt;"
+			Return lArg &gt; rArg
+			
+		Case "&lt;="
+			Return lArg &lt;= rArg
+			
+		Case "&gt;="
+			Return lArg &gt;= rArg
+			
+		Case ""
+			Return lArg&lt;&gt;0
+			
+	End Select
+End Function
+
+Function PP_Error(errorMessage$)		;Replace calls to this with your compiler's main error handler function
+	Print "ERROR: "+errorMessage
+	WaitKey:End
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br>None.<br><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

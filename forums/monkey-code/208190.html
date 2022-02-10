@@ -1,0 +1,505 @@
+<!DOCTYPE html><html lang="en" ><head ><title >True Type Fonts for Android and HTML5</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >True Type Fonts for Android and HTML5</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >True Type Fonts for Android and HTML5</a><br><br>
+<a name="2082358"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >therevills</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Inspired by a blog post by fractious:<br><a href="http://fractiousg.blogspot.com.au/2012/04/rendering-text-in-opengl-on-android.html" target="_blank">http://fractiousg.blogspot.com.au/2012/04/rendering-text-in-opengl-on-android.html</a><br><br>This module allows you to load a true type font (ttf) in MonkeyX. The basic idea is that the module loads in the ttf and then displays it in the background, where it is rendered and captured to a Monkey surface so you can draw it later.<br><br>Android code:<br><b>GLText.java</b><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">import android.graphics.Typeface;
+import android.graphics.Paint;
+
+// GLText converted to Monkey from:
+// <a href="http://fractiousg.blogspot.com.au/2012/04/rendering-text-in-opengl-on-android.html" target="_blank">http://fractiousg.blogspot.com.au/2012/04/rendering-text-in-opengl-on-android.html</a>
+
+
+class GLText{
+	gxtkSurface surface;
+
+	//--Constants--//
+	public final static int CHAR_START = 32;           // First Character (ASCII Code)
+	public final static int CHAR_END = 126;            // Last Character (ASCII Code)
+	public final static int CHAR_CNT = ( ( ( CHAR_END - CHAR_START ) + 1 ) + 1 );  // Character Count (Including Character to use for Unknown)
+
+	public final static int CHAR_NONE = 32;            // Character to Use for Unknown (ASCII Code)
+	public final static int CHAR_UNKNOWN = ( CHAR_CNT - 1 );  // Index of the Unknown Character
+
+	public final static int FONT_SIZE_MIN = 6;         // Minumum Font Size (Pixels)
+	public final static int FONT_SIZE_MAX = 180;       // Maximum Font Size (Pixels)
+
+	public final static int CHAR_BATCH_SIZE = 100;     // Number of Characters to Render Per Batch
+
+	int fontPadX, fontPadY;                            // Font Padding (Pixels; On Each Side, ie. Doubled on Both X+Y Axis)
+
+	float fontHeight;                                  // Font Height (Actual; Pixels)
+	float fontAscent;                                  // Font Ascent (Above Baseline; Pixels)
+	float fontDescent;                                 // Font Descent (Below Baseline; Pixels)
+
+	int textureSize;                                   // Texture Size for Font (Square)
+
+	float charWidthMax;                                // Character Width (Maximum; Pixels)
+	float charHeight;                                  // Character Height (Maximum; Pixels)
+	final float[] charWidths;                          // Width of Each Character (Actual; Pixels)
+	TextureRegion[] charRgn;                           // Region of Each Character (Texture Coordinates)
+	int cellWidth, cellHeight;                         // Character Cell Width/Height
+
+	float scaleX, scaleY;                              // Font Scale (X,Y Axis)
+	float spaceX;  
+
+	boolean allChars;
+	
+	Activity activity;
+	Context context;
+	AssetManager assets;
+	
+	static public GLText GetNewInstance(){
+		return new GLText();
+	}
+	
+	public GLText() {
+		activity = BBAndroidGame.AndroidGame().GetActivity();
+		context = activity.getApplicationContext();
+		
+		surface = new gxtkSurface();
+		
+		assets = context.getAssets();
+		
+		charWidths = new float[CHAR_CNT];               // Create the Array of Character Widths
+		charRgn = new TextureRegion[CHAR_CNT];          // Create the Array of Character Regions
+
+		// initialize remaining members
+		fontPadX = 0;
+		fontPadY = 0;
+
+		fontHeight = 0.0f;
+		fontAscent = 0.0f;
+		fontDescent = 0.0f;
+
+		textureSize = 0;
+
+		charWidthMax = 0;
+		charHeight = 0;
+
+		cellWidth = 0;
+		cellHeight = 0;
+
+		scaleX = 1.0f;                                  // Default Scale = 1 (Unscaled)
+		scaleY = 1.0f;                                  // Default Scale = 1 (Unscaled)
+		spaceX = 0.0f;
+	}
+	
+	public boolean CreateText(String file, String text, int size){
+		return Load(file, text, size, 0, 0);
+	}
+	
+	public boolean Load(String file, int size, int padX, int padY){
+		return Load(file, "", size, padX, padY);
+	}
+	
+	public boolean Load(String file, String text, int size, int padX, int padY){
+		// Append monkey folder!!!
+		file = "monkey/"+file;
+		
+		allChars = false;
+		if ("".equals(text))
+			allChars = true;
+		
+		
+		// load the font and setup paint instance for drawing
+		Typeface tf = Typeface.createFromAsset( assets, file );  // Create the Typeface from Font File
+		Paint paint = new Paint();                      // Create Android Paint Instance
+		paint.setAntiAlias( true );                     // Enable Anti Alias
+		paint.setTextSize( size );                      // Set Text Size
+		paint.setColor( 0xffffffff );                   // Set ARGB (White, Opaque)
+		paint.setTypeface( tf );                        // Set Typeface
+		
+		// get font metrics
+		Paint.FontMetrics fm = paint.getFontMetrics();  // Get Font Metrics
+		fontHeight = (float)Math.ceil( Math.abs( fm.bottom ) + Math.abs( fm.top ) );  // Calculate Font Height
+		fontAscent = (float)Math.ceil( Math.abs( fm.ascent ) );  // Save Font Ascent
+		fontDescent = (float)Math.ceil( Math.abs( fm.descent ) );  // Save Font Descent
+		
+		// determine the width of each character (including unknown character)
+		// also determine the maximum character width
+		char[] s = new char[2];                         // Create Character Array
+		charWidthMax = charHeight = 0;                  // Reset Character Width/Height Maximums
+		float[] w = new float[2];                       // Working Width Value
+		int cnt = 0;                                    // Array Counter
+		for ( char c = CHAR_START; c &lt;= CHAR_END; c++ )  {  // FOR Each Character
+			s[0] = c;                                    // Set Character
+			paint.getTextWidths( s, 0, 1, w );           // Get Character Bounds
+			charWidths[cnt] = w[0];                      // Get Width
+			if ( charWidths[cnt] &gt; charWidthMax )        // IF Width Larger Than Max Width
+				charWidthMax = charWidths[cnt];           // Save New Max Width
+			cnt++;                                       // Advance Array Counter
+		}
+		s[0] = CHAR_NONE;                               // Set Unknown Character
+		paint.getTextWidths( s, 0, 1, w );              // Get Character Bounds
+		charWidths[cnt] = w[0];                         // Get Width
+		if ( charWidths[cnt] &gt; charWidthMax )           // IF Width Larger Than Max Width
+			charWidthMax = charWidths[cnt];              // Save New Max Width
+		cnt++;                                          // Advance Array Counter
+
+		// set character height to font height
+		charHeight = fontHeight;                        // Set Character Height
+		
+		int maxSize = 0;
+		
+		if (allChars) {
+			// find the maximum size, validate, and setup cell sizes
+			cellWidth = (int)charWidthMax + ( 2 * fontPadX );  // Set Cell Width
+			cellHeight = (int)charHeight + ( 2 * fontPadY );  // Set Cell Height
+			maxSize = cellWidth &gt; cellHeight ? cellWidth : cellHeight;  // Save Max Size (Width/Height)
+			if ( maxSize &lt; FONT_SIZE_MIN || maxSize &gt; FONT_SIZE_MAX )  // IF Maximum Size Outside Valid Bounds
+				return false;                                // Return Error
+		} else  {
+			cellWidth = (int)charWidthMax * text.length();
+			cellHeight = (int)charHeight;
+			maxSize = cellWidth;
+		}
+		// set texture size based on max font size (width or height)
+		// NOTE: these values are fixed, based on the defined characters. when
+		// changing start/end characters (CHAR_START/CHAR_END) this will need adjustment too!
+		Bitmap bitmap;
+		if (allChars) {
+			if ( maxSize &lt;= 24 )                            // IF Max Size is 18 or Less
+				textureSize = 256;                           // Set 256 Texture Size
+			else if ( maxSize &lt;= 40 )                       // ELSE IF Max Size is 40 or Less
+				textureSize = 512;                           // Set 512 Texture Size
+			else if ( maxSize &lt;= 80 )                       // ELSE IF Max Size is 80 or Less
+				textureSize = 1024;                          // Set 1024 Texture Size
+			else                                            // ELSE IF Max Size is Larger Than 80 (and Less than FONT_SIZE_MAX)
+				textureSize = 2048;                          // Set 2048 Texture Size
+				
+			// create an empty bitmap (alpha only)
+			bitmap = Bitmap.createBitmap( textureSize, textureSize, Bitmap.Config.ARGB_8888 );//Bitmap.Config.ALPHA_8 );  // Create Bitmap
+		
+		} else {
+			textureSize = getNextPOT(maxSize);
+			int textureSizeH = getNextPOT(cellHeight);
+
+			// create an empty bitmap (alpha only)
+			bitmap = Bitmap.createBitmap( textureSize, textureSizeH, Bitmap.Config.ARGB_8888 );//Bitmap.Config.ALPHA_8 );  // Create Bitmap
+		}
+
+		Canvas canvas = new Canvas( bitmap );           // Create Canvas for Rendering to Bitmap
+		bitmap.eraseColor( 0x00000000 );                // Set Transparent Background (ARGB)
+
+		// render each of the characters to the canvas (ie. build the font map)
+		float x = fontPadX;                             // Set Start Position (X)
+		float y = ( cellHeight - 1 ) - fontDescent - fontPadY;  // Set Start Position (Y)
+		if (allChars) {
+			for ( char c = CHAR_START; c &lt;= CHAR_END; c++ )  {  // FOR Each Character
+				s[0] = c;                                    // Set Character to Draw
+				canvas.drawText( s, 0, 1, x, y, paint );     // Draw Character
+				x += cellWidth;                              // Move to Next Character
+				if ( ( x + cellWidth - fontPadX ) &gt; textureSize )  {  // IF End of Line Reached
+					x = fontPadX;                             // Set X for New Row
+					y += cellHeight;                          // Move Down a Row
+				}
+			}
+		} else {
+			canvas.drawText( text, x, y, paint );
+		}
+		s[0] = CHAR_NONE;                               // Set Character to Use for NONE
+		
+		canvas.drawText( s, 0, 1, x, y, paint );        // Draw Character
+		surface.SetBitmap( bitmap );
+
+		// setup the array of character texture regions
+		x = 0;                                          // Initialize X
+		y = 0;                                          // Initialize Y
+		for ( int c = 0; c &lt; CHAR_CNT; c++ )  {         // FOR Each Character (On Texture)
+			charRgn[c] = new TextureRegion( textureSize, textureSize, x, y, cellWidth-1, cellHeight-1 );  // Create Region for Character
+			x += cellWidth;                              // Move to Next Char (Cell)
+			if ( x + cellWidth &gt; textureSize )  {
+				x = 0;                                    // Reset X Position to Start
+				y += cellHeight;                          // Move to Next Row (Cell)
+			}
+		}
+		
+		return true;
+	}
+	
+	private int getNextPOT(int a) {
+		int b = 1;
+		while (b &lt; a){
+			b = b &lt;&lt; 1;
+		}
+		return b;
+	}
+
+	private void SetMatrix() {
+		//FIXME: copied code from c_GraphicsContext.p_Validate() as I can't call it for some reason
+		if ((bb_graphics.g_context.m_matDirty)!=0) {
+			bb_graphics.g_renderDevice.SetMatrix(bb_graphics.g_context.m_ix,
+								bb_graphics.g_context.m_iy,
+								bb_graphics.g_context.m_jx,
+								bb_graphics.g_context.m_jy,
+								bb_graphics.g_context.m_tx,
+								bb_graphics.g_context.m_ty);
+			bb_graphics.g_context.m_matDirty=0;
+		}
+	}
+	
+	public void Draw(String text, float x, float y)  {
+		if (!allChars)
+			return;
+			
+		SetMatrix();
+		
+		float chrHeight = cellHeight * scaleY;          // Calculate Scaled Character Height
+		float chrWidth = cellWidth * scaleX;            // Calculate Scaled Character Width
+		int len = text.length();                        // Get String Length
+		x += ( chrWidth / 2.0f ) - ( fontPadX * scaleX );  // Adjust Start X
+		y += ( chrHeight / 2.0f ) - ( fontPadY * scaleY );  // Adjust Start Y
+		for ( int i = 0; i &lt; len; i++ )  {              // FOR Each Character in String
+			int c = (int)text.charAt( i ) - CHAR_START;  // Calculate Character Index (Offset by First Char in Font)
+			if ( c &lt; 0 || c &gt;= CHAR_CNT )                // IF Character Not In Font
+				c = CHAR_UNKNOWN;                         // Set to Unknown Character Index
+			
+			bb_graphics.g_renderDevice.DrawSurface2(surface, x, y, charRgn[c].x, charRgn[c].y, charRgn[c].w, charRgn[c].h);
+
+			x += ( charWidths[c] + spaceX ) * scaleX;    // Advance X Position by Scaled Character Width
+		}
+	}
+	
+	public void DrawTexture(float x, float y)  {
+		SetMatrix();
+		bb_graphics.g_renderDevice.DrawSurface(surface, x, y);
+	}
+}
+
+class TextureRegion {
+
+	//--Members--//
+	public float u1, v1;                               // Top/Left U,V Coordinates
+	public float u2, v2;                               // Bottom/Right U,V Coordinates
+
+	public int x, y;
+	public int w, h;
+	
+	//--Constructor--//
+	// D: calculate U,V coordinates from specified texture coordinates
+	// A: texWidth, texHeight - the width and height of the texture the region is for
+	//    x, y - the top/left (x,y) of the region on the texture (in pixels)
+	//    width, height - the width and height of the region on the texture (in pixels)
+	public TextureRegion(float texWidth, float texHeight, float x, float y, float width, float height)  {
+		this.x = Math.round(x);
+		this.w = Math.round(width);
+		this.y = Math.round(y);
+		this.h = Math.round(height);
+		
+		this.u1 = x / texWidth;                         // Calculate U1
+		this.v1 = y / texHeight;                        // Calculate V1
+		this.u2 = this.u1 + ( width / texWidth );       // Calculate U2
+		this.v2 = this.v1 + ( height / texHeight );     // Calculate V2
+	}
+}
+</textarea><br><br>HTML5 Code:<br><b>GLText.js</b><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">function GLText(){
+	this.image = new Image;
+	this.font = "";
+	this.size = 0;
+	this.text = "";
+	return this;
+}
+
+GLText.GetNewInstance=function()
+{
+	return new GLText();
+}
+
+GLText.prototype.Load=function(font, size, xpad, ypad)
+{
+	this.font = font;
+	this.size = size;
+
+	var newStyle = document.createElement('style');
+
+	newStyle.appendChild(document.createTextNode("\
+	@font-face {\
+		font-family: '" + font + "';\
+		src: url('data/" + font + "');\
+	}\
+	"));
+	document.head.appendChild(newStyle);
+	
+	return true;
+}
+
+GLText.prototype.CreateText=function(font, text, size)
+{
+	this.font = font
+	this.text = text;
+	this.size = size;
+	this.Load(font, size, 0, 0);
+	return true;
+}
+
+GLText.prototype.Draw=function(text, x, y)
+{
+	var canvas = document.getElementById( "GameCanvas" );
+	var ctx = canvas.getContext('2d');
+
+	ctx.font = this.size + 'px "'+this.font+'"';
+	ctx.textBaseline = 'top';
+	ctx.fillText(text, x, y);	
+}
+
+GLText.prototype.DrawTexture=function(x, y)
+{
+	this.Draw(this.text, x, y);
+}</textarea><br><br>MonkeyX Code:<br><b>gltext.monkey</b><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+#If TARGET&lt;&gt;"android" and TARGET&lt;&gt;"html5"
+#Error "The GLText module is only available on the Android and HTML5 targets"
+#End
+
+Import mojo
+Import "native/GLText.${LANG}"
+
+Extern
+
+Class GLText Extends Null = "GLText"
+	Function GetNewInstance:GLText()
+	Method Load:bool(file:String, size:Int, padX:Int, padY:Int)
+	Method CreateText:bool(file:String, text:String, size:Int)
+	Method Draw:Void(text:String, x:Float, y:Float)
+	Method DrawTexture:Void(x:Float, y:Float)
+End
+</textarea><br><br>Example code:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Strict
+#TEXT_FILES+="*.ttf"
+#ANDROID_APP_LABEL="Diddy GLText Test"
+#ANDROID_APP_PACKAGE="com.therevillsgames.gltexttest"
+
+Import mojo
+Import diddy.gltext
+
+Function Main:Int()
+	New MyApp()
+	Return True
+End
+
+Class MyApp Extends App
+	Field font20:GLText
+	Field font10:GLText
+	Field rotation:Int
+	
+	Method OnCreate:Int()
+		font20 = GLText.GetNewInstance()
+		font20.Load("Roboto-Regular.ttf", 18, 2, 2)
+		
+		font10 = GLText.GetNewInstance()
+		font10.Load("Roboto-Regular.ttf", 10, 2, 2)
+		
+		SetUpdateRate(60)
+		Return True
+	End
+	
+	Method OnUpdate:Int()
+		rotation += 5
+		Return True
+	End
+
+	Method OnRender:Int()
+		Cls(10, 100, 100)
+		
+		Local date:Int[] = GetDate();
+		
+		PushMatrix
+			Translate 100, 100
+			Rotate rotation
+			SetColor 255, 255, 255		
+			font20.Draw("Hello Font20! " + date[6], 10, 30)
+			font10.Draw("Hello font10! " + date[6], 10, 60)
+		PopMatrix
+		
+		PushMatrix
+			Rotate 0
+			SetColor 255, 0, 0
+			font20.Draw("Hello Font20 Again! " + date[5], 10, 90)
+			font10.Draw("Hello font10 Again! " + date[5], 10, 120)
+		PopMatrix
+		
+		Return True
+	End
+
+End</textarea><br><br>For some reason I can't call c_GraphicsContext.p_Validate(), so I've copied the Matrix code in the Draw method...<br><br>I think this method could be used for the other targets to allow all of them to load TTF somehow...<br><br>Oh and this module is part of Diddy. <br><br></td></tr></table><br>
+<a name="2082356"></a>
+
+<a name="2082265"></a>
+
+<a name="2082263"></a>
+
+<a name="2082264"></a>
+
+<a name="2082276"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Midimaster</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh my god, what a feature! This would be so helpful!!! Thank you for sharing this. But what about the other targets? This could stop this boaring limitation with texts in monkey. <br><br>I would like to see this as a part of monkey kernel. Mark, could you please think about it? <br><br></td></tr></table><br>
+<a name="2082278"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Supertino</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> WoW really nice, FontMachine is good and all that but nothing beats TTF support IMHO. <br><br></td></tr></table><br>
+<a name="2082279"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >therevills</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just to be clear this is loading a TTF and converting it into a bitmap font. This allows you to only supply the ttfs which are small and saves generating multiple bitmasp fonts.<br><br>Also I was thinking this technique could be used to generate single images for full words or sentences, which would help performance. <br><br></td></tr></table><br>
+<a name="2082353"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >therevills</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Also I was thinking this technique could be used to generate single images for full words or sentences, which would help performance. <br></div><br>I've implemented this in the Diddy version:<br><a href="http://code.google.com/p/diddy/source/detail?r=30562b12cf5cf9b726174bd62fd078e2b65d7ed2" target="_blank">http://code.google.com/p/diddy/source/detail?r=30562b12cf5cf9b726174bd62fd078e2b65d7ed2</a><br><br>So the commands are:<br><pre class=code>' Load in font for dynamic text
+font20 = GLText.GetNewInstance() ' instantiate the GLText object
+font20.Load("Roboto-Regular.ttf", 20, 2, 2) '  load the font, set the size and padding using method Load(fontfile, fontsize, xpadding, ypadding)
+font20.Draw("Hello, World!", 100, 100) ' draws the text on screen using method Draw(text, x, y)
+
+' Create a static text texture
+staticScoreText  = GLText.GetNewInstance() '  instantiate the GLText object
+staticScoreText.CreateText("Roboto-Regular.ttf", "SCORE:", 30) ' load the font, set the text and set the size using method CreateText(fontfile, text, size)
+staticScoreText.DrawTexture(10, 200) ' draws the text on screen using DrawTexture(x, y)</pre> <br><br></td></tr></table><br>
+<a name="2082352"></a>
+
+<a name="2082357"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >therevills</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Update to have WIP HTML5 support... <br><br></td></tr></table><br>
+<a name="2082360"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Samah</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Be aware of licenses when distributing TTF files with your game.  I would suggest grabbing one from here:<br><a href="http://openfontlibrary.org/" target="_blank">http://openfontlibrary.org/</a> <br><br></td></tr></table><br>
+<a name="2082376"></a>
+
+<a name="2082377"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >MikeHart</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Are webfonts supported with HTML5 too? Some sponsors only accept games which use webfonts. <br><br></td></tr></table><br>
+<a name="2082411"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >CopperCircle</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is great, I was hoping to do a similar thing with SVG fonts.  I hope you can get other platforms working... <br><br></td></tr></table><br>
+<a name="2082453"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >therevills</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Are webfonts supported with HTML5 too?  <br></div><br>From what I've read you should be able to change the code to support them, with the HTML5 code we are actually drawing the text directly with the font (no bitmap fonts).<br><br><div class="quote"> I hope you can get other platforms working... <br></div><br>My target is Android and I have that working, but I prototype in HTML5 and that's nearly fully working - so I wont be adding anymore targets myself. <br><br></td></tr></table><br>
+<a name="2113968"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >therevills</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm now reusing this for the HTML5 version of my game due to the slowness happening with Chrome v47 and SetColor/MouseDrag.<br><br>I have found and fixed an issue with the matrix for HTML5 and also added a new method to calculate the width of the text (for HTML5):<br><br><a href="https://github.com/swoolcock/diddy/commit/b43e80c51e0ff741d4d4b208e6b4fde1b784bc90" target="_blank">https://github.com/swoolcock/diddy/commit/b43e80c51e0ff741d4d4b208e6b4fde1b784bc90</a><br><br>The important HTML5 fix is needed in the Draw method, we need to call bb_graphics_context.p_Validate(); so that the matrix is set correctly:<br><br><pre class=code>GLText.prototype.Draw=function(text, x, y)
+{
+	var canvas = document.getElementById( "GameCanvas" );
+	var ctx = canvas.getContext('2d');
+	bb_graphics_context.p_Validate();
+	
+	ctx.font = this.size + 'px "'+this.font+'"';
+	ctx.textBaseline = 'top';
+	ctx.fillText(text, x, y);
+}</pre><br><br>I'm also going to add a way to change the font size on the fly for HTML5, since its just property of the GLText class it should be pretty easy. The Android version cant do this as it is an actual image (bitmap font). Something like this should do it(untested):<br><pre class=code>GLText.prototype.SetSize=function(size)
+{
+	this.size = size;
+}</pre><br><pre class=code>Class GLText Extends Null = "GLText"
+	Function GetNewInstance:GLText()
+	Method Load:bool(file:String, size:Int, padX:Int, padY:Int)
+	Method CreateText:bool(file:String, text:String, size:Int)
+	Method Draw:Void(text:String, x:Float, y:Float)
+	Method DrawTexture:Void(x:Float, y:Float)
+	Method CalcWidth:Int(text:String)
+	Method SetSize:Void(size:Int)
+End
+</pre><br><br>Actually the Android version maybe able to do this, but it would require we loading and recreating the bitmap font all the time... <br><br></td></tr></table><br>
+<a name="2113964"></a>
+
+<a name="2113963"></a>
+
+<a name="2113962"></a>
+
+<a name="2113985"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >CopperCircle</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi, I have extended this module with Skn3 and added an iOS version, I can email you the code if you want to merge it in? <br><br></td></tr></table><br>
+<a name="2114012"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >therevills</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> That'll be great CopperCircle or you could post the code here :)<br><br>BTW the SetSize method works well for HTML5. <br><br></td></tr></table><br>
+<a name="2114108"></a>
+
+<a name="2114109"></a>
+
+<a name="2114110"></a>
+
+<a name="2114111"></a>
+
+<a name="2114112"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Soap</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thank you for making this. Going to try to switch from using rendered fonts to this. I wonder if the features in mojo2 would make good looking fonts without using tons of memory. <a href="https://www.youtube.com/watch?v=CGZRHJvJYIg" target="_blank">https://www.youtube.com/watch?v=CGZRHJvJYIg</a> <br><br><a href="https://github.com/libgdx/libgdx/wiki/Distance-field-fonts" target="_blank">https://github.com/libgdx/libgdx/wiki/Distance-field-fonts</a> <br><br></td></tr></table><br>
+<a name="2114107"></a>
+
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

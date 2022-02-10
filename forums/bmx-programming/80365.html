@@ -1,0 +1,530 @@
+<!DOCTYPE html><html lang="en" ><head ><title >How to use Threads in BlitzMAX?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >How to use Threads in BlitzMAX?</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >How to use Threads in BlitzMAX?</a><br><br>
+<a name="903549"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TomToad</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Now that we have threading in the experimental svn version of BlitzMAX, I've been trying to wrap my head around it.  So I thought I'd start a thread for the purpose of learning.<br><br>Some functions are self explanatory, but others I can't seem to figure out.<br><br>I understand CreateThread(Entry:Object(data:Object),data:Object)<br>Entry is the function that is to run in it's own thread.  data is an Object that will be passed to that function.<br><br>Now I'm not completely sure how to use DetatchThread() and WaitThread().  I'm assuming that when WaitThread() is called, that the main thread waits until the second thread is through, then the second thread is closed.  So does DetatchThread() simply flag the GC to close the thread and allow the main thread to continue running alongside the second thread or does it immediately terminate the second thread?<br><br>When I run this example with WaitThread(), it behaves the way I expect it to<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Import pub.threads
+
+Local Time:Int = MilliSecs()
+Local Thread:Int = CreateThread(WaitOnMe,Null)
+
+WaitThread(Thread)
+Print "I have waited "+(MilliSecs()-Time)+" milliseconds"
+Input()
+
+Function WaitOnMe:Object(data:Object)
+	Print "In the WaitOnMe Thread"
+	Delay(10000)
+	Print "Finished Delay"
+End Function
+</textarea><br><br>But if I replace WaitThread() with DetachThread(), The WaitOnMe() function doesn't get called and Input acts as though I already hit Enter even though I haven't touched any key.<br>Putting DetachThread() after the Input() and it works fine.  The thread even interlaces it's Print with the main program's Print, like so, "I have waited 0 milliseIn the WcaitOonMe nThrdeads" proving that the threads are running independantly.<br>So am I right to assume that DetachThread() immediately ends the second thread?<br><br>Now for the data:Object parameter.  Is that only for reading or can you write to it as well?  This experiment seems to indicate that it can be written to, making it an ideal way for threads to pass information to each other.<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Import pub.threads
+
+Const ThreadWait:Int = 0
+Const ThreadSync:Int = 1
+Const ThreadEnd:Int = -1
+
+Type TSync
+	Field Go:Int = ThreadWait
+	Field Count:Int = 0
+End Type
+
+Local Time:Int = MilliSecs()
+Local Sync:TSync = New TSync
+
+Local Thread:Int = CreateThread(WaitOnMe,Sync)
+
+Print "Beginning..."
+
+Repeat
+	If Sync.Go = ThreadSync
+		Print "Syncing... "+Sync.Count
+		Sync.Go = ThreadWait
+	End If
+Until Sync.Go = ThreadEnd
+Print "Ending..."
+DetachThread(Thread)
+
+Function WaitOnMe:Object(data:Object)
+	Local Sync:TSync = TSync(data)
+	Local Timer:Int = MilliSecs() + 1000
+	
+	Repeat
+		If MilliSecs() &gt;= Timer
+			Timer :+ 1000
+			Sync.Count :+ 1
+			Sync.Go = ThreadSync
+		End If
+	Until Sync.Count = 10
+	Sync.Go = ThreadEnd
+
+End Function
+</textarea><br>I'm not completely sure if that is the correct way.  It might work ok in some circumstances, but be unstable in others.  As I understand it, Mutex is suppose to make shared data thread safe, but how do I use it?  Do I call LockMutex() before writing to anything that is shared and UnlockMutex() afterwards?  Do I need to make CreateMutex() global to the entire program or can I create a seperate mutex for every thread that uses a shared resource?<br>Seems that this works ok:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Import pub.threads
+
+Const ThreadWait:Int = 0
+Const ThreadSync:Int = 1
+Const ThreadEnd:Int = -1
+
+Type TSync
+	Field Go:Int = ThreadWait
+	Field Count:Int = 0
+End Type
+
+Global Mutex:Int = CreateMutex()
+
+Local Time:Int = MilliSecs()
+Local Sync:TSync = New TSync
+
+Local Thread:Int = CreateThread(WaitOnMe,Sync)
+
+Print "Beginning..."
+
+Repeat
+	If Sync.Go = ThreadSync
+		Print "Syncing... "+Sync.Count
+		LockMutex(Mutex)
+		Sync.Go = ThreadWait
+		UnlockMutex(Mutex)
+	End If
+Until Sync.Go = ThreadEnd
+Print "Ending..."
+DetachThread(Thread)
+CloseMutex()
+
+Function WaitOnMe:Object(data:Object)
+	Local Sync:TSync = TSync(data)
+	Local Timer:Int = MilliSecs() + 1000
+	
+	Repeat
+		If MilliSecs() &gt;= Timer
+			Timer :+ 1000
+			LockMutex(Mutex)
+			Sync.Count :+ 1
+			Sync.Go = ThreadSync
+			UnlockMutex(Mutex)
+		End If
+	Until Sync.Count = 10
+	LockMutex(Mutex)
+	Sync.Go = ThreadEnd
+	UnlockMutex(Mutex)
+
+End Function
+</textarea><br>Is this a more appropriate way of doing it?<br>Also, the Entry:Object(data:Object) function returns an Object.  Just what uses this object and what exactly should be returned in it?<br>Is this what gets returned in WaitThread()? <br><br></td></tr></table><br>
+<a name="903552"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Also as a general question about threads, can the function that is being run by the thread access all global variables defined in your app and access all memory and everything? It's not restricted to the Object you pass to it, or local variables only is it? <br><br></td></tr></table><br>
+<a name="903555"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Winni</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Threads share the memory space of the process to which they belong (which makes them so potentially dangerous).<br><br>If you want to access global variables, you should 'mutex' such operations to make them safe. If two threads write to the same memory concurrently, you're in for some bad surprises.<br><br>You should also mutex 'Print' commands, by the way, otherwise you will have some very weird outputs on your screen.<br><br>DetachThread() lets go of the thread once it finishes (you couldn't restart it anyway). WaitThread() waits for the thread to finish, then let's go of it. The main difference is that when calling WaitThread(), the calling thread stops until the called thread terminates; DetachThread() continues the execution of the calling thread. <br><br></td></tr></table><br>
+<a name="903570"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TomToad</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, I think I'm getting the idea of how DetachThread() works now.  Apparently if the main thread ends, any spawned threads end as well, regardless if they are finished or not.  That is why my first example would not work with DetachThread().  I did add an Input() command to stop execution while the thread ran, but for some reason, Input fell through without me hitting Enter.  But by replacing Input with a timed loop, I was able to get it to work.<br>Couldn't use Delay(), seems Delay can't run concurrently within two threads and if I used Mutex on Delay(), one delay would wait until the other one was finished.<br><br>Now back to using Mutex.  Is the way I'm using it here correct?  <br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Import pub.threads
+
+Local Time:Int = MilliSecs()
+Local Thread:Int = CreateThread(WaitOnMe,Null)
+Global Mutex:Int = CreateMutex()
+
+DetachThread(Thread)
+LockMutex(Mutex)
+Print "I have waited "+(MilliSecs()-Time)+" milliseconds"
+
+UnlockMutex(Mutex)
+Repeat
+Until MilliSecs() &gt;= Time + 20000
+
+Function WaitOnMe:Object(data:Object)
+	LockMutex(Mutex)
+	Print "In the WaitOnMe Thread"
+	UnlockMutex(Mutex)
+	Delay(10000)
+	LockMutex(Mutex)
+	Print "Finished Delay"
+	UnlockMutex(Mutex)
+End Function
+</textarea><br>Since CreateMutex() returns a handle, I would tend to think that you could create more than one.  That way you could have a Mutex on a Global and a Mutex on a Print statement so one thread wouldn't have to wait to access a global while another is printing something.<br>However, I noticed that CloseMutex() does not take any parameters.  Does that mean you should call it after all threads end to close all mutex, or is that an indication that you can only have one at a time?<br>looking at threads.c source, function threads_CloseMutex() takes a BBMutex * paramter, but it is not used.  Is that a mistake? According to REDi, it is.<br><div class="quote"> *BUG* It seems CloseMutex() is missing the (BBMutex*) handle in threads.bmx<br> <br></div> <br><br></td></tr></table><br>
+<a name="903573"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >REDi</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes that's all there is to mutual exclusions, just lock it before you read/write to a variable (or non-thread safe function) that's used by more than one thread at a time.<br><br>Its also good practice to have one mutex for each "visible" variable/object, so you could have a print_mutex etc, this reduces the amount of time spent on waiting for the mutex to become available. <br><br></td></tr></table><br>
+<a name="903574"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TomToad</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, I changed line 46 in Threads.bmx to read<br><b>Function CloseMutex( mutex )="threads_CloseMutex"</b><br>However, it doesn't seem to work with more than one Mutex as can be seen in this example.<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Import pub.threads
+
+Global TimerA:Int = MilliSecs() + 1000
+Global TimerB:Int = MilliSecs() + 1100
+Global MutexA:Int = CreateMutex()
+Global MutexB:Int = CreateMutex()
+
+Local OldA:Int = TimerA
+Local OldB:Int = TimerB
+Local EndTime:Int = MilliSecs() + 20000
+
+DetachThread(CreateThread(RunA,Null))
+DetachThread(CreateThread(RunB,Null))
+
+Repeat
+	LockMutex(MutexA)
+		If OldA &lt;&gt; TimerA
+			Print "TimerA Ticked"
+			OldA = TimerA
+		End If
+	UnlockMutex(MutexA)
+	
+	LockMutex(MutexB)
+		If OldB &lt;&gt; TimerB
+			Print "TimerB ticked"
+			OldB = TimerB
+		End If
+	UnlockMutex(MutexB)
+Until MilliSecs() &gt;= EndTime
+
+CloseMutex(MutexA)
+CloseMutex(MutexB)
+
+Function RunA:Object(data:Object)
+	Repeat
+		LockMutex(MutexA)
+			If MilliSecs() &gt;= TimerA Then TimerA :+ 1000
+		UnlockMutex(MutexA)
+	Forever
+End Function
+
+Function RunB:Object(data:Object)
+	Repeat
+		LockMutex(MutexB)
+			If MilliSecs() &gt;= TimerB Then TimerB :+ 1100
+		UnlockMutex(MutexB)
+	Forever
+End Function
+</textarea><br>It seems that the Mutex in RunA() never gets unblocked as you can see by the fact that TimerA never gets updated.<br><br>Hmm, seems if i move DetachThread()  to the end of the main thread, then it works as expected.  So DetachThread() doesn't necessarily wait until the thread's completion before ending it?<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Import pub.threads
+
+Global TimerA:Int = MilliSecs() + 1000
+Global TimerB:Int = MilliSecs() + 1100
+Global MutexA:Int = CreateMutex()
+Global MutexB:Int = CreateMutex()
+
+Local OldA:Int = TimerA
+Local OldB:Int = TimerB
+Local EndTime:Int = MilliSecs() + 20000
+
+Local ThreadA:Int = CreateThread(RunA,Null)
+Local ThreadB:Int = CreateThread(RunB,Null)
+
+Repeat
+	LockMutex(MutexA)
+		If OldA &lt;&gt; TimerA
+			Print "TimerA Ticked"
+			OldA = TimerA
+		End If
+	UnlockMutex(MutexA)
+	
+	LockMutex(MutexB)
+		If OldB &lt;&gt; TimerB
+			Print "TimerB ticked"
+			OldB = TimerB
+		End If
+	UnlockMutex(MutexB)
+Until MilliSecs() &gt;= EndTime
+
+CloseMutex(MutexA)
+CloseMutex(MutexB)
+
+DetachThread(ThreadA)
+DetachThread(ThreadB)
+
+Function RunA:Object(data:Object)
+	Repeat
+		LockMutex(MutexA)
+			If MilliSecs() &gt;= TimerA Then TimerA :+ 1000
+		UnlockMutex(MutexA)
+	Forever
+End Function
+
+Function RunB:Object(data:Object)
+	Repeat
+		LockMutex(MutexB)
+			If MilliSecs() &gt;= TimerB Then TimerB :+ 1100
+		UnlockMutex(MutexB)
+	Forever
+End Function
+</textarea> <br><br></td></tr></table><br>
+<a name="903576"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >REDi</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> looking at the source, detachthread only closes the handle and releases the structure, but I would have thought it would have doubled up for use to terminate a running thread as well.<br><br>I think you shouldnt call detachthread until the thread has actually finish running.<br><br>*EDIT* in your first test you forgot to make the threads? :P <br><br></td></tr></table><br>
+<a name="903578"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TomToad</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Having some fun here.  Can spawn the same function more than once. :)<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Import pub.threads
+
+Global Mutex:Int = CreateMutex()
+
+Local ThreadA:Int = CreateThread(Run,"Hello")
+Local ThreadB:Int = CreateThread(Run,"World")
+
+Delay(60000)
+DetachThread(ThreadA)
+DetachThread(ThreadB)
+CloseMutex(Mutex)
+
+Function Run:Object(data:Object)
+	Local S:String = String(data)
+	Local Timer:Int = MilliSecs() + 1000
+	
+	Repeat
+		If MilliSecs() &gt;= Timer
+			Timer :+ 1000
+			LockMutex(Mutex)
+				Print S
+			UnlockMutex(Mutex)
+		End If
+	Forever
+End Function
+</textarea> <br><br></td></tr></table><br>
+<a name="903580"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TomToad</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> I think you shouldnt call detachthread until the thread has actually finish running.  <br></div><br>Is there a way to detect when a thread is still running or has actually finished?<br>Also related, the "Hello World" example I just posted above uses a Repeat/Forever in the thread.  Is there a way for the main thread to terminate the spawned threads since DetachThread() doesn't seem to act consistently on this? <br><br></td></tr></table><br>
+<a name="903581"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >REDi</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Have a variable (mutexed) to tell the thread to finish? like I say, I'm surprised that detachthread doesn't also terminate the thread, may be we'll get that or a terminatethread function in the future.  It would also be nice to have a threadstatus command as well.<br><br>*EDIT* saying that I think the new GC expects the thread function to fall through properly, and not be terminated.<br><br>wrapping the whole thing up in a class as winni has done (in the other thread) is a good way to get around some of these problems. <br><br></td></tr></table><br>
+<a name="903583"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>looking at threads.c source, function threads_CloseMutex() takes a BBMutex * paramter, but it is not used. Is that a mistake? <br> <br></div><br>Oh yes, it's a whopper!<br><br>Fixed now, and I've also added a bit to the docs to hopefully clarify DetachThread a little. There is currently no kill/terminate thread function.<br><br>The detach/wait/close thread thing is kind of interesting. There are a couple of ways to do it:<br><br>1) Either DetachThread or WaitThread cause the thread to 'close' automatically - this is the current situation and similar to how unixy stuff works.<br><br>2) Add a 'CloseThread' to explicitly close threads - ie: either DetachThread/WaitThread also needs an explicit CloseThread. This is how win32 stuff works. I kind of like this because you can keep doing things with the thread's handle after, say, a WaitThread but before CloseThread.<br><br>3) Rely on GC to handle closing threads - ie: neither WaitThread/DetachThread close the thread: threads are closed when GC collects thread struct. Meh, not sure what I think of this.<br><br>What do I mean by 'closing' a thread? Basically just freeing up the data/handle it was using. This has to be done eventually, but with threading, just when to do it gets a bit fuzzy. There are already similar issues in the MaxIDE with processes...<br><br>Anyway, be interesting to hear others' thoughts here. <br><br></td></tr></table><br>
+<a name="903585"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >REDi</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Mark while your here, in case you miss it on the other thread... shouldnt threads.c use GC_CreateThread instead of plain old CreateThread? <br><br></td></tr></table><br>
+<a name="903587"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>Mark while your here, in case you miss it on the other thread... shouldnt threads.c use GC_CreateThread instead of plain old CreateThread?<br> <br></div><br>The bdwgc #define's CreateThread to GC_CreateThread (and a bunch of other stuff - which I'm not wild about, but it works) so it doesn't really matter.<br><br>If you don't do this properly, the GC spits up a notify box with 'no GC for this thread' or something similar - ie: you'll know about it (took me a day to get rid of!). <br><br></td></tr></table><br>
+<a name="903591"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >REDi</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ah, cool, my bad. :)<br><br>I've gotta... <b>YAY THREADS! :D</b> <br><br></td></tr></table><br>
+<a name="903657"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sorry, I'm completely newbee in this field (I saw this is experimental so I dont' want to bump more than due...) but what exactly does MUTEX?<br><br>This is TomToad's example<br><pre class=code>
+SuperStrict
+Import pub.threads
+Global Mutex:Int = CreateMutex()
+Local ThreadA:Int = CreateThread(Run,"Hello")
+Local ThreadB:Int = CreateThread(Run,"World")
+Delay(60000)
+DetachThread(ThreadA)
+DetachThread(ThreadB)
+CloseMutex(Mutex)
+
+Function Run:Object(data:Object)
+	Local S:String = String(data)
+	Local Timer:Int = MilliSecs() + 1000
+	
+	Repeat
+		If MilliSecs() &gt;= Timer
+			Timer :+ 1000
+			LockMutex(Mutex) '--- to every other threads 'Stop, I'm coming'?
+				Print S
+			UnlockMutex(Mutex)'--- to every other threads 'OK, I finished'?
+		End If
+	Forever
+End Function
+</pre><br><br>At the first I think Mutex should 'lock' a <u>determinated resource</u> for a <u>determinated thread</u>. But I think I was wrong and Mutex is a sort of message that a (current running) thread sends to all-the-others to lock them to do anything. Right?<br><br>But (if my interpretation is right....), why I need more than one Mutex? <br><br></td></tr></table><br>
+<a name="903659"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> If you make a lockmutex(MyMutex), if MyMutex is already locked, the thread will wait untill it is unlocked. Threads will not stop becouse you lock a mutex. Only threads trying to lock the same mutex, while you have it locked, will wait untill you release it. <br><br></td></tr></table><br>
+<a name="903668"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TomToad</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> Think of mutexes (mutexi?) like the take-a-number systems at the grocery store.  I go to the deli department and take a number.  I then wait until my number is called.  Once it is called, I now have access to the server and can get my bologna.<br>I think LockMutex and UnlockMutex is kind of misleading, but that is the terminology being used by the industry.  I think something like QueueMutex and FreeMutex would be better.  If a thread needs access to a resource, it gets queued behind other threads also waiting for its turn to the resource.  When its "number" is called, the thread gets access to the resource.  When it is done, it frees the resource so the next thread in line can get access.<br>If a thread doesn't actually need to use the resource, then there's no reason it should be queued, so it keeps running other tasks.  By using more than one Mutex, a thread doesn't have to wait in the same line as those waiting for ResourceA if it only needs to access ResourceB.<br><br>Now I hope I'm getting this right and not just confusing things more.  Even though I've understood the concept of threads for quite a while, I'm just now starting to experiment with them. <br><br></td></tr></table><br>
+<a name="903731"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> I was thinking about how to do away with mutexes and just use an integer to say whether a variable is locked or not, but then it occurred to me that a function could be in the middle of unlocking at the same time as some other function accesses the lock and that would give incorrect results. So is a mutex like some low-level o/s system that totally avoids two threads reading the same lock data at the same time? <br><br></td></tr></table><br>
+<a name="903871"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TomToad</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, this is strange.  Just updated via svn to fix the CloseMutex problem.  The docs has a little more to say about DetachThread(), but with experimentation, it doesn't seem to behave as I would be expecting.<br>According to the docs, DetachThread does not kill the thread.<br><div class="quote"> DetachThread closes a thread's handle, but does not 'kill' or otherwise affect the target thread. <br>This allows the thread to run without your program having to continually check whether it has completed in order to close it.  <br></div><br>If I create a thread, then call DetachThread(), then I create a second thread, the first one no longer executes.  However, if I wait until both threads are created before calling DetachThread(), then both run as expected.<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Import pub.threads
+
+Global TimerA:Int = MilliSecs() + 1000
+Global TimerB:Int = MilliSecs() + 1100
+
+Local OldA:Int = TimerA
+Local OldB:Int = TimerB
+Global EndTime:Int = MilliSecs() + 20000
+
+Local ThreadA:Int = CreateThread(RunA,Null)
+DetachThread(ThreadA) 'If DetachThread(ThreadA) is done before creating ThreadB, then the thread does not run
+Local ThreadB:Int = CreateThread(RunB,Null)
+'DetachThread(ThreadA) 'If you DetachThread(ThreadA) after ThreadB is created, it works fine.
+DetachThread(ThreadB)
+
+Repeat
+Until MilliSecs() &gt;= EndTime
+
+
+Function RunA:Object(data:Object)
+	Repeat
+			If MilliSecs() &gt;= TimerA
+				TimerA :+ 1000
+				Print "ThreadA Ticked"
+			End If
+	Until Timera &gt;= EndTime
+End Function
+
+Function RunB:Object(data:Object)
+	Repeat
+			If MilliSecs() &gt;= TimerB
+				TimerB :+ 1100
+				Print "ThreadB Ticked"
+			End If
+	Until TimerB &gt;= EndTime
+End Function
+</textarea> <br><br></td></tr></table><br>
+<a name="903877"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>Fix committed!<br><br>The problem was pretty cool: DetachThread was also freeing up the thread handle, which was then being 'reused' by the 2nd CreateThread (ie: both CreateThreads were returning the same value).<br><br>This is OK - handles will be reused sooner or later, BUT, the first thread hadn't actually started and was depending on the value held in the (reused) handle.<br><br>Stick a Print "RunA"/Print "RunB" at the top of each Run function for a fun result (before applying fix of course!).<br><br>I've fixed this by using GC allocation for thread/mutex structures, meaning they wont accidentally be reused before your program releases all refs to them. You should still treat a closed thread as 'unusable', but this will do for now. <br><br></td></tr></table><br>
+<a name="904060"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Retimer</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> If you make a lockmutex(MyMutex), if MyMutex is already locked, the thread will wait untill it is unlocked. Threads will not stop becouse you lock a mutex. Only threads trying to lock the same mutex, while you have it locked, will wait untill you release it.  <br></div><br><br>Indeed, and it is something to be grateful for. Unlike creating a reliable-ordered UDP, you don't have to go back and sort everything out in order, which would be a disaster. <br><br></td></tr></table><br>
+<a name="904088"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#22">[#22]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well yeah, this feature will save me tens of thousands of dollars/time I would have spent working in C++.<br><br>When games like STALKER are being released causing BSODs (as much as I like THQ) it casts serious doubt whether C++ makes good business sense. <br><br></td></tr></table><br>
+<a name="904093"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jamesmintram</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#23">[#23]</a></td></tr></table></td></tr><tr ><td class="posttext"> Is there any way to check a mutex is locked without blocking a thread?<br><br>Ie <br><br>If MutexLocked ( mutex ) = 0 then <br>   LockMutex ( mutex )<br>      'Do stuff<br>   UnlockMutex ( mutex )<br>Endif<br><br><br>Would allow you to task a job off to a thread and poll it every logic <br>phase to see if it has completed if not carry on with what you were doing.<br><br>If not is it safe to read say, an Int variable, or int field of an Object at any time if that Object / Variable will be updated by the thread at some point. <br><br></td></tr></table><br>
+<a name="904146"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#24">[#24]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>I've added a TryLockMutex() - compiles OK but currently untested.<br><br>However, you don't need a mutex to poll a thread - the following should be safe:<br><pre class=code>
+Strict
+
+Global threadDone
+
+Function MyThread:Object( data:Object )
+	'
+	'blah...thread does its thing here...
+	'
+	threadDone=True	
+End Function
+
+threadDone=True	'kickstart things
+
+Repeat
+	If threadDone
+		threadDone=False
+		DetachThread CreateThread( MyThread,Null ) )
+	EndIf
+	'
+	'blah...
+	'
+Forever
+</pre><br>It *is* safe to perform simple reads/writes like this - you've just gotta keep it clear in your mind whether or not mutliple threads may be reading/writing at the same time. In fact, I'd encourage people to explore 'software solutions' like this, as they are generally more efficient than OS things like mutex's. Just wait until we get some 'spinlocks' in...<br><br>What is dangerous is read/modify/write stuff, like increment or add. For example:<br><pre class=code>
+Strict
+
+Global test
+
+Global mutex=CreateMutex()
+
+Function Thread1:Object( data:Object )
+	For Local i=0 Until 10000
+		test:+1
+	Next
+End Function
+
+Function Thread2:Object( data:Object )
+	For Local i=0 Until 10000
+		test:-1
+	Next
+End Function
+
+Local th1=CreateThread( Thread1,Null )
+Local th2=CreateThread( Thread2,Null )
+
+WaitThread th1
+WaitThread th2
+
+Print "Test="+test
+</pre><br>The expected result is probably for sum to equal 0, but this doesn't always happen. Actually, it will on a single core CPU but not (reliably) on a multicore one.<br><br>Which is why reference counting just doesn't fit in nicely...! <br><br></td></tr></table><br>
+<a name="904249"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DStastny</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#25">[#25]</a></td></tr></table></td></tr><tr ><td class="posttext"> Any chance for a WaitFor(TimeOut)?<br><br>And some sort of signaling mechanism.<br><br>I a not to familar with PThreads but with windows.  You can make a thread sleep till an a signal or time out.  WaitForObject(blah,1000)<br><br><br>Some where in your code SetEvent(blah)<br><br>Granted this is just win32 psuedo as i dont have SDK in front of me.<br><br>Thanks<br>Doug <br><br></td></tr></table><br>
+<a name="907466"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#26">[#26]</a></td></tr></table></td></tr><tr ><td class="posttext"> Can someone fill me in on what the current status is of this pub.threads mod? Is it cross-platform (Mac and PC at least), and safe enough to put in a project? <br><br></td></tr></table><br>
+<a name="907474"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#27">[#27]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Is it cross-platform <br></div><br>Yes.<br><br><div class="quote"> safe enough to put in a project?  <br></div><br>I'd consider it "beta" at the moment - It appears to work, but is possibly subject to change, and may yet have unknown issues. Up to you at the end of the day :-) <br><br></td></tr></table><br>
+<a name="907662"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#28">[#28]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just so I get this correct, locking mutexes you are not assigning it to a speciffic block of memory of variable?<br><br>I can't see from examples how speciffic vars are being locked.<br><br>Is it just a case of while the mutex is locked, no other threads can do... ANYTHING? <br><br></td></tr></table><br>
+<a name="907719"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kurator</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#29">[#29]</a></td></tr></table></td></tr><tr ><td class="posttext"> no :)<br><br>A mutex is a variable that can be in one of two states: unlocked or locked. Minimum Two Threads / Processes are used with mutextes. When a thread needs access to a critical region, it locks the mutex. If the mutex is currently unlocked (meaning that the critical region is available), the call succeeds and the calling thread is free to enter the critical region.<br><br>On the other hand. if the mutex is already locked, the calling thread (and only the calling thread) is blocked until the thread in the critical region is finished an unlocks the mutex. If multiple threads are blocked on the mutex, one of them is chooses at random and allowed to acquire the block. <br><br></td></tr></table><br>
+<a name="907727"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#30">[#30]</a></td></tr></table></td></tr><tr ><td class="posttext"> So are you supposed to just test the mutex to see if its locked and then write to the variables depending on the returned status?<br><br>I can't see where you are assigning a certain mutex to a certain set of "critical" data/variables/functions/etc.<br><br>After posting this it kinda clicked in my head. So you use the function calls to "ask" if you can access data. Depending on the function call you use it can either wait until the memory is available, or just return false and allow the thread operation to continue.<br><br>is that correct ? <br><br></td></tr></table><br>
+<a name="907740"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TomToad</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#31">[#31]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> So you use the function calls to "ask" if you can access data. Depending on the function call you use it can either wait until the memory is available, or just return false and allow the thread operation to continue. <br></div><br>Not quite, LockMutex is a blocking call, meaning that when a thread "asks" to access the data, it will wait until the data is available.  It would be nice if there was a non-blocking PollMutex() command, but at the moment there isn't.<br><br>Edit:  mark mentioned in an earlier post of a TryLockMutex() command, but it doesn't seem to have made it's way into the svn update yet.<br><br>Edit2:  Actually it did make it into the latest svn update.  Need to remember to rebuild documentation after update :) <br><br></td></tr></table><br>
+<a name="907748"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#32">[#32]</a></td></tr></table></td></tr><tr ><td class="posttext"> cool thanking you.. looking forward to getting to grips with it now :) <br><br></td></tr></table><br>
+<a name="907979"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#33">[#33]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here is a little test I did. It has a threaded print command.<br><br><pre class=code>
+Const total_background_threads:Int = 10
+
+Global program_ending:Int = False
+Global closed_threads:Int = 0
+
+Local threads:Int[total_background_threads]
+
+Local index:Int = 0
+For index = 0 Until total_background_threads
+	threads[index] = CreateThread(threadfunc,String(index))
+Next
+
+' - main thread runtime here
+Graphics 640,480,0,60
+Local count:Int = 0
+Local value:Float = 0
+Local size:Float = 0
+Repeat
+	Cls
+	count:+1
+	value = Abs(Cos(count))
+	size = (value * 200) + 100
+	SetColor((155.0*value)+100,100.0*value,100.0*value)
+	DrawOval(MouseX()-(size/2),MouseY()-(size/2),size,size)
+	SetColor(0,255,0)
+	DrawText("Press esc to end",5,5)
+	Flip
+Until KeyDown(KEY_ESCAPE) = True
+EndGraphics
+
+
+' - terminate the background threads
+'close all the thread handles
+tprint  "*** closing threads"
+program_ending = True
+For index = 0 Until total_background_threads
+	DetachThread(threads[index])
+Next
+'wait until all threads have closed
+Repeat
+	Delay 10
+Until closed_threads = total_background_threads
+
+
+' - thread functions
+'background thread, this is the 2nd thread in the program
+Function threadfunc:Object(nobject:Object)
+	'pause for a bit before printing
+	Local count:Int = 0
+	Local timedelay:Int = Rand(200,2000)
+	While program_ending = False
+		Delay timedelay
+		count:+1
+		If program_ending = False tprint "background thread "+String(nobject)+" (call: "+count+")"
+	Wend
+	
+	'increase closed thread count and display message
+	closed_threads:+1
+	tprint "closing background thread "+String(nobject)
+End Function
+
+'threaded print command, this will allow you to safely print within threads
+Function tprint(ntext:String)
+	'this will create a speciffic mutex for locking the print command to reuse every function call
+	Global mutex:Int = CreateMutex()
+	
+	'lock the mutex
+	'this function will ask the system "can i please lock the mutex", as the mutex can only have two states:
+	' - locked
+	' - unlocked
+	'like a 'bit' (0 or 1), it means that only one thing can be in control of the mutex. The function will 
+	'wait in line until the system says it can lock the mutex. It is important to no keep the mutex locked in a perminant
+	'loop, especialy for a print command, as it is a regualrly used function.
+	
+	'if you try and lock the mutex, but it is already locked, it means another thread is currently printing something.
+	'Once the print has completed and the mutex is unlocked, any calls to print during, will go through one by one until there
+	'are no more attempts to locked the mutex and print.
+	LockMutex(mutex)
+	Print ntext
+	
+	'we have finished our printing so unlock the mutex so that other threads may use it
+	UnlockMutex(mutex)
+End Function
+</pre> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

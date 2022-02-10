@@ -1,0 +1,1491 @@
+<!DOCTYPE html><html lang="en" ><head ><title >3D Single Surface Spiral Galaxy</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Creates a 3D Spiral Galaxy using a Single Surface algorithm, language=bb, category=3D Graphics - Effects'><meta name='author' content='Krischan'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=11>3D Graphics - Effects</a>/3D Single Surface Spiral Galaxy</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2777.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >3D Single Surface Spiral Galaxy by Krischan</td><td align="right">2010 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> I've been playing around with single surface techniques and this is the result. A nice procedural galaxy in 3D - "only" 24.000 stars visible but you can increase the number to the vertex/surface limit of a mesh, if your CPU/GFX card can handle it. The galaxy itself is being generated using a customized <a href="http://en.wikipedia.org/wiki/Archimedean_spiral" target="_blank">archimedean spiral</a> algorithm. You can play around with the constant parameters, by default it looks Andromeda-like, for example: our own Milkyway has only two arms. The number of stars spread over the whole galaxy, so even lower numbers show the shape (but with less detail).<br><br>The single surface technique used here creates virtual "quads" with 4 vertices each and uses two tformvector commands to align the vertices representing a virtual quad to the cam. There is only one entity (the galaxy) with one or more surfaces (max. 32000 vertices=32000/4=8000 stars/quads per surface). The star texture is generated procedurally on the fly.<br><br>Steering: Arrows and mouse, <b>but you won't notice any movement until you press one (fast) or both (very fast) mousebuttons</b>. If you encounter a star field you should release both buttons and use only one button for faster travel to "visit" single stars until a certain distance.<br><br><img src="http://www.christianhart.de/bb/galaxy/3dgalaxy.png"> </td></tr><tr ><td class="cell"><pre class="code">Graphics3D 800,600,32,2
+
+SetBuffer BackBuffer()
+
+Const TurnSpeed#    = 4.000        ; cam turn speed
+Const RollSpeed#    = 0.500        ; cam roll speed
+Const CameraSpeed#  = 0.005        ; cam move speed
+Const Stars%        = 24000        ; number of stars
+Const Spiralarms%   = 4            ; number of spiral arms
+Const Spread#       = 20.0         ; star spread
+Const Rotation#     = 4.0          ; how many spiral rotations
+Const Range#        = 100.0        ; milkyway radius
+
+Global WIDTH%=GraphicsWidth()
+Global HEIGHT%=GraphicsHeight()
+Global TIMER%=CreateTimer(60)
+Global Scale#=WIDTH/3.0            ; star scale
+
+Global total%,vis%
+
+Local cam%,galaxy%,tex%
+
+Type quad
+	
+	Field surf%
+	Field x#,y#,z#
+	Field v%
+	Field scale#
+	Field r%,g%,b%
+	
+End Type
+
+; init galaxy
+galaxy=InitGalaxy(Stars,Spiralarms,Spread,Rotation,Range)
+EntityFX galaxy,1+2
+EntityBlend galaxy,3
+tex=CreateSunTexture(256,128,128,128)
+TextureBlend tex,3
+EntityTexture galaxy,tex
+
+; init camera
+cam=CreateCamera()
+CameraRange cam,0.1,1000
+PositionEntity cam,0,90,150
+PointEntity cam,galaxy
+
+MoveMouse WIDTH/2,HEIGHT/2
+
+; main loop
+While Not KeyHit(1)
+	
+	Local ms%,me%
+	
+	Movement(cam)
+	
+	ms=MilliSecs()
+	UpdateGalaxy(cam,Scale)
+	me=MilliSecs()-ms
+	
+	RenderWorld
+	
+	WaitTimer TIMER
+	
+	AppTitle vis+" Stars visible ["+total+" Stars total] "+me+"ms"
+	
+	Flip 0
+	
+Wend
+
+End
+
+; update quads in single surface mesh
+Function UpdateGalaxy(cam%,scale#=256.0)
+	
+	Local cx#=EntityX(cam)
+	Local cy#=EntityY(cam)
+	Local cz#=EntityZ(cam)
+	
+	Local q.quad,d#,s#
+	
+	total=0
+	vis=0
+	
+	For q.quad = Each quad
+		
+		; check if star is visible
+		TFormPoint q\x,q\y,q\z,0,cam
+		
+		; in front of cam?
+		If TFormedZ()&gt;0 Then
+		
+			; adaptive size
+			d#=Distance3D(q\x,q\y,q\z,cx,cy,cz)
+			s#=(q\scale/d)+(d/scale)
+			If s&lt;d/scale Then s=d/scale
+		
+			; align single surface quads to cam
+			UpdateQuad(q.quad,s,cam)
+			
+			vis=vis+1
+		
+		EndIf
+		
+		total=total+1
+		
+	Next
+	
+End Function
+
+; create galaxy
+Function InitGalaxy%(stars%=10000,arms%=4,spread#=40.0,rot#=2.0,range#=100.0)
+	
+	Local mesh%=CreateMesh()
+	Local surf%=CreateSurface(mesh)
+	Local q.quad
+	Local angle#,dist#,turb#
+	Local i%,col#,multi#,lum#,bulge%,counter%
+	
+	For i=1 To stars
+		
+		q.quad = New quad
+		
+		; color
+		col=Rnd(1)
+		If col&gt;0.90 And col&lt;=1.00 Then q\r=255 : q\g=  0 : q\b=  0
+		If col&gt;0.70 And col&lt;=0.90 Then q\r=255 : q\g=255 : q\b=  0
+		If col&gt;0.50 And col&lt;=0.70 Then q\r=  0 : q\g=  0 : q\b=255
+		If col&gt;0.00 And col&lt;=0.50 Then q\r=255 : q\g=255 : q\b=255
+		
+		; angle
+		angle=Int(Floor(i*1.0/(stars/arms)))*(360.0/arms)
+		
+		; center / arm relation
+		If Rnd(1)&gt;0.5 Then multi=Rnd(0.1,1) Else multi=Rnd(1,2)
+		
+		; distance and turbulence
+		dist=Rnd(0,range)*Rnd(1,Rnd(Rnd(multi)))
+		turb=Rnd(0,Rnd(spread)) : If Rnd(1)&gt;0.5 Then turb=-turb
+		
+		; more red/yellow stars in bulge
+		lum=Rnd(1)
+		If dist&lt;range/2*lum Then
+			
+			If lum&gt;0.75 Then
+				
+				q\r=255 : q\g=0 : q\b=0		; red stars
+				
+			Else If lum&gt;0.5 Then
+				
+				q\r=255 : q\g=255 : q\b=0	; yellow stars
+				
+			EndIf
+			
+		Else
+			
+			If lum&gt;0.75 Then
+				
+				q\r=0 : q\g=0 : q\b=255		; blue stars
+				
+			Else If lum&gt;0.5 Then
+				
+				q\r=255 : q\g=255 : q\b=255	; white stars
+				
+			EndIf
+			
+		EndIf
+		
+		; star position x/z
+		q\x=dist*Cos(angle+(dist*rot))+Rnd(Rnd(Rnd(-spread)),Rnd(Rnd(spread)))
+		q\z=dist*Sin(angle+(dist*rot))+Rnd(Rnd(Rnd(-spread)),Rnd(Rnd(spread)))
+		
+		; star position y
+		bulge=Normalize(Distance2D(q\x,q\z,0,0),0,range/2.0,0,180)/2.0
+		If bulge&gt;90 Then bulge=90
+		q\y=(Cos(bulge)*Rnd(Rnd(-spread),Rnd(spread))/2.0)+(turb/10.0)
+		
+		; scale
+		q\scale=Rnd(0.01,Rnd(0.02,Rnd(0.04,0.08)))
+		
+		; create new surface if too many vertices
+		If counter+4&gt;32000 Then surf=CreateSurface(mesh) : counter=0
+		q\surf=surf
+		
+		; add vertices
+		q\v=AddVertex(q\surf,0,0,0,0,0)
+		AddVertex(q\surf,0,0,0,1,0)
+		AddVertex(q\surf,0,0,0,1,1)
+		AddVertex(q\surf,0,0,0,0,1)
+		
+		; color vertices
+		VertexColor q\surf,q\v,q\r,q\g,q\b
+		VertexColor q\surf,q\v+1,q\r,q\g,q\b
+		VertexColor q\surf,q\v+2,q\r,q\g,q\b
+		VertexColor q\surf,q\v+3,q\r,q\g,q\b
+		
+		; add triangles
+		AddTriangle(q\surf,q\v,q\v+1,q\v+2)
+		AddTriangle(q\surf,q\v,q\v+2,q\v+3)
+		
+		; vertex counter
+		counter=counter+4
+		
+	Next
+	
+	Return mesh
+	
+End Function
+
+; align single surface quad to cam
+Function UpdateQuad(q.quad,s#,target%)
+	
+	Local x1#,y1#,z1#,x2#,y2#,z2#
+	
+	TFormVector -s,0,0,target,0
+	x1=TFormedX()
+	y1=TFormedY()
+	z1=TFormedZ()
+	
+	TFormVector 0,-s,0,target,0
+	x2=TFormedX()
+	y2=TFormedY()
+	z2=TFormedZ()
+	
+	VertexCoords q\surf,q\v+0,q\x-x1-x2,q\y-y1-y2,q\z-z1-z2
+	VertexCoords q\surf,q\v+1,q\x-x1+x2,q\y-y1+y2,q\z-z1+z2
+	VertexCoords q\surf,q\v+2,q\x+x1+x2,q\y+y1+y2,q\z+z1+z2
+	VertexCoords q\surf,q\v+3,q\x+x1-x2,q\y+y1-y2,q\z+z1-z2
+	
+End Function
+
+; calculate 2D Distance
+Function Distance2D#(x1#,y1#,x2#,y2#)
+	
+	Local x#=x1-x2
+	Local y#=y1-y2
+	
+	Return Sqr((x*x)+(y*y))
+	
+End Function
+
+; calucate 3D Distance
+Function Distance3D#(x1#,y1#,z1#,x2#,y2#,z2#)
+	
+	Local x#=x1-x2
+	Local y#=y1-y2
+	Local z#=z1-z2
+	
+	Return Sqr((x*x)+(y*y)+(z*z))
+	
+End Function
+
+; normalize a value
+Function Normalize#(value#=128.0,vmin#=0.0,vmax#=255.0,nmin#=0.0,nmax#=1.0)
+    
+    Return ((value#-vmin#)/(vmax#-vmin#))*(nmax#-nmin#)+nmin#
+    
+End Function
+
+; camera movement
+Function Movement(cam%,sensitivity#=1.0)
+    
+    Local roll#,cz#,tx#,ty#,multi%=1
+    
+    ; arrows = move / LMB = Turbo / RMB = Lightspeed / LMB+RMB = incredible speed
+    cz=(KeyDown(200)-KeyDown(208))*CameraSpeed
+	roll=(KeyDown(203)-KeyDown(205))*RollSpeed
+    If MouseDown(1) Then multi=10
+	If MouseDown(2) Then multi=multi*10
+    
+    tx=Normalize(MouseX(),0,WIDTH , 1,-1)
+    ty=Normalize(MouseY(),0,HEIGHT,-1, 1)
+    
+    If ty&lt;0 Then ty=(Abs(ty)^sensitivity)*-1 Else ty=ty^sensitivity
+    If tx&lt;0 Then tx=(Abs(tx)^sensitivity)*-1 Else tx=tx^sensitivity
+    
+    TurnEntity cam,ty*TurnSpeed,tx*TurnSpeed,roll*TurnSpeed
+    MoveEntity cam,0,0,cz*multi
+	
+End Function
+
+; create a stunning sun texture
+Function CreateSunTexture(size%=512,r%=255,g%=255,b%=255)
+	
+	Local tex%=CreateTexture(size,size,3)
+	Local tb%=TextureBuffer(tex)
+	
+	Local i#,j%,col%,rgb%
+	Local x%,y%,xx%,yy%
+	Local a%
+	
+	LockBuffer tb
+	
+	For j=0 To (size/2)-1
+		
+		col=255-Normalize(j,0,(size/2.0)-1,0,255)
+		If col&gt;255 Then col=255
+		rgb=col*$1000000+col*$10000+col*$100+col
+		
+		For i=0 To 360 Step 0.05
+			
+			WritePixelFast (size/2)+(Sin(i)*j),(size/2)+(Cos(i)*j),rgb,tb
+			
+		Next
+		
+	Next
+	
+	UnlockBuffer tb
+	
+	; temp camera
+	Local tempcam%=CreateCamera()
+	CameraRange tempcam,1,WIDTH*2
+	
+	; temp pivot
+	Local tempsun%=CreatePivot()
+	
+	; create 4 layers
+	CreateQuad(tempsun,size/4.0,tex,3,1+8+16,r*1.00,g*1.00,b*1.00,1.00)
+	CreateQuad(tempsun,size/1.5,tex,3,1+8+16,r*1.00,g*1.00,b*1.00,1.00)
+	CreateQuad(tempsun,size/1.2,tex,3,1+8+16,r*0.75,g*0.75,b*0.50,0.75)
+	CreateQuad(tempsun,size/1.0,tex,3,1+8+16,r*0.50,g*0.50,b*0.50,0.50)
+	
+	PositionEntity tempsun,0,0,WIDTH
+    
+	; render it
+    RenderWorld
+	
+	; delete pivot
+	FreeEntity tempsun
+	
+	LockBuffer BackBuffer()
+	LockBuffer tb
+	
+	; grab image
+	For x=0 To size-1
+		
+		For y=0 To size-1
+			
+			xx=(WIDTH/2)-(size/2)+x
+			yy=(HEIGHT/2)-(size/2)+y
+			
+			rgb=ReadPixelFast(xx,yy,BackBuffer())
+			
+			r=(rgb And $ff0000)/$10000
+			g=(rgb And $ff00)/$100
+			b=(rgb And $ff)
+			a=255
+			
+			; alpha
+			If (r+g+b)/3 &lt; 32 Then a=Normalize((r+g+b)/3,0,32,0,255)
+			
+			; rgb
+			rgb=(r+g+b)/3*$1000000+r*$10000+g*$100+b
+			
+			WritePixelFast x,y,rgb,tb
+			
+		Next
+		
+	Next
+	
+	UnlockBuffer tb
+	UnlockBuffer BackBuffer()
+	
+	RenderWorld
+	
+	; delete temp cam
+	FreeEntity tempcam
+	
+	Return tex
+	
+End Function
+
+; advanced quad creation
+Function CreateQuad(parent%=False,scale#=1.0,tex%=False,blend%=False,fx%=False,r%=255,g%=255,b%=255,a#=1.0)
+	
+	Local mesh%=CreateMesh()
+	Local surf%=CreateSurface(mesh)
+	
+	Local v0%=AddVertex(surf, 1, 1,0,0,0)
+	Local v1%=AddVertex(surf,-1, 1,0,1,0)
+	Local v2%=AddVertex(surf,-1,-1,0,1,1)
+	Local v3%=AddVertex(surf, 1,-1,0,0,1)
+	
+	AddTriangle surf,v0,v1,v2
+	AddTriangle surf,v0,v2,v3
+	
+	If parent Then EntityParent mesh,parent
+	If fx Then EntityFX mesh,fx
+	If tex Then EntityTexture mesh,tex
+	If blend Then EntityBlend mesh,blend
+	
+	EntityColor mesh,r,g,b
+	EntityAlpha mesh,a
+	
+	VertexColor surf,v0,r,g,b,a
+	VertexColor surf,v1,r,g,b,a
+	VertexColor surf,v2,r,g,b,a
+	VertexColor surf,v3,r,g,b,a
+	
+	ScaleEntity mesh,scale,scale,scale
+	
+	Return mesh
+	
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >MCP</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Another great entry for the code archives Krischan. Well done! :) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Krischan</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Well I am unhappy with it. I tried to create billions of stars... 24000 is ridiculous ;-) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Krischan</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Well, at least with some quick and dirty optimizations it is now possible to show at least 240000 stars with a decent FPS rate here. Looks nicer now:<br><br><img src="http://www.christianhart.de/bb/galaxy/galaxytop.jpg"><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Graphics3D 800,600,32,2
+
+SetBuffer BackBuffer()
+
+Const TurnSpeed#    = 4.000        ; cam turn speed
+Const RollSpeed#    = 0.500        ; cam roll speed
+Const CameraSpeed#  = 0.005        ; cam move speed
+Const Stars%        = 240000       ; number of stars
+Const Spiralarms%   = 4            ; number of spiral arms
+Const Spread#       = 20.0         ; star spread
+Const Rotation#     = 4.0          ; how many spiral rotations
+Const Range#        = 100.0        ; milkyway radius
+
+Global WIDTH%=GraphicsWidth()
+Global HEIGHT%=GraphicsHeight()
+Global TIMER%=CreateTimer(60)
+Global Scale#=WIDTH/3.0            ; star scale
+
+Global meshes%[256]
+
+Global total%,vis%
+
+Local cam%,galaxy%,tex%
+
+Type quad
+    
+    Field surf%
+    Field x#,y#,z#
+    Field v%
+    Field scale#
+    Field r%,g%,b%
+    Field lastdist#
+    
+End Type
+
+tex=CreateSunTexture(256,128,128,128)
+TextureBlend tex,3
+
+; init galaxy
+galaxy=InitGalaxy(Stars,Spiralarms,Spread,Rotation,Range)
+
+For i=0 To galaxy
+    
+    If meshes[i]&gt;0 Then
+    
+    EntityFX meshes[i],1+2
+    EntityBlend meshes[i],3
+    EntityTexture meshes[i],tex
+    
+EndIf
+    
+Next
+
+; init camera
+cam=CreateCamera()
+CameraRange cam,0.1,1000
+PositionEntity cam,0,90,150
+PointEntity cam,meshes[0]
+
+; update galaxy once
+Local cx#=EntityX(cam)
+Local cy#=EntityY(cam)
+Local cz#=EntityZ(cam)
+Local q.quad,d#,s#
+For q.quad = Each quad
+    ; adaptive size
+    d=Distance3D(q\x,q\y,q\z,cx,cy,cz)
+    s=(q\scale/d)+(d/Scale)
+    If s&lt;d/Scale Then s=d/Scale
+    ; align single surface quads to cam
+    UpdateQuad(q.quad,s,cam)
+    q\lastdist=d
+Next
+    
+MoveMouse WIDTH/2,HEIGHT/2
+
+; main loop
+While Not KeyHit(1)
+    
+    Local ms%,me%
+    
+    Movement(cam)
+    
+    ms=MilliSecs()
+    i=i+1 : If i&gt;=10 Then i=0
+    UpdateGalaxy(cam,Scale,i)
+    me=MilliSecs()-ms
+        
+    RenderWorld
+    
+    WaitTimer TIMER
+    
+    AppTitle vis+" Stars updated ["+total+" Stars total] "+me+"ms"
+    
+    Flip 0
+    
+Wend
+
+End
+
+; update quads in single surface mesh
+Function UpdateGalaxy(cam%,scale#=256.0,part%)
+    
+    Local cx#=EntityX(cam)
+    Local cy#=EntityY(cam)
+    Local cz#=EntityZ(cam)
+    
+    Local q.quad,d#,s#,steps%,i%,start%,ende%
+    
+    total=0
+    vis=0
+    
+    steps=Stars/10
+    
+    For q.quad = Each quad
+        
+        ; set start and end
+        start=part*steps
+        ende=(part+1)*steps
+        
+        ; check only current part or nearby stars
+        If i&gt;=start And i&lt;ende Or q\lastdist&lt;5 Then
+            
+            TFormPoint q\x,q\y,q\z,0,cam
+            
+            ; in front of cam?
+            If TFormedZ()&gt;0 Then 
+        
+                ; adaptive size
+                d#=Distance3D(q\x,q\y,q\z,cx,cy,cz)
+                s#=(q\scale/d)+(d/scale)
+                If s&lt;d/scale Then s=d/scale
+                
+                ; store last distance calculation
+                q\lastdist=d
+            
+                ; align single surface quads to cam
+                UpdateQuad(q.quad,s,cam)
+        
+                vis=vis+1
+                
+            EndIf
+        
+        EndIf
+        
+        i=i+1
+        
+        total=total+1
+        
+    Next
+    
+End Function
+
+; create galaxy
+Function InitGalaxy%(stars%=10000,arms%=4,spread#=40.0,rot#=2.0,range#=100.0)
+    
+    Local mesh%=CreateMesh()
+    Local surf%=CreateSurface(mesh)
+    Local q.quad
+    Local angle#,dist#,turb#
+    Local i%,col#,multi#,lum#,bulge%,counter%,surfs%=1,m%=0
+    
+    meshes[0]=mesh
+    
+    For i=1 To stars
+        
+        q.quad = New quad
+        
+        ; color
+        col=Rnd(1)
+        If col&gt;0.90 And col&lt;=1.00 Then q\r=255 : q\g=  0 : q\b=  0
+        If col&gt;0.70 And col&lt;=0.90 Then q\r=255 : q\g=255 : q\b=  0
+        If col&gt;0.50 And col&lt;=0.70 Then q\r=  0 : q\g=  0 : q\b=255
+        If col&gt;0.00 And col&lt;=0.50 Then q\r=255 : q\g=255 : q\b=255
+        
+        ; angle
+        angle=Int(Floor(i*1.0/(stars/arms)))*(360.0/arms)
+        
+        ; center / arm relation
+        If Rnd(1)&gt;0.5 Then multi=Rnd(0.1,1) Else multi=Rnd(1,2)
+        
+        ; distance and turbulence
+        dist=Rnd(0,range)*Rnd(1,Rnd(Rnd(multi)))
+        turb=Rnd(0,Rnd(spread)) : If Rnd(1)&gt;0.5 Then turb=-turb
+        
+        ; more red/yellow stars in bulge
+        lum=Rnd(1)
+        If dist&lt;range/2*lum Then
+            
+            If lum&gt;0.75 Then
+                
+                q\r=255 : q\g=0 : q\b=0        ; red stars
+                
+            Else If lum&gt;0.5 Then
+                
+                q\r=255 : q\g=255 : q\b=0    ; yellow stars
+                
+            EndIf
+            
+        Else
+            
+            If lum&gt;0.75 Then
+                
+                q\r=0 : q\g=0 : q\b=255        ; blue stars
+                
+            Else If lum&gt;0.5 Then
+                
+                q\r=255 : q\g=255 : q\b=255    ; white stars
+                
+            EndIf
+            
+        EndIf
+        
+        ; star position x/z
+        q\x=dist*Cos(angle+(dist*rot))+Rnd(Rnd(Rnd(-spread)),Rnd(Rnd(spread)))
+        q\z=dist*Sin(angle+(dist*rot))+Rnd(Rnd(Rnd(-spread)),Rnd(Rnd(spread)))
+        
+        ; star position y
+        bulge=Normalize(Distance2D(q\x,q\z,0,0),0,range/2.0,0,180)/2.0
+        If bulge&gt;90 Then bulge=90
+        q\y=(Cos(bulge)*Rnd(Rnd(-spread),Rnd(spread))/2.0)+(turb/10.0)
+        
+        ; scale
+        q\scale=Rnd(0.01,Rnd(0.02,Rnd(0.04,0.08)))
+        
+        ; create new surface if too many vertices
+        If counter+4&gt;32000 Then
+            
+            If surfs+1&gt;3 Then
+                m=m+1
+                mesh=CreateMesh()
+                meshes[m]=mesh
+                surfs=0
+            EndIf
+                
+            surf=CreateSurface(mesh)
+            counter=0
+            surfs=surfs+1
+            
+        EndIf
+        
+        q\surf=surf
+        
+        ; add vertices
+        q\v=AddVertex(q\surf,0,0,0,0,0)
+        AddVertex(q\surf,0,0,0,1,0)
+        AddVertex(q\surf,0,0,0,1,1)
+        AddVertex(q\surf,0,0,0,0,1)
+        
+        ; color vertices
+        VertexColor q\surf,q\v,q\r,q\g,q\b
+        VertexColor q\surf,q\v+1,q\r,q\g,q\b
+        VertexColor q\surf,q\v+2,q\r,q\g,q\b
+        VertexColor q\surf,q\v+3,q\r,q\g,q\b
+        
+        ; add triangles
+        AddTriangle(q\surf,q\v,q\v+1,q\v+2)
+        AddTriangle(q\surf,q\v,q\v+2,q\v+3)
+        
+        ; vertex counter
+        counter=counter+4
+        
+    Next
+    
+    DebugLog m
+    
+    Return m
+    
+End Function
+
+; align single surface quad to cam
+Function UpdateQuad(q.quad,s#,target%)
+    
+    Local x1#,y1#,z1#,x2#,y2#,z2#
+    
+    TFormVector -s,0,0,target,0
+    x1=TFormedX()
+    y1=TFormedY()
+    z1=TFormedZ()
+    
+    TFormVector 0,-s,0,target,0
+    x2=TFormedX()
+    y2=TFormedY()
+    z2=TFormedZ()
+    
+    VertexCoords q\surf,q\v+0,q\x-x1-x2,q\y-y1-y2,q\z-z1-z2
+    VertexCoords q\surf,q\v+1,q\x-x1+x2,q\y-y1+y2,q\z-z1+z2
+    VertexCoords q\surf,q\v+2,q\x+x1+x2,q\y+y1+y2,q\z+z1+z2
+    VertexCoords q\surf,q\v+3,q\x+x1-x2,q\y+y1-y2,q\z+z1-z2
+    
+End Function
+
+; calculate 2D Distance
+Function Distance2D#(x1#,y1#,x2#,y2#)
+    
+    Local x#=x1-x2
+    Local y#=y1-y2
+    
+    Return Sqr((x*x)+(y*y))
+    
+End Function
+
+; calucate 3D Distance
+Function Distance3D#(x1#,y1#,z1#,x2#,y2#,z2#)
+    
+    Local x#=x1-x2
+    Local y#=y1-y2
+    Local z#=z1-z2
+    
+    Return Sqr((x*x)+(y*y)+(z*z))
+    
+End Function
+
+; normalize a value
+Function Normalize#(value#=128.0,vmin#=0.0,vmax#=255.0,nmin#=0.0,nmax#=1.0)
+    
+    Return ((value#-vmin#)/(vmax#-vmin#))*(nmax#-nmin#)+nmin#
+    
+End Function
+
+; camera movement
+Function Movement(cam%,sensitivity#=1.0)
+    
+    Local roll#,cz#,tx#,ty#,multi%=1
+    
+    ; arrows = move / LMB = Turbo / RMB = Lightspeed / LMB+RMB = incredible speed
+    cz=(KeyDown(200)-KeyDown(208))*CameraSpeed
+    roll=(KeyDown(203)-KeyDown(205))*RollSpeed
+    If MouseDown(1) Then multi=10
+    If MouseDown(2) Then multi=multi*10
+    
+    tx=Normalize(MouseX(),0,WIDTH , 1,-1)
+    ty=Normalize(MouseY(),0,HEIGHT,-1, 1)
+    
+    If ty&lt;0 Then ty=(Abs(ty)^sensitivity)*-1 Else ty=ty^sensitivity
+    If tx&lt;0 Then tx=(Abs(tx)^sensitivity)*-1 Else tx=tx^sensitivity
+    
+    TurnEntity cam,ty*TurnSpeed,tx*TurnSpeed,roll*TurnSpeed
+    MoveEntity cam,0,0,cz*multi
+    
+End Function
+
+; create a stunning sun texture
+Function CreateSunTexture(size%=512,r%=255,g%=255,b%=255)
+    
+    Local tex%=CreateTexture(size,size,3)
+    Local tb%=TextureBuffer(tex)
+    
+    Local i#,j%,col%,rgb%
+    Local x%,y%,xx%,yy%
+    Local a%
+    
+    LockBuffer tb
+    
+    For j=0 To (size/2)-1
+        
+        col=255-Normalize(j,0,(size/2.0)-1,0,255)
+        If col&gt;255 Then col=255
+        rgb=col*$1000000+col*$10000+col*$100+col
+        
+        For i=0 To 360 Step 0.05
+            
+            WritePixelFast (size/2)+(Sin(i)*j),(size/2)+(Cos(i)*j),rgb,tb
+            
+        Next
+        
+    Next
+    
+    UnlockBuffer tb
+    
+    ; temp camera
+    Local tempcam%=CreateCamera()
+    CameraRange tempcam,1,WIDTH*2
+    
+    ; temp pivot
+    Local tempsun%=CreatePivot()
+    
+    ; create 4 layers
+    CreateQuad(tempsun,size/4.0,tex,3,1+8+16,r*1.00,g*1.00,b*1.00,1.00)
+    CreateQuad(tempsun,size/1.5,tex,3,1+8+16,r*1.00,g*1.00,b*1.00,1.00)
+    CreateQuad(tempsun,size/1.2,tex,3,1+8+16,r*0.75,g*0.75,b*0.50,0.75)
+    CreateQuad(tempsun,size/1.0,tex,3,1+8+16,r*0.50,g*0.50,b*0.50,0.50)
+    
+    PositionEntity tempsun,0,0,WIDTH
+    
+    ; render it
+    RenderWorld
+    
+    ; delete pivot
+    FreeEntity tempsun
+    
+    LockBuffer BackBuffer()
+    LockBuffer tb
+    
+    ; grab image
+    For x=0 To size-1
+        
+        For y=0 To size-1
+            
+            xx=(WIDTH/2)-(size/2)+x
+            yy=(HEIGHT/2)-(size/2)+y
+            
+            rgb=ReadPixelFast(xx,yy,BackBuffer())
+            
+            r=(rgb And $ff0000)/$10000
+            g=(rgb And $ff00)/$100
+            b=(rgb And $ff)
+            a=255
+            
+            ; alpha
+            If (r+g+b)/3 &lt; 32 Then a=Normalize((r+g+b)/3,0,32,0,255)
+            
+            ; rgb
+            rgb=(r+g+b)/3*$1000000+r*$10000+g*$100+b
+            
+            WritePixelFast x,y,rgb,tb
+            
+        Next
+        
+    Next
+    
+    UnlockBuffer tb
+    UnlockBuffer BackBuffer()
+    
+    RenderWorld
+    
+    ; delete temp cam
+    FreeEntity tempcam
+    
+    Return tex
+    
+End Function
+
+; advanced quad creation
+Function CreateQuad(parent%=False,scale#=1.0,tex%=False,blend%=False,fx%=False,r%=255,g%=255,b%=255,a#=1.0)
+    
+    Local mesh%=CreateMesh()
+    Local surf%=CreateSurface(mesh)
+    
+    Local v0%=AddVertex(surf, 1, 1,0,0,0)
+    Local v1%=AddVertex(surf,-1, 1,0,1,0)
+    Local v2%=AddVertex(surf,-1,-1,0,1,1)
+    Local v3%=AddVertex(surf, 1,-1,0,0,1)
+    
+    AddTriangle surf,v0,v1,v2
+    AddTriangle surf,v0,v2,v3
+    
+    If parent Then EntityParent mesh,parent
+    If fx Then EntityFX mesh,fx
+    If tex Then EntityTexture mesh,tex
+    If blend Then EntityBlend mesh,blend
+    
+    EntityColor mesh,r,g,b
+    EntityAlpha mesh,a
+    
+    VertexColor surf,v0,r,g,b,a
+    VertexColor surf,v1,r,g,b,a
+    VertexColor surf,v2,r,g,b,a
+    VertexColor surf,v3,r,g,b,a
+    
+    ScaleEntity mesh,scale,scale,scale
+    
+    Return mesh
+    
+End Function</textarea> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ZJP</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Nice....again :)<br><br>JP <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ClayPigeon</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Awesome! I can't fathom how you managed to get that many stars on at once. I thought they were just points until I zoomed in. Nice work!<br><br>PS: Where's the black hole? :D <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_PJ_</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> The mathematics here don't seem right at all... maybe I'm, just not following it properly, but what's this for?<br><br><pre class=code>
+        If bulge&gt;90 Then bulge=90
+        q\y=(Cos(bulge)*Rnd(Rnd(-spread),Rnd(spread))/2.0)+(turb/10.0)</pre><br><br>I assumed this was to effectively give a greater density of stars around the central region of the galaxy, but it's way off the mark. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Krischan</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> To test the power of minib3d I ported this to Blitzmax - unfortunately I couldn't rearrange it to be superstrict. But it runs faster than in Blitz3D (on my old laptop 26FPS in minib3d and 21FPS in Blitz3D!). A general problem is the lack of some kind of quad/octree optimization to minimize CPU calculations as minib3d could handle at least a million of stars easy - which would look very impressive then.<br><br>Moving is with mouse/arrows while LMB speeds up 10x and LMB+RMB speeds up 100 times, which is recommended in the start position (you can slow down in the bulge/arms)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Import sidesign.minib3d
+
+Graphics3D 800, 600, 32, 2
+
+ClearTextureFilters()
+
+Const TurnSpeed:Float = 4.00
+Const RollSpeed:Float = 0.50
+Const CameraSpeed:Float = 0.01
+
+Const Stars:Int = 250000		' number of stars
+Const Spiralarms:Int = 4		' number of spiral arms
+Const Spread:Float = 20.0		' star spread
+Const Rotation:Float = 4.0		' how many spiral rotations
+Const Range:Float = 100.0		' milkyway radius
+
+Const QuatToEulerAccuracy:Double = 0.00001
+
+Global WIDTH:Int = GraphicsWidth()
+Global HEIGHT:Int = GraphicsHeight()
+Global TIMER:TTimer = CreateTimer(60)
+Global Scale:Float = WIDTH / 3.0	' star scale
+
+Global meshes:Int[256]
+
+Global total:Int, vis:Int
+
+Local cam:TCamera, galaxy:Int, tex:TTexture, i:Int, g:Int
+
+Type quad
+
+	Global List:TList = CreateList()
+	Method New()
+		ListAddLast(List, Self)
+	End Method
+    
+	Field surf:Int
+	Field x:Float, y:Float, z:Float
+	Field v:Int
+	Field scale:Float
+	Field r:Int, g:Int, b:Int
+	Field lastdist:Float
+    
+End Type
+
+tex = CreateSunTexture(256, 128, 128, 128)
+TextureBlend tex, 3
+
+' init galaxy
+galaxy = InitGalaxy(Stars, Spiralarms, Spread, Rotation, Range)
+
+For i = 0 To galaxy
+    
+	If meshes[i] &gt; 0 Then
+		
+		EntityFX meshes[i], 1 + 2
+		EntityBlend meshes[i], 3
+		EntityTexture meshes[i], tex
+		
+	EndIf
+    
+Next
+
+' init camera
+cam = CreateCamera()
+CameraRange cam, 0.1, 1000
+PositionEntity cam, 0, 90, 150
+PointEntity cam, meshes[0]
+
+' update galaxy once
+Local cx:Float = EntityX(cam)
+Local cy:Float = EntityY(cam)
+Local cz:Float = EntityZ(cam)
+Local q:quad, d:Float, s:Float
+
+For q:quad = EachIn quad.List
+
+	' adaptive size
+	d = Distance3D(q.x, q.y, q.z, cx, cy, cz)
+	s = (q.Scale / d) + (d / Scale)
+	If s &lt; d / Scale Then s = d / Scale
+    
+	' align single surface quads to cam
+	UpdateQuad(q:quad, s, cam)
+	q.lastdist = d
+    
+Next
+
+MoveMouse WIDTH / 2, HEIGHT / 2
+
+' main loop
+While Not AppTerminate()
+
+	Cls
+	
+	' Escape = Terminate
+	If KeyHit(KEY_ESCAPE) Then End
+	
+	Movement(cam, 1)
+	
+	Local ms:Int, me:Int
+    
+	ms = MilliSecs()
+	g = g + 1
+	If g &gt;= 10 Then g = 0
+	UpdateGalaxy(cam, Scale, g)
+	me = MilliSecs() - ms
+	
+	RenderWorld
+    
+	WaitTimer TIMER
+    
+	Text 0, 0, vis + " Stars updated [" + total + " Stars total] " + me + "ms"
+    
+	Flip 0
+    
+Wend
+
+End
+
+Function Movement(cam:TCamera, sensitivity:Float = 1.0)
+	
+	Local roll:Float, cz:Float, tx:Float, ty:Float, multi:Int = 1
+	
+	cz = (KeyDown(KEY_UP) - KeyDown(KEY_DOWN)) * CameraSpeed
+	roll = (KeyDown(KEY_LEFT) - KeyDown(KEY_RIGHT)) * RollSpeed
+	If KeyDown(KEY_RSHIFT) Or MouseDown(1) Then multi = 10
+	If MouseDown(2) Then multi = multi * 10
+	
+	tx = Normalize(MouseX(), 0, GraphicsWidth(), 1, -1)
+	ty = Normalize(MouseY(), 0, GraphicsHeight(), -1, 1)
+	
+	If ty &lt; 0 Then ty = (Abs(ty) ^ sensitivity) * -1 Else ty = ty ^ sensitivity
+	If tx &lt; 0 Then tx = (Abs(tx) ^ sensitivity) * -1 Else tx = tx ^ sensitivity
+	
+	TurnCam cam, ty * TurnSpeed, tx * TurnSpeed, roll * TurnSpeed
+	MoveEntity cam, 0, 0, cz * multi
+	
+End Function
+
+' update quads in single surface mesh
+Function UpdateGalaxy(cam:TEntity, scale:Float = 256.0, part:Int)
+    
+	Local cx:Float = EntityX(cam)
+	Local cy:Float = EntityY(cam)
+	Local cz:Float = EntityZ(cam)
+    
+	Local q:quad, d:Float, s:Float, steps:Int, i:Int, start:Int, ende:Int
+    
+	total = 0
+	vis = 0
+    
+	steps = Stars / 10
+    
+	For q:quad = EachIn quad.List
+        
+		' set start and end
+		start = part * steps
+		ende = (part + 1) * steps
+        
+		' check only current part or nearby stars
+		If i &gt;= start And i &lt; ende Or q.lastdist &lt; 5 Then
+            
+			TFormPoint q.x, q.y, q.z, 0, cam
+            
+			' in front of cam?
+			If TFormedZ() &gt; 0 Then
+				
+				' adaptive size
+				d:Float = Distance3D(q.x, q.y, q.z, cx, cy, cz)
+				s:Float = (q.Scale / d) + (d / Scale)
+				If s &lt; d / Scale Then s = d / Scale
+                
+				' store last distance calculation
+				q.lastdist = d
+				
+				' align single surface quads To cam
+				UpdateQuad(q:quad, s, cam)
+				
+				vis = vis + 1
+                
+			EndIf
+			
+		EndIf
+        
+		i = i + 1
+        
+		total = total + 1
+        
+	Next
+    
+End Function
+
+' Create galaxy
+Function InitGalaxy:Int(stars:Int = 10000, arms:Int = 4, spread:Float = 40.0, rot:Float = 2.0, range:Float = 100.0)
+    
+	Local mesh:TMesh = CreateMesh()
+	Local surf:TSurface = CreateSurface(mesh)
+	Local q:quad
+	Local angle:Float, dist:Float, turb:Float
+	Local i:Int, col:Float, multi:Float, lum:Float, bulge:Int, counter:Int, surfs:Int = 1, m:Int = 0
+    
+	meshes[0] = mesh
+    
+	For i = 1 To Stars
+        
+		q:quad = New quad
+        
+		' color
+		col = Rnd(1)
+		If col &gt; 0.90 And col &lt;= 1.00 Then
+			q.r = 255
+			q.g = 0
+			q.b = 0
+		EndIf
+	
+		If col &gt; 0.70 And col &lt;= 0.90 Then
+			q.r = 255
+			q.g = 255
+			q.b = 0
+		EndIf
+	
+		If col &gt; 0.50 And col &lt;= 0.70 Then
+			q.r = 0
+			q.g = 0
+			q.b = 255
+		EndIf
+	
+		If col &gt; 0.00 And col &lt;= 0.50 Then
+			q.r = 255
+			q.g = 255
+			q.b = 255
+		EndIf
+        
+		' angle
+		angle = Int(Floor(i * 1.0 / (Stars / arms))) * (360.0 / arms)
+        
+		' center / arm relation
+		If Rnd(1) &gt; 0.5 Then
+			multi = Rnd(0.1, 1)
+		Else
+			multi = Rnd(1, 2)
+		EndIf
+        
+		' distance And turbulence
+		dist = Rnd(0, Range) * Rnd(1, Rnd(Rnd(multi)))
+		turb = Rnd(0, Rnd(Spread))
+		If Rnd(1) &gt; 0.5 Then turb = -turb
+        
+		' more red/yellow Stars in bulge
+		lum = Rnd(1)
+		If dist &lt; Range / 2 * lum Then
+            
+			If lum &gt; 0.75 Then
+                
+				q.r = 255
+				q.g = 0
+				q.b = 0        ' red Stars
+                
+			Else If lum &gt; 0.5 Then
+                
+				q.r = 255
+				q.g = 255
+				q.b = 0    ' yellow Stars
+                
+			EndIf
+            
+		Else
+            
+			If lum &gt; 0.75 Then
+                
+				q.r = 0
+				q.g = 0
+				q.b = 255        ' blue Stars
+                
+		
+			Else If lum &gt; 0.5 Then
+                
+				q.r = 255
+				q.g = 255
+				q.b = 255    ' white Stars
+                
+			EndIf
+            
+		EndIf
+        
+		' star position x/z
+		q.x = dist * Cos(angle + (dist * rot)) + Rnd(Rnd(Rnd(-Spread)), Rnd(Rnd(Spread)))
+		q.z = dist * Sin(angle + (dist * rot)) + Rnd(Rnd(Rnd(-Spread)), Rnd(Rnd(Spread)))
+        
+		' star position y
+		bulge = Normalize(Distance2D(q.x, q.z, 0, 0), 0, Range / 2.0, 0, 180) / 2.0
+		If bulge &gt; 90 Then bulge = 90
+		q.y = (Cos(bulge) * Rnd(Rnd(-Spread), Rnd(Spread)) / 2.0) + (turb / 10.0)
+        
+		' Scale
+		q.Scale = Rnd(0.01, Rnd(0.02, Rnd(0.04, 0.08)))
+        
+		' Create New surface If too many vertices
+		If counter + 4 &gt; 32000 Then
+            
+			If surfs + 1 &gt; 3 Then
+				m = m + 1
+				mesh = CreateMesh()
+				meshes[m] = mesh
+				surfs = 0
+			EndIf
+			
+			surf = CreateSurface(mesh)
+			counter = 0
+			surfs = surfs + 1
+            
+		EndIf
+        
+		q.surf = surf
+        
+		' add vertices
+		q.v = AddVertex(q.surf, 0, 0, 0, 0, 0)
+		AddVertex(q.surf, 0, 0, 0, 1, 0)
+		AddVertex(q.surf, 0, 0, 0, 1, 1)
+		AddVertex(q.surf, 0, 0, 0, 0, 1)
+        
+		' color vertices
+		VertexColor q.surf, q.v + 0, q.r, q.g, q.b
+		VertexColor q.surf, q.v + 1, q.r, q.g, q.b
+		VertexColor q.surf, q.v + 2, q.r, q.g, q.b
+		VertexColor q.surf, q.v + 3, q.r, q.g, q.b
+        
+		' add triangles
+		AddTriangle(q.surf, q.v, q.v + 1, q.v + 2)
+		AddTriangle(q.surf, q.v, q.v + 2, q.v + 3)
+        
+		' vertex counter
+		counter = counter + 4
+        
+	Next
+    
+	Return m
+    
+End Function
+
+' align single surface quad To cam
+Function UpdateQuad(q:quad, s:Float, target:TEntity)
+    
+	Local x1:Float, y1:Float, z1:Float, x2:Float, y2:Float, z2:Float
+    
+	TFormVector - s, 0, 0, target, 0
+	x1 = TFormedX()
+	y1 = TFormedY()
+	z1 = TFormedZ()
+    
+	TFormVector 0, -s, 0, target, 0
+	x2 = TFormedX()
+	y2 = TFormedY()
+	z2 = TFormedZ()
+    
+	VertexCoords q.surf, q.v + 0, q.x - x1 - x2, q.y - y1 - y2, q.z - z1 - z2
+	VertexCoords q.surf, q.v + 1, q.x - x1 + x2, q.y - y1 + y2, q.z - z1 + z2
+	VertexCoords q.surf, q.v + 2, q.x + x1 + x2, q.y + y1 + y2, q.z + z1 + z2
+	VertexCoords q.surf, q.v + 3, q.x + x1 - x2, q.y + y1 - y2, q.z + z1 - z2
+    
+End Function
+
+' calculate 2D Distance
+Function Distance2D:Float(x1:Float, y1:Float, x2:Float, y2:Float)
+    
+	Local x:Float = x1 - x2
+	Local y:Float = y1 - y2
+    
+	Return Sqr((x * x) + (y * y))
+    
+End Function
+
+' calucate 3D Distance
+Function Distance3D:Float(x1:Float, y1:Float, z1:Float, x2:Float, y2:Float, z2:Float)
+    
+	Local x:Float = x1 - x2
+	Local y:Float = y1 - y2
+	Local z:Float = z1 - z2
+    
+	Return Sqr((x * x) + (y * y) + (z * z))
+    
+End Function
+
+' Normalize a value
+Function Normalize:Float(value:Float = 128.0, vmin:Float = 0.0, vmax:Float = 255.0, nmin:Float = 0.0, nmax:Float = 1.0)
+    
+	Return ((value:Float - vmin:Float) / (vmax:Float - vmin:Float)) * (nmax:Float - nmin:Float) + nmin:Float
+    
+End Function
+
+' Create a stunning sun texture
+Function CreateSunTexture:TTexture(size:Int = 512, r:Int = 255, g:Int = 255, b:Int = 255)
+
+	Local i:Float, j:Int, col:Int, rgb:Int
+
+	Local tempcam:TCamera, tempsun:TPivot, tex:TTexture
+	Local pixmap:TPixmap = CreatePixmap(size, size, PF_RGBA8888)
+	Local source:TPixmap
+		
+	For j = 0 To (size / 2) - 1
+        
+		col = 255 - Normalize(j, 0, (size / 2.0) - 1, 0, 255)
+		If col &gt; 255 Then col = 255
+		rgb = col * $1000000 + col * $10000 + col * $100 + col
+        
+		For i = 0 To 360 Step 0.1
+            
+			WritePixel(pixmap, (size / 2) + (Sin(i) * j), (size / 2) + (Cos(i) * j), rgb)
+            
+		Next
+        
+	Next
+	
+	SavePixmapPNG(pixmap, "sun1.png")
+	
+	tex = LoadTexture("sun1.png", 2)
+    
+	' temp camera
+	tempcam = CreateCamera()
+	CameraRange tempcam, 1, WIDTH * 2
+    
+	' temp pivot
+	tempsun = CreatePivot()
+    
+	' Create 4 layers
+	CreateQuad(tempsun, size / 4.0, tex, 3, 1 + 8 + 16, r * 1.00, g * 1.00, b * 1.00, 1.00)
+	CreateQuad(tempsun, size / 1.5, tex, 3, 1 + 8 + 16, r * 1.00, g * 1.00, b * 1.00, 1.00)
+	CreateQuad(tempsun, size / 1.2, tex, 3, 1 + 8 + 16, r * 0.75, g * 0.75, b * 0.50, 0.75)
+	CreateQuad(tempsun, size / 1.0, tex, 3, 1 + 8 + 16, r * 0.50, g * 0.50, b * 0.50, 0.50)
+    
+	PositionEntity tempsun, 0, 0, WIDTH
+    
+	' render it
+	RenderWorld
+	RenderWorld	
+        
+	source = GrabPixmap(0, 0, WIDTH, HEIGHT)
+     
+	' grab image
+	For x = 0 To size - 1
+        
+		For y = 0 To size - 1
+            
+			xx = (WIDTH / 2) - (size / 2) + x
+			yy = (HEIGHT / 2) - (size / 2) + y
+            
+			rgb = ReadPixel(source, xx, yy)
+            
+			r = (rgb &amp; $ff0000) / $10000
+			g = (rgb &amp; $ff00) / $100
+			b = (rgb &amp; $ff)
+            
+			' rgb
+			rgb = (r + g + b) / 3 * $1000000 + r * $10000 + g * $100 + b
+            
+			WritePixel(pixmap, x, y, rgb)
+            
+		Next
+        
+	Next
+    
+	SavePixmapPNG(pixmap, "sun2.png")
+	
+	' Load texture
+	tex = LoadTexture("sun2.png", 2)
+    
+	' Delete pivot and temp cam
+	FreeEntity tempsun
+	FreeEntity tempcam
+    
+	Return tex
+    
+End Function
+
+' advanced quad creation
+Function CreateQuad:Tmesh(parent:TEntity, scale:Float = 1.0, tex:TTexture = Null, blend:Int = False, fx:Int = False, r:Int = 255, g:Int = 255, b:Int = 255, a:Float = 1.0)
+    
+	Local mesh:TMesh = CreateMesh()
+	Local surf:TSurface = CreateSurface(mesh)
+	Local v0:Int, v1:Int, v2:Int, v3:Int
+    
+	v0 = AddVertex(surf, 1, 1, 0, 0, 0)
+	v1 = AddVertex(surf, -1, 1, 0, 1, 0)
+	v2 = AddVertex(surf, -1, -1, 0, 1, 1)
+	v3 = AddVertex(surf, 1, -1, 0, 0, 1)
+    
+	AddTriangle surf, v0, v1, v2
+	AddTriangle surf, v0, v2, v3
+    
+	If parent Then EntityParent Mesh, parent
+	If fx Then EntityFX Mesh, fx
+	If tex Then EntityTexture Mesh, tex
+	If blend Then EntityBlend Mesh, blend
+    
+	EntityColor Mesh, r, g, b
+	EntityAlpha Mesh, a
+    
+	VertexColor surf, v0, r, g, b, a
+	VertexColor surf, v1, r, g, b, a
+	VertexColor surf, v2, r, g, b, a
+	VertexColor surf, v3, r, g, b, a
+    
+	ScaleEntity Mesh, Scale, Scale, Scale
+    
+	Return Mesh
+    
+End Function
+
+Function TurnCam(Ent:TEntity, X:Float, Y:Float, Z:Float, Glob:Int = False)
+
+	Local Pitch:Float = 0.0
+	Local Yaw:Float = 0.0
+	Local Roll:Float = 0.0
+	
+	Local Quat:TQuaternion = EulerToQuat( 0.0, 0.0, 0.0 )
+	Local Turn_Quat:TQuaternion = EulerToQuat( 0.0, 0.0, 0.0 )
+	
+	If Glob=False
+	
+		Quat = EulerToQuat( EntityPitch( Ent, True ), EntityYaw( Ent, True ), EntityRoll( Ent, True ) )
+		Turn_Quat = EulerToQuat( X, Y, Z )
+		Quat = MultiplyQuats( Quat, Turn_Quat )
+		Quat = NormalizeQuat( Quat )
+		QuatToEuler2( Quat.x, Quat.y, Quat.z, Quat.w, Pitch, Yaw, Roll )
+		RotateEntity Ent, Pitch, Yaw, Roll
+	Else
+	
+		RotateEntity Ent, EntityPitch( Ent )+X, EntityYaw( Ent )+Y, EntityRoll( Ent )+Z
+		
+	EndIf
+	
+End Function
+
+Function EulerToQuat:TQuaternion(pitch:Float,yaw:Float,roll:Float)
+
+	Local cr:Float=Cos(-roll/2.0)
+	Local cp:Float=Cos(pitch/2.0)
+	Local cy:Float=Cos(yaw/2.0)
+	Local sr:Float=Sin(-roll/2.0)
+	Local sp:Float=Sin(pitch/2.0)
+	Local sy:Float=Sin(yaw/2.0)
+	Local cpcy:Float=cp*cy
+	Local spsy:Float=sp*sy
+	Local spcy:Float=sp*cy
+	Local cpsy:Float=cp*sy
+	
+	Local q:TQuaternion=New TQuaternion
+	
+	q.w:Float=cr*cpcy+sr*spsy
+	q.x:Float=sr*cpcy-cr*spsy
+	q.y:Float=cr*spcy+sr*cpsy
+	q.z:Float=cr*cpsy-sr*spcy
+	
+	Return q
+	
+End Function
+
+Function QuatToEuler2(x:Float,y:Float,z:Float,w:Float,pitch:Float Var,yaw:Float Var,roll:Float Var)
+
+	Local sint:Float=(2.0*w*y)-(2.0*x*z)
+	Local cost_temp:Float=1.0-(sint*sint)
+	Local cost:Float
+
+	If Abs(cost_temp)&gt;QuatToEulerAccuracy
+
+		cost=Sqr(cost_temp)
+
+		Else
+
+		cost=0.0
+
+	EndIf
+
+	Local sinv:Float,cosv:Float,sinf:Float,cosf:Float
+	
+	If Abs(cost)&gt;QuatToEulerAccuracy
+	
+		sinv=((2.0*y*z)+(2.0*w*x))/cost
+		cosv=(1.0-(2.0*x*x)-(2.0*y*y))/cost
+		sinf=((2.0*x*y)+(2.0*w*z))/cost
+		cosf=(1.0-(2.0*y*y)-(2.0*z*z))/cost
+		
+	Else
+		
+		sinv=(2.0*w*x)-(2.0*y*z)
+		cosv=1.0-(2.0*x*x)-(2.0*z*z)
+		sinf=0.0
+		cosf=1.0
+		
+	EndIf
+	
+	pitch=ATan2(sint,cost)
+	yaw=ATan2(sinf,cosf)
+	roll=-ATan2(sinv,cosv)
+	
+End Function
+
+Function MultiplyQuats:TQuaternion(q1:TQuaternion,q2:TQuaternion)
+
+	Local q:TQuaternion=New TQuaternion
+	
+	q.w = q1.w*q2.w - q1.x*q2.x - q1.y*q2.y - q1.z*q2.z
+	q.x = q1.w*q2.x + q1.x*q2.w + q1.y*q2.z - q1.z*q2.y
+	q.y = q1.w*q2.y + q1.y*q2.w + q1.z*q2.x - q1.x*q2.z
+	q.z = q1.w*q2.z + q1.z*q2.w + q1.x*q2.y - q1.y*q2.x
+
+	Return q
+
+End Function
+
+Function NormalizeQuat:TQuaternion(q:TQuaternion)
+
+	Local uv:Float=Sqr(q.w*q.w+q.x*q.x+q.y*q.y+q.z*q.z)
+
+	q.w=q.w/uv
+	q.x=q.x/uv
+	q.y=q.y/uv
+	q.z=q.z/uv
+
+	Return q
+
+End Function</textarea> <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,382 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Defining a Printer Driver</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Defining a Printer Driver</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=124" >Brucey's Modules</a>/<a href="#bottom" >Defining a Printer Driver</a><br><br>
+<a name="986933"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Glenn Dodd</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> If i use WXMax how do i define a printer or printer driver so the print dialog doesn't come up each time i print something?<br>Please Note:<br>The specific printer will never be the default printer on windows.<br><br>Regards<br>Glenn <br><br></td></tr></table><br>
+<a name="987017"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DavidDC</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is something I've never perfected. The best I've currently got is that each session the user OK's the printer dialog once (with the printer they need already highlighted for them) and all subsequent prints are dialog-less.<br><br>What I'm doing is keeping a (global) copy of the PrintData, PageSetup and PrintDialogData after it has been setup once. I imagine you could dump this data to disk on cleanup and reload on startup, but I'm just using a global for the time being. Be interested if you can that aspect going!<br><br>Once you have your valid data structures filled, call TPrinter.Print with a false for the prompt dialog argument.<br><br>I'll include my wrapper for reference as to what I'm doing, (as opposed to correct practice!). Don't expect it to compile though as it will be missing dependencies.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+'Import GibbonGames.Locales
+Import GibbonGames.HelperTypes
+Import wx.wxPrinter
+Import wx.wxPrintout
+Import "MessageBox.bmx"
+
+' ----------------------------------------------------------------
+Rem
+	bbdoc:  To use: Extend Draw() and Invoke Printing via Print()
+	about:    
+End Rem	
+Type TPrinter Extends wxPrintout
+
+	Field MinPage:Int
+	Field MaxPage:Int
+	Field FromPage:Int
+	Field ToPage:Int
+	
+	Field GraphicRect:TRect
+	
+	Field ParentFrame:wxWindow
+	Global PrintData:wxPrintData
+	Global PageSetupData:wxPageSetupDialogData
+	Global PrintDialogData:wxPrintDialogData
+	Global Printer:wxPrinter
+	
+	' ----------------------------------------------------------------
+	Rem
+		bbdoc:  Call me if you want to grab fresh settings for user - like changing printers
+		about:    
+	End Rem		
+	Function Cleanup()
+	
+		Printer = Null
+		PrintDialogData = Null
+		PageSetupData = Null
+		PrintData = Null
+			
+	End Function
+
+	' ----------------------------------------------------------------
+	Rem
+		bbdoc:  We set a crazily high max pages, and then force printing abort once we run out of things to print by setting MaxPages = 0, which will violate the HasPage() constraint 
+		about:  Will return NULL on error - so check the return code!  
+	End Rem	
+	Method CreateGadget:TPrinter(_parent_window:wxWindow = Null,  _num_pages:Int = 10000, _graphics_rect:TRect = Null, _s_title:String = Null,  _margins:TRect = Null, _paper_id:Int = wxPAPER_A4, _orientation:Int = wxPORTRAIT, _b_clean_start:Int = True, _paper_size:TRect = Null, _bin:Int = wxPRINTBIN_DEFAULT, _s_printer_name:String = Null )
+	
+		In("CreateGadget")
+	
+		If _b_clean_start Then Cleanup()
+	
+		If _parent_window Then ParentFrame = _parent_window
+		
+		'	Safety 
+		If Not ParentFrame Then Throw GetTypeDescription() +"CreateGadget - Null ParentFrame"
+	
+		'	The size of the virutal window that all printer dc graphics are drawn on -we need this to scale to paper size
+		If _graphics_rect 
+		
+			GraphicRect = New TRect.Copy(_graphics_rect)
+		
+		'	Auto set a gfx window size reflecting ISO paper ratio 1:1.1414
+		Else
+			
+			GraphicRect = New TRect.Init(0,0,210*3,297*3)
+		
+		EndIf
+	
+		If Not PrintData Then PrintData = New wxPrintData.Create()
+	
+		'	NO! FAIL GRACEFULLY - This error can trigger if no printer is connected to the system, or not installed. So it is a PROBABLE error that demands elegant recovery
+		If Not PrintData.IsOk() 
+			
+			'	Log bad first attempt
+			TLog.Info(GetTypeDescription() +"CreateGadget Invalid PrintData:wxPrintData -Resetting")
+		
+			'	Clear all global printer data
+			Cleanup()
+			
+			'	Reattempt to create a valid printer
+			PrintData = New wxPrintData.Create()
+			
+			'	Still failed? Inform user and exit
+			If Not PrintData.IsOk() 
+			
+				TLog.Critical(GetTypeDescription() +"CreateGadget Invalid PrintData:wxPrintData - still invalid POST reset")
+		
+				TMessageBox.Open("Unable to initialise the printer. Please check a printer is connected, switch on and properly installed on this system. If you see this message repeatedly, please contact Aromillo support.",,,ParentFrame)
+				
+				Return Null
+				
+			EndIf
+			
+		EndIf
+		
+		' Set an initial paper size here
+   		PrintData.SetPaperId(_paper_id)   
+		PrintData.SetOrientation(_orientation)
+		PrintData.SetBin(_bin)
+		PrintData.SetNoCopies(1)
+		PrintData.SetPrinterName(_s_printer_name)
+		
+		If Not PageSetupData Then PageSetupData = New wxPageSetupDialogData.Create()
+	
+		PageSetupData.SetDefaultInfo(True)
+	
+	  	' copy over initial paper size from Print record
+		PageSetupData.SetPrintData(PrintData)
+				
+		If _paper_size
+			PageSetupData.SetPaperSize(_paper_size.w, _paper_size.h)
+		EndIf
+	
+	    	' Set some initial page margins in mm. 
+	    	If _margins
+			PageSetupData.SetMarginTopLeft(_margins.x, _margins.y)
+	    		PageSetupData.SetMarginBottomRight(_margins.w, _margins.h)
+		Else
+			PageSetupData.SetMarginTopLeft(15,15)
+	    		PageSetupData.SetMarginBottomRight(15,15)
+		EndIf
+		
+		Create(_s_title)
+		
+		'	Default to 1..num_pages output
+		SetPageInfo(1, _num_pages)
+		
+		Out("CreateGadget")
+		
+		Return Self	
+	
+	End Method
+	
+	' ----------------------------------------------------------------
+	Rem
+		bbdoc:  
+		about:    
+	End Rem	
+	Method DisplayError()
+	
+		In("DisplayError")
+	
+		Local s_error:String
+			
+		Select wxPrinter.GetLastError()
+		
+			Case  wxPRINTER_NO_ERROR
+				
+				'	User pressed cancel most likely 
+				's_error = "wxPRINTER_NO_ERROR - why then are you reading this?"
+				
+			Case wxPRINTER_ERROR
+				
+				s_error = "You have a default printer error. Please check your printer settings and retry."
+		
+			Case wxPRINTER_CANCELLED
+					
+				TLog.Info("TPrinter.DisplayError - wxPRINTER_CANCELLED. Printing cancelled by user.")
+				
+			Default
+			
+				s_error = "Unknown error code."
+						
+		End Select
+				
+		If s_error Then TMessageBox.Open(GetTypeDescription()+s_error)
+	
+		Out("DisplayError")
+		
+	End Method
+		
+	' ----------------------------------------------------------------
+	Rem
+		bbdoc:  
+		about:    
+	End Rem	
+	Method Draw(_dc:wxDC, _page:Int)
+	
+		'override me with your own page specific drawing code
+	
+	End Method
+
+	' ----------------------------------------------------------------
+	Rem
+		bbdoc:  
+		about:    
+	End Rem	
+	Method DrawPage(_dc:wxDC, _page:Int)
+	
+		In("DrawPage",True)
+	
+		If GraphicRect And PageSetupData
+		
+			DebugLog "DrawPage::GraphicRect and PageSetupData OK " +PageSetupData.IsOk()
+				
+			Local max_x:Int = GraphicRect.w
+			Local max_y:Int = GraphicRect.h
+			
+			'	Safety check on dimensions - you will get bizarre tough to track errors if you accidentally pass a &lt;=0 into these
+			If max_x &lt;= 0 Or max_y &lt;= 0 Then Throw GetTypeDescription() +" DrawPage INVALID GraphicRect dimensons (w,h) = ("+max_x +"," +max_y+")"
+			
+			' This sets the user scale and origin of the DC so that the image fits
+			' within the page margins as specified by g_PageSetupData, which you can
+			' change (on some platforms, at least) in the Page Setup dialog. Note that
+			' on Mac, the native Page Setup dialog doesn't let you change the margins
+			' of a wxPageSetupDialogData object, so you'll have to write your own dialog or
+			' use the Mac-only wxMacPageMarginsDialog, as we do in this program.		
+			FitThisSizeToPageMargins(max_x, max_y, PageSetupData)
+			Local fit_rect:wxRect = GetLogicalPageMarginsRectRect(PageSetupData)
+			
+			' This offsets the image so that it is centered within the reference
+		    	' rectangle defined above.
+			Local x_off:Int = (fit_rect.GetWidth() - max_x) / 2
+			Local y_off:Int = (fit_rect.GetHeight() - max_y) / 2
+			OffsetLogicalOrigin(x_off, y_off)
+	
+		    	Draw(_dc, _page)
+	
+		EndIf
+	
+		Out("DrawPage")
+	
+	End Method
+
+	' ----------------------------------------------------------------
+	Rem
+		bbdoc:  
+		about:    
+	End Rem	
+	Method GetPageInfo(_min_page:Int Var, _max_page:Int Var, _from_page:Int Var, _to_page:Int Var)
+
+		_min_page 	= MinPage
+		_max_page 	= MaxPage
+		_from_page 	= FromPage
+		_to_page		= ToPage
+		
+		DebugLog "TPrinter.GetPageInfo - min page " +_min_page +" max page " +_max_page +" from page " +_from_page +" to page " +_to_page		
+				
+	End Method
+
+	' ----------------------------------------------------------------
+	Rem
+		bbdoc:  
+		about:    
+	End Rem		
+	Method HasPage:Int(_page:Int)
+		DebugLog "TPrinter.HasPage - " +_page  +" = " +(_page &gt;= MinPage And _page &lt;= MaxPage)
+		Return _page &gt;= MinPage And _page &lt;= MaxPage
+	End Method
+	
+	' ----------------------------------------------------------------
+	Rem
+		bbdoc:  
+		about:    
+	End Rem		
+	Method OnBeginDocument:Int(_start_page:Int, _end_page:Int)
+		DebugLog("TPrinter.OnBeginDocument " +_start_page +" "+_end_page)
+		Return True
+	End Method
+
+	' ----------------------------------------------------------------
+	Rem
+		bbdoc:  
+		about:    
+	End Rem	
+	Method OnPrintPage:Int(_page:Int)
+		
+		In("OnPrintPage",True)
+		
+		Local dc:wxDC = GetDC()
+		
+		If dc
+			
+			DrawPage(dc, _page)
+		
+			' Draw page numbers at top Left corner of printable area, sized so that screen size of text matches paper size.
+			'MapScreenSizeToPage()
+			'dc.DrawText("PAGE " + _page, 0, 0)
+					
+		Else
+		
+			TLog.Debug(GetTypeDescription() +"OnPrintPage - Null DC?")
+			
+		EndIf
+		
+		Out("OnPrintPage")
+		
+		Return dc &lt;&gt; Null
+		
+	End Method
+	
+	' ----------------------------------------------------------------
+	Rem
+		bbdoc:  
+		about:    
+	End Rem		
+	Method Print(_s_title:String= Null, _b_prompt_dialog:Int = True)
+	
+		In("Print",True)
+		
+		'	Save out file path
+		Local s_path:String = CurrentDir() 
+		
+		'	Safety
+		If Not PrintData Or Not PrintData.IsOk() Then Throw GetTypeDescription() +"Print Invalid PrintData:wxPrintData"   
+		
+		If Not PrintDialogData Or _b_prompt_dialog Or Not PrintDialogData.IsOk()
+			_b_prompt_dialog = True
+			PrintDialogData = New wxPrintDialogData.Create(PrintData)
+		EndIf
+		
+		'	Safety
+		If Not PrintDialogData.IsOk() Then Throw GetTypeDescription() +"Print Invalid PrintDialogData:wxPrintDialogData"
+		
+		'	Create the printer
+		If Not Printer Or _b_prompt_dialog Then Printer = New wxPrinter.Create(PrintDialogData)
+		
+		DebugLog GetTypeDescription() +"calling Printer.Print()"
+		
+		'	And run the print			
+		If Not Printer.Print(ParentFrame, Self, _b_prompt_dialog ) 
+		
+		   	DisplayError()
+			
+		Else
+			'	Store our settings for next time
+		'    PrintData = Printer.GetPrintDialogData().GetPrintData()
+		End If
+		
+		'	Restore our original file path
+		ChangeDir s_path
+			
+		Out("Print",True)
+		
+	End Method
+	
+	' ----------------------------------------------------------------
+	Rem
+		bbdoc:  
+		about:    
+	End Rem	
+	Method SetPageInfo(_min_page:Int, _max_page:Int, _from_page:Int=0, _to_page:Int=0)
+
+		MinPage = _min_page
+		MaxPage = _max_page
+		
+		If _from_page 
+			FromPage = _from_page 
+		Else
+			 FromPage = MinPage
+		EndIf
+	
+		If _to_page 
+			ToPage = _to_page 
+		Else
+			 ToPage = MaxPage
+		EndIf
+				
+	End Method
+
+End Type
+</textarea><br>I call the above using something like this for my POS receipt printouts:<br><pre class=code>
+'	If the user has switched the printers to something else (by printing out another document) then force a fresh config
+	If TPrinter.PrintData And TPrinter.PrintData.GetPrinterName() &lt;&gt; Settings.s_POSReceiptPrinterName Then TPrinter.Cleanup()
+					
+	Local printer:TSalePrinter = TSalePrinter(New TSalePrinter.CreateGadget(Self,,Settings.POSReceiptCanvasRect,,Settings.POSReceiptMargins,wxPAPER_A4,,False,,wxPRINTBIN_AUTO, Settings.s_POSReceiptPrinterName))
+				
+	'	And throw the sale list at the printer
+	'	Passing false requests that we remember this printer for next time			
+	If printer Then printer.PrintSale(POSTableViewDialogPanel.GetSaleItemList(),False)
+</pre><br>TSalePrinter is an extension of TPrinter. Hope that helps! <br><br></td></tr></table><br>
+<a name="987047"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Glenn Dodd</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Many thanks David.<br>It looks very useful. I need to prototype the concept to my work to prove the point and this will help me immensely.<br><br>Cheers<br>Glenn <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

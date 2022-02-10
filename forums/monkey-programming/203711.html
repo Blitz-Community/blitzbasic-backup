@@ -1,0 +1,374 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Android: Polygon Slowdown</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Android: Polygon Slowdown</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=507" >Monkey Programming</a>/<a href="#bottom" >Android: Polygon Slowdown</a><br><br>
+<a name="2039739"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dragon</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is not really a bug,<br>but a known issue on ANDROID devices without CPU floating point support. I have here a Galaxy Tab 7 and can see it!<br><br>The Problem is simple:<br>Any floating point number is calculated per software (Java or so), if here is no CPU support. And this is very SLOOOOOOOOOOOOOW!<br><br><a href="http://www.badlogicgames.com/wiki/index.php/Direct_Bulk_FloatBuffer.put_is_slow" target="_blank">http://www.badlogicgames.com/wiki/index.php/Direct_Bulk_FloatBuffer.put_is_slow</a><br><br>Imagine, you want to draw ovals, so you need many polygons.<br><br>I did a test:<br>drawing only 72 images: i get 60 fps<br>drawing only 72 ovals (80x80), i get 20 fps (!!!!!)<br><br>I could fix this on android (JAVA, not monkey) with some tricks:<br>1) i use always int numbers instead floats for polygons<br>2) i use a buffer where i store so many polys as possible and push it to device<br><br>PseudoCode for quads:<br><pre class=code>Quad(x, y, u, v) 'set edges 1 to 4
+Quad(x, y, u, v)
+Quad(x, y, u, v)
+Quad(x, y, u, v)
+...
+Flush()</pre><br><br>Flush should autom. called, at Flip or when buffer is full.<br>Or Flush can called autom. at some points<br><br><br><br>@MARKSIBLY: is here any chance to add this to mojo?<br>We need many int commands for DrawRect, DrawOval, DrawImage etc...<br>This is very important...<br><br><br><br>Java Sample Code:<br><br><pre class=code>package test;
+import java.nio.ByteOrder;
+import java.nio.ByteBuffer;
+import java.nio.ShortBuffer;
+import javax.microedition.khronos.opengles.GL10;
+
+
+
+public class Draw
+{
+
+	///////////////////////////////////////////////////////////////////////////
+
+	protected static short[] indexarray;
+	protected static short[] vertexarray;
+	protected static short[] texturearray;
+	protected static byte[]  colorarray;
+
+	protected static ShortBuffer indexbuffer;
+	protected static ShortBuffer vertexbuffer;
+	protected static ShortBuffer texturebuffer;
+	protected static ByteBuffer  colorbuffer;
+	
+	protected static final int vertexmax = 2048; //512 quads x 4 vertices
+	protected static int vertexcount;
+	protected static int indexcount;
+
+	protected static byte red   = (byte)255;
+	protected static byte green = (byte)255;
+	protected static byte blue  = (byte)255;
+	protected static byte alpha = (byte)255;
+	
+	///////////////////////////////////////////////////////////////////////////
+
+	public static void Update ()
+	{
+		ByteBuffer b;
+
+	    	if (indexarray   == null) indexarray   = new short[vertexmax / 4 * 6]; //i
+    		if (vertexarray  == null) vertexarray  = new short[vertexmax * 2]; //xy
+	    	if (texturearray == null) texturearray = new short[vertexmax * 2]; //uv
+    		if (colorarray   == null) colorarray   = new byte [vertexmax * 4]; //rgba
+
+   		if (indexbuffer == null)
+   		{
+		    	b = ByteBuffer.allocateDirect((vertexmax / 4 * 6) * 2);
+		    	b.order(ByteOrder.nativeOrder());
+	    		indexbuffer = b.asShortBuffer();
+   		}
+
+   		if (vertexbuffer == null)
+   		{
+			b = ByteBuffer.allocateDirect(vertexmax * 2 * 2);
+		    	b.order(ByteOrder.nativeOrder());
+	    		vertexbuffer = b.asShortBuffer();
+   		}
+    	
+	    	if (texturebuffer == null)
+    		{
+	   		b = ByteBuffer.allocateDirect(vertexmax * 2 * 2);
+	    		b.order(ByteOrder.nativeOrder());
+		    	texturebuffer = b.asShortBuffer();
+    		}
+
+	    	if (colorbuffer == null)
+    		{
+	    		colorbuffer = ByteBuffer.allocateDirect(vertexmax * 4 * 1);
+    		}
+    	
+	    	if (View.gl != null)
+    		{
+			View.gl.glEnableClientState(GL10.GL_VERTEX_ARRAY);
+			View.gl.glVertexPointer(2, GL10.GL_SHORT, 0, vertexbuffer);
+
+			View.gl.glEnableClientState(GL10.GL_TEXTURE_COORD_ARRAY);
+			View.gl.glTexCoordPointer(2, GL10.GL_SHORT, 0, texturebuffer);
+
+			View.gl.glEnableClientState(GL10.GL_COLOR_ARRAY);
+			View.gl.glColorPointer(4, GL10.GL_UNSIGNED_BYTE, 0, colorbuffer);
+	    	}
+    	
+		vertexcount = 0;
+		indexcount = 0;
+    }
+	
+	///////////////////////////////////////////////////////////////////////////
+	
+	public static void Flush ()
+	{
+		if (vertexcount &lt; 4) return;
+
+		indexbuffer.put(indexarray, 0, indexcount);
+		vertexbuffer.put(vertexarray, 0, vertexcount * 2);
+		texturebuffer.put(texturearray, 0, vertexcount * 2);
+		colorbuffer.put(colorarray, 0, vertexcount * 4);
+
+	    	indexbuffer.position(0);
+    		vertexbuffer.position(0);
+	    	texturebuffer.position(0);
+    		colorbuffer.position(0);
+
+	    	View.gl.glDrawElements(GL10.GL_TRIANGLES, indexcount, GL10.GL_UNSIGNED_SHORT, indexbuffer);
+
+		vertexcount = 0;
+		indexcount = 0;
+	}
+	
+	///////////////////////////////////////////////////////////////////////////
+
+	public static void Quad (int x, int y, int u, int v)
+	{
+		vertexarray[vertexcount * 2] = (short)x;
+		vertexarray[vertexcount * 2 + 1] = (short)y;
+
+		texturearray[vertexcount * 2] = (short)u;
+		texturearray[vertexcount * 2 + 1] = (short)v;
+
+		//if (vertexcount % 4 == 2)
+		//{
+			colorarray[vertexcount * 4] = red;
+			colorarray[vertexcount * 4 + 1] = green;
+			colorarray[vertexcount * 4 + 2] = blue;
+			colorarray[vertexcount * 4 + 3] = alpha;
+		//}
+
+		if (vertexcount % 4 != 3) //point 1-3
+		{
+			indexarray[indexcount] = (short)vertexcount;
+			indexcount++;
+		}
+		else //point 4
+		{
+			indexarray[indexcount]     = (short)(vertexcount-2);
+			indexarray[indexcount + 1] = (short)vertexcount;
+			indexarray[indexcount + 2] = (short)(vertexcount-1);
+			indexcount = indexcount + 3;
+		}
+
+		vertexcount++;
+		if (vertexcount == vertexmax) Flush();
+	}
+
+	///////////////////////////////////////////////////////////////////////////
+
+	public static void Quad (int x, int y, int u, int v, int red, int green, int blue, int alpha)
+	{
+		Draw.red   = (byte)red;
+		Draw.green = (byte)green;
+		Draw.blue  = (byte)blue;
+		Draw.alpha = (byte)alpha;
+		Quad(x, y, u, v);
+	}
+
+	///////////////////////////////////////////////////////////////////////////
+	
+	public static void Color (int red, int green, int blue, int alpha)
+	{
+		Draw.red   = (byte)red;
+		Draw.green = (byte)green;
+		Draw.blue  = (byte)blue;
+		Draw.alpha = (byte)alpha;
+	}
+
+}
+</pre> <br><br></td></tr></table><br>
+<a name="2039736"></a>
+
+<a name="2039734"></a>
+
+<a name="2039733"></a>
+
+<a name="2039732"></a>
+
+<a name="2039731"></a>
+
+<a name="2039730"></a>
+
+<a name="2039927"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Note that Ovals are made up of many triangles, so there's more overhead. Shouldn't be much, though.<br><br><br>I have a Galaxy Tab P1010 and it is about the expected speed (slow, but manageable). PowerVR SGX530 and CortexA-8 have FPU.<br><br>Also try running Linpack to get accurate MFlops if you are curious.<br><br><br>In my tests, Math.Sin and Math.Cos really slow down Android devices. I'd create a lookup table and that may speed up oval drawing. (minimum 12 segments x2 sin/cos calculations x72 = 1728 cosine calculations per frame... slow) <br><br></td></tr></table><br>
+<a name="2039926"></a>
+
+<a name="2039924"></a>
+
+<a name="2039936"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Moving this to programming...<br><br>We went through a lot of this in the early days of Monkey - a lot of links out there (eg: the "FloatBuffer.put is slow" one) are dated, and turned out to only apply to a subset of very early android devices.<br><br>After much trial and error, we managed to get Monkey performance up to about par with the other 2D libs out there - ie: they're all probably hardware limited. There are tradeoffs - some approaches work better on some HW than others - but in general I'm happy with Mojo's performance on Android.<br><br>Mojo does buffer rendering - check out the source - but not ovals because they can consume a lot of vertices. This could possibly be improved, but quads, points, lines are all 'batched'. Also, there IS overhead per triangle, so ovals will always be 'slowish'. <br><br></td></tr></table><br>
+<a name="2039935"></a>
+
+<a name="2039932"></a>
+
+<a name="2039928"></a>
+
+<a name="2039930"></a>
+
+<a name="2039931"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Also.... it looks like mojo is using java.lang.Math which converts doubles to floats.<br><br>Hm, maybe use FloatMath? It says it takes 1/3 the time. I may think about using this in miniB3D as well...<br><a href="http://developer.android.com/reference/android/util/FloatMath.html" target="_blank">http://developer.android.com/reference/android/util/FloatMath.html</a> <br><br></td></tr></table><br>
+<a name="2039938"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>&gt; Hm, maybe use FloatMath?<br><br>Nice find! Could be the way to go for Sin/Cos etc...<br><br>Although this is a worry:<br><br><a href="http://code.google.com/p/android/issues/detail?id=36199" target="_blank">http://code.google.com/p/android/issues/detail?id=36199</a><br><br>Perhaps it uses 'fast' software emulation instead of the FPU...?<br><br>This seems to agree:<br><br><a href="http://www.badlogicgames.com/wordpress/?p=796" target="_blank">http://www.badlogicgames.com/wordpress/?p=796</a><br><br><div class="quote"> <br>So what does this mean? FloatMath works a tiny bit better on older devices with no FPU as expected. On never devices with FPU it’s actually slower it seems due to load conversions to and from the FPU registers for 32-bit floats. Function calls are still evil and nasty even with the JIT.<br> <br></div> <br><br></td></tr></table><br>
+<a name="2039937"></a>
+
+<a name="2039933"></a>
+
+<a name="2039942"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dragon</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> in my tab i have nearly same HW, but a bit better Video-Chip<br><br>ARM Cortex-A8<br>PowerVR-SGX540<br><br>more details about CPU:<br><a href="http://en.wikipedia.org/wiki/ARM_Cortex-A8" target="_blank">http://en.wikipedia.org/wiki/ARM_Cortex-A8</a><br><a href="http://en.wikipedia.org/wiki/Samsung_Exynos#Exynos_3110" target="_blank">http://en.wikipedia.org/wiki/Samsung_Exynos#Exynos_3110</a><br><br>FPU on ARM-A8 is optional, i could not find out if it is integrated<br><br><br><br>i can check out later what is the problem:<br>-float generally<br>-or openGL float <br><br></td></tr></table><br>
+<a name="2039939"></a>
+
+<a name="2039940"></a>
+
+<a name="2039943"></a>
+
+<a name="2039944"></a>
+
+<a name="2039945"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dragon</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Mojo does buffer rendering - check out the source <br></div><br><br>i checked it... yes mojo use buffers,<br>but i see that matrix calculations are done per software and not per hardware using openGL commands (glRotate, glScale etc...)<br><br>best way for me is use gl-commands for transform and then push raw int vertices without software matrices calculations<br><br>and this should run fine on any platform - or? <br><br></td></tr></table><br>
+<a name="2039946"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>&gt; but i see that matrix calculations are done per software and not per hardware using openGL commands (glRotate, glScale etc...)<br><br>This is about the slowest way you can do 2D rendering.<br><br>It means you can't batch primitives - because they must be drawn/flushed to be rotated/scaled etc - which means many more calls to OS/GL functions AND a great reduction in what can be done in parallel with the GPU.<br><br>It's also not supported in GL2.0, which isn't a problem right now but.. <br><br></td></tr></table><br>
+<a name="2039949"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Function calls are still evil and nasty even with the JIT. <br></div><br>ok. darn. thought maybe they had implemented LUTs. <br><br></td></tr></table><br>
+<a name="2039979"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dragon</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> This is about the slowest way you can do 2D rendering.<br>It means you can't batch primitives - because they must be drawn/flushed to be rotated/scaled etc - which means many more calls to OS/GL functions AND a great reduction in what can be done in parallel with the GPU. <br></div><br><br>Mark, i think you don't understand what i mean...<br>Here are 2 situations:<br><br>1) many objects with different rotation, scale...<br>2) many objects width same rotation, scale...<br><br>Your code is effective for first situation.<br>It is OK to use floats, because you MUST<br>calculate matrices using floats<br><br>For second situation, i think it is not efficient.<br><br>If i setup a screen rotation and scale once<br>(how many gl-calls are this? only few),<br>then i could draw massive count of polys with same matrix.<br>But not per software each time using floats.<br>Instead of this i CAN NOW use ints only (!) and ignoring matrix<br>floating calculations and i can push many many more int<br>vertices to device.<br><br>And you CAN batch primitives - so long nothing changes on matrix!!!<br><br>The problem with older androids &lt; 3.0 is not drawing polygons,<br>the problem is to put all data to device - this is much slower than drawing!!! and this is incredible! Here is bottleneck somewhere...<br><br><br>I think it is possible to mix both situations with only one code...<br>You can add something like a "switch".<br>So long you use old float DrawImage etc, you use old code #1 and batch in old float buffers. In special cases, when you use Int DrawImage etc, you can use new code #2 and batch in new int buffer (when you flush data, you must temporary change hardware device matrix, because both matrices situations are different!). Do you understand what i mean?<br><br>Situation 1:<br>-calculate vertices using matrices per software<br>-save this data in float buffer<br>-push float buffer to device without changing device matrix<br><br>Situation 2:<br>-save data in int buffer without change<br>-change device matrix<br>-push int buffer to device<br>-change device matrix back to identity to keep compatibility with old code<br><br>You see that situation 2 work good only with batched polys,<br>so matrix change should happen very seldom.<br><br><br><div class="quote"> It's also not supported in GL2.0, which isn't a problem right now but..  <br></div><br><br>yes, in GL2 you must use shaders<br>this is a bit different...<br>i don't like this also...<br>because you need separate flush code for GL1 and GL2,<br><br><a href="http://mobileorchard.com/getting-started-with-opengl-es-20-on-the-iphone-3gs/" target="_blank">http://mobileorchard.com/getting-started-with-opengl-es-20-on-the-iphone-3gs/</a> <br><br></td></tr></table><br>
+<a name="2039975"></a>
+
+<a name="2039976"></a>
+
+<a name="2039974"></a>
+
+<a name="2040007"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> So what you are saying is that you would want a situation #2 added?<br>And situation #2 is where the vertices are being modified by a global matrix (device matrix), rather than individual matrixes?<br><br>Could you use a write pixels to image for this? Are you using this for a tiled background? <br><br></td></tr></table><br>
+<a name="2040034"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dragon</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> i modify mojo a bit and add int buffer to test it<br>most code is from above - it have only a very simple buffer for one texture type and only for images<br><br><br>so here is the benchmark result:<br><br>'number of images (16x16 with some alpha) to slowdown app from 60 fps to 30 fps / window 1024x600<br>'---------------------------<br>'HTML5: 2600<br>'flash: 3700<br>'glfw: 66000<br>'xna: 130000<br>'android: 6600<br>'android: 13000 (int buffer!)<br><br><br>as you can see i could DOUBLE the speed on android with that code<br>the trick is to use SHORT buffer for vertex &amp; texture<br><br>texture is a bit tricky - it must scaled up with matrix (not done yet) to get range over 0..1<br><br>Transformations from monkey are not used yet (only a dummy), but openGL have already a transformation applied and calculate with it.<br><br><br>here is benchmark code without mojo modifications:<br><br><pre class=code>Strict
+Import mojo
+
+Global nr:Int = 13000
+
+Class Program Extends App
+
+	Global img:Image
+	Global frames:Int
+	Global time:Int
+	
+	Method OnCreate:Int ()
+		SetUpdateRate(60)
+		img = LoadImage("icon.png") '16x16
+		Return 0
+	End
+
+	Method OnUpdate:Int ()
+		Return 0
+	End
+
+	Method OnRender:Int ()
+		Local w:Int = DeviceWidth() - img.Width()
+		Local h:Int = DeviceHeight() - img.Height()
+		Local i:Int,x:Int,y:Int
+
+		Cls(255,0,255)
+		For i = 1 To nr
+			DrawImage(img, x, y)
+			'DrawImageX(img, x, y, 16, 16, 0, 0, 1, 1)
+			x = x + img.Width()
+			If x &gt; w Then x=0; y=y+img.Height()
+			If y &gt; h Then y=0
+		End
+		'Flush2()
+		
+		If frames = 0 Then time = Millisecs()
+		Local fps:Int = Float(frames) / (Float(Millisecs() - time) / 1000.0)
+		DrawText("fps:" + String(fps), 10, 10)
+		frames = frames + 1
+
+		Return 0
+	End
+
+End
+
+Function Main:Int ()
+	New Program()
+	Return 0
+End</pre> <br><br></td></tr></table><br>
+<a name="2040033"></a>
+
+<a name="2040075"></a>
+
+<a name="2040076"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> using a short buffer leads to half the amount of bytes being transferred. <br><br></td></tr></table><br>
+<a name="2040079"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>I had a hack at short buffers this afternoon, and it does seem to make a significant difference (in bouncyaliens anyway) on my Nexus7.<br><br>See bottom of product updates section for an experimental version - rename to mojo.android.java and drop it in modules/mojo/native.<br><br>Some issues:<br><br>I don't see how gl transforms can help unless your talking about one transform for a bunch of primitives. Even then, I think short buffers will generally need some sort of CPU transform regardless...<br><br>The issue is that for int vertices to work, they really need to be in device/pixel space when they're written to the buffers. People frequently use transforms to implement virtual resolutions, so unless you're OK with stuff 'jumping' around depending on device res vs virtual res, this transform needs to be done first.<br><br>Another alternative would be to use some kind of fixed point system, but it's hard to do this in a general way - eg: how would it support an app that decided to map the entire display to a virtual size of 1 x 1? As it is, I've implemented 4 bits 'fraction' in the above anyway because I don't like the idea of losing subpixel accuracy completely.<br><br>This has also required some extra code in DrawBlah to throw away stuff that overflows a short, but this surprisingly is still a significant win in bouncyaliens. What the hell are those drivers up to?!?<br><br>Anyway, have a play and test with as much as you can! <br><br></td></tr></table><br>
+<a name="2040099"></a>
+
+<a name="2040100"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dragon</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> thx mark,<br><br>i did again some speed test - this time with floats,<br>i could speed up mojo drawimage<br><br>you should look at function<br>DrawImage &amp; Co<br><br>i do not understand why you use "If context.tformed" here.<br>it make no sense...<br><br>i replaced DrawImage with new one and get 25% speed boost:<br>images are normaly transformed - i do not see any difference<br><br><pre class=code>Function DrawImage( image:Image,x#,y#,frame=0 )
+#If CONFIG="debug"
+	DebugRenderDevice
+#End
+	Local f:Frame=image.frames[frame]
+	context.Validate
+	If image.flags &amp; Image.FullFrame
+		renderDevice.DrawSurface image.surface,x-image.tx,y-image.ty
+	Else
+		renderDevice.DrawSurface2 image.surface,x-image.tx,y-image.ty,f.x,f.y,image.width,image.height
+	Endif
+End</pre><br><br><br><br>I also add only few more lines to mojo to temporary switch to a new mode<br>and get 36% more speed - compared to normal drawimage<br><br><pre class=code>'1) replace above code in graphics.monkey
+
+'2) add this to graphicsdevice.monkey:
+	Method DrawMode( mode:Bool )
+
+'3) add this to graphics.monkey:
+Function DrawMode( mode:Bool )
+#If CONFIG="debug"
+	DebugRenderDevice
+#End
+	context.Validate
+	renderDevice.DrawMode mode
+End</pre><br><br><br>and add this diff to mojo.android.java:<br><br><pre class=code>--- C:/Prog/Prog/MonkeyPro66/modules/mojo_backup/native/mojo.android.java	Tue Sep 25 14:44:22 2012
++++ C:/Prog/Prog/MonkeyPro66/modules/mojo/native/mojo.android.java	Thu Oct 04 21:41:55 2012
+@@ -607 +607,2 @@
+-	
++	boolean drawmode;
++
+@@ -638,0 +640,9 @@
++	int DrawMode( boolean mode ){
++		if (drawmode!=mode)
++		{
++			Flush();
++			drawmode=mode;
++		}
++		return 0;
++	}
++	
+@@ -678,0 +689 @@
++		drawmode=false;
+@@ -707,0 +719,9 @@
++		if (drawmode==true &amp;&amp; tformed==true){
++			float m[]={
++			ix,iy,0,0,
++			jx,jy,0,0,
++			0,0,1,0,
++			tx,ty,0,1};
++			GLES11.glMultMatrixf(m, 0);
++		}
++		
+@@ -743,0 +764,2 @@
++
++		if (drawmode==true &amp;&amp; tformed==true) GLES11.glLoadIdentity();
+@@ -853 +875 @@
+-	
++		if (drawmode==true) Flush();
+@@ -1028 +1050 @@
+-		if( tformed ){
++		if( tformed==true &amp;&amp; drawmode==false ){
+@@ -1065 +1087 @@
+-		if( tformed ){
++		if( tformed==true &amp;&amp; drawmode==false ){
+</pre><br><br><br>this speed up transformed images only <br><br></td></tr></table><br>
+<a name="2040097"></a>
+
+<a name="2040098"></a>
+
+<a name="2040102"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>&gt;i do not understand why you use "If context.tformed" here.<br>&gt;it make no sense...<br><br>I think you're right! I believe it's the 'old code' effect...<br><br>Will do some more testing but this looks like a nice improvement.<br><br>How is DrawMode used though? Is there anyway it could be 'autodetected', ie: without an extra command? <br><br></td></tr></table><br>
+<a name="2040107"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> i think he's using DrawMode to switch to the glMatrix. <br><br></td></tr></table><br>
+<a name="2040109"></a>
+
+<a name="2040112"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dragon</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> Enable special mode with "DrawMode(true)"<br>this is good for many polys with same transformation<br>that give few % more speed  <br><br>disable with "DrawMode(false)"<br><br><br><br>i do not think you can autodetect that<br>this is what user should do<br>false-mode calc matrices per software for each vertex<br>true-mode cals matrices per hardware <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

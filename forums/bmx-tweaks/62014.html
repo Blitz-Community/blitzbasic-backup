@@ -1,0 +1,521 @@
+<!DOCTYPE html><html lang="en" ><head ><title >new TMap implementation</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >new TMap implementation</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=110" >BlitzMax Module Tweaks</a>/<a href="#bottom" >new TMap implementation</a><br><br>
+<a name="693057"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi all,<br><br>As has been pointed out, Max's TMap doesn't used a balanced Tree which means it's performance is highly dependant on the order in which objects are inserted/deleted etc.<br><br>Here's a new implementation of TMap based on Java's Treemap that does use a balanced tree, meaning it should behave much more consistently.<br><br>This sort of thing is notoriously fiddly to get right, so I thought I'd post it here for people to play with before adding it officially to the modules.<br><br>Let me know if you find anything dodgy in there...<br><br>Bye!<br>Mark<br><pre class=code>
+
+Strict
+
+Private
+
+Global nil:TNode=New TNode
+
+nil._color=TMap.BLACK
+nil._parent=nil
+nil._left=nil
+nil._right=nil
+
+Public
+
+Type TNode
+
+	Method NextNode:TNode()
+		Local node:TNode=Self
+		If node._right&lt;&gt;nil
+			node=_right
+			While node._left&lt;&gt;nil
+				node=node._left
+			Wend
+			Return node
+		EndIf
+		Local parent:TNode=_parent
+		While node=parent._right
+			node=parent
+			parent=parent._parent
+		Wend
+		Return parent
+	End Method
+	
+	Method PrevNode:TNode()
+		Local node:TNode=Self
+		If node._left&lt;&gt;nil
+			node=node._left
+			While node._right&lt;&gt;nil
+				node=node._right
+			Wend
+			Return node
+		EndIf
+		Local parent:TNode=node._parent
+		While node=parent._left
+			node=parent
+			parent=node._parent
+		Wend
+		Return parent
+	End Method
+	
+	Field _key:Object,_value:Object
+	Field _color,_parent:TNode=nil,_left:TNode=nil,_right:TNode=nil
+End Type
+
+Type TNodeEnumerator
+	Method HasNext()
+		Return _node&lt;&gt;nil
+	End Method
+	
+	Method NextObject:Object() Abstract
+
+	Field _node:TNode	
+End Type
+
+Type TKeyEnumerator Extends TNodeEnumerator
+	Method NextObject:Object()
+		Local node:TNode=_node
+		_node=_node.NextNode()
+		Return node._key
+	End Method
+End Type
+
+Type TValueEnumerator Extends TNodeEnumerator
+	Method NextObject:Object()
+		Local node:TNode=_node
+		_node=_node.NextNode()
+		Return node._value
+	End Method
+End Type
+
+Type TMapEnumerator
+	Method ObjectEnumerator:TNodeEnumerator()
+		Return _enumerator
+	End Method
+
+	Field _enumerator:TNodeEnumerator
+End Type
+
+Type TMap
+
+	Method Clear()
+		_root=nil
+	End Method
+	
+	Method IsEmpty()
+		Return _root=nil
+	End Method
+	
+	Method Insert( key:Object,value:Object )
+		Local node:TNode=_root,parent:TNode=nil,cmp
+		
+		While node&lt;&gt;nil
+			parent=node
+			cmp=key.Compare( node._key )
+			If cmp&gt;0
+				node=node._right
+			Else If cmp&lt;0
+				node=node._left
+			Else
+				node._value=value
+				Return
+			EndIf
+		Wend
+		
+		node=New TNode
+		node._key=key
+		node._value=value
+		node._color=RED
+		node._parent=parent
+		
+		If parent=nil
+			_root=node
+			Return
+		EndIf
+		If cmp&gt;0
+			parent._right=node
+		Else
+			parent._left=node
+		EndIf
+		
+		_InsertFixup node
+	End Method
+	
+	Method Contains( key:Object )
+		Return _FindNode( key )&lt;&gt;nil
+	End Method
+
+	Method ValueForKey:Object( key:Object )
+		Local node:TNode=_FindNode( key )
+		If node&lt;&gt;nil Return node._value
+	End Method
+	
+	Method Remove( key:Object )
+		Local node:TNode=_FindNode( key )
+		If node=nil Return 0
+		 _RemoveNode node
+		Return 1
+	End Method
+	
+	Method Keys:TMapEnumerator()
+		Local nodeenum:TNodeEnumerator=New TKeyEnumerator
+		nodeenum._node=_FirstNode()
+		Local mapenum:TMapEnumerator=New TMapEnumerator
+		mapenum._enumerator=nodeenum
+		Return mapenum
+	End Method
+	
+	Method Values:TMapEnumerator()
+		Local nodeenum:TNodeEnumerator=New TValueEnumerator
+		nodeenum._node=_FirstNode()
+		Local mapenum:TMapEnumerator=New TMapEnumerator
+		mapenum._enumerator=nodeenum
+		Return mapenum
+	End Method
+	
+	Method _FirstNode:TNode()
+		Local node:TNode=_root
+		While node._left&lt;&gt;nil
+			node=node._left
+		Wend
+		Return node
+	End Method
+	
+	Method _LastNode:TNode()
+		Local node:TNode=_root
+		While node._right&lt;&gt;nil
+			node=node._right
+		Wend
+		Return node
+	End Method
+	
+	Method _FindNode:TNode( key:Object )
+		Local node:TNode=_root
+		While node&lt;&gt;nil
+			Local cmp=key.Compare( node._key )
+			If cmp&gt;0
+				node=node._right
+			Else If cmp&lt;0
+				node=node._left
+			Else
+				Return node
+			EndIf
+		Wend
+		Return node
+	End Method
+	
+	Method _RemoveNode( node:TNode )
+		Local splice:TNode,child:TNode
+		
+		If node._left=nil
+			splice=node
+			child=node._right
+		Else If node._right=nil
+			splice=node
+			child=node._left
+		Else
+			splice=node._left
+			While splice._right&lt;&gt;nil
+				splice=splice._right
+			Wend
+			child=splice._left
+			node._key=splice._key
+			node._value=splice._value
+		EndIf
+		Local parent:TNode=splice._parent
+		If child&lt;&gt;nil
+			child._parent=parent
+		EndIf
+		If parent=nil
+			_root=child
+			Return
+		EndIf
+		If splice=parent._left
+			parent._left=child
+		Else
+			parent._right=child
+		EndIf
+		
+		If splice._color=BLACK _DeleteFixup child,parent
+	End Method
+	
+	Method _InsertFixup( node:TNode )
+		While node._parent._color=RED And node._parent._parent&lt;&gt;nil
+			If node._parent=node._parent._parent._left
+				Local uncle:TNode=node._parent._parent._right
+				If uncle._color=RED
+					node._parent._color=BLACK
+					uncle._color=BLACK
+					uncle._parent._color=RED
+					node=uncle._parent
+				Else
+					If node=node._parent._right
+						node=node._parent
+						_RotateLeft node
+					EndIf
+					node._parent._color=BLACK
+					node._parent._parent._color=RED
+					_RotateRight node._parent._parent
+				EndIf
+			Else
+				Local uncle:TNode=node._parent._parent._left
+				If uncle._color=RED
+					node._parent._color=BLACK
+					uncle._color=BLACK
+					uncle._parent._color=RED
+					node=uncle._parent
+				Else
+					If node=node._parent._left
+						node=node._parent
+						_RotateRight node
+					EndIf
+					node._parent._color=BLACK
+					node._parent._parent._color=RED
+					_RotateLeft node._parent._parent
+				EndIf
+			EndIf
+		Wend
+		_root._color=BLACK
+	End Method
+	
+	Method _RotateLeft( node:TNode )
+		Local child:TNode=node._right
+		node._right=child._left
+		If child._left&lt;&gt;nil
+			child._left._parent=node
+		EndIf
+		child._parent=node._parent
+		If node._parent&lt;&gt;nil
+			If node=node._parent._left
+				node._parent._left=child
+			Else
+				node._parent._right=child
+			EndIf
+		Else
+			_root=child
+		EndIf
+		child._left=node
+		node._parent=child
+	End Method
+	
+	Method _RotateRight( node:TNode )
+		Local child:TNode=node._left
+		node._left=child._right
+		If child._right&lt;&gt;nil
+			child._right._parent=node
+		EndIf
+		child._parent=node._parent
+		If node._parent&lt;&gt;nil
+			If node=node._parent._right
+				node._parent._right=child
+			Else
+				node._parent._left=child
+			EndIf
+		Else
+			_root=child
+		EndIf
+		child._right=node
+		node._parent=child
+	End Method
+	
+	Method _DeleteFixup( node:TNode,parent:TNode )
+		While node&lt;&gt;_root And node._color=BLACK
+			If node=parent._left
+				Local sib:TNode=parent._right
+				If sib._color=RED
+					sib._color=BLACK
+					parent._color=RED
+					_RotateLeft parent
+					sib=parent._right
+				EndIf
+				If sib._left._color=BLACK And sib._right._color=BLACK
+					sib._color=RED
+					node=parent
+					parent=parent._parent
+				Else
+					If sib._right._color=BLACK
+						sib._left._color=BLACK
+						sib._color=RED
+						_RotateRight sib
+						sib=parent._right
+					EndIf
+					sib._color=parent._color
+					parent._color=BLACK
+					sib._right._color=BLACK
+					_RotateLeft parent
+					node=_root
+				EndIf
+			Else	
+				Local sib:TNode=parent._left
+				If sib._color=RED
+					sib._color=BLACK
+					parent._color=RED
+					_RotateRight parent
+					sib=parent._left
+				EndIf
+				If sib._right._color=BLACK And sib._left._color=BLACK
+					sib._color=RED
+					node=parent
+					parent=parent._parent
+				Else
+					If sib._left._color=BLACK
+						sib._right._color=BLACK
+						sib._color=RED
+						_RotateLeft sib
+						sib=parent._left
+					EndIf
+					sib._color=parent._color
+					parent._color=BLACK
+					sib._left._color=BLACK
+					_RotateRight parent
+					node=_root
+				EndIf
+			EndIf
+		Wend
+		node._color=BLACK
+	End Method
+	
+	Const RED=-1,BLACK=1
+	
+	Field _root:TNode=nil
+	
+End Type
+
+Rem
+bbdoc: Create a map
+returns: A new map object
+End Rem
+Function CreateMap:TMap()
+	Return New TMap
+End Function
+
+Rem
+bbdoc: Clear a map
+about:
+#ClearMap removes all keys and values from @map
+End Rem
+Function ClearMap( map:TMap )
+	map.Clear
+End Function
+
+Rem
+bbdoc: Check if a map is empty
+returns: True if @map is empty, otherwise false
+End Rem
+Function MapIsEmpty( map:TMap )
+	Return map.IsEmpty()
+End Function
+
+Rem
+bbdoc: Insert a key/value pair into a map
+about:
+If @map already contained @key, it's value is overwritten with @value. 
+End Rem
+Function MapInsert( map:TMap,key:Object,value:Object )
+	map.Insert key,value
+End Function
+
+Rem
+bbdoc: Find a value given a key
+returns: The value associated with @key
+about:
+If @map does not contain @key, a #Null object is returned.
+End Rem
+Function MapValueForKey:Object( map:TMap,key:Object )
+	Return map.ValueForKey( key )
+End Function
+
+Rem
+bbdoc: Check if a map contains a key
+returns: True if @map contains @key
+End Rem
+Function MapContains( map:TMap,key:Object )
+	Return map.Contains( key )
+End Function
+
+Rem
+bbdoc: Remove a key/value pair from a map
+End Rem
+Function MapRemove( map:TMap,key:Object )
+	map.Remove key
+End Function
+
+Rem
+bbdoc: Get map keys
+returns: An iterator object
+about
+The object returned by #MapKeys can be used with #EachIn to iterate through 
+the keys in @map.
+End Rem
+Function MapKeys:Object( map:TMap )
+	Return map.Keys()
+End Function
+
+Rem
+bbdoc: Get map values
+returns: An iterator object
+about:
+The object returned by #MapValues can be used with #EachIn to iterate through 
+the values in @map.
+End Rem
+Function MapValues:Object( map:TMap )
+	Return map.Values()
+End Function
+
+'Testing!
+
+Const N=1000
+
+Local deck[N]
+
+For Local i=0 Until N
+	deck[i]=i
+Next
+
+For Local i=0 Until N
+	Local r=Rand(N)-1
+	Local t=deck[i]
+	deck[i]=deck[r]
+	deck[r]=t
+Next
+
+Local map:TMap=New TMap
+
+For Local i=0 Until N
+	Local t=deck[i]
+	Print "Inserting:"+t
+	map.Insert String(t),"*****"+String(t)+"*****"
+Next
+
+For Local i=0 Until N Step 2
+	Print "Removing:"+i
+	map.Remove String(i)
+Next
+
+For Local t$=EachIn map.keys()
+	Print "Key:"+t
+Next
+
+For Local t$=EachIn map.Values()
+	Print "Value:"+t
+Next
+</pre> <br><br></td></tr></table><br>
+<a name="698355"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >tonyg</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> After all the kerfuffle has nobody got any feedback? <br>Mark, I'm sure lots of people would find maps useful if they knew what to do with them. It was something that sneaked into the source and not the docs. It might be a case of "if you don't know 'em you don't need 'em" but then...<br>Anyway, tell me how to use it and what is considered a good test and I'll provide some feedback. <br><br></td></tr></table><br>
+<a name="698357"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >H&amp;K</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I didnt even notice this. Is it sticky? Err, whats it for? <br><br></td></tr></table><br>
+<a name="698362"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >tonyg</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> <a href="/posts.php?topic=59585#664259" target="_blank"> TMap doc </a><br><a href="/posts.php?topic=51627#577282" target="_blank"> Hashtables </a><br><a href="/posts.php?topic=49028#577102" target="_blank"> Best 'how to use TMaps' post </a><br><a href="/posts.php?topic=44223#622725" target="_blank"> Short and sweet </a> <br><br></td></tr></table><br>
+<a name="698420"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dreamora</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> TMaps have been in for a long time.<br>They just never got a procedural interface.<br><br>We (many users that have been using BM from start) are adviceing them for many months now ...<br>Reason we knew of it: As user of the first versions you were used to read the source and not the docs if you wanted to use OO. (now I use HotDocs for that, official docs are still OO pointless) <br><br></td></tr></table><br>
+<a name="698567"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've been using TMaps extensively since they were introduced.<br><br>Just haven't had time to test this new baby, as I'm currently neck-deep in various modules development at the moment, but this looks like it'll help improve lots of my stuff :-) <br><br></td></tr></table><br>
+<a name="698629"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Warren</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Brucey<br><br>Revive your Eclipse plugin!  Nobody has a copy, apparently. <br><br></td></tr></table><br>
+<a name="700601"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Gabriel</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, so I've updated to 1.22 and now I guess I have this new implementation. Which is not so great for me, because all my modules won't compile any more.<br><br>TMap.Insert() used to return a TNode and now it doesn't. Why?<br><br>Anything else I'm going to have to change? <br><br></td></tr></table><br>
+<a name="700873"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dreamora</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Why it doesn't: what is the use of the TNode? Removing a node within a balanced tree does not work like on a linear linked list, it has to search it first to remove it. (both Log(n) ops)<br>the only thing you can do with it is read the value from it and this one is what you already have given to it when calling insert.<br><br>The only stuff you might have to change is stuff related to TNode ... so unless you messed around with its structure, there is nothing you have to change.<br><br>PS: the new implementation was up before 1.22 already. Not counting the fact it was in the module tweak board for weeks. <br><br></td></tr></table><br>
+<a name="700909"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Eric</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Can some explain to this layman what the Tmap is used for. Maybe a small practical example.<br><br>Thanks,<br>Eric <br><br></td></tr></table><br>
+<a name="700939"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >tonyg</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Did none of those links help? <br><br></td></tr></table><br>
+<a name="700950"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dreamora</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Eric: One of the places where it is often used is for dictionaries or for "string based arrays" (if you want to store something by its name). <br><br></td></tr></table><br>
+<a name="700985"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Gabriel</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> PS: the new implementation was up before 1.22 already. Not counting the fact it was in the module tweak board for weeks.  <br></div><br>I don't doubt it, but I didn't have to recompile all my modules until updating to 1.22.<br><br><div class="quote"> Why it doesn't: what is the use of the TNode? Removing a node within a balanced tree does not work like on a linear linked list, it has to search it first to remove it. <br></div><br>Ok, if you say so. It seemed to me from a cursory glance at the code above that I was speeding things up by keeping the node and could call _RemoveNode(Node) with it instead of calling Remove(Object) but I guess it's no great loss. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

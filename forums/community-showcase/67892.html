@@ -1,0 +1,172 @@
+<!DOCTYPE html><html lang="en" ><head ><title >TCP stream though proxy (chaining) functions</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >TCP stream though proxy (chaining) functions</h1><a href="forums.php" >Community Forums</a>/<a href="topics.php?forum=61" >Showcase</a>/<a href="#bottom" >TCP stream though proxy (chaining) functions</a><br><br>
+<a name="758212"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Open TCP streams through proxy servers. Chaining supported.<br><br>It's recommended to ping proxies so it can connect to fastest one(s)<br><br>OpenProxyConnection(server$[, port%][, depth%]) <br>Default port% is 80 and depth% is 1<br>depth% is the count of proxies in chain to use to reach the destination server<br><br>After successfull connection use Blitz's own TCP stream functions.<br><br>Example:<br><pre class=code>
+Include "multiprox.bb"
+
+; Insert some proxies to system
+AddProxy("69.88.144.162")
+AddProxy("66.98.238.8", 3128)
+AddProxy("65.83.25.189")
+AddProxy("69.88.144.163")
+
+; Ping proxies (first, parameter is for bandwidth testing, default is True, second is for sorting by ping (default True))
+PingProxies(False, True)
+
+; Open proxy connection
+stream% = OpenProxyConnection("www.google.com", 80, 2)
+
+WriteLine stream%, "GET / HTTP/1.1"
+WriteLine stream%, "Host: www.google.com"
+WriteLine stream%, "User-Agent: MultiProx"
+WriteLine stream%, "Connection: Close"
+WriteLine stream%, ""
+
+Repeat
+	If ReadAvail(stream%) then Print ReadLine$(stream%)
+Forever
+WaitKey
+</pre><br><br>Functions (multiprox.bb):<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+; List of proxies: <a href="http://tools.rosinstrument.com/proxy/" target="_blank">http://tools.rosinstrument.com/proxy/</a>
+
+Type proxy
+	Field host$, port%
+	Field ping%, bandwidth%
+End Type
+
+Function OpenProxyConnection(server$, port% = 80, depth% = 1)
+	; Connect to proxies
+	this.proxy = First proxy
+	DebugLog "Connecting to proxy " + this\host$ + ":" + this\port% + " (" + this\ping% + "ms)..."
+	stream% = OpenTCPStream(this\host$, this\port%)
+	If stream%
+		For d% = depth% To 1 Step -1
+			If d% &gt; 1
+				this = After this
+					DebugLog "Chaining proxy #" + (depth% - d% + 1) + " " + this\host$ + ":" + this\port% + " (" + this\ping% + "ms)"
+					WriteLine stream%, "CONNECT " + this\host$ + ":" + this\port% + " HTTP/1.1"
+					WriteLine stream%, "User-Agent: MultiProx"
+					WriteLine stream%, ""
+			Else
+				DebugLog "Chaining destination server #" + (depth% - d% + 1) + " " + server$ + ":" + port% + "..."
+				WriteLine stream%, "CONNECT " + server$ + ":" + port% + " HTTP/1.1"
+				WriteLine stream%, "User-Agent: MultiProx"
+				WriteLine stream%, ""
+			EndIf
+			
+			; Waiting header
+			tim% = MilliSecs()
+			Repeat
+				If (MilliSecs() - tim%) &gt; 5000 Then Exit
+			Until ReadAvail(stream%)
+			
+			; Check for headers
+			While ReadAvail(stream%)
+				txt$ = ReadLine$(stream%)
+				If Left$(txt$, 8) = "HTTP/1.0" Or Left$(txt$, 8)= "HTTP/1.1"
+					If Instr(txt$, "200")
+						; Connection established
+						DebugLog "Proxy #" + (depth% - d% + 1) + " - Connection established!"
+						header_count% = header_count% + 1
+						Exit
+					Else
+						; Connection failed
+						DebugLog "Proxy #" + (depth% - d% + 1) + " - Connection failed! Reason:" + Mid$(txt$, Instr(txt$, " ", Instr(txt$, " ") + 2))
+						CloseTCPStream stream%
+						stream% = False
+						Return stream%
+					EndIf
+				EndIf
+			Wend
+			
+			; Clear buffer
+			While ReadAvail(stream%)
+				ReadLine$(stream%)
+			Wend
+		Next
+	Else
+		DebugLog this\host$ + ":" + this\port% + " - Connectuion failed!"
+	EndIf
+	
+	Return stream%
+End Function
+
+Function PingProxies(check_bandwidth% = True, sort% = True)
+	Local bank% = CreateBank(128)
+	
+	For this.proxy = Each proxy
+		DebugLog this\host$ + ":" + this\port% + " - Connecting..."
+		ping% = MilliSecs()
+		stream% = OpenTCPStream(this\host$, this\port%)
+		this\ping% = MilliSecs() - ping%
+		If stream%
+			WriteLine stream%, "GET <a href="http://www.google.com/" target="_blank">http://www.google.com/</a> HTTP/1.1"
+			WriteLine stream%, "Host: " + this\host$
+			WriteLine stream%, "User-Agent: MultiProx"
+			WriteLine stream%, "Connection: Close"
+			WriteLine stream%, ""
+			
+			If check_bandwidth%
+				received% = 0
+				tim% = MilliSecs()
+				While Not Eof(stream%)
+					avail% = ReadAvail(stream%)
+					If avail% &gt; BankSize(bank%) Then avail% = BankSize(bank%)
+					If avail% Then received% = received% + ReadBytes(bank%, stream%, 0, avail%)
+				Wend
+				
+				this\bandwidth% = Int(received% / ((MilliSecs() - tim%) / 1000.0))
+				
+				DebugLog this\host$ + ":" + this\port% + " - Ping: " + this\ping% + " Speed: " + Int(this\bandwidth% / 1024.0) + "KB/s"
+			Else
+				DebugLog this\host$ + ":" + this\port% + " - Ping: " + this\ping% + " Speed: N/A"
+			EndIf
+			
+			CloseTCPStream stream% 
+		Else
+			DebugLog this\host$ + ":" + this\port% + " - Failed!"
+		EndIf
+	Next
+	
+	If sort%
+		For this.proxy = Each proxy
+			For that.proxy = Each proxy
+				If this\ping &lt; that\ping Then
+					tmp$ = this\host$
+					this\host$ = that\host$
+					that\host$ = tmp$
+					
+					tmp$ = this\port%
+					this\port% = that\port%
+					that\port% = Int(tmp$)
+					
+					tmp$ = this\ping%
+					this\ping% = that\ping%
+					that\ping% = Int(tmp$)
+					
+					tmp$ = this\bandwidth%
+					this\bandwidth% = that\bandwidth%
+					that\bandwidth% = Int(tmp$)
+				EndIf
+			Next
+		Next
+	EndIf
+	
+	FreeBank bank%
+End Function
+
+Function AddProxy(host$, port% = 80)
+	this.proxy = New proxy
+		this\host$ = host$
+		this\port% = port%
+		this\ping% = -1
+		this\bandwidth% = -1
+End Function
+</textarea> <br><br></td></tr></table><br>
+<a name="758762"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Pretty useful stuff, thanks. <br><br></td></tr></table><br>
+<a name="758816"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've ran into a problem with proxy connection. It connects fine to HTTP server but FTP servers doesn't seem to be compatible. Are there some limitations for that? <br><br></td></tr></table><br>
+<a name="759621"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> I have no idea. Maybe one for the forums coding section. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,266 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Lag Fix ... Back to the drawing board</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Lag Fix ... Back to the drawing board</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Lag Fix ... Back to the drawing board</a><br><br>
+<a name="655327"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> OK, so a lot of you know about the BlitzMax DirectX 7 rendering pipeline lag problem, where if there's a lot going on, the frames get buffered and then rendered later.  This results in an lag between user input and output on the screen which is unacceptable for action games or games with a mouse pointer (that's pretty much all games then).<br><br>Several fixes were proposed and the "final" proposed fix was this (to be placed after your Flip command):<br><br><pre class=code>
+ If TD3D7Max2DDriver(_max2dDriver)
+      While DDERR_WASSTILLDRAWING = PrimaryDevice.PrimarySurface.GetBltStatus(DDGBS_ISBLTDONE) ; Wend
+    EndIf
+</pre><br><br>Yep this works esp. in some code like this:<br><br><pre class=code>
+'low poly and high fill rate causes the issue, solvable by flushing the driver's
+'buffered frames using grab pixmap or locking a buffer with a large speed penalty.
+'opengl is unaffected.
+
+'change how many loops you do till you see the lag and not general slowdown
+'this will vary from pc to pc
+
+'SetGraphicsDriver GLMax2DDriver()
+Graphics 800,600,0
+
+AutoMidHandle True
+Local fix = 0
+
+mx = 300
+my = 200
+
+While Not KeyHit(KEY_ESCAPE)
+  Cls
+  
+  If KeyHit(KEY_SPACE) Then fix = 1 - fix
+  
+  If KeyDown(KEY_Z) Then mx = mx - 10
+  If KeyDown(KEY_X) Then mx = mx + 10
+  
+  For i = 0 To 2000
+	DrawRect mx,my,200,200
+  Next
+  
+  SetScale 1, 1
+  DrawText "Fix = " + fix, 12, 12
+  
+  Flip
+  
+  If fix
+    If TD3D7Max2DDriver(_max2dDriver)
+      While DDERR_WASSTILLDRAWING = PrimaryDevice.PrimarySurface.GetBltStatus(DDGBS_ISBLTDONE) ; Wend
+    EndIf
+  EndIf
+Wend
+</pre><br><br>Use the Z and X keys to move left and right, you should the the square trying to catch up with you. Enable the fix and all is fine. Good.<br><br>Here's the *BUT*.<br><br>On certain Geforce cards (e.g. Ti4200, 6600, 6800 etc), this lag fix causes a rhymic jerkiness in my game framework (around once every second).  Turning off the fix makes the game framework run fine.  Bummer.  The fix works fine on Radeons and other video cards.<br><br>I tried Indiepath's module tweak i.e. change the Flip method of TD3D7Device in d3d7graphics.bmx to:<br><pre class=code>
+
+		Device.EndScene()
+		If state&amp;DX7FULLSCREEN
+			If PrimarySurface.GetFlipStatus(DDGFS_CANFLIP) = DD_OK
+				PrimarySurface.Flip Null,flipflags
+			EndIf
+		Else
+			If PrimarySurface.GetBltStatus(DDGBS_ISBLTDONE) =  DD_OK
+				Local src[]=[0,0,width,height]
+				Local dest[]=[0,0,width,height]
+				ClientToScreen hwnd,dest
+				dest[2]:+dest[0]
+				dest[3]:+dest[1]
+				PrimarySurface.Blt dest,BackBuffer,src,0,Null
+			EndIf
+		EndIf
+		Device.BeginScene()
+</pre><br>and also change Method GetFlipStatus() in dd.bmx to 	Method GetFlipStatus(flags) then rebuild modules.<br><br>The idea behind this being it only outputs a frame when it can do thus saving processor cycles.  However, this causes a problem with the square example above where it only seems to draw every second or so, so it looks really jerky.<br><br>So basically this issue is raised again as it is not yet solved unfortunately... <br><br></td></tr></table><br>
+<a name="655335"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Robert Cummings</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Use GrabPixmap(0,0,2,2) after flip. It's slow but it works...<br><br>I think the honest truth is, Simon and Mark don't have any idea what to do about this issue otherwise they would have fixed it. I am sure if we all knock heads something must come up.<br><br>I've done my best to look for solutions on this. <br><br></td></tr></table><br>
+<a name="655358"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> The first link on this search has an answer to this problem, I don't know if people have tried it or not though:<br><br>http://www.google.com/search?hl=en&amp;q=%22mouse+lag%22+%22dx7%22&amp;btnG=Google+Search<br><br>Here:<br><a href="http://discuss.microsoft.com/SCRIPTS/WA-MSD.EXE?A2=ind0006c&amp;L=directxdev&amp;D=1&amp;P=4821" target="_blank">http://discuss.microsoft.com/SCRIPTS/WA-MSD.EXE?A2=ind0006c&amp;L=directxdev&amp;D=1&amp;P=4821</a><br><a href="http://discuss.microsoft.com/SCRIPTS/WA-MSD.EXE?A2=ind0006c&amp;L=directxdev&amp;D=1&amp;P=10943" target="_blank">http://discuss.microsoft.com/SCRIPTS/WA-MSD.EXE?A2=ind0006c&amp;L=directxdev&amp;D=1&amp;P=10943</a><br><br><div class="quote"> <br>:) It's funny how our senses can mislead us so much. I' came to this<br>very list twice with this problem over a year ago. It's not the input<br>that's lagging. It's the output. Your 3D card can queue up to, say, 100<br>frames (that number is totally arbitrary, of course). So when the program<br>is rendering, say, frame 300, the card is displaying frame 200.<br><br>    If it happens in full-screen mode, then it's a driver bug and you<br>should report it to the vendor. If it happens in windowed mode, then it's a<br>driver glitch (drivers are not required to prevent this from happening, but<br>they should) and you should report it to them anyway.<br><br>    I know for a fact that NVIDIA drivers 5.22 do fix this problem in<br>Win2K. I just had to upgrade a machine that was showing this very problem.<br><br>------------<br><br>Also, make sure you use the GetBltStatus when Blt()ing - everyone<br>has to obey the rules for this - Check the archives for an example<br>of how I altered an SDK sample to fix this.<br><br>------------<br><br>Another simple solution is to Lock and Unlock backbuffer after displaying<br>frame, so that driver must flush out its queued data. We've put this as an<br>option into our last game, but it seems it may be used always without any<br>loss of performace.<br> <br></div><br><br>If those don't work, maybe one of the other links in that search has a solution. <br><br></td></tr></table><br>
+<a name="655408"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TartanTangerine (was Indiepath)</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yeah locking and unlocking does the job nicely<br><pre class=code>
+Strict
+
+Graphics 800,600,0
+
+AutoMidHandle True
+Local fix = 0
+
+Local mx = 300
+Local my = 200
+
+Local info:DDSURFACEDESC2=New DDSURFACEDESC2
+
+While Not KeyHit(KEY_ESCAPE)
+  Cls
+  
+  If KeyHit(KEY_SPACE) Then fix = 1 - fix
+  
+  If KeyDown(KEY_Z) Then mx = mx - 10
+  If KeyDown(KEY_X) Then mx = mx + 10
+  
+  For Local i = 0 To 2000
+	DrawRect mx,my,200,200
+  Next
+  
+  SetScale 1, 1
+  DrawText "Fix = " + fix, 12, 12
+
+  Flip
+
+  If fix
+    If TD3D7Max2DDriver(_max2dDriver)
+		DoLock()
+    EndIf
+  EndIf
+Wend
+
+
+Function DoLock()
+	Local sdesc:DDSurfaceDesc2=New DDSurfaceDesc2
+	sdesc.dwSize=SizeOf(sdesc)
+	Local res=PrimaryDevice.backbuffer.Lock(Null,sdesc,DDLOCK_WAIT|DDLOCK_READONLY,Null)
+	PrimaryDevice.backbuffer.unlock(Null)
+	Return res
+End Function</pre> <br><br></td></tr></table><br>
+<a name="655410"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TartanTangerine (was Indiepath)</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Added this as a Method to my projection matrix code <br><br></td></tr></table><br>
+<a name="655419"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Daz</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi Indiepath (and also for Grey),<br><br>I tried this code of yours and I still get a fair amount of Vsync re-drawing issues.   If I continually hold down Z or X, as the screen redraws there are black lines going down the side of the white square causing a kind of motion blur effect (for the lack of a better term!!!).  <br><br> The update is also very very jerky and lots of flickering at both vertical sides of the square.  So, there was no smoothness to the screen update at all.<br><br>This happens when the fix value is set to 0 or 1.<br><br>Now, I am not sure if I am getting these effects because of the relative simplicity of the examples or because of the problems with my GFX card.<br><br>As a further set of separate tests I took indie's example and specifically set the graphics drivers at the start of the code<br>ie.<br>SetGraphicsDriver GLMax2DDriver()<br>SetGraphicsDriver D3D7Max2DDriver ()<br><br>Both test gave exactly the same results as I mentioned at the start of this post.   So, could this be more to do with a general BlitzMax - nVidia drivers issue?<br><br>I mentioned my PC specs in Grey's game framework thread in the showcase forum, but I am running a nVidia 6600 which has 256 meg RAM. <br><br></td></tr></table><br>
+<a name="655426"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> One Eyed Jack: Yeah I might try that on these Geforce cards and see if it helps.<br><br>Sswift: groovy, will check it out.<br><br>Indiepath: yep that works nice one.  But I haven't tried it on a Geforce yet.<br><br>Daz: In windowed mode you will experience vertical tearing where the edges of the square ripple.  This is currently "normal" for Blitz Max, even if it's rubbish.  Hopefully Skidaracer might fix this.  Have you tried the above code in full-screen mode i.e. change graphics to 800,600,32?  You shouldn't get any vertical tearing (unless there is a driver issue) but it will look a bit jerky just because of the huge loop being too much work for the PC to do in a single frame.  What I need to try is Indiepaths new code, or One Eyed Jack's old code, OR Sswifts tips in my Game FRamework to see if it's better on geforce cards.  Can't do that until Monday though...<br><br>As for the OpenGl Driver, you shouldn't experience lag with it, as in move that square areound a lot and let go of the keys, it should stop immediately.  It doesn't do this in DirectX. In windowed mode you'll still get vertical tearing in OPenGL mode plus it will look jerky due to the loop size.  This is normal for any card.  In fact, I'm going to try my FRamework test in OpenGL as well to check everything is smooth.<br><br>Has anyone noticed that if you run the above test in OpenGL mode, there is a tiny lag, about 1 frame or something.  Try tapping a key really fast.  The square seems to move as you finger is coming off the key.  If you do the same in directX with the fix ON, it moves instantly (just that tiny bit quicker). <br><br></td></tr></table><br>
+<a name="655432"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> OK Daz, please try this new OpenGL framework test.<br><br><a href="http://www.greyaliengames.com/misc/frameworktest3.zip" target="_blank">http://www.greyaliengames.com/misc/frameworktest3.zip</a> (584kb)<br><br>Don't bother pressing A, it won't do anything, although you can press Y to change Flip Sync and see if that changes anything.  I doubt it will though.  Anyway what I'm hoping to see with this test (in full-screen mode) is:<br><br>1) smooth movement.  No rythmic jerking every second or so on Geforce cards<br>2) no vertical tearing on most cards, but maybe on some.  Maybe on your card Daz.  Try pressing Y to change Flip Sync and see it it gets better.<br>3) windowed mode (press F) will be smooth but WILL have vertical tearing.<br><br>I'm keen to know the results.  Thanks :-) <br><br></td></tr></table><br>
+<a name="655434"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Daz</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Grey,<br><br>Referring to Indiepath's code...<br><br>Tried running the code in both DirectX and OpenGL full screen mode.  Both version still had the vertical tearing effect and it was certainly very jerky.   <br><br>In OpenGL mode the tearing effect was nowhere near as bad as DirectX, but still a little bit noticable.<br><br>In DirectX mode I noticed that holding down the key for a long time and then releasing did cause the square to move quite a few extra pixels after the release.    OpenGL mode also demonstrated this behaviour but, again, to a much lesser extent. <br><br>In both these above tests chaning the fix value from 0 to 1 and back again to 0 had no effect. <br><br></td></tr></table><br>
+<a name="655436"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> OK thanks, the fix value in DirectX (for Indiepath's code)should prevent the square moving on it's own after key release (in windowed and full-screen) but it won't solve any of the Vsync or jerkiness problems, that's not what we're testing here.   The fix value won't have any effect in OpenGL. <br><br></td></tr></table><br>
+<a name="655437"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TartanTangerine (was Indiepath)</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Daz, can you tell me what value is being returned from the DoLock() function. It's possible that the backbuffer can not be locked on your machine. <br><br></td></tr></table><br>
+<a name="655440"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Daz</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Grey,<br><br>Thanks for the link to the framework3 test.  I think you may have cracked it!!!!<br><br>In full screen mode I saw the screen jerk for about the first 3 seconds and after that everything remained totally smooth. The exact same thing happened when I switched to windowed mode - jerkiness for 3 seconds then totally smooth.<br><br>Strangely, totally against what you were expecting, at no point was there any hint of tearing in either windowed or full screen.<br><br>Also, flipping between the values with the A and Y keys didn't hinder the smoothness. <br><br>I have run your test app several times just to confirm this behaviour and everytime it has been nice and smooth. <br><br></td></tr></table><br>
+<a name="655442"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> great thanks.  So OpenGL is good for you but DirectX + lag fix is not. <br><br></td></tr></table><br>
+<a name="655446"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Daz</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Indiepath,<br><br>I changed your DoLock function to add the value of res to the screen. <br><br><pre class=code>
+Function DoLock()
+    res = 59
+	Local sdesc:DDSurfaceDesc2=New DDSurfaceDesc2
+	sdesc.dwSize=SizeOf(sdesc)
+	Local res=PrimaryDevice.backbuffer.Lock(Null,sdesc,DDLOCK_WAIT|DDLOCK_READONLY,Null)
+	PrimaryDevice.backbuffer.unlock(Null)
+		
+	DrawText "Res = " + res, 10, 200
+	Flip
+	WaitKey()
+	
+	Return res
+End Function
+</pre><br><br>res always showed a value of 0. <br><br></td></tr></table><br>
+<a name="655450"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> Guess that means it fails then ... hmm it returns 0 on mine but it does fix the lag issue! <br><br></td></tr></table><br>
+<a name="655452"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here's another test.  Back to DirectX but with Indiepath's fix instead:<br><br><a href="http://www.greyaliengames.com/misc/frameworktest4.zip" target="_blank">http://www.greyaliengames.com/misc/frameworktest4.zip</a> <br><br></td></tr></table><br>
+<a name="655453"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Robert Cummings</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> Can we please have an official look in from Skid and Mark as to what method is the best and what method they should add to the flip code (it's obviously something affecting a lot of people now) ?<br><br><br>Remember we are waiting also for the results of both Mark's findings with the synching, and Simon's findings with the tearing.<br><br>When those are fixed, it will undoubtedly cast a more reliable eye on the following:<br><br>Is it:<br><br>grabpixmap?<br>getbltstatus?<br>lock/unlock (in the manner described above with no slowdown)?<br><br><br>Thanks in advance BRL - I personally would love to see the end of this issue. <br><br></td></tr></table><br>
+<a name="655467"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Daz</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> Good news Grey - with your framework 4 test things are a lot better.  <br><br>In both windowed and full screen mode there is no tearing effect whatsoever.   <br><br>In windowed mode everything is very very smooth.  <br><br>In full screen mode there still seems just a very small hint of jerkiness with some of the fastest moving UFO sprites, but certainly nowhere near as bad as the first few framework tests.  The slower moving UFOs are perfectly smooth though.<br><br>Toggling the fix lag and flip values has no impact on performance. <br><br></td></tr></table><br>
+<a name="655874"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> One Eyed Jack: Well GetBltStatus isn't compatible with Geforce cards as it causes some kind of "catch up" jerk which occurs every second or so (at least with my code).<br><br>The lock/unlock Indiepath posted DOES seem Geforce compatible and it works on my Radeon for sure.  My framework test 4 goes from 2000FPS to 1400FPS i.e. loses 600FPS.  The GetBltStatus fix only lost 400FPS so seems a bit faster.  I haven't tried the Grabpixmap fix.<br><br>Daz: Thanks for the info.  Glad it's a lot better.  Shame it's not perfect on the fast moving ones.  Couldn't say why as it's fine on mine.  This actually could be due to your TFT, perhaps but I really don't know. <br><br></td></tr></table><br>
+<a name="655898"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> If I had a GetBltStatus() function, it would always return EATEN. <br><br></td></tr></table><br>
+<a name="655901"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> wha...?  Ah, but would it fix the lag on all PCs, and remove vertical tearing whilst it's at it? <br><br></td></tr></table><br>
+<a name="655910"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#22">[#22]</a></td></tr></table></td></tr><tr ><td class="posttext"> "My framework test 4 goes from 2000FPS to 1400FPS i.e. loses 600FPS."<br><br>How can you even get a reading of 2000fps?  If you're using millisecond timing you can only get up to 1000 or so, unless maybe you're incremeting a counter and calculating the number of frames that were rendered after a second has passed, or maybe doing some kind of timer averaging over multiple frames so that times of 0 and 1 repeating forever give you 2000.<br><br>Anyway do you know how much of a difference between 1400fps and 1600fps?  1400fps is 0.7ms per frame.  1600fps is 0.6ms per frame.  Thats a difference of a TENTH of a millisecond!<br><br>It might be a 200fps diffference, but what are you going to do in 200 frames that take a tenth of a millisecond to render?  Not much.  In fact, I'd say it'd be downright impossible to actually do any real game stuff in that amount of time.  That means that your real world framerates will be lower.  And that means more time between frames.  A LOT more.  And that means that if you're running at 100fps, there's TEN milliseconds in between each frame.  Indiepath's method will cost you only one TENTH of a millisecond, total, over the course of TWO THOUSAND frames.  Divide 1/10th by 2000 and you get a verrrrry tiny number.  That's how much time you lose per frame.<br><br>In other words, your methodology is magnifying the difference between your two functions so greatly that it LOOKS like there's a big difference between your two methods, but in fact your method is less than 10% faster, and the amount of time either takes is so tiny as to be insignificant in the 0.00005th degree.  (That's 0.1/2000)<br><br>Therefore you should go with the method that works better. <br><br></td></tr></table><br>
+<a name="655919"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#23">[#23]</a></td></tr></table></td></tr><tr ><td class="posttext"> But anyway... <br><br>So basically Grey, you're saying Indiepath's method works.  It fixes the lag for you, and everyone else tested, has no side effects on Radeons, and takes effectively no time to do it's job.<br><br>Right?<br><br>If so, great.  Now we just need to wrap that function up in an if check to see if it's in DX mode before we call that stuff. <br><br>Could someone explain what indiepath's code is doing though?  It doesn't have comments to explain what that info:ddsurfacedesc = new line at the start is for for example.<br><br>Also, Indie, did you write that cause of the info I posted?  Just curious if I was of assistance. :-) <br><br></td></tr></table><br>
+<a name="655937"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TartanTangerine (was Indiepath)</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#24">[#24]</a></td></tr></table></td></tr><tr ><td class="posttext"> @sswift,<br><br>Yeah I wrote that right after I read your post. The info:ddsuface.....blah is required as when you lock the buffer the command returns buffer specific details to that structure. When you lock the backbuffer it flushes any frames that maybe sitting in a queue.<br><br>A return value of zero (0) is DD_OK that means everything is cool :)<br><br>I have included the code, along with DirectX checking in my ProjectionMatrix Module which is now free :- <a href="http://modules.indiepath.com/forum/viewtopic.php?t=19" target="_blank">http://modules.indiepath.com/forum/viewtopic.php?t=19</a> <br><br></td></tr></table><br>
+<a name="655952"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#25">[#25]</a></td></tr></table></td></tr><tr ><td class="posttext"> sswift: couple of things.  I forgot to post that actually I'm not using Flip 0, I'm using Flip -1 so I very much doubt the fix will have any noticeable negative effect on my games or other games.  And yes, 2000FPS is because I'm logging frames rendered via a counter.  Naturally I'll use the fix that works on the most PCs, cos I'm a pro ;-)<br><br>Indiepath:  when I saw your code I assumed it was a rehash of the old "Draw Image, Lock/Unlock Image code" because I didn't look at it properly.  I now see that it is something new, in fact the 5th proposed solution as follows:<br><br>1) Grab image<br>2) Draw image, lock/unlock image<br>3) GetBltStatus While Wend (non Geforce compatible)<br>4) Indiepath's Flip Method modification in d3d7graphics e.g. If PrimarySurface.GetFlipStatus(DDGFS_CANFLIP) = DD_OK etc. (didn't look too good in action on my PC)<br>5) Indiepath's lock unlock backbuffer method (works well AND is Geforce compatible!)<br><br>So I wanted to say a BIG thankyou and well done, and too Sswift for posting the links!! Great work :-)<br><br>Also I'm glad that a return value of 0 *IS* what's expected, great! <br><br></td></tr></table><br>
+<a name="656036"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Chris C</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#26">[#26]</a></td></tr></table></td></tr><tr ><td class="posttext"> have others found this too? using<br>SetGraphicsDriver GLMax2DDriver()<br>fixes the problem in many cases, but also introduces a 1 frame pause per second, fix/pause happens differently or in combination on different machines.<br><br>@ any rate I've still to make a max framework I would consider "production" compared with c++ and sdl...<br><br>what are others experiences (on more than 1 machine) <br><br></td></tr></table><br>
+<a name="656048"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Robert Cummings</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#27">[#27]</a></td></tr></table></td></tr><tr ><td class="posttext"> ogl doesn't suffer buffering ahead.<br><br>this is based on indiepath's fix with changes. I call it after flip, what do you think? will it work? <br><br><pre class=code>
+Function FlushGraphics:Int()
+	?Win32
+		If TD3D7Max2DDriver(_max2dDriver)
+			Local sdesc:DDSurfaceDesc2 = New DDSurfaceDesc2
+			sdesc.dwSize = SizeOf(sdesc)
+			Local res:Int = PrimaryDevice.backbuffer.Lock(Null,sdesc,DDLOCK_WAIT|DDLOCK_READONLY,Null)
+			PrimaryDevice.backbuffer.unlock(Null)
+			Return res
+		EndIf
+	?
+End Function
+</pre> <br><br></td></tr></table><br>
+<a name="656065"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#28">[#28]</a></td></tr></table></td></tr><tr ><td class="posttext"> Is checking to see if you're compiling on Win32 neccessary?  <br><br>Also, I don't see this bit in your code:<br>Local info:DDSURFACEDESC2=New DDSURFACEDESC2 <br><br></td></tr></table><br>
+<a name="656070"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yan</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#29">[#29]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Is checking to see if you're compiling on Win32 necessary? <br></div>Not really, it just removes redundant code from Mac and Linux builds, since TD3D7Max2DDriver(_max2dDriver) will alway be null on those platforms.<br><br><div class="quote"> Also, I don't see this bit in your code:<br>Local info:DDSURFACEDESC2=New DDSURFACEDESC2 <br></div>'sdesc:DDSurfaceDesc2' is used to hold the returned structure. I think it's inclusion in the original was just an oversight. <br><br></td></tr></table><br>
+<a name="656072"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#30">[#30]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey, couldn't we just hook this function to flip so it's called after it automatically instead of putting it in our main loop?<br><br>Hm... Seems the Hook functions didn't do what I though they did.  You COULD hook it to the flip to be run BEFORE the flip occurs.<br><br>There's a way to override the flip function though right?  I think we just would call our own function Flip() and then inside that call .Flip() first, and then do our flush buffer thing?<br><br>That might be the best way to do it because it would guarantee that all calls to Flip() would make use of this, even ones inside other functions which might render things inside of them like screen blurs.  Though it might not actually be neccessary in cases like that since they're not reading input, so maybe it's a better idea to just call that function after flip. <br><br></td></tr></table><br>
+<a name="656108"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TartanTangerine (was Indiepath)</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#31">[#31]</a></td></tr></table></td></tr><tr ><td class="posttext"> @sswift, you need to have a structure defined otherwise the command will return errors and not function. And yes you need the compiler directives otherwise it won't compile on other platforms.<br><br>Here is the method that I have included in my module.<br><pre class=code>
+Rem
+bbdoc: Flip
+returns: DD_OK if done
+about: Flips, Locks and unlocks the backbuffer which causes the buffer chain to be cleared. Also fixes lag problems.
+End Rem	
+	Method Flip(flags=1)
+		Flip(flags)
+?win32
+		If primarydevice.device = Null Then
+			Return false
+		Else
+			Local sdesc:DDSurfaceDesc2=New DDSurfaceDesc2
+			sdesc.dwSize=SizeOf(sdesc)
+			Local res=PrimaryDevice.backbuffer.Lock(Null,sdesc,DDLOCK_WAIT|DDLOCK_READONLY,Null)
+			PrimaryDevice.backbuffer.unlock(Null)
+			Return res
+		EndIf
+?
+	End Method</pre><br><br>It works a treat on all systems I have tested on. It works in a similar way to grabpixel since grabpixel locks the buffers to grab the image data. Problem with grabpixel is that it is transferring data from VideoMem to SystemMem and even 1 pixel of data causes the whole pipeline to slow - hence big drops in framerate. The reason that Gray saw some FPS drop is because we are preventing the system from rendering ahead, that's it! <br><br></td></tr></table><br>
+<a name="656120"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dmaz</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#32">[#32]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Is checking to see if you're compiling on Win32 neccessary?  <br></div><br><br>yes, but not just to remove redundant code.  Without the directives this won't compile on Mac or Linux because DDSurfaceDesc2 is not a defined type.  remember, that module is only imported on windows. <br><br></td></tr></table><br>
+<a name="656128"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#33">[#33]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm quite happy to call it after Flip manually.  I have a function called ccFixLag() that goes into my CommonCode.bmx file.  I'll also add in the Win32 compiler directives.  Thanks all for your help! <br><br></td></tr></table><br>
+<a name="656130"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TartanTangerine (was Indiepath)</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#34">[#34]</a></td></tr></table></td></tr><tr ><td class="posttext"> ?Why don't you just be done with the Method in the projectionmatrix module? I know it don't look much but it's probably THE most useful module I've ever made - Every home should have one.<br><br>Heh, but anyway... Can we now consider this Topic closed? <br><br></td></tr></table><br>
+<a name="656142"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#35">[#35]</a></td></tr></table></td></tr><tr ><td class="posttext"> I don't need a project matrix (or at least I don't know I need one).<br><br>maybe topic closed then, unless Blitz Research can come up with something cool.  For example, if they fix this issue, then we need to remove all this fancy code to prevent it being done twice! <br><br></td></tr></table><br>
+<a name="656146"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TartanTangerine (was Indiepath)</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#36">[#36]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> I don't need a project matrix (or at least I don't know I need one). <br></div><br>How are you going to support multiple resolutions? Surely you are not going to apply a scaling factor to every single co-ordinate and dimension? Na, you can't be doing that can you? <br><br></td></tr></table><br>
+<a name="656148"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#37">[#37]</a></td></tr></table></td></tr><tr ><td class="posttext"> No it's more simple than that.  I'm NOT going to support multiple resolutions. <br><br></td></tr></table><br>
+<a name="656158"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TartanTangerine (was Indiepath)</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#38">[#38]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> No it's more simple than that. I'm NOT going to support multiple resolutions.  <br></div><br>Fair enough. <br><br></td></tr></table><br>
+<a name="656160"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Robert Cummings</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#39">[#39]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm NOT playing! <br><br></td></tr></table><br>
+<a name="656166"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yan</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#40">[#40]</a></td></tr></table></td></tr><tr ><td class="posttext"> @dmaz - Yeah, It's obviouse now in the cold light of day. What can I say, it was late/early, my brain had turned to jelly and I was being a div. ;o)<br><br>@indiepath - I think sswift was confused as to why you defined an unused local DDSurfaceDesc2 variable in your main code and then defined another in the lock function. <br><br></td></tr></table><br>
+<a name="656172"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#41">[#41]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ding ding ding! <br><br></td></tr></table><br>
+<a name="656182"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TartanTangerine (was Indiepath)</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#42">[#42]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Ian, lol yeah that's a hangover. <br><br></td></tr></table><br>
+<a name="656188"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#43">[#43]</a></td></tr></table></td></tr><tr ><td class="posttext"> Indiepath: I'm of the opinion that if you are making a puzzle game with pre-redendered art that a projection matrix won't really benefit the customer (who won't experiment with res changes) and also it may deform the carefully made art a tiny bit.  However, If I make an action game using 3D graphics/vectors or whatever that's pitched to a different audience, then your module would be brilliant.  So in the future I'm might well come knocking ... :-) <br><br></td></tr></table><br>
+<a name="656197"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TartanTangerine (was Indiepath)</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#44">[#44]</a></td></tr></table></td></tr><tr ><td class="posttext"> Fair cop. I use it extensively as it allows me to have a windowed mode of 640x480 or 800x600 (or even 16:9) and have a full screen mode of 1024x768. It also enables me to quickly produce a low-res (480x360 or 512x384) version for igLoader. <br><br></td></tr></table><br>
+<a name="656265"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#45">[#45]</a></td></tr></table></td></tr><tr ><td class="posttext"> sounds pretty good for that sort of thing. <br><br></td></tr></table><br>
+<a name="656353"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Robert Cummings</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#46">[#46]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Indiepath: I'm of the opinion that if you are making a puzzle game with pre-redendered art that a projection matrix won't really benefit the customer (who won't experiment with res changes) and also it may deform the carefully made art a tiny bit. <br></div>I think you're missing the point of the fact that an LCD (which is now outstripping CRT in the home) scales to your game res really quite badly, causing blurry graphics and artifacting, where the average CRT would not. This is because LCD scaling methods are really terrible. Some are better than others at this.<br><br>Basically, if indiepath was to use his projection matrix to make a full screen windowed mode window at desktop res, the LCD would not need to scale, and the graphics would actually be much crisper as the graphics and projection matrix would be handling scale up, not the LCD.<br><br>This is preferable visually, but I for one won't be doing it because it is literally too much bother for the casual market and of course be a bit slower. It would not be a lot slower however. <br><br></td></tr></table><br>
+<a name="656379"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >popcade</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#47">[#47]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sould't us make Mark aware of  this and fix it in the next  official release? <br><br></td></tr></table><br>
+<a name="656465"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#48">[#48]</a></td></tr></table></td></tr><tr ><td class="posttext"> OEJ: I'm aware of the TFT thing, it's a good point.  It used to be that the scaling was rubbish but most TFTs are now pretty darn good at interpolating the image I find.  But anyway, like you said, it may be overkill for the casual market.<br><br>yoxola: They must be 100% aware of it by now due to all the threads over the last month or so and in the past. <br><br></td></tr></table><br>
+<a name="672285"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#49">[#49]</a></td></tr></table></td></tr><tr ><td class="posttext"> Syncmods for the official version.<br><br>I would imagine people need to remove their workarounds with the latest fix for performance sake. <br><br></td></tr></table><br>
+<a name="672286"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >WendellM</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#50">[#50]</a></td></tr></table></td></tr><tr ><td class="posttext"> That helps a <i>great</i> deal here, skidracer, and it will hopefully work for others as well.  DirectX is now roughly as smooth for me as OpenGL (not quite, but a <i>lot</i> closer than before).  This is at least as good as, if not better than, the  workarounds that I've tried in the past - and it's now built-in so that workarounds are no longer needed.  As far as I can tell, DirectX is no longer annoyingly laggy compared to OpenGL (you have to look to see the difference rather than it smacking you in the face),  and DX is now a fully viable option for BlitzMax.  Well done! <br><br></td></tr></table><br>
+<a name="672291"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#51">[#51]</a></td></tr></table></td></tr><tr ><td class="posttext"> sounds great thanks.  I'll try this on the PC later, update my framework and release and version for everyone. <br><br></td></tr></table><br>
+<a name="672314"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Damien Sturdy</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#52">[#52]</a></td></tr></table></td></tr><tr ><td class="posttext"> My TFT was a cheap Acer 19", (Forgot the model- i'm at work). I use 640x480 in games (Because I don't need more!) and my TFT does a fine job scaling, but i know for a fact, the other two I have near don't<br><br>I prefer gaming on my TV thiugh :D (Off topic..) <br><br></td></tr></table><br>
+<a name="672318"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#53">[#53]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just as long as the backgrounds not red, then the ghosting on LCD is truly awful. Speed up the RedrawGadget example code on line 34 to see what I mean:<br><br><pre class=code>
+		SetRotation MilliSecs()
+</pre> <br><br></td></tr></table><br>
+<a name="672320"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Robert Cummings</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#54">[#54]</a></td></tr></table></td></tr><tr ><td class="posttext"> You haven't seen my LCD then. Sub 2ms LCDS are now common. Mine's the vp191b and while it's 8ms, the recorded maxumum by tomshardware and behardware is just under 16ms.<br><br>This is equivelent to a 60fps response, and coupled with 75hz refresh, you are very hard pressed to notice ghosting. You need to look for it. <br><br></td></tr></table><br>
+<a name="672321"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#55">[#55]</a></td></tr></table></td></tr><tr ><td class="posttext"> You mean you can't see a trail of grey rectangles with my test? <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

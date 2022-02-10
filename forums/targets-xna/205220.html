@@ -1,0 +1,204 @@
+<!DOCTYPE html><html lang="en" ><head ><title >keyboard fix for desktop apps</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >keyboard fix for desktop apps</h1><a href="forums.php" >Monkey Targets Forums</a>/<a href="topics.php?forum=508" >XNA</a>/<a href="#bottom" >keyboard fix for desktop apps</a><br><br>
+<a name="2057696"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skid</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> We need forms and interop (call dll) so need to either edit our own and/or template version of Program.cs with these replacement lines in the header:<br><br><pre class=code>
+
+#if WINDOWS
+using System.Windows;
+using System.Windows.Forms;
+using System.Runtime.InteropServices;
+#endif
+
+</pre><br><br>In target/modules/xna/native/xnagame.cs replace last blocks of public virtual void Run() implementation with this: <br><br><pre class=code>
+
+#if WINDOWS
+		_form = System.Windows.Forms.Form.FromHandle(_app.Window.Handle) as System.Windows.Forms.Form;
+		if (MonkeyConfig.XNA_WINDOW_FULLSCREEN != "1")
+		{
+			_form.FormClosing+=FormClosing;
+		}
+		MessageFilter keyboardFilter = new MessageFilter();
+		System.Windows.Forms.Application.AddMessageFilter(keyboardFilter); 
+		
+#endif		
+
+</pre><br><br>and add this code where we intercept the windows message pump for our form and feed monkey non xna based keyboard events:<br><br><pre class=code>
+
+	public class MessageFilter : IMessageFilter{
+		[DllImport("user32.dll")]
+		static extern bool TranslateMessage(ref Message lpMsg); 
+				
+		const int WM_CHAR = 0x0102;
+		const int WM_KEYDOWN = 0x0100;
+		const int WM_KEYUP = 0x0101;
+
+		public bool PreFilterMessage(ref Message m){
+			switch(m.Msg){
+				case WM_CHAR:
+					int wp = m.WParam.ToInt32();
+					if (wp &gt; 31)
+					{
+						Game().KeyEvent(3, wp);
+					}
+					return true;
+				case WM_KEYDOWN:
+					if(TranslateMessage(ref m)){
+						Game().KeyEvent(1,m.WParam.ToInt32());
+					}
+					return true;
+				case WM_KEYUP:
+					if (TranslateMessage(ref m)){
+						Game().KeyEvent(2, m.WParam.ToInt32());
+					}
+					return true;
+				default:
+					break;
+			}
+			return false;
+		}
+	}
+
+</pre><br><br>and replace PollKeyboard and PollMouse with these<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+	void PollKeyboard(){
+	}
+
+	void PollMouse(){
+#if WINDOWS
+		MouseState m=Mouse.GetState();
+	
+		int ev=BBGameEvent.None;
+		int data=-1;
+		
+		if( m.LeftButton!=_mouse.LeftButton ){
+			ev=m.LeftButton==Microsoft.Xna.Framework.Input.ButtonState.Pressed ? BBGameEvent.MouseDown : BBGameEvent.MouseUp;data=0;
+		}
+		if( m.RightButton!=_mouse.RightButton ){
+			ev=m.RightButton==Microsoft.Xna.Framework.Input.ButtonState.Pressed ? BBGameEvent.MouseDown : BBGameEvent.MouseUp;data=1;
+		}
+		if( m.MiddleButton!=_mouse.MiddleButton ){
+			ev=m.MiddleButton==Microsoft.Xna.Framework.Input.ButtonState.Pressed ? BBGameEvent.MouseDown : BBGameEvent.MouseUp;data=2;
+		}
+		
+		if( ev!=BBGameEvent.None ){
+			MouseEvent( ev,data,m.X,m.Y );
+		}else if( m.X!=_mouse.X || m.Y!=_mouse.Y ){
+			MouseEvent( BBGameEvent.MouseMove,-1,m.X,m.Y );
+		}
+		_mouse=m;
+#endif		
+	}
+
+	public override bool PollJoystick( int port,float[] joyx,float[] joyy,float[] joyz,bool[] buttons ){
+	
+		if( port!=0 ) return false;
+	
+		GamePadState gs;
+
+		if( _gamePadFound ){
+			gs=GamePad.GetState( _gamePadIndex );
+		}else{
+			gs=GamePad.GetState( PlayerIndex.One );	//to shut up compiler.
+			for( PlayerIndex i=PlayerIndex.One;i&lt;=PlayerIndex.Four;++i ){
+				gs=GamePad.GetState( i );
+				if( !gs.IsConnected ) continue;
+				if (gs.Buttons.A == Microsoft.Xna.Framework.Input.ButtonState.Pressed || gs.Buttons.B == Microsoft.Xna.Framework.Input.ButtonState.Pressed ||
+				gs.Buttons.X == Microsoft.Xna.Framework.Input.ButtonState.Pressed || gs.Buttons.Y == Microsoft.Xna.Framework.Input.ButtonState.Pressed ||
+				gs.Buttons.LeftShoulder == Microsoft.Xna.Framework.Input.ButtonState.Pressed || gs.Buttons.RightShoulder == Microsoft.Xna.Framework.Input.ButtonState.Pressed ||
+				gs.Buttons.Back == Microsoft.Xna.Framework.Input.ButtonState.Pressed || gs.Buttons.Start == Microsoft.Xna.Framework.Input.ButtonState.Pressed ||
+				gs.DPad.Left == Microsoft.Xna.Framework.Input.ButtonState.Pressed || gs.DPad.Up == Microsoft.Xna.Framework.Input.ButtonState.Pressed ||
+				gs.DPad.Right == Microsoft.Xna.Framework.Input.ButtonState.Pressed || gs.DPad.Down == Microsoft.Xna.Framework.Input.ButtonState.Pressed)
+				{
+					_gamePadFound=true;
+					_gamePadIndex=i;
+					break;
+				}
+			}	
+		}
+		
+		if( !_gamePadFound ) return false;
+		
+		joyx[0]=gs.ThumbSticks.Left.X;
+		joyx[1]=gs.ThumbSticks.Right.X;
+		joyy[0]=gs.ThumbSticks.Left.Y;
+		joyy[1]=gs.ThumbSticks.Right.Y;
+		joyz[0]=gs.Triggers.Left;
+		joyz[1]=gs.Triggers.Right;
+
+		buttons[0] = gs.Buttons.A == Microsoft.Xna.Framework.Input.ButtonState.Pressed;
+		buttons[1] = gs.Buttons.B == Microsoft.Xna.Framework.Input.ButtonState.Pressed;
+		buttons[2] = gs.Buttons.X == Microsoft.Xna.Framework.Input.ButtonState.Pressed;
+		buttons[3]=gs.Buttons.Y==Microsoft.Xna.Framework.Input.ButtonState.Pressed;
+		buttons[4] = gs.Buttons.LeftShoulder == Microsoft.Xna.Framework.Input.ButtonState.Pressed;
+		buttons[5] = gs.Buttons.RightShoulder == Microsoft.Xna.Framework.Input.ButtonState.Pressed;
+		buttons[6] = gs.Buttons.Back == Microsoft.Xna.Framework.Input.ButtonState.Pressed;
+		buttons[7] = gs.Buttons.Start == Microsoft.Xna.Framework.Input.ButtonState.Pressed;
+		buttons[8] = gs.DPad.Left == Microsoft.Xna.Framework.Input.ButtonState.Pressed;
+		buttons[9] = gs.DPad.Up == Microsoft.Xna.Framework.Input.ButtonState.Pressed;
+		buttons[10] = gs.DPad.Right == Microsoft.Xna.Framework.Input.ButtonState.Pressed;
+		buttons[11] = gs.DPad.Down == Microsoft.Xna.Framework.Input.ButtonState.Pressed;
+		
+		return true;
+	}
+</textarea> <br><br></td></tr></table><br>
+<a name="2057695"></a>
+
+<a name="2057694"></a>
+
+<a name="2057693"></a>
+
+<a name="2057692"></a>
+
+<a name="2057691"></a>
+
+<a name="2057708"></a>
+
+<a name="2057711"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Erik</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks! Perfect timing, I was thinking about writing this myself, but now I don't have to! :) <br><br></td></tr></table><br>
+<a name="2059413"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Erik</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Make KeyToChar public and change WM_KEYDOWN to this to handle arrow keys and the other special char keys:<br><br><pre class=code>
+  case WM_KEYDOWN:
+    if(TranslateMessage(ref m)){
+      Game().KeyEvent(1,m.WParam.ToInt32());
+      var keychar = BBXnaGame._xnaGame.KeyToChar(m.WParam.ToInt32());
+      if (keychar!=0)
+        Game().KeyEvent(3, keychar);
+    }
+    return true;
+</pre><br><br>. <br><br></td></tr></table><br>
+<a name="2057714"></a>
+
+<a name="2057740"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skid</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks Erik.<br><br>Mouse code should also I think, be moved to the message pump.<br><br>I haven't been able to work out how to post safely to the GameThread in monkey yet. <br><br></td></tr></table><br>
+<a name="2057767"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skid</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> and a nicer EndApp implementation:<br><br><pre class=code>
+	public static int g_EndApp(){
+		g__game.Quit();		
+		return 0;
+	}
+</pre> <br><br></td></tr></table><br>
+<a name="2057936"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Erik</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well, that didn't work, shift and alt stopped working, here is another version that only overrides the special char keys:<br><br><pre class=code>
+  case WM_KEYDOWN:
+    if(TranslateMessage(ref m)){
+      Game().KeyEvent(1,m.WParam.ToInt32());
+      var keychar = BBXnaGame._xnaGame.KeyToChar(m.WParam.ToInt32());
+      if (keychar==8 ||
+          keychar==9 ||
+          keychar==13 ||
+          keychar==27 ||
+          keychar==127 ||
+          keychar==65569 ||
+          keychar==65570 ||
+          keychar==65571 ||
+          keychar==65572 ||
+          keychar==65573 ||
+          keychar==65574 ||
+          keychar==65575 ||
+          keychar==65576 ||
+          keychar==65581)
+              Game().KeyEvent(3, keychar);
+    }
+  return true;
+</pre> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

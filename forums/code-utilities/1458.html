@@ -1,0 +1,264 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Online Patcher using the recursive CRC-32 builder</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='HTTP Patcher, language=bb, category=File Utilities'><meta name='author' content='ozak'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=8>File Utilities</a>/Online Patcher using the recursive CRC-32 builder</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="1458.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Online Patcher using the recursive CRC-32 builder by ozak</td><td align="right">2005 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Use my recursive CRC-32 file builder to build a patch info file.<br>Place it on your webserver and use this patcher to download changed files. </td></tr><tr ><td class="cell"><pre class="code">; HTTP Patcher for use with BuildCRC by Odin Jensen (www.furi.dk)
+
+; Global config
+Global url$ = "http://www.yourwebsitehere.com"
+Global patchDir$ = "yourpatchdirhere"
+Global aTitle$ = "HTTP Patcher v1.0"
+Global winTitle$ = "HTTP Patcher v1.0 by Odin Jensen"
+Global gameExe$ = "game.exe"
+
+; Global control handles
+Global patchBtn
+Global playBtn
+Global curProgBar
+Global totalProgBar
+Global infoBox
+
+; Number of files to be patched
+Global numFiles# = 0
+
+; Download bank
+Global bank=CreateBank(16384)
+
+; File storage struct
+Type FileEntry
+
+	Field fileName$
+	
+End Type
+
+; Initialize CRC table
+Dim CRC32_table(255)
+CRC32_init()
+
+; Create main window and controls
+InitApp()
+
+; Main loop
+While WaitEvent()&lt;&gt;$803
+
+	; Was it a gadget action event?
+	If (EventID()=$401)
+
+		; Play button
+		If (EventSource()=playBtn)
+			ExecFile(gameExe)
+		End If 
+	
+		; Patch button
+		If (EventSource()=patchBtn)
+			; Connected
+			AddGadgetItem(infoBox,"Retrieving patch information.")
+	
+			; Get patch info file
+			If (GetHTTPFile("patchinfo.dat") = False)				
+				AddGadgetItem(infoBox, "Error: Could not retrieve patch information")				
+			Else
+				; Inform the user of our progress
+				AddGadgetItem(infoBox, "Patch information retrieved ok.")
+				AddGadgetItem(infoBox, "Scanning files.")
+
+				; Read and check files
+				inFile = OpenFile("patchinfo.dat")
+
+				While (Not Eof(inFile))
+
+					; Read entry
+					curLine$ = ReadLine(inFile)
+					fe.FileEntry = New FileEntry
+					fe\fileName = Left(curLine, Instr(curLine,",")-1)
+					CRC$ = Mid(curLine, Instr(curLine, ",")+1, Len(curLine))					
+										
+					; Check CRC
+					fileCRC$ = Hex(CRC32_FromFile(fe\fileName))
+					If (Not fileCRC = CRC)
+						AddGadgetItem(infoBox, "File '" +  fe\fileName + "' needs patching.")
+						numFiles=numFiles+1
+					Else
+						AddGadgetItem(infoBox, "File '" +  fe\fileName + "' is up to date.")
+						Delete(fe)
+					End If
+									
+				Wend				
+
+				; Close file
+				CloseFile(infile)
+
+				; Patch those files
+				If (numFiles &lt;&gt; 0)			
+					AddGadgetItem(infoBox, "Patching files.")
+				End If
+				
+				progPos = 0
+				For fe.FileEntry=Each FileEntry
+					
+					GetHTTPFile(fe\fileName)
+					progPos=progPos+1
+					UpdateProgBar(totalProgBar,progPos/numFiles)
+				
+				Next
+	
+				; Patching done
+				UpdateProgBar(totalProgBar,1)
+				AddGadgetItem(infoBox, "Ready to play!")
+				EnableGadget(playBtn)
+				DisableGadget(patchBtn)
+
+				; Delete patch info file
+				DeleteFile("patchInfo.dat")
+			End If 					
+		EndIf
+	EndIf
+
+Wend
+
+
+; Create main window and controls function
+Function InitApp()
+
+	; Set app title
+	AppTitle(aTitle)
+
+	; Create main window 		
+	mainWindow=CreateWindow(winTitle,(ClientWidth (Desktop ()) / 2) - 200,(ClientHeight (Desktop ()) / 2) - 200,400,400,0,1)
+	
+	; Create canvas
+	mainCanvas = CreateCanvas(0,0,GadgetWidth(mainWindow),GadgetHeight(mainWindow),mainWindow,0)
+	
+	; Setup canvas for drawing
+	SetBuffer(CanvasBuffer(mainCanvas))
+	Color(100,100,100)
+	Rect(0,0,GadgetWidth(mainWindow),GadgetHeight(mainWindow))
+	
+	; Create labels
+	Color(255,255,255)
+	Text(5, 10, "Total progress")
+	Text(5, 65, "Current progress")	
+	Text(5, 120, "Information")
+	
+	; Create progress bars
+	totalProgBar=CreateProgBar(5, 30, GadgetWidth(mainWindow) - 16, 20, mainCanvas)
+	curProgBar=CreateProgBar(5, 85, GadgetWidth(mainWindow) - 16, 20, mainCanvas)
+	
+	; Create listbox for information
+	infoBox=CreateListBox(5, 140, GadgetWidth(mainWindow) - 16, GadgetHeight(mainWindow) - 200, mainCanvas)	
+	
+	; Create buttons
+	patchBtn=CreateButton("Patch", 5, GadgetHeight(mainWindow) - 50, 50, 20, mainCanvas)
+	playBtn=CreateButton("Play", GadgetWidth(mainWindow) - 60, GadgetHeight(mainWindow) - 50, 50, 20, mainCanvas)
+	DisableGadget(playBtn)
+	
+	; Add some start info
+	AddGadgetItem(infoBox, "Welcome to the patcher. Click the patch button to begin.")
+	
+	; Update canvas
+	FlipCanvas(mainCanvas)
+	
+End Function
+
+; Get HTTP file function
+Function GetHTTPFile(fileName$)
+
+	; Open stream
+	tcpStream=OpenTCPStream(url,80)
+
+	; Get and write patch info file
+	WriteLine tcpStream,"GET "+url+patchDir+"/"+fileName+" HTTP/1.0" 
+	WriteLine tcpStream,Chr$(10) 
+	
+	; Error?
+	If (Eof(tcpStream))	
+		Return False 	
+	End If 
+
+	; Open file for writing				
+	error=False
+	Local temp$
+	Local size# = 0
+	
+	; Read header
+	Repeat 
+		; Read next HTTP line
+		temp = ReadLine$(tcpStream)
+		
+		; If we got a 404 Not Found, the file is missing from the server (or mispelled somewhere :)
+		If (Instr(temp, "404 Not Found")) error=True
+
+		; Get size
+		If  (Instr(temp, "Content-Length"))
+			size = Mid(temp, Instr(temp,": ")+2, Len(temp))
+		End If 									
+		
+		; End of header
+		If (temp = "")
+		
+			Exit
+		
+		End If
+		
+	Forever
+
+	; Error?
+	If (error)	
+		Return False 
+	End If
+
+	; Read and write file	
+	Local outfile = WriteFile(fileName)
+
+	progPos = 0
+	While (Not Eof(tcpStream))
+		n=ReadBytes(bank,tcpStream,0,16384)
+		WriteBytes(bank,outfile,0,n)
+		progPos=progPos+n
+		UpdateProgBar(curProgBar,progPos/size)
+	Wend
+
+	CloseFile(outfile)
+
+	; Close stream
+	CloseTCPStream(tcpStream)				
+	
+	; All went well
+	Return True
+	
+End Function
+
+; CRC init function
+Function CRC32_Init()
+
+  Local i
+  Local j
+  Local value
+
+  For i=0 To 255
+    value=i
+    For j=0 To 7
+      If (value And $1) Then 
+        value=(value Shr 1) Xor $EDB88320
+      Else
+        value=(value Shr 1)
+      EndIf
+    Next
+    CRC32_table(i)=value
+  Next
+  
+End Function
+
+; Function to get CRC-32 value from a file
+Function CRC32_FromFile(name$)
+
+  Local byte
+  Local crc
+  Local file
+
+  crc=$FFFFFFFF
+  file=ReadFile(name$)
+  If file=0 Then Return
+  While Not Eof(file)
+    byte=ReadByte(file)
+    crc=(crc Shr 8) Xor CRC32_table(byte Xor (crc And $FF))
+  Wend
+  Return ~crc
+  
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Xzider</td><td align="right"><font class=tiny>2005</font></td></tr></table></td></tr><tr ><td class="posttext"> looks cool.. but <br><br>Function waitevent() not found ? <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ozak</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> Better late than never. It's Blitz2D code :) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Damien Sturdy</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> You mean B+ :) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ozak</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> Yes. Yes I do :) <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

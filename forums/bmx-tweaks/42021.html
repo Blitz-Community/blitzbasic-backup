@@ -1,0 +1,672 @@
+<!DOCTYPE html><html lang="en" ><head ><title >WIN32 - Better Windowed/Debug gfx mode</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >WIN32 - Better Windowed/Debug gfx mode</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=110" >BlitzMax Module Tweaks</a>/<a href="#bottom" >WIN32 - Better Windowed/Debug gfx mode</a><br><br>
+<a name="471223"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DredPirateRoberts</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> changed the blitzgl.win32.c file ( id backup original i dont know if this breaks anything so far )<br><br>adds window resizing . fixes bug that made window wrong size<br>and mouse y was off. <br><br>functions i added to handle resizing and detecting window close.<br><br>BOOL bglWinIsResized ( void )<br>BOOL bglWinIsClosed ( void )<br>int bglWinWidth ( void )  &lt;&lt; call after bglWinISResized = True<br>int bglWinHeight ( void ) &lt;&lt; call after when bglWinISResized = True<br><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+#include &lt;windows.h&gt;
+
+#include &lt;gl/gl.h&gt;
+#include &lt;gl/glu.h&gt;
+
+enum{
+	BGL_FULLSCREEN=1,
+	BGL_BACKBUFFER=2,
+	BGL_ALPHABUFFER=4,
+	BGL_DEPTHBUFFER=8,
+	BGL_STENCILBUFFER=16,
+	BGL_ACCUMBUFFER=32
+};
+
+static const char *CLASS_NAME="BlitzGL Window Class";
+
+static HDC context_hdc;
+static HWND context_hwnd;
+static HGLRC context_hglrc;
+
+static int fullScreen;
+static DEVMODE devmode;
+static int active,started,font_lists;
+
+typedef BOOL (APIENTRY * WGLSWAPINTERVALEXT) (int);
+static WGLSWAPINTERVALEXT wglSwapIntervalEXT;
+
+static void bglExit(){
+	bglDeleteContext(0);
+}
+
+static void poll(){
+	MSG msg;
+	while( PeekMessage( &amp;msg,0,0,0,PM_REMOVE ) ){
+		TranslateMessage( &amp;msg );
+		DispatchMessage( &amp;msg );
+	}
+}
+
+// NEW FUNCS BELOW ===
+
+int g_wingl_width;
+int g_wingl_height;
+BOOL g_wingl_resize;
+BOOL g_wingl_closed;
+
+BOOL bglWinIsResized ( void )
+{
+   BOOL rc = g_wingl_resize;
+
+   g_wingl_resize = FALSE;
+
+   return( rc );
+}
+
+BOOL bglWinIsClosed ( void )
+{
+   return( g_wingl_closed );
+}
+
+int bglWinWidth ( void )
+{
+   return( g_wingl_width );
+}
+
+int bglWinHeight ( void )
+{
+   return( g_wingl_height );
+}
+
+// END NEW FUNCTIONS
+
+// CHANGED AND ADDED STUFF TO NEXT FUNC and CreateWindowContext
+_stdcall long wndProc( HWND hwnd,UINT msg,WPARAM wp,LPARAM lp ){
+   RECT rect;
+
+	switch( msg ){
+       case WM_SIZE:
+           GetClientRect(hwnd, &amp;rect); 
+
+           glViewport ( 0, 0, rect.right, rect.bottom );
+ 
+           glMatrixMode(GL_PROJECTION);
+           glLoadIdentity();
+           gluOrtho2D( rect.left, rect.right, rect.bottom, rect.top ); 
+           glMatrixMode(GL_MODELVIEW);
+           g_wingl_resize = TRUE;
+           g_wingl_width = rect.right - rect.left;
+           g_wingl_height = rect.bottom - rect.top;
+       break;   
+
+	case WM_CLOSE:
+       g_wingl_closed = TRUE;
+		return 0;
+	case WM_PAINT:
+		ValidateRect( hwnd,0 );
+		return 0;
+	case WM_SETFOCUS:
+		if( devmode.dmSize &amp;&amp; !fullScreen ){
+			if( ChangeDisplaySettings( &amp;devmode,CDS_FULLSCREEN )==DISP_CHANGE_SUCCESSFUL ){
+				fullScreen=1;
+			}else if( devmode.dmFields&amp;DM_DISPLAYFREQUENCY ){
+				devmode.dmDisplayFrequency=0;
+				devmode.dmFields&amp;=~DM_DISPLAYFREQUENCY;
+				if( ChangeDisplaySettings( &amp;devmode,CDS_FULLSCREEN )==DISP_CHANGE_SUCCESSFUL ){
+					fullScreen=1;
+				}
+			}
+		}
+		return 0;
+	case WM_KILLFOCUS:
+		if( devmode.dmSize &amp;&amp; fullScreen ){
+			ChangeDisplaySettings( 0,0 );
+			ShowWindow( hwnd,SW_MINIMIZE );
+			fullScreen=0;
+		}
+		return 0;
+	}
+	return DefWindowProc( hwnd,msg,wp,lp );
+}
+
+void bglDeleteContext( context ){
+	if( !active ) return;
+	wglDeleteContext( context_hglrc );
+	DestroyWindow( context_hwnd );
+	ChangeDisplaySettings( 0,0 );
+	active=0;
+}
+
+int bglDisplayModes( int *modes,int size ){
+
+	int count=size/16;
+	int *end=modes+count*4,i=0,n=0;
+
+	while( modes!=end ){
+
+		DEVMODE	mode;
+		mode.dmSize=sizeof(DEVMODE);
+		mode.dmDriverExtra=0;
+
+		if( !EnumDisplaySettings(0,i++,&amp;mode) ) break;
+
+		if( mode.dmBitsPerPel&lt;16 ) continue;
+
+		*modes++=mode.dmPelsWidth;
+		*modes++=mode.dmPelsHeight;
+		*modes++=mode.dmBitsPerPel;
+		*modes++=mode.dmDisplayFrequency;
+		++n;
+	}
+	return n;
+}
+
+static void setPfd( PIXELFORMATDESCRIPTOR *pfd,int flags ){
+
+	memset( pfd,0,sizeof(*pfd) );
+
+	pfd-&gt;nSize=sizeof(pfd);
+	pfd-&gt;nVersion=1;
+	pfd-&gt;cColorBits=1;
+	pfd-&gt;iPixelType=PFD_TYPE_RGBA;
+	pfd-&gt;iLayerType=PFD_MAIN_PLANE;
+	pfd-&gt;dwFlags=PFD_DRAW_TO_WINDOW|PFD_SUPPORT_OPENGL;
+
+	pfd-&gt;dwFlags|=(flags &amp; BGL_BACKBUFFER) ? PFD_DOUBLEBUFFER : 0;
+	pfd-&gt;cAlphaBits=(flags &amp; BGL_ALPHABUFFER) ? 1 : 0;
+	pfd-&gt;cDepthBits=(flags &amp; BGL_DEPTHBUFFER) ? 1 : 0;
+	pfd-&gt;cStencilBits=(flags &amp; BGL_STENCILBUFFER) ? 1 : 0;
+	pfd-&gt;cAccumBits=(flags &amp; BGL_ACCUMBUFFER) ? 1 : 0;
+}
+
+static void createWindowedContext( int width,int height,int flags ){
+
+	long pf;
+	PIXELFORMATDESCRIPTOR pfd;
+	RECT				rect;
+
+	devmode.dmSize=0;
+
+	SetRect ( &amp;rect, 0, 0, width, height );
+	AdjustWindowRectEx ( &amp;rect, WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SIZEBOX, FALSE, WS_EX_APPWINDOW );
+
+	context_hwnd=CreateWindowEx( 
+		0,CLASS_NAME,"BlitzGL Application",
+		WS_CAPTION | WS_VISIBLE | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SIZEBOX,
+		CW_USEDEFAULT,
+       CW_USEDEFAULT,
+		rect.right - rect.left,
+		rect.bottom - rect.top,
+       0,
+       0,
+       GetModuleHandle(0),
+       0 );
+
+	ShowWindow( context_hwnd,SW_RESTORE );
+
+	setPfd( &amp;pfd,flags );
+
+	context_hdc=GetDC( context_hwnd );
+	pf=ChoosePixelFormat( context_hdc,&amp;pfd );
+	if( !pf ){
+		DestroyWindow( context_hwnd );
+		return;
+	}
+	SetPixelFormat( context_hdc,pf,&amp;pfd );
+	context_hglrc=wglCreateContext( context_hdc );
+	wglMakeCurrent( context_hdc,context_hglrc );
+
+	active=1;
+}
+
+static void createFullscreenContext( int width,int height,int depth,int hertz,int flags ){
+
+	long pf;
+	PIXELFORMATDESCRIPTOR pfd;
+
+	devmode.dmSize=sizeof(devmode);
+	devmode.dmPelsWidth=width;
+	devmode.dmPelsHeight=height;
+	devmode.dmBitsPerPel=depth;
+	devmode.dmFields=DM_PELSWIDTH|DM_PELSHEIGHT|DM_BITSPERPEL;
+	if( hertz ){
+		devmode.dmDisplayFrequency=hertz;
+		devmode.dmFields|=DM_DISPLAYFREQUENCY;
+	}
+	context_hwnd=CreateWindowEx( 
+		WS_EX_TOPMOST,CLASS_NAME,"BlitzGL Application",
+		WS_POPUP|WS_VISIBLE|WS_CLIPSIBLINGS|WS_CLIPCHILDREN,0,0,width,height,0,0,GetModuleHandle(0),0 );
+
+	setPfd( &amp;pfd,flags );
+
+	context_hdc=GetDC( context_hwnd );
+	pf=ChoosePixelFormat( context_hdc,&amp;pfd );
+	if( !pf ){
+		DestroyWindow( context_hwnd );
+		return;
+	}
+	SetPixelFormat( context_hdc,pf,&amp;pfd );
+	context_hglrc=wglCreateContext( context_hdc );
+	wglMakeCurrent( context_hdc,context_hglrc );
+
+	active=1;
+}
+
+int bglCreateContext( int width,int height,int depth,int hertz,int flags ){
+
+	bglDeleteContext();
+
+	if( !started ){
+	    WNDCLASS wc={0};
+		wc.style=CS_HREDRAW|CS_VREDRAW|CS_OWNDC;
+		wc.lpfnWndProc=(WNDPROC)wndProc;
+		wc.hInstance=GetModuleHandle(0);
+		wc.lpszClassName=CLASS_NAME;
+		wc.hCursor=(HCURSOR)LoadCursor( 0,IDC_ARROW );
+		wc.hbrBackground=0;//(HBRUSH)GetStockObject(BLACK_BRUSH);
+		if( !RegisterClass( &amp;wc ) ) exit(-1);
+		atexit( bglExit );
+		started=1;
+	}
+
+	if( flags &amp; BGL_FULLSCREEN ){
+		createFullscreenContext( width,height,depth,hertz,flags );
+	}else{
+		createWindowedContext( width,height,flags );
+	}
+
+	if( !active ) return 0;
+
+	wglSwapIntervalEXT=(WGLSWAPINTERVALEXT)wglGetProcAddress("wglSwapIntervalEXT");
+
+	bglSetSwapInterval( 0 );
+
+	return 1;
+}
+
+int bglSetSwapInterval( int n ){
+	return wglSwapIntervalEXT &amp;&amp; wglSwapIntervalEXT(n);
+}
+
+void bglSwapBuffers(){
+	if( !active ) return;
+	SwapBuffers( context_hdc );
+}
+
+void bglSetMouseVisible( int visible ){
+	int n;
+	if( !active ) return;
+	n=ShowCursor( visible );
+	if( n&lt;-1 || n&gt;0 ) ShowCursor(!visible);
+}
+
+int bglFixedFontBitmaps(){
+	HFONT hfont,t_font;
+	HDC hdc;
+		
+	if( !active ) return 0;
+
+	if( font_lists ) return font_lists;
+
+	hfont=CreateFont( 
+		14,0,0,0,
+		FW_REGULAR,0,0,0,ANSI_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
+		DEFAULT_QUALITY,DEFAULT_PITCH|FF_DONTCARE,"fixedsys" );
+
+	hdc=CreateCompatibleDC(0);
+	t_font=(HFONT)SelectObject( hdc,hfont );
+
+	font_lists=glGenLists( 256 );
+	wglUseFontBitmaps( hdc,0,255,font_lists );
+
+	SelectObject( hdc,t_font );
+	DeleteDC( hdc );
+	DeleteObject( hfont );
+
+	return font_lists;
+}
+
+</textarea><br><br>add this to your bmx code<br><br>Extern <br>   Function bglWinIsClosed()<br>   Function bglWinIsResized()<br>   Function bglWinWidth()<br>   Function bglWinHeight()<br>End Extern<br><br>recompile modules . then your program <br><br></td></tr></table><br>
+<a name="471385"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >fredborg</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Great!<br><br>One small thing. It might be good to reset the 'bglWinIsClosed()' return value once it's been called. If you make a confirm requester now, and press 'cancel' it will keep popping up. Small example:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Strict
+
+Graphics 640,480,0
+
+Local graphics_width	= bglWinWidth()
+Local graphics_height	= bglWinHeight()
+
+While Not KeyDown(KEY_ESCAPE)
+
+	If bglWinIsClosed()
+		If Confirm("Are you sure you wish to quit?")
+			End
+		EndIf
+	EndIf
+
+	If bglWinIsResized()
+		graphics_width = bglWinWidth()
+		graphics_height = bglWinHeight()
+	EndIf
+
+	SetColor Rand(0,255),Rand(0,255),Rand(0,255)
+	DrawRect Rand(0,graphics_width),Rand(0,graphics_height),20,20
+
+	FlushMem
+	Flip
+
+Wend</textarea><br>The following 'blitzgl.win32.c' version resets the bglWinIsClosed return:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">#include &lt;windows.h&gt;
+
+#include &lt;gl/gl.h&gt;
+#include &lt;gl/glu.h&gt;
+
+enum{
+	BGL_FULLSCREEN=1,
+	BGL_BACKBUFFER=2,
+	BGL_ALPHABUFFER=4,
+	BGL_DEPTHBUFFER=8,
+	BGL_STENCILBUFFER=16,
+	BGL_ACCUMBUFFER=32
+};
+
+static const char *CLASS_NAME="BlitzGL Window Class";
+
+static HDC context_hdc;
+static HWND context_hwnd;
+static HGLRC context_hglrc;
+
+static int fullScreen;
+static DEVMODE devmode;
+static int active,started,font_lists;
+
+typedef BOOL (APIENTRY * WGLSWAPINTERVALEXT) (int);
+static WGLSWAPINTERVALEXT wglSwapIntervalEXT;
+
+static void bglExit(){
+	bglDeleteContext(0);
+}
+
+static void poll(){
+	MSG msg;
+	while( PeekMessage( &amp;msg,0,0,0,PM_REMOVE ) ){
+		TranslateMessage( &amp;msg );
+		DispatchMessage( &amp;msg );
+	}
+}
+
+// NEW FUNCS BELOW ===
+
+int g_wingl_width;
+int g_wingl_height;
+BOOL g_wingl_resize;
+BOOL g_wingl_closed;
+
+BOOL bglWinIsResized ( void )
+{
+   BOOL rc = g_wingl_resize;
+
+   g_wingl_resize = FALSE;
+
+   return( rc );
+}
+
+BOOL bglWinIsClosed ( void )
+{
+    BOOL rc = g_wingl_closed;
+    g_wingl_closed = FALSE;
+    return( rc );
+}
+
+int bglWinWidth ( void )
+{
+   return( g_wingl_width );
+}
+
+int bglWinHeight ( void )
+{
+   return( g_wingl_height );
+}
+
+// END NEW FUNCTIONS
+
+// CHANGED AND ADDED STUFF TO NEXT FUNC and CreateWindowContext
+_stdcall long wndProc( HWND hwnd,UINT msg,WPARAM wp,LPARAM lp ){
+   RECT rect;
+
+	switch( msg ){
+       case WM_SIZE:
+           GetClientRect(hwnd, &amp;rect); 
+
+           glViewport ( 0, 0, rect.right, rect.bottom );
+ 
+           glMatrixMode(GL_PROJECTION);
+           glLoadIdentity();
+           gluOrtho2D( rect.left, rect.right, rect.bottom, rect.top ); 
+           glMatrixMode(GL_MODELVIEW);
+           g_wingl_resize = TRUE;
+           g_wingl_width = rect.right - rect.left;
+           g_wingl_height = rect.bottom - rect.top;
+       break;   
+
+	case WM_CLOSE:
+       g_wingl_closed = TRUE;
+		return 0;
+	case WM_PAINT:
+		ValidateRect( hwnd,0 );
+		return 0;
+	case WM_SETFOCUS:
+		if( devmode.dmSize &amp;&amp; !fullScreen ){
+			if( ChangeDisplaySettings( &amp;devmode,CDS_FULLSCREEN )==DISP_CHANGE_SUCCESSFUL ){
+				fullScreen=1;
+			}else if( devmode.dmFields&amp;DM_DISPLAYFREQUENCY ){
+				devmode.dmDisplayFrequency=0;
+				devmode.dmFields&amp;=~DM_DISPLAYFREQUENCY;
+				if( ChangeDisplaySettings( &amp;devmode,CDS_FULLSCREEN )==DISP_CHANGE_SUCCESSFUL ){
+					fullScreen=1;
+				}
+			}
+		}
+		return 0;
+	case WM_KILLFOCUS:
+		if( devmode.dmSize &amp;&amp; fullScreen ){
+			ChangeDisplaySettings( 0,0 );
+			ShowWindow( hwnd,SW_MINIMIZE );
+			fullScreen=0;
+		}
+		return 0;
+	}
+	return DefWindowProc( hwnd,msg,wp,lp );
+}
+
+void bglDeleteContext( context ){
+	if( !active ) return;
+	wglDeleteContext( context_hglrc );
+	DestroyWindow( context_hwnd );
+	ChangeDisplaySettings( 0,0 );
+	active=0;
+}
+
+int bglDisplayModes( int *modes,int size ){
+
+	int count=size/16;
+	int *end=modes+count*4,i=0,n=0;
+
+	while( modes!=end ){
+
+		DEVMODE	mode;
+		mode.dmSize=sizeof(DEVMODE);
+		mode.dmDriverExtra=0;
+
+		if( !EnumDisplaySettings(0,i++,&amp;mode) ) break;
+
+		if( mode.dmBitsPerPel&lt;16 ) continue;
+
+		*modes++=mode.dmPelsWidth;
+		*modes++=mode.dmPelsHeight;
+		*modes++=mode.dmBitsPerPel;
+		*modes++=mode.dmDisplayFrequency;
+		++n;
+	}
+	return n;
+}
+
+static void setPfd( PIXELFORMATDESCRIPTOR *pfd,int flags ){
+
+	memset( pfd,0,sizeof(*pfd) );
+
+	pfd-&gt;nSize=sizeof(pfd);
+	pfd-&gt;nVersion=1;
+	pfd-&gt;cColorBits=1;
+	pfd-&gt;iPixelType=PFD_TYPE_RGBA;
+	pfd-&gt;iLayerType=PFD_MAIN_PLANE;
+	pfd-&gt;dwFlags=PFD_DRAW_TO_WINDOW|PFD_SUPPORT_OPENGL;
+
+	pfd-&gt;dwFlags|=(flags &amp; BGL_BACKBUFFER) ? PFD_DOUBLEBUFFER : 0;
+	pfd-&gt;cAlphaBits=(flags &amp; BGL_ALPHABUFFER) ? 1 : 0;
+	pfd-&gt;cDepthBits=(flags &amp; BGL_DEPTHBUFFER) ? 1 : 0;
+	pfd-&gt;cStencilBits=(flags &amp; BGL_STENCILBUFFER) ? 1 : 0;
+	pfd-&gt;cAccumBits=(flags &amp; BGL_ACCUMBUFFER) ? 1 : 0;
+}
+
+static void createWindowedContext( int width,int height,int flags ){
+
+	long pf;
+	PIXELFORMATDESCRIPTOR pfd;
+	RECT				rect;
+
+	devmode.dmSize=0;
+
+	SetRect ( &amp;rect, 0, 0, width, height );
+	AdjustWindowRectEx ( &amp;rect, WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SIZEBOX, FALSE, WS_EX_APPWINDOW );
+
+	context_hwnd=CreateWindowEx( 
+		0,CLASS_NAME,"BlitzGL Application",
+		WS_CAPTION | WS_VISIBLE | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SIZEBOX,
+		CW_USEDEFAULT,
+       CW_USEDEFAULT,
+		rect.right - rect.left,
+		rect.bottom - rect.top,
+       0,
+       0,
+       GetModuleHandle(0),
+       0 );
+
+	ShowWindow( context_hwnd,SW_RESTORE );
+
+	setPfd( &amp;pfd,flags );
+
+	context_hdc=GetDC( context_hwnd );
+	pf=ChoosePixelFormat( context_hdc,&amp;pfd );
+	if( !pf ){
+		DestroyWindow( context_hwnd );
+		return;
+	}
+	SetPixelFormat( context_hdc,pf,&amp;pfd );
+	context_hglrc=wglCreateContext( context_hdc );
+	wglMakeCurrent( context_hdc,context_hglrc );
+
+	active=1;
+}
+
+static void createFullscreenContext( int width,int height,int depth,int hertz,int flags ){
+
+	long pf;
+	PIXELFORMATDESCRIPTOR pfd;
+
+	devmode.dmSize=sizeof(devmode);
+	devmode.dmPelsWidth=width;
+	devmode.dmPelsHeight=height;
+	devmode.dmBitsPerPel=depth;
+	devmode.dmFields=DM_PELSWIDTH|DM_PELSHEIGHT|DM_BITSPERPEL;
+	if( hertz ){
+		devmode.dmDisplayFrequency=hertz;
+		devmode.dmFields|=DM_DISPLAYFREQUENCY;
+	}
+	context_hwnd=CreateWindowEx( 
+		WS_EX_TOPMOST,CLASS_NAME,"BlitzGL Application",
+		WS_POPUP|WS_VISIBLE|WS_CLIPSIBLINGS|WS_CLIPCHILDREN,0,0,width,height,0,0,GetModuleHandle(0),0 );
+
+	setPfd( &amp;pfd,flags );
+
+	context_hdc=GetDC( context_hwnd );
+	pf=ChoosePixelFormat( context_hdc,&amp;pfd );
+	if( !pf ){
+		DestroyWindow( context_hwnd );
+		return;
+	}
+	SetPixelFormat( context_hdc,pf,&amp;pfd );
+	context_hglrc=wglCreateContext( context_hdc );
+	wglMakeCurrent( context_hdc,context_hglrc );
+
+	active=1;
+}
+
+int bglCreateContext( int width,int height,int depth,int hertz,int flags ){
+
+	bglDeleteContext();
+
+	if( !started ){
+	    WNDCLASS wc={0};
+		wc.style=CS_HREDRAW|CS_VREDRAW|CS_OWNDC;
+		wc.lpfnWndProc=(WNDPROC)wndProc;
+		wc.hInstance=GetModuleHandle(0);
+		wc.lpszClassName=CLASS_NAME;
+		wc.hCursor=(HCURSOR)LoadCursor( 0,IDC_ARROW );
+		wc.hbrBackground=0;//(HBRUSH)GetStockObject(BLACK_BRUSH);
+		if( !RegisterClass( &amp;wc ) ) exit(-1);
+		atexit( bglExit );
+		started=1;
+	}
+
+	if( flags &amp; BGL_FULLSCREEN ){
+		createFullscreenContext( width,height,depth,hertz,flags );
+	}else{
+		createWindowedContext( width,height,flags );
+	}
+
+	if( !active ) return 0;
+
+	wglSwapIntervalEXT=(WGLSWAPINTERVALEXT)wglGetProcAddress("wglSwapIntervalEXT");
+
+	bglSetSwapInterval( 0 );
+
+	return 1;
+}
+
+int bglSetSwapInterval( int n ){
+	return wglSwapIntervalEXT &amp;&amp; wglSwapIntervalEXT(n);
+}
+
+void bglSwapBuffers(){
+	if( !active ) return;
+	SwapBuffers( context_hdc );
+}
+
+void bglSetMouseVisible( int visible ){
+	int n;
+	if( !active ) return;
+	n=ShowCursor( visible );
+	if( n&lt;-1 || n&gt;0 ) ShowCursor(!visible);
+}
+
+int bglFixedFontBitmaps(){
+	HFONT hfont,t_font;
+	HDC hdc;
+		
+	if( !active ) return 0;
+
+	if( font_lists ) return font_lists;
+
+	hfont=CreateFont( 
+		14,0,0,0,
+		FW_REGULAR,0,0,0,ANSI_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
+		DEFAULT_QUALITY,DEFAULT_PITCH|FF_DONTCARE,"fixedsys" );
+
+	hdc=CreateCompatibleDC(0);
+	t_font=(HFONT)SelectObject( hdc,hfont );
+
+	font_lists=glGenLists( 256 );
+	wglUseFontBitmaps( hdc,0,255,font_lists );
+
+	SelectObject( hdc,t_font );
+	DeleteDC( hdc );
+	DeleteObject( hfont );
+
+	return font_lists;
+}</textarea><br>And you should probably add a conditional compile to the Extern, like this:<div class="quote"> ?Win32<br>Extern <br>Function bglWinIsClosed() <br>Function bglWinIsResized() <br>Function bglWinWidth() <br>Function bglWinHeight() <br>End Extern<br>? <br></div> <br><br></td></tr></table><br>
+<a name="471465"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DredPirateRoberts</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> i left the flag set cuz in my code i just quit when its closed .. but i could change that. ( and the conditional win32 thing ). just did this until they officialy add some features like this so i can get my project going.<br><br>Regards<br>Scott Host <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

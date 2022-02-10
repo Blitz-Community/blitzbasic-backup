@@ -1,0 +1,122 @@
+<!DOCTYPE html><html lang="en" ><head ><title >2GB+ filestream</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Handles large files (64bit sizes) - Windows only, language=bmx, category=File Utilities'><meta name='author' content='Azathoth'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=8>File Utilities</a>/2GB+ filestream</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2665.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >2GB+ filestream by Azathoth</td><td align="right">2010 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Allows the creation, reading and writing of files larger than the 32bit limit.<br>Use PosEx, SizeEx, and SeekEx to handle the 64bit positions and size; the ordinary methods are still only 32bit.<br><br>Win32 only. </td></tr><tr ><td class="cell"><pre class="code">Strict
+
+Import Pub.Win32
+
+Const INVALID_HANDLE_VALUE = -1 
+
+Const GENERIC_READ = $80000000
+Const GENERIC_WRITE = $40000000
+
+Const OPEN_EXISTING = 3
+
+Extern "win32"
+	Function CreateFileW(lpFileName:Byte Ptr,dwDesiredAccess,dwShareMode,lpSecurityAttributes:Byte Ptr,dwCreationDisposition,dwFlagsAndAttributes,hTemplateFile)
+	Function GetFileSizeEx(hFile, lpFileSize:Byte Ptr)
+	Function SetFilePointerEx(hFile, liDistanceToMove:Long, lpNewFilePointer:Byte Ptr, dwMoveMethod)
+	Function ReadFile(hFile, lpBuffer:Byte Ptr, nNumberOfBytesToRead, lpNumberOfBytesRead:Byte Ptr, lpOverlapped:Byte Ptr)
+	Function WriteFile(hFile, lpBuffer:Byte Ptr, nNumberOfBytesToWrite, lpNumberOfBytesWritten:Byte Ptr, lpOverlapped:Byte Ptr)
+	Function FlushFileBuffers(hFile)
+
+	Function CloseHandle(hObject)
+	Function GetLastError()
+	
+EndExtern
+
+Function FileSizeEx:Long(path:String)
+	Local size:Long, handle:Int
+
+	handle=CreateFileW(path.ToWString(),GENERIC_READ,0,Null,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0)
+	If handle&lt;&gt;INVALID_HANDLE_VALUE
+		If GetFileSizeEx(handle, Varptr size)=0 Then size=-1 
+		CloseHandle(handle)
+	EndIf
+	Return size
+EndFunction
+
+Type TFileStream Extends TStream
+	Field _pos:Long, _size:Long, _handle=INVALID_HANDLE_VALUE, _mode
+	
+	Method PosEx:Long()
+		Return _pos
+	EndMethod
+	
+	Method SizeEx:Long()
+		Return _size
+	EndMethod
+	
+	Method Eof()
+		Return (PosEx()=SizeEx())
+	EndMethod
+	
+	Method SeekEx:Long(pos:Long)
+		Assert _handle&lt;&gt;INVALID_HANDLE_VALUE Else "Attempt to seek closed stream"
+		SetFilePointerEx(_handle,pos,Varptr _pos,0)
+		Return _pos
+	EndMethod
+	
+	Method Read(buf:Byte Ptr, count)
+		Assert _handle&lt;&gt;INVALID_HANDLE_VALUE Else "Attempt to read from closed stream"
+		Assert _mode &amp; GENERIC_READ Else "Attempt to read from write-only stream"
+		If ReadFile(_handle,buf,count, Varptr count, Null)=0 Then Return 0
+		_pos:+count
+		Return count
+	EndMethod
+	
+	Method Write( buf:Byte Ptr,count )
+		Assert _handle&lt;&gt;INVALID_HANDLE_VALUE Else "Attempt to write to closed stream"
+		Assert _mode &amp; GENERIC_WRITE Else "Attempt to write to read-only stream"
+		If WriteFile(_handle,buf,count,Varptr count, Null )=0 Then Return 0
+		_pos:+count
+		If _pos&gt;_size _size=_pos
+		Return count
+	End Method
+	
+	Method Pos()
+		Return Int(_pos)
+	EndMethod
+	
+	Method Size()
+		Return Int(_size)
+	EndMethod
+	
+	Method Seek(pos)
+		Return Int(SeekEx(pos))
+	EndMethod
+	
+	Method Flush()
+		If _handle&lt;&gt;INVALID_HANDLE_VALUE Then FlushFileBuffers(_handle)
+	EndMethod	
+	
+	Method Close()
+		If _handle=INVALID_HANDLE_VALUE Then Return
+		Flush()
+		CloseHandle(_handle)
+		_handle=INVALID_HANDLE_VALUE
+		_pos=0
+		_size=0
+	EndMethod
+	
+	Function OpenFile:TFileStream(path:String,readable,writeable )
+		Local m, handle, wstr:Byte Ptr
+		
+		If readable m:|GENERIC_READ
+		If writeable m:|GENERIC_WRITE
+		
+		wstr=path.ToWString()
+		
+		handle=CreateFileW(wstr,m,0,Null,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0)
+		
+		MemFree(wstr)
+		If handle&lt;&gt;INVALID_HANDLE_VALUE
+			Local stream:TFileStream=New TFileStream
+			
+			stream._handle=handle
+			SetFilePointerEx(handle,0,Varptr stream._pos,1)
+			SetFilePointerEx(handle,0,Varptr stream._size,2)
+			SetFilePointerEx(handle,stream._pos,Null,0)
+			stream._mode=m
+			Return stream
+		EndIf
+	EndFunction
+		
+EndType</pre></td></tr></table><br><a name="comments">Comments</a><br><br>None.<br><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,717 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Concave hulls aka poly-from-sprite</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Concave hulls aka poly-from-sprite</h1><a href="forums.php" >Monkey Archive Forums</a>/<a href="topics.php?forum=511" >Monkey Projects</a>/<a href="#bottom" >Concave hulls aka poly-from-sprite</a><br><br>
+<a name="2105178"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> <img src="http://www.raphkoster.com/monkey/concavehull/ss.jpg"><br><br><a href="http://www.raphkoster.com/monkey/concavehull/MonkeyGame.html" target="_blank">http://www.raphkoster.com/monkey/concavehull/MonkeyGame.html</a><br><br>Still WIP.<br><br>- Hit SPACE to cycle through the image test cases.<br>- tap the left and right arrows to adjust epsilon, aka the level-of-detail of the generated polygon.<br><br>Algorithm:<br>- Convert the image to a pixel data array<br>- add a border around the entire image<br>- flood fill everything under 0.5 alpha<br>- create an outline from the border of the floodfill<br>- identify all corners in the outline<br>- build a list of edges from the corners<br>- build a polygon by welding all the edges<br>- run Douglas-Peucker on the resulting poly<br><br>Edit: here is the code.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+#GLFW_WINDOW_WIDTH=800                  'Set this and HEIGHT to 0 for a 'windowless' glfw app
+#GLFW_WINDOW_HEIGHT=600     
+
+Import mojo
+Import vector
+
+Function Main()
+	New Game()
+End
+
+'summary: Returns a closed polygon concave hull for the specified sprite frame
+Function concavehullFromImage:List&lt;Vector&gt;(img:Image, theFrame:Int = 0, epsilon:Float = 1.25)
+	Local newhull:List&lt;Vector&gt; = ConcaveHull.generateHull(img, theFrame, epsilon)
+	Return newhull
+End
+
+'summary: generates a concave hull (e.g. one that "hugs" the image) for the specified sprite &amp; frame
+Class ConcaveHull
+	Global img:Image
+	Global imgData:Int[]
+	Global hull:List&lt;Vector&gt; = New List&lt;Vector&gt;
+	Global edgePoints:List&lt;Edge&gt; = New List&lt;Edge&gt;
+	Global epsilon:Float = 1.25
+	Global dirtyhull:List&lt;Vector&gt; = New List&lt;Vector&gt;
+	Global elapsed:Int
+	
+	'summary: generates a concave hull (e.g. one that "hugs" the image) for the specified sprite &amp; frame
+	Function generateHull:List&lt;Vector&gt;(theImg:Image, theFrame:Int = 0, e:Float = 1.25)
+		elapsed = Millisecs()
+		epsilon = e
+		If theImg = Null Then Return
+		img = theImg
+		imgData = ImageData(theImg, theFrame)					' Convert image to a pixel data array
+		imgData = resizeImgData()					' add a border 2 pix around the entire edge
+		FloodFill(0, 0)								' floodfill everything under 0.5 alpha
+		imgData = findEdges()						' identify all pixels at the border of the flood fill
+		imgData = findCorners()						' identify all corners in the resulting lines
+		buildHull()									' build polygon out of the corners; discard
+
+		dirtyhull.Clear								' make a copy of this high-vert version (display purposes)
+		For Local i:Vector = EachIn hull
+			dirtyhull.AddLast(i)
+		Next
+
+		Local arrHull:Vector[] = hull.ToArray()		' run Douglas-Peucker on the high-poly one to reduce it
+		arrHull = DouglasPeucker(arrHull, epsilon)
+		arrayToHull(arrHull)
+		Local nhull:List&lt;Vector&gt; = New List&lt;Vector&gt;
+		For Local i:Vector = EachIn hull
+			nhull.AddLast(i)
+		Next
+		elapsed = Millisecs - elapsed
+		
+		Return nhull
+	End
+
+	Private
+	
+	'summary: Returns an array of ints representing the pixel data of the specified image.
+	'modified from 297chrisc's code found at <a href="http://www.monkey-x.com/Community/posts.php?topic=5272" target="_blank">http://www.monkey-x.com/Community/posts.php?topic=5272</a>
+	Function ImageData:Int[] (Img:Image, theFrame = 0, Red = 255, Green = 255, Blue = 255, Rotation = 0, ScaleX:Float = 1, ScaleY:Float = 1)
+	
+		Local Margin = 5
+	
+		Local OldScissor:Float[] = GetScissor()
+		Local OldColor:Float[] = GetColor()
+		Local OldScreen:Image = CreateImage(Img.Width * ScaleX, Img.Height * ScaleY)
+		Local OldHandle:Vector = New Vector(Img.HandleX, Img.HandleY)
+		
+		SetScissor(0, 0, Img.Width * ScaleX, Img.Height * ScaleY)
+		Img.SetHandle(0, 0)
+		SetColor(255, 255, 255)
+		
+		'Setup arrays
+		Local GreyPixels:Int[] = New Int[ (Img.Width * ScaleX) * (Img.Height * ScaleX)]
+		Local BlackPixels:Int[] = New Int[ (Img.Width * ScaleX) * (Img.Height * ScaleX)]
+		Local WhitePixels:Int[] = New Int[ (Img.Width * ScaleX) * (Img.Height * ScaleX)]
+		Local ReturnData:Int[] = New Int[ (Img.Width * ScaleX) * (Img.Height * ScaleX)]
+		Local OriginalArea:Int[] = New Int[ (Img.Width * ScaleX) * (Img.Height * ScaleX)]
+		
+		'Populate Original
+		ReadPixels(OriginalArea, 0, 0, Img.Width * ScaleX, Img.Height * ScaleY)
+		OldScreen.WritePixels(OriginalArea, 0, 0, Img.Width * ScaleX, Img.Height * ScaleY)
+		SetColor(Red, Green, Blue)
+		
+		'Rotation Values
+		Local OffX = 0
+		Local OffY = 0
+		If Rotation &lt;&gt; 0 Then
+			Img.SetHandle(Img.Width / 2, Img.Height / 2)
+			OffX = ( (Img.Width * ScaleX) / 2)
+			OffY = ( (Img.Height * ScaleY) / 2)
+		
+		End If
+		
+		'Draw on 128 Grey
+		Cls(128, 128, 128)
+		DrawImage(Img, OffX, OffY, -Rotation, ScaleX, ScaleY, theFrame)
+		ReadPixels(GreyPixels, 0, 0, Img.Width * ScaleX, Img.Height * ScaleY)
+		
+		'Draw on Black
+		Cls(0, 0, 0)
+		DrawImage(Img, OffX, OffY, -Rotation, ScaleX, ScaleY, theFrame)
+		ReadPixels(BlackPixels, 0, 0, Img.Width * ScaleX, Img.Height * ScaleY)
+		
+		'Draw on White
+		Cls(255, 255, 255)
+		DrawImage(Img, OffX, OffY, -Rotation, ScaleX, ScaleY, theFrame)
+		ReadPixels(WhitePixels, 0, 0, Img.Width * ScaleX, Img.Height * ScaleY)
+		
+		
+		'Loop through the pixels
+		For Local i = 0 To( (Img.Width * ScaleX) * (Img.Height * ScaleY)) - 1
+			'Get argb values
+			Local GreyAlpha:Float
+			Local GreyRed = (GreyPixels[i] Shr 16) &amp; $ff
+			Local GreyGreen = (GreyPixels[i] Shr 8) &amp; $ff
+			Local GreyBlue = GreyPixels[i] &amp; $ff
+			Local BlackRed = (BlackPixels[i] Shr 16) &amp; $ff
+			Local BlackGreen = (BlackPixels[i] Shr 8) &amp; $ff
+			Local BlackBlue = BlackPixels[i] &amp; $ff
+			Local WhiteRed = (WhitePixels[i] Shr 16) &amp; $ff
+			Local WhiteGreen = (WhitePixels[i] Shr 8) &amp; $ff
+			Local WhiteBlue = WhitePixels[i] &amp; $ff
+			
+			'Compare and adjust grey alpha	
+			If BlackRed &gt; WhiteRed - Margin And BlackRed &lt; WhiteRed + Margin And BlackGreen &gt; WhiteGreen - Margin And BlackGreen &lt; WhiteGreen + Margin And BlackBlue &gt; WhiteBlue - Margin And BlackBlue &lt; WhiteBlue + Margin Then
+				'The same = no alpha
+				GreyAlpha = 255
+			Else
+				'Not the same therefore alpha level required
+				Local TotalBlack = BlackRed + BlackGreen + BlackBlue
+				Local TotalWhite = WhiteRed + WhiteGreen + WhiteBlue
+				'Get the colour difference (out of 765)
+				Local Difference
+				If TotalBlack &gt; TotalWhite Then
+					Difference = TotalWhite - TotalBlack
+				Else
+					Difference = TotalBlack - TotalWhite
+				End If
+				
+				'Translate difference out of 255 alpha
+				If Difference &gt; Margin Then
+					GreyAlpha = (Difference) * 0.33333
+				Else
+					GreyAlpha = 0
+				End If
+			End If
+			
+			' turn this into a black and white mask
+			If GreyAlpha &gt; 0 Then GreyAlpha = 255
+			Local returnargb = (GreyAlpha shl 24) | (255 shl 16) | (255 shl 8) | 255
+
+			ReturnData[i] = returnargb
+			
+		Next
+		
+		SetColor(OldColor[0], OldColor[1], OldColor[2])
+		DrawImage(OldScreen, 0, 0)
+		SetScissor(OldScissor[0], OldScissor[1], OldScissor[2], OldScissor[3])
+	
+		If Rotation &gt; 0 Then
+			Img.SetHandle(0, 0)
+		End If
+	
+		Img.SetHandle(OldHandle.X, OldHandle.Y)
+			
+		Return ReturnData
+	End Function	
+	
+	'summary: adds a 2px border around the image data so we can flood fill safely and have room for a 1px outline.	
+	Function resizeImgData:Int[] ()
+		Local newsize = (img.Width + 4) * (img.Height + 4)
+		Local newImgData:Int[newsize]
+
+		Local endY = img.Height
+		Local endX = img.Width
+		
+		Local count = 0
+		For Local y = 2 Until endY + 1
+			For Local x = 2 To endX + 1
+				Local thePos = (y * (img.Width + 4)) + x
+				newImgData[thePos] = imgData[count]
+				count += 1
+			Next
+		Next
+		
+		Return newImgData
+	End
+
+	'summary: floodfills with hot pink. Image won't have any because we changed it to a black and white mask
+	Function FloodFill:Int(x:Int, y:Int)
+		' adapted from <a href="http://www.monkey-x.com/Community/posts.php?topic=6159" target="_blank">http://www.monkey-x.com/Community/posts.php?topic=6159</a>
+		Local q:= New IntStack
+		Local nx:Int, ny:Int
+		Local rcolor:Int = (255 shl 24) | (255 shl 16) | (0 shl 8) | 255
+		Local qpix:Int = imgData[x + (y * (img.Width() +4))]
+		Local a = (qpix Shr 24) &amp; $ff
+		If a &gt; 0 Then Return 0
+		q.Push(x)
+		q.Push(y)
+		Local floodcount:Int = 0
+		While q.Length &gt; 0
+			ny = q.Pop()
+			nx = q.Pop()
+			qpix = imgData[nx + (ny * (img.Width() +4))]
+			a = (qpix Shr 24) &amp; $ff
+			If a &lt; 1
+				floodcount += 1
+				imgData[nx + (ny * (img.Width() +4))] = rcolor
+				If nx &gt; 0
+					q.Push(nx-1); q.Push(ny); 'Print "West.."
+				Endif
+				If nx &lt; (img.Width() +3)
+						q.Push(nx+1); q.Push(ny); 'Print "East.."
+				Endif
+				If ny &gt; 0
+						q.Push(nx); q.Push(ny - 1);' Print "North..."
+				Endif
+				If ny &lt; (img.Height() +3)
+						q.Push(nx); q.Push(ny+1); 'Print "South..."
+				Endif
+			Endif
+		Wend
+
+		Return 0
+	End Function
+	
+	'summary: find the boundary between hot pink and image, and mark it yellow.
+	Function findEdges:Int[] ()
+		Local newsize = (img.Width + 4) * (img.Height + 4)
+		Local newImgData:Int[newsize]
+		
+		For Local y = 0 Until img.Height + 4
+			For Local x = 0 Until img.Width + 4
+				Local index = y * (img.Width + 4) + x
+				
+				If queryPix(x, y) = True
+					Local ncount = 0
+					If queryPix(x + 1, y) Then ncount += 1
+					If queryPix(x, y + 1) Then ncount += 1
+					If queryPix(x - 1, y) Then ncount += 1
+					If queryPix(x, y - 1) Then ncount += 1
+					If queryPix(x + 1, y + 1) Then ncount += 1
+					If queryPix(x - 1, y + 1) Then ncount += 1
+					If queryPix(x - 1, y - 1) Then ncount += 1
+					If queryPix(x + 1, y - 1) Then ncount += 1
+					
+					If ncount = 8
+						newImgData[index] = 0
+					Else
+						Local returnargb = (255 shl 24) | (255 shl 16) | (0 shl 8) | 255
+						newImgData[index] = returnargb
+					EndIf
+				EndIf
+			Next
+		Next
+		Return newImgData
+	End
+	
+	' scan for the yellow outline and turn it into edges. This routine *WILL* generate edges that are only 1 wide...
+	Function findCorners:Int[] ()
+		edgePoints.Clear
+		Local newsize = (img.Width + 4) * (img.Height + 4)
+		
+		' back up the imgdata so we can look at it twice
+		Local imgData2:Int[newsize]
+		For Local i = 0 Until newsize
+			imgData2[i] = imgData[i]
+		Next
+		
+		Local newImgData:Int[newsize]	
+		For Local y = img.Height + 3 To 0 Step - 1
+			For Local x = img.Width + 3 To 0 Step - 1
+				Local index = y * (img.Width + 4) + x
+				
+				If queryPix(x, y) = True
+					'DebugLog("Found right edge at " + x + "," + y)
+					Local ncount = 0
+					While 1
+						'DebugLog("Looping...")
+						ncount += 1
+						If queryPix(x - ncount, y) = False
+							Local returnargb = (255 shl 24) | (0 shl 16) | (255 shl 8) | 0
+							newImgData[index] = returnargb						
+							Exit 'And queryPix(x + 1, y)
+						Else
+							Local index2 = y * (img.Width + 4) + x - ncount
+							imgData[index2] = 0
+						EndIf
+						'DebugLog(ncount + " long")
+					Wend
+					If ncount &gt; 1
+						' We can get stuck down in rabbit holes of concave angles
+						edgePoints.AddLast(New Edge(New Vector(x - ncount + 1, y), New Vector(x, y)))
+						'DebugLog("Adding horizontal vector from " + (x - ncount) + "," + y + " to " + x + "," + y)
+						Local returnargb = (255 shl 24) | (0 shl 16) | (255 shl 8) | 0
+						newImgData[index] = returnargb
+					EndIf
+				EndIf
+
+				If queryPix(x, y, imgData2) = True
+					Local ncount2 = 0
+					While 1
+						'DebugLog("Looping...")
+						ncount2 += 1
+						If queryPix(x, y - ncount2, imgData2) = False
+							Local returnargb = (255 shl 24) | (0 shl 16) | (255 shl 8) | 0
+							newImgData[index] = returnargb						
+							Exit 'And queryPix(x + 1, y)
+						Else
+							Local index2 = (y - ncount2) * (img.Width + 4) + x
+							imgData2[index2] = 0
+						EndIf
+						'DebugLog(ncount + " long")
+					Wend
+					If ncount2 &gt; 1
+						edgePoints.AddLast(New Edge(New Vector(x, y), New Vector(x, y - ncount2 + 1)))
+						Local returnargb = (255 shl 24) | (0 shl 16) | (255 shl 8) | 0
+						newImgData[index] = returnargb
+						'DebugLog("Adding vertical vector from " + (x - ncount) + "," + y + " to " + x + "," + y)
+					EndIf
+					
+'					If queryPix(x, y - 1) And queryPix(x, y + 1) Then ncount = 1
+'					
+'					If ncount &lt; 1 and ncount2 &lt; 1 Then newImgData[index] = 0
+
+				EndIf
+			Next
+		Next
+		Return newImgData
+	End
+	
+	' is a pixel hot pink?
+	Function queryPix(x, y, imgD:Int[] = imgData)
+		'If imgD = Null Then imgD = imgData
+		If x &lt; 0 or y &lt; 0 or x &gt; img.Width + 3 or y &gt; img.Height + 3 Then Return True
+	
+		Local index = y * (img.Width + 4) + x
+		Local pix = imgD[index]
+		Local a = (pix Shr 24) &amp; $ff
+		Local r = (pix Shr 16) &amp; $ff
+		Local g = (pix Shr 8) &amp; $ff
+		Local b = pix &amp; $ff
+		If r = 255 And g = 0 And b = 255 Then Return True
+		Return False
+	End
+	
+	' connect edges into a coherent polygon
+	Function buildHull()
+		hull.Clear
+		If edgePoints = Null Then Return
+		
+		' make a copy of edgePoints so that we can still draw it for debug purposes
+		Local ep2:List&lt;Edge&gt; = New List&lt;Edge&gt;
+		For Local i:Edge = EachIn edgePoints
+			ep2.AddLast(i)
+		Next
+		
+		Local firstStart:Vector = ep2.First.endPoint
+		hull.AddLast(ep2.First.startPoint)
+
+		'DebugLog("Start: " + hull.First.X + "," + hull.First.Y)
+		While ep2.Count &gt; 0
+			Local e:Vector = hull.Last()
+			'DebugLog("End: " + e.X + "," + e.Y)
+			Local all:String = ""
+				Local found:Bool = False
+			For Local link:Edge = EachIn ep2
+				'DebugLog("Checking (" + link.startPoint.X + "," + link.startPoint.Y + ") to (" + link.endPoint.X + "," + link.endPoint.Y + ")")
+				all += "(" + link.startPoint.X + "," + link.startPoint.Y + ") to (" + link.endPoint.X + "," + link.endPoint.Y + ") "
+
+				If link.startPoint.X = link.endPoint.X And link.startPoint.Y = link.endPoint.Y
+					ep2.Remove(link)
+				ElseIf link.startPoint.X = e.X And link.startPoint.Y = e.Y
+					'DebugLog("(" + link.startPoint.X + "," + link.startPoint.Y + ") to (" + link.endPoint.X + "," + link.endPoint.Y + ") " + " matches " + e.X + "," + e.Y)
+					hull.AddLast(link.endPoint)
+					e = hull.Last()
+					found = True
+					ep2.Remove(link)
+					Exit
+				ElseIf link.endPoint.X = e.X And link.endPoint.Y = e.Y
+					'DebugLog("(" + link.startPoint.X + "," + link.startPoint.Y + ") to (" + link.endPoint.X + "," + link.endPoint.Y + ") " + " matches " + e.X + "," + e.Y)
+					hull.AddLast(link.startPoint)
+					found = True
+					e = hull.Last()
+					ep2.Remove(link)
+					Exit
+				EndIf
+			Next
+			If found = False
+				'DebugLog("Failed to find match! " + edgePoints.Count + " left")
+				'DebugLog all
+				' probably because it's off by one because of a convex point. So let's search again for off-by-ones
+				For Local link:Edge = EachIn ep2
+					If (link.startPoint.X = e.X + 1 or link.startPoint.X = e.X - 1 or link.startPoint.X = e.X) And (link.startPoint.Y = e.Y + 1 or link.startPoint.Y = e.Y - 1 or link.startPoint.Y = e.Y)
+						'DebugLog("(" + link.startPoint.X + "," + link.startPoint.Y + ") to (" + link.endPoint.X + "," + link.endPoint.Y + ") " + " matches " + e.X + "," + e.Y)
+						hull.AddLast(link.endPoint)
+						e = hull.Last()
+						found = True
+						ep2.Remove(link)
+						Exit
+					ElseIf(link.endPoint.X = e.X + 1 or link.endPoint.X = e.X - 1 or link.endPoint.X = e.X) And (link.endPoint.Y = e.Y + 1 or link.endPoint.Y = e.Y or link.endPoint.Y = e.Y - 1)
+						'DebugLog("(" + link.startPoint.X + "," + link.startPoint.Y + ") to (" + link.endPoint.X + "," + link.endPoint.Y + ") " + " matches " + e.X + "," + e.Y)
+						hull.AddLast(link.startPoint)
+						found = True
+						e = hull.Last()
+						ep2.Remove(link)
+						Exit
+					EndIf
+				Next
+			EndIf
+			If found = False
+				'DebugLog("BLOOIE! Overly convex.")
+				Exit
+			EndIf
+		Wend
+		'DebugLog("Hull complete: " + hull.Count + " verts.")
+	End
+	
+	' reduce a line of points to fewer points
+	Function DouglasPeucker:Vector[] (pointList:Vector[], epsilon:Float)
+	' implemented as a port from here: <a href="http://karthaus.nl/rdp/" target="_blank">http://karthaus.nl/rdp/</a>
+		Local dmax:Float = 0
+		Local index:Int = -1
+		Local endPoint:Int = pointList.Length - 1
+		
+		If pointList.Length &lt; 3
+			Return pointList
+		EndIf
+		
+		For Local i = 1 Until pointList.Length - 1
+			Local d:Float = findPerpendicularDistance(pointList[i], pointList[0], pointList[endPoint])
+			If (d &gt; dmax)
+				index = i
+				dmax = d
+			EndIf
+		Next
+		
+		Local resultList:Vector[]
+		If (dmax &gt; epsilon)
+			' recurse
+			Local results1:Vector[] = DouglasPeucker(pointList[ .. index + 1], epsilon)
+			Local results2:Vector[] = DouglasPeucker(pointList[index ..], epsilon)
+			
+			' build the results list
+			resultList = Concat(results1, results2)
+			
+		Else
+			resultList =[pointList[0], pointList[endPoint]]
+		EndIf
+		Return resultList
+	End
+	
+	' concatenate these two arrays.
+	Function Concat:Vector[] (arr1:Vector[], arr2:Vector[])
+		Local offset:Int = arr1.Length - 1
+		arr1 = arr1.Resize(offset + arr2.Length)
+		For Local i = 0 Until arr2.Length
+			arr1[i + offset] = arr2[i]
+		Next
+		Return arr1
+	End
+	
+	' find ow far off a point is from a line
+	Function findPerpendicularDistance:Float(p:Vector, p1:Vector, p2:Vector)
+		Local result:Float
+		Local slope:Float
+		Local intercept:Float
+		If (p1.X = p2.X)
+			result = Abs(p.X - p1.X)
+		Else
+			slope = (p2.Y - p1.Y) / (p2.X - p1.X)
+			intercept = p1.Y - (slope * p1.X)
+			result = Abs(slope * p.X - p.Y + intercept) / Sqrt(Pow(slope, 2) + 1)
+		EndIf
+		Return Abs(result)
+	End
+	
+	' convert array back into a List
+	Function arrayToHull(arr:Vector[])
+		hull.Clear
+		For Local v:Vector = EachIn arr
+			' compensate for the 2 pixel border we added at the start
+			v.X -= 2
+			v.Y -= 2
+			
+			hull.AddLast(v)
+		Next
+	End
+	
+End
+
+Class Game Extends App
+
+	Field img:Image[9]
+	Field hull:List&lt;Vector&gt; = New List&lt;Vector&gt;
+	Field theStep = 0
+	Field echange:Bool = False
+	
+	'summary:The OnCreate Method is called when mojo has been initialized and the application has been successfully created.
+	Method OnCreate()
+		img[0] = LoadImage("square.png")
+		img[1] = LoadImage("ball.png")
+		img[2] = LoadImage("hat.png")
+		img[3] = LoadImage("gridbot0.png")
+		img[4] = LoadImage("hamster.png", 8)
+		img[5] = LoadImage("nastygrid.png")
+		img[6] = LoadImage("widget.png")
+		img[7] = LoadImage("island.png")
+		img[8] = LoadImage("alphatest.png")
+		
+		'Set how many times per second the game should update and render itself
+
+		SetUpdateRate(60)
+	
+	End
+	
+	'summary: This method is automatically called when the application's update timer ticks. 
+	Method OnUpdate()
+		If KeyHit(KEY_SPACE)
+			theStep += 1
+			If theStep &gt; img.Length - 1 Then theStep = 0
+			echange = True
+		EndIf
+		
+		If KeyHit(KEY_LEFT)
+			ConcaveHull.epsilon -= 0.05
+			If ConcaveHull.epsilon &lt; 0 Then ConcaveHull.epsilon = 0
+			echange = True
+		EndIf
+		
+		If KeyHit(KEY_RIGHT)
+			ConcaveHull.epsilon += 0.05
+			echange = True
+		EndIf
+	End
+	
+	Method drawEdges()
+		If ConcaveHull.edgePoints = Null
+			SetColor 255, 255, 255
+			DrawText("No edges", 0, 0)
+			Return
+		
+		EndIf
+		If ConcaveHull.edgePoints.Count = 0
+			SetColor 255, 255, 255
+			DrawText("No edges", 0, 0)
+			Return
+		EndIf
+		For Local e:Edge = EachIn ConcaveHull.edgePoints
+			SetColor 0, 0, 255
+			DrawOval(e.endPoint.X * 6, e.endPoint.Y * 6, 5, 5)
+			SetColor 0, 0, 255
+			DrawLine(e.startPoint.X * 6 + 3, e.startPoint.Y * 6 + 3, e.endPoint.X * 6 + 3, e.endPoint.Y * 6 + 3)
+			DrawOval(e.startPoint.X * 6 + 1, e.startPoint.Y * 6 + 1, 3, 3)
+		Next
+	End
+	
+	Method drawHull()
+
+		SetColor 255, 255, 255
+		Local lastX = hull.First.X * 6 + 3
+		Local lastY = hull.First.Y * 6 + 3
+		Local count:Int = 0
+		For Local point:Vector = EachIn hull
+			If count = 0
+				count += 1
+				Continue
+			EndIf
+
+			Local x = point.X * 6 + 3
+			Local y = point.Y * 6 + 3
+			DrawLine lastX, lastY, x, y
+			DrawOval lastX - 3, lastY - 3, 6, 6
+			DrawText(count - 1), lastX, lastY
+			count += 1
+			lastX = x
+			lastY = y
+		Next
+		SetColor 255, 255, 255
+		Local es:String = ConcaveHull.epsilon
+		If es.Length &gt; 4 Then es = es[ .. 4]
+		DrawText(hull.Count + " verts calculated in " + ConcaveHull.elapsed + "ms.", 0, DeviceHeight - 80)
+		DrawText("Epsilon is " + es + ". Tap left and right arrows to change.", 0, DeviceHeight - 60)
+
+	End
+
+	Method drawdirtyHull()
+		If img[theStep] = Null
+			DebugLog("No image")
+			Return
+		EndIf
+		If ConcaveHull.dirtyhull.Count = 0
+			DebugLog("No dirty hull")
+			Return
+		EndIf
+		SetColor 255, 0, 0
+		Local lastX = ConcaveHull.dirtyhull.First.X * 6 + 3
+		Local lastY = ConcaveHull.dirtyhull.First.Y * 6 + 3
+		Local count:Int = 0
+		For Local point:Vector = EachIn ConcaveHull.dirtyhull
+			If count = 0
+				count += 1
+				Continue
+			EndIf
+
+			Local x = point.X * 6 + 3
+			Local y = point.Y * 6 + 3
+			DrawLine lastX, lastY, x, y
+			'DrawOval lastX - 3, lastY - 3, 6, 6
+			count += 1
+			lastX = x
+			lastY = y
+		Next
+		SetColor 255, 255, 255
+		DrawText("Originally " + ConcaveHull.dirtyhull.Count + " verts (red) based on " + ConcaveHull.edgePoints.Count + " disconnected edges (blue).", 0, DeviceHeight - 40)
+		DrawText("Hit SPACE to look at another test case.", 0, DeviceHeight - 20)
+
+	End	
+		
+	'summary: This method is automatically called when the application should render itself, such as when the application first starts, or following an OnUpdate call. 
+	Method OnRender()
+		Cls()
+		
+		If img[theStep] = Null
+			DebugLog("Image is null")
+			Return
+		EndIf
+		If img[theStep] &lt;&gt; Null Then DrawImage(img[theStep], DeviceWidth - img[theStep].Width, 0)
+				
+		If hull.Count = 0 or echange = True
+				hull = concavehullFromImage(img[theStep], 0, ConcaveHull.epsilon)
+				echange = False
+		EndIf
+				
+		DrawImage(img[theStep], 0, 0, 0, 6, 6)
+		drawEdges()
+		drawdirtyHull()
+		drawHull()
+
+	End
+	
+	'summary: This method is called instead of OnRender when the application should render itself, but there are still resources such as images or sounds in the process of being loaded. 
+	Method OnLoading()
+		
+	End
+	
+	'summary: This method is called when the application's device window size changes. 
+	Method OnResize()
+		
+	End
+	
+	'#REGION Code to handle susped status of the game goes here
+	
+	'summary: OnSuspend is called when your application is about to be suspended. 
+	Method OnSuspend()
+	
+	End
+	
+	'summary: OnResume is called when your application is made active again after having been in a suspended state. 
+	Method OnResume()
+		
+	End	
+	'#END REGION
+	
+	'#REGION Code to handle game closing goes here:
+	
+	'summary: This method is called when the application's 'close' button is pressed. 
+	Method OnClose()
+		Super.OnClose()
+	End
+
+	'summary:This method is called when the application's 'back' button is pressed. 
+	Method OnBack()
+		Super.OnBack()
+	End
+	
+	'#END REGION
+
+End
+
+Class Edge
+	Field startPoint:Vector
+	Field endPoint:Vector
+	
+	Method New(s:Vector, e:Vector)
+		startPoint = s
+		endPoint = e
+	End
+End
+</textarea><br><br>You need a vector class. I used this one: <a href="http://www.monkey-x.com/Community/posts.php?topic=568" target="_blank">http://www.monkey-x.com/Community/posts.php?topic=568</a><br><br>This looks like I started to change it slightly from the web demo... but it should be a decent starting point. That said, I never finished it -- it uses color flood fill on the image. <br><br></td></tr></table><br>
+<a name="2089357"></a>
+
+<a name="2089359"></a>
+
+<a name="2089360"></a>
+
+<a name="2089358"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dragon</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> wonderful! <br><br></td></tr></table><br>
+<a name="2089361"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks. I still need to do the floodfill/edgefinding via a method other than using color to mark pixels -- currently it breaks on images with (255,0,255) or (255, 255, 0) on the edges. Small fix though! The hard parts were actually the edge detection/poly welding given extreme concave angles... <br><br></td></tr></table><br>
+<a name="2089373"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >CopperCircle</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looks good, I did something similar awhile back, does it deal with islands? (parts of an image that are not connected to the main image) <br><br></td></tr></table><br>
+<a name="2089396"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Right now the welding algo intentionally throws away the excess edges, but it would be easy to simply start a new poly when it hits that case. But the resulting array won't cleanly plug into other uses, of course. <br><br></td></tr></table><br>
+<a name="2089445"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Supertino</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Now this is handy, I got caught out a while back with poly in Monkey when shapes ( X ) on some targets did look right. <br><br></td></tr></table><br>
+<a name="2105199"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Source code for this project is now in the first post. It does seem to work but I haven't touched it in months. <br><br></td></tr></table><br>
+<a name="2105198"></a>
+
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

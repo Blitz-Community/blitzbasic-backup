@@ -1,0 +1,920 @@
+<!DOCTYPE html><html lang="en" ><head ><title >basiC (just for fun)</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >basiC (just for fun)</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >basiC (just for fun)</a><br><br>
+<a name="1016065"></a>
+
+<a name="1051582"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Something I knocked together in a couple of hours, to see whether it was possible...<br><br><b>EDIT:</b> Download examples and .exe here: <a href="https://sites.google.com/site/nangdongseng/downloads/basiC.rar?attredirects=0&amp;d=1" target="_blank">https://sites.google.com/site/nangdongseng/downloads/basiC.rar?attredirects=0&amp;d=1</a><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Include "BBLex_basiC.bb"
+
+Type SourceCodeFile		;This is a queue of files to convert - "Include" and "Import" add names to this list
+	Field name$
+End Type
+
+Global currentToken,bSource,cSource,cTempMain,cTempFunc,newline$=Chr(13)+Chr(10)
+Global currentFile.SourceCodeFile,indentLevel=-1,arrayDeclarator$,lineNoBank
+
+Graphics 700,300,0,2
+
+EnqueueForConversion("basictest.bc")
+
+Write "Converting... "
+For currentFile=Each SourceCodeFile
+	ConvertSource(currentFile\name)
+Next
+Print "done!"
+
+Print ""
+Print "Press any key to exit..."
+
+WaitKey
+End
+
+
+
+Function ConvertSource(bFile$)
+	Local cFile$,i,c,token,char,lineCount=1
+	
+	cFile=Left(bFile,Len(bFile)-2)+Right(bFile,1)	;This makes the assumption that the basiC file uses the extension .bc or .bh
+	
+	bSource=BBLex_ScanFile(bFile)
+	cSource=WriteFile(cFile)			;Forward declarations
+	cTempMain=WriteFile(cFile+"_tempmain__")	;Main code goes here until everything has been forward declared
+	cTempFunc=WriteFile(cFile+"_tempfunc__")	;Function forward decls go here until types have been forward declared
+	lineNoBank=CreateBank(BankSize(bSource)/2)
+	
+	For i=4 To BankSize(bSource)-4 Step 8	;Force case insensitivity
+		If PeekInt(bSource,i-4)&gt;3	;If it's not a string (leave those) or number (pointless)
+			token=PeekInt(bSource,i)
+			For c=0 To BankSize(token)-1
+				char=PeekByte(token,c)
+				If char&gt;=65 And char&lt;=90	;It's upper case
+					PokeByte token,c,char+32	;Lower it
+				EndIf
+			Next
+		EndIf
+		
+		;Get the line number for the current token
+		PokeInt lineNoBank,(i-4)/2,lineCount
+		If PeekInt(bSource,i-4)=95 Then lineCount=lineCount+1
+	Next
+	
+	OutputStandardHeader
+	
+	ParseBody
+	
+	WriteLine cSource,""
+	CloseFile cTempMain
+	CloseFile cTempFunc
+	
+	cTempFunc=ReadFile(cFile+"_tempfunc__")		;Copy the function delcarations to the output now that types exist
+	While Not Eof(cTempFunc)
+		WriteLine cSource,ReadLine(cTempFunc)
+	Wend
+	CloseFile cTempFunc
+	
+	cTempMain=ReadFile(cFile+"_tempmain__")		;Copy the main code to the output now that functions and types exist
+	While Not Eof(cTempMain)
+		WriteLine cSource,ReadLine(cTempMain)
+	Wend
+	CloseFile cTempMain
+	
+	CloseFile cSource
+	DeleteFile cFile+"_tempfunc__"
+	DeleteFile cFile+"_tempmain__"
+	BBLex_FreeTokenBank bSource
+End Function
+
+Function ParseBody(blockEnd=-1)
+	Local tCount,tType,tStr$,defStr$,iterator$,fFrom$,fTo$,fStep$
+	
+	indentLevel=indentLevel+1
+	tCount=BankSize(bSource)/8
+	
+	While currentToken&lt;tCount
+		tType=BBLex_TokenType(bSource,currentToken)
+		If tType=blockEnd Or ((tType=14 Or tType=15) And blockEnd=18) Or ((tType=8 Or tType=11) And blockEnd=19) Then Exit		;Allow ElseIf and Else to exit where EndIf was requested - same for Case/Default amd End Select
+		
+		Select tType
+			Case 4,5,97		;"Include", "Import", "IncludeC"
+				currentToken=currentToken+1
+				tStr=BBLex_Token(bSource,currentToken)
+				ExpectType 3,"filename"
+				ExpectType 95,"newline"
+				If tType=5		;Add an #include guard
+					defStr=PathToConstant(tStr)
+					WriteLine cTempMain,"#ifndef "+defStr+newline+"#define "+defStr
+				EndIf
+				WriteLine cTempMain,"#include "+Chr(34)+tStr+Chr(34)
+				If tType=5 Then WriteLine cTempMain,"#endif"
+				
+				If tType&lt;&gt;97 Then EnqueueForConversion tStr		;Don't reprocess C headers, but do convert basiC includes
+				
+			Case 9		;"Const"
+				currentToken=currentToken+1
+				ParseVariableDeclaration("const")
+				
+			Case 25		;"For"
+				currentToken=currentToken+1
+				iterator=BBLex_Token(bSource,currentToken)
+				ExpectType 96,"iterator name"
+				ExpectType 69,"="
+				fFrom=GetComponentExpression(46)		;ending in "To"
+				ExpectType 46,"To"
+				fTo=GetComponentExpression(42)			;potentially ending in "Step"
+				If CheckType(42)
+					fStep=BBLex_Token(bSource,currentToken)
+					ExpectType 1,"integer constant"
+				Else
+					fStep="1"
+				EndIf
+				ExpectType 95,"newline"		;Newline
+				
+				If Sgn(Int(fStep))=1
+					WriteLineI cTempMain,"for ("+iterator+" = "+fFrom+" ; "+iterator+" &lt;= "+fTo+" ; "+iterator+" += "+fStep+" ) {"
+				Else
+					WriteLineI cTempMain,"for ("+iterator+" = "+fFrom+" ; "+iterator+" &gt;= "+fTo+" ; "+iterator+" += "+fStep+" ) {"
+				EndIf
+				ParseBody 35
+				ExpectType 35,"Next"
+				ExpectType 95,"newline"
+				WriteLineI cTempMain,"}"
+				
+			Case 26		;"Function"
+				ParseFunction
+				
+			Case 27		;"Global"
+				currentToken=currentToken+1
+				ParseVariableDeclaration("global")
+				
+			Case 29		;"If"
+				currentToken=currentToken+1
+				tStr="if ("+GetComponentExpression(45)+") { "
+				If CheckType(45)	;If there's a Then, this is a single-line expression
+					tStr=tStr+GetComponentExpression(15)+"; }"
+					While CheckType(15)		;"ElseIf"
+						tStr=tStr+" else if ("+GetComponentExpression(45)+") { "
+						ExpectType 45,"Then"
+						tStr=tStr+GetComponentExpression(15)+"; }"
+					Wend
+					If CheckType(14)		;"Else"
+						tStr=tStr+" else { "+GetComponentExpression(95)+"; }"
+						ExpectType 95,"newline"
+					EndIf
+					WriteLineI cTempMain,tStr
+				Else		;If there's no Then, there'd better be newlines or separators
+					ExpectType 95,"newline"
+					WriteLineI cTempMain,tStr
+					ParseBody 18
+					While CheckType(15)		;"ElseIf"
+						tStr=GetComponentExpression(95)
+						ExpectType 95,"newline"
+						WriteLineI cTempMain,"} else if ("+tStr+") {"
+						ParseBody 18
+					Wend
+					If CheckType(14)
+						ExpectType 95,"newline"
+						WriteLineI cTempMain,"} else {"
+						ParseBody 18
+					EndIf
+					ExpectType 18,"EndIf"
+					WriteLineI cTempMain,"}"
+				EndIf
+				
+			Case 32		;"Local"
+				currentToken=currentToken+1
+				ParseVariableDeclaration()		;Declaring local in the outer scope is the same as global, really
+				
+			Case 98		;"Repeat" - originally wanted do/while but not possible in BASIC syntax
+				currentToken=currentToken+1
+				ExpectType 95,"newline"
+				WriteLineI cTempMain,"do {"
+				ParseBody 100
+				If CheckToken("forever")
+					ExpectType 95,"newline"
+					WriteLineI cTempMain,"} while (1);"
+				Else
+					ExpectToken "until","until"
+					tStr=GetComponentExpression(95)
+					ExpectType 95,"newline
+					WriteLineI cTempMain,"} while (!("+tStr+"));"
+				EndIf
+				
+			Case 39		;"Select"
+				ParseSelect
+				
+			Case 43		;"Static"
+				currentToken=currentToken+1
+				ParseVariableDeclaration("static")
+				
+			Case 48		;"Type"
+				ParseType
+				
+			Case 50		;"While"
+				currentToken=currentToken+1
+				tStr=GetComponentExpression(95)
+				ExpectType 95,"newline"
+				
+				WriteLineI cTempMain,"while ("+tStr+") {"
+				ParseBody 49
+				ExpectType 49,"Wend"
+				ExpectType 95,"newline"
+				WriteLineI cTempMain,"}"
+				
+			Case 81		;"." - Goto label
+				currentToken=currentToken+1
+				tStr=BBLex_Token(bSource,currentToken)
+				ExpectType 96,"label identifier"
+				ExpectType 95,"newline"
+				WriteLineI cTempMain,tStr+":"
+				
+			Case 95		;Empty line
+				WriteShort cTempMain,$A0D
+				currentToken=currentToken+1
+				
+			Default
+				tStr=GetComponentExpression(95)
+				ExpectType 95,"newline"
+				WriteLineI cTempMain,tStr+";"
+				
+		End Select
+	Wend
+	
+	indentLevel=indentLevel-1
+End Function
+
+Function GetComponentExpression$(breakID)
+	Local cExpression$,tType=BBLex_TokenType(bSource,currentToken)
+	
+	Repeat
+		tType=BBLex_TokenType(bSource,currentToken)
+		
+		If tType=94
+			PokeInt bSource,currentToken*8,95	;Replace colon with newline - that's pretty much what it is
+			tType=95
+		EndIf
+		If tType=95 Or tType=breakID Or (tType=14 And breakID=15) Then Exit		;Allow "Else" to exit where "ElseIf" is requested
+		
+		cExpression=cExpression+" "+ReplaceOperator(BBLex_TokenType(bSource,currentToken))
+		currentToken=currentToken+1
+	Forever
+	
+	Return Trim(cExpression)
+End Function
+
+Function ReplaceOperator$(bOp)		;Replace BASIC-only operators or commands with C equivalents
+	Local cOperator$,tName$
+	
+	Select bOp
+		Case 6		;"And"
+			cOperator="&amp;"
+		Case 16		;"End"
+			cOperator="exit(EXIT_SUCCESS)"
+		Case 21		;"Exit"
+			cOperator="break"
+		Case 22		;"False"
+			cOperator="0"
+		Case 33		;"Mod"
+			cOperator="%"
+		Case 34		;"New"
+			currentToken=currentToken+1
+			ExpectType 63,"type expression"		;Open parenthesis
+			tName=BBLex_Token(bSource,currentToken)
+			ExpectType 96,"type identifier"
+			ExpectType 64,"type expression"		;Close parenthesis
+			cOperator="new(sizeof(struct "+tName+"_s))"
+			currentToken=currentToken-1		;Set this back so the flow isn't disrupted
+		Case 36		;"Not"
+			cOperator="!"
+		Case 37		;"Null"
+			cOperator="NULL"
+		Case 38		;"Or"
+			cOperator="|"
+		Case 40		;"Shl"
+			cOperator="&lt;&lt;"
+		Case 41		;"Shr"
+			cOperator="&gt;&gt;"
+		Case 47		;"True"
+			cOperator="1"
+		Case 52		;"Xor"
+			cOperator="^"
+		Case 54		;=&lt;
+			cOperator="&lt;="
+		Case 56		;=&gt;
+			cOperator="&gt;="
+		Case 59		;&lt;&gt;
+			cOperator="!="
+		Case 81		;. (Member access)
+			cOperator="-&gt;"
+		Default
+			cOperator=BBLex_Token(bSource,currentToken)
+	End Select
+	
+	Return cOperator
+End Function
+
+Function WriteLineI(stream,chars$)
+	WriteLine stream,String(Chr(9),indentLevel)+chars
+End Function
+
+Function ParseType()
+	Local typeName$
+	
+	currentToken=currentToken+1
+	typeName=BBLex_Token(bSource,currentToken)
+	ExpectType 96,"type name"
+	
+	WriteLine cSource,"struct "+typeName+"_s; typedef struct "+typeName+"_s * "+typeName+";"	;Forward declaration
+	
+	WriteLine cTempMain,"struct "+typeName+"_s {"
+	
+	indentLevel=indentLevel+1
+	While Not CheckType(20)		;"End Type"
+		Select BBLex_TokenType(bSource,currentToken)
+			Case 95		;Newline
+				currentToken=currentToken+1
+			Case 23		;"Field"
+				currentToken=currentToken+1
+				ParseVariableDeclaration "field"
+			Default
+				ThrowError "Expecting field definition"
+		End Select
+	Wend
+	indentLevel=indentLevel-1
+	
+	WriteLine cTempMain,"};"
+End Function
+
+Function ParseVariableDeclaration(modifier$="")
+	Local varName$,varType$,stream,initialiser$="",isVar=True
+	
+	If modifier="global" Or modifier="const"	;Declare globals in outer scope
+		stream=cTempFunc
+		If modifier="global" Then modifier=""
+	Else
+		If modifier="field" Then isVar=False:modifier=""
+		stream=cTempMain
+	EndIf
+	
+	If Len(modifier)
+		If Right(modifier,1)&lt;&gt;" " Then modifier=modifier+" "
+	EndIf
+	
+	Repeat
+		varName=BBLex_Token(bSource,currentToken)
+		ExpectType 96,"identifier"
+		
+		varType=GetDataType()
+		If isVar And (arrayDeclarator="")	;Don't attempt to initialise fields
+			If varType="int" Or varType="float"
+				initialiser=" = 0"
+			Else
+				initialiser=" = NULL"
+			EndIf
+		EndIf
+		If CheckType(69)		;If an initialiser is given, use that
+			initialiser=" = "+GetComponentExpression(60)
+		ElseIf Right(arrayDeclarator,1)=")"
+			If CheckType(55) Then initialiser=" = "+GetComponentExpression(60)	;It's possible for &gt; and = to be misread as &gt;= - can't be bothered to fix
+		EndIf
+		
+		WriteLineI stream,modifier+varType+" "+varName+arrayDeclarator+initialiser+";"
+		
+		If Not CheckType(60) Then ExpectType 95,"newline":Exit
+	Forever
+End Function
+
+Function ParseSelect()
+	Local tStr$
+	
+	currentToken=currentToken+1
+	tStr=GetComponentExpression(95)
+	ExpectType 95,"newline"
+	WriteLineI cTempMain,"switch ("+tStr+") {"
+	indentLevel=indentLevel+1
+	
+	While Not CheckType(19)
+		Select BBLex_TokenType(bSource,currentToken)
+			Case 95		;Newline
+				currentToken=currentToken+1
+			Case 8		;"Case"
+				currentToken=currentToken+1
+				
+				tStr=GetComponentExpression(60)
+				While CheckType(60)
+					WriteLineI cTempMain,"case "+tStr+":"
+					tStr=GetComponentExpression(60)
+				Wend
+				ExpectType 95,"newline"
+				WriteLineI cTempMain,"case "+tStr+":"
+				ParseBody(19)
+				WriteLineI cTempMain,Chr(9)+"break;"
+				
+			Case 11		;"Default"
+				currentToken=currentToken+1
+				ExpectType 95,"newline"
+				WriteLineI cTempMain,"default:"
+				ParseBody(19)
+				WriteLineI cTempMain,Chr(9)+"break;"
+				
+			Default
+				ThrowError "Expecting case definition"
+		End Select
+	Wend
+	
+	indentLevel=indentLevel-1
+	WriteLineI cTempMain,"}"
+End Function
+
+Function ParseFunction()
+	Local funcName$,funcType$,fptrType$
+	
+	currentToken=currentToken+1
+	funcName=BBLex_Token(bSource,currentToken)
+	ExpectType 96,"function name"
+	
+	funcType=GetDataType()
+	fptrType=arrayDeclarator	;Second return value - can't be an array declarator but it can be function pointer info
+	
+	ExpectType 63,"function parameters"
+	funcName=funcType+" "+funcName+GetArgList()+fptrType
+	
+	WriteLine cTempFunc,funcName+";"
+	WriteLine cTempMain,funcName+" {"
+	ExpectType 95,"newline"
+	
+	ParseBody 17
+	
+	ExpectType 17,"end of function"
+	WriteLine cTempMain,"}"+newline
+End Function
+
+Function GetDataType$(waiveColon=False)
+	Local dataType$,arrayDec$,fptrDec$
+	
+	dataType="int"
+	If CheckType(91)
+		dataType="int"
+	ElseIf CheckType(92)
+		dataType="float"
+	ElseIf CheckType(93)
+		dataType="char *"
+	ElseIf CheckType(94) Or waiveColon
+		dataType=BBLex_Token(bSource,currentToken)
+		If dataType="string"
+			dataType="char *"
+		ElseIf dataType&lt;&gt;"int" And dataType&lt;&gt;"float" And dataType&lt;&gt;"void"	;I won't stop you declaring variables as void, but GCC will
+			ExpectType 96,"type name"
+		Else
+			currentToken=currentToken+1
+		EndIf
+	EndIf
+	
+	While BBLex_TokenType(bSource,currentToken)=77 Or BBLex_TokenType(bSource,currentToken)=82
+		If CheckType(77)	;"[" - it's an array
+			arrayDec=arrayDec+"["+GetComponentExpression(78)+"]"
+			ExpectType 78,"]"
+		EndIf
+		
+		If CheckType(82)		;"&lt;" - function pointer syntax
+			dataType=dataType+"(*"
+			fptrDec=")"+ParseFunctionPointerDeclaration()+fptrDec
+		EndIf
+	Wend
+	
+	arrayDeclarator=arrayDec+fptrDec	;Cheating - multiple return values
+	Return dataType
+End Function
+
+Function ParseFunctionPointerDeclaration$()
+	Local fpType$="("
+	
+	If CheckType(51)	;"Void"
+		ExpectType 83,"function pointer argument type list"
+		Return "(void)"
+	ElseIf CheckType(83)	;"&lt;&gt;" - void as well
+		Return "(void)"
+	EndIf
+	
+	Repeat
+		fpType=fpType+GetDataType(True)
+		If BBLex_TokenType(bSource,currentToken)=60 Then fpType=fpType+", "
+	Until Not CheckType(60)
+	If BBLex_TokenType(bSource,currentToken)&lt;&gt;55	;Parse error: &gt;= will be detected if there is no space before initialiser
+		ExpectType 83,"function pointer argument type list"
+	EndIf
+	fpType=fpType+")"
+	
+	Return fpType
+End Function
+
+Function GetArgList$()
+	Local argList$,argName$,argType$
+	
+	argList="("
+	If CheckType(51)
+		ExpectType 64,"end of parameter list"
+		argList=argList+"void)"
+	ElseIf CheckType(64)
+		argList=argList+"void)"
+	Else
+		Repeat
+			argName=BBLex_Token(bSource,currentToken)
+			currentToken=currentToken+1
+			argType=GetDataType()
+			argList=argList+argType+" "+argName+arrayDeclarator
+			
+			If Not CheckType(60) Then ExpectType 64,"end of parameter list":Exit
+			argList=argList+", "
+		Forever
+		argList=argList+")"
+	EndIf
+	
+	Return argList
+End Function
+
+Function ExpectType(typeID,typeName$)
+	If BBLex_TokenType(bSource,currentToken)&lt;&gt;typeID Then ThrowError "Expecting "+typeName
+	currentToken=currentToken+1
+End Function
+
+Function CheckType(typeID)
+	If BBLex_TokenType(bSource,currentToken)=typeID
+		currentToken=currentToken+1
+		Return True
+	Else
+		Return False
+	EndIf
+End Function
+
+Function ExpectToken(tok$,typeName$)
+	If Lower(BBLex_Token(bSource,currentToken))&lt;&gt;tok Then ThrowError "Expecting "+typeName
+	currentToken=currentToken+1
+End Function
+
+Function CheckToken(tok$)
+	If Lower(BBLex_Token(bSource,currentToken))=tok
+		currentToken=currentToken+1
+		Return True
+	Else
+		Return False
+	EndIf
+End Function
+
+Function ThrowError(err$)
+	Print "Error in "+currentFile\name+", line "+PeekInt(lineNoBank,currentToken*4)+": "+err
+	Print ""
+	Print "Conversion failed! Press any key to exit..."
+	WaitKey
+	End
+End Function
+
+Function OutputStandardHeader()		;Necessary C functions and types etc.
+	
+	;Credits tag
+	WriteLine cSource,newline+"/*"+newline+"   Converted from BASIC syntax using basiC: http://www.blitzbasic.com/Community/posts.php?topic=89467"+newline+"*/"+newline
+	
+	;stdlib.h (needed for malloc(), NULL etc.), stdio.h (needed for stderr)
+	WriteLine cSource,"#include &lt;stdlib.h&gt;"+newline+"#include &lt;stdio.h&gt;"+newline
+	
+	;The "new" function
+	WriteLine cSource,"void * new(int size)"+newline+"{"
+	WriteLine cSource,Chr(9)+"void * newObj;"
+	WriteLine cSource,Chr(9)+"if ((newObj = calloc(1, size)) == NULL) {"
+	WriteLine cSource,Chr(9)+Chr(9)+"fprintf(stderr, "+Chr(34)+"Unable to allocate memory!"+Chr(34)+");"
+	WriteLine cSource,Chr(9)+Chr(9)+"exit(EXIT_FAILURE);"+newline+Chr(9)+"}"
+	WriteLine cSource,Chr(9)+"return newObj;"+newline+"}"+newline
+	
+	;The "delete" macro
+	WriteLine cSource,"#define delete(obj) { free(obj); obj = NULL; }"+newline
+End Function
+
+Function PathToConstant$(path$)		;Creates a string usable as a constant from a file path
+	Local newPath$,c,char
+	
+	newPath="_"
+	path=Upper(path)
+	
+	For c=1 To Len(path)
+		char=Asc(Mid(path,c,1))
+		If char&gt;90 Or char&lt;48 Or (char&gt;57 And char&lt;65) Then char=95
+		newPath=newPath+Chr(char)
+	Next
+	
+	Return newPath
+End Function
+
+Function EnqueueForConversion(includedFile$)
+	Local inc.SourceCodeFile
+	inc=New SourceCodeFile
+	inc\name=includedFile
+End Function
+
+</textarea><br><br>The Included file "BBLex_basiC.bb" is <a href="/codearcs.php?code=2636" target="_blank">an automatically-generated lexer</a> from the following lexer template:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+;BASIC-syntax for C: Lexer
+;=========================
+
+Case Insensitive
+
+Constants: {
+	
+}
+
+Modes: {
+	Comment Exclusive
+	InString Exclusive
+}
+
+Rules: {
+
+	;Comments - comments have to store newlines as newlines are important in BASIC syntax (and for line counting)
+	rem Mode &lt;Comment&gt;
+	&lt;Comment&gt; \n Store 95
+	&lt;Comment&gt; end[:blank:]*rem Mode &lt;&gt;
+	\;[^\n]*\n Store 95
+	
+	;Values
+	[0-9]+ {	StoreNumericToken tBank,1,token
+		}
+	0[xX][0-9a-fA-F]+ {	BBLex_StoreToken tBank,1,HexToDec(token)
+		}
+	[0-9]*\.[0-9]+([eE]-?[0-9]+)? {	StoreNumericToken tBank,2,token
+		}
+	" Mode &lt;InString&gt;
+	&lt;InString&gt; [^\n"]* { BBLex_StoreToken tBank,3,Chr(34)+token+Chr(34)
+		}
+	&lt;InString&gt; \n|" Mode &lt;&gt;
+	
+	;Preprocessing
+	include Store 4
+	import Store 5
+	includec Store 97
+	
+	;Keywords
+	and Store 6
+	break Store 7
+	case Store 8
+	const Store 9
+	continue Store 10
+	default Store 11
+	delete Store 12
+;	do Store 13
+	else Store 14
+	else[:blank:]*if Store 15
+	end Store 16
+	end[:blank:]*function Store 17
+	end[:blank:]*if Store 18
+	end[:blank:]*select Store 19
+	end[:blank:]*type Store 20
+	exit Store 21
+	false Store 22
+	field Store 23
+	float Store 24
+	for Store 25
+	function Store 26
+	global Store 27
+	goto Store 28
+	if Store 29
+	int Store 30
+;	integer Store 31
+	local Store 32
+	mod Store 33
+	new Store 34
+	next Store 35
+	not Store 36
+	null Store 37
+	or Store 38
+	select Store 39
+	shl Store 40
+	shr Store 41
+	step Store 42
+	static Store 43
+	string Store 44
+	then Store 45
+	to Store 46
+	true Store 47
+	type Store 48
+	wend Store 49
+	while Store 50
+	void Store 51
+	xor Store 52
+	;Added later - until and forever are intentionally the same
+	repeat Store 98
+	forever Store 100
+	until Store 100
+	return Store 101
+	' Store 102
+	\*= Store 103
+	
+	;Punctuation
+	\&lt;= Store 53
+	=&lt; Store 54
+	&gt;= Store 55
+	=&gt; Store 56
+	== Store 57
+	!= Store 58
+	\&lt;\&gt; Store 59
+	, Store 60
+	\* Store 61
+	/ Store 62
+	\( Store 63
+	\) Store 64
+	- Store 65
+	-- Store 66
+	\+ Store 67
+	\+\+ Store 68
+	= Store 69
+	\+= Store 70
+	-= Store 71
+	/= Store 72
+	\|= Store 73
+	&amp;= Store 74
+	\&lt;\&lt;= Store 75
+	\&gt;\&gt;= Store 76
+	\[ Store 77
+	\] Store 78
+	\{ Store 79
+	\} Store 80
+	\. Store 81
+	\&lt; Store 82
+	\&gt; Store 83
+	\&lt;\&lt; Store 84
+	\&gt;\&gt; Store 85
+	&amp;&amp; Store 86
+	&amp; Store 87
+	\|\| Store 88
+	\| Store 89
+	\^ Store 90
+	% Store 91
+	# Store 92
+	\$ Store 93
+	: Store 94
+	\n Store 95
+	
+	;Identifiers
+	[a-zA-Z_][a-zA-Z0-9_]* Store 96
+}
+
+Code: {
+	;If the previous token was a minus, check if it was subtraction or negation and store appropriately
+	Function StoreNumericToken(tBank,numType,token$)
+		Local i
+		If BankSize(tBank)
+			If BBLex_TokenType(tBank,(BankSize(tBank)/8)-1)=65
+				If BankSize(tBank)&gt;8
+					If TokenSubtractible(BBLex_TokenType(tBank,(BankSize(tBank)/8)-2))=False
+						RemoveLastToken(tBank)
+						token="-"+token
+					EndIf
+				Else
+					RemoveLastToken(tBank)
+					token="-"+token
+				EndIf
+			EndIf
+		EndIf
+		BBLex_StoreToken tBank,numType,token
+	End Function
+
+	;Removes the last token from the given token bank
+	Function RemoveLastToken(tBank)
+		Local i
+		For i=0 To BankSize(tBank)/8-1
+			If PeekInt(tBank,BankSize(tBank)-8)=BBLex_TokenType(tBank,i) Then Exit
+		Next
+		If i=BankSize(tBank)/8 Then FreeBank PeekInt(tBank,BankSize(tBank)-4)
+		ResizeBank tBank,BankSize(tBank)-8
+	End Function
+
+	;Take a token type and see if it's an operator or a term
+	Function TokenSubtractible(tokenType)
+		If tokenType&lt;3 Or tokenType=64 Or tokenType=78 Or tokenType=96
+			Return True
+		Else
+			Return False
+		EndIf
+	End Function
+	
+	;Convert a hexadecimal number to decimal
+	Function HexToDec(hNum$)
+		Local rVal,i,o,aChr
+		hNum=Mid(hNum,2)	;Remove the "$"
+		o=1
+		For i=Len(hNum) to 1 step -1
+			aChr=Asc(Mid(hNum,i,1))
+			If aChr&gt;=49 And aChr&lt;=57
+				rVal=rVal+(aChr-48)*o
+			ElseIf aChr&gt;=65 And aChr&lt;=70
+				rVal=rVal+(aChr-55)*o
+			ElseIf aChr&gt;=97 And aChr&lt;=102
+				rVal=rVal+(aChr-87)*o
+			EndIf
+			o=o*16
+		Next
+		Return rVal
+	End Function
+}
+</textarea><br><br>The end result, when you plug it all together, is a really tiny "translator" that converts a cut-down BASIC-like syntax into standard C, to compile with GCC or a compiler of your choice!<br><br>Syntax is largely based on Blitz3D, with a few alterations:<br><br> - type field access is with . rather than \<br><br> - variable and function type names are separated with : rather than . (you can still use %, #, $ as well)<br><br> - All local variables MUST be declared before use (this is because C is superstrict by nature). Functions, types, and global variables can be declared anywhere within a source file (although this won't magically carry across Includes, so you need to Include the file with the definitions above any uses of the identifiers). In both cases, specifying a type is optional; if you don't, Int will be assumed. You can also specify functions as void.<br><br> - available types are the same as Blitz3D - int, float, string (well, char*), and pointers to type objects. You can't declare pointers to basic types, or create literal structs. There are also function pointers (see below).<br><br> - there is no "body code" - you must have a function named "main", as per normal C code (and it should ideally have the argc, argv parameters, or be void, unlike in the example below).<br><br> - there are no "commands" (functions that return no value, and act as a statement eg. MoveEntity). All functions, even of type void, MUST have parentheses around the arguments. Sorry. This also goes for New() and Delete().<br><br> - ":" is a line separator (only available in function body). The main difference this causes from Blitz3D is that : serves the same role as an end-of-line; unlike in Blitz3D where you can stack multiple statements on the same line after an If/Then, to do that here you'd need to drop the Then and add an EndIf at the end.<br><br> - Select/Case isn't as flexible; Case values must be numeric constants (as is true for C's switch/case).<br><br> - You can optionally declare local variables as "static" instead of "local" - this means their value will persist between function calls. (You can also declare Globals inside functions and Locals in the outer scope... I would just ignore this "feature").<br><br> - No Dim() command, so you're limited to square-bracket arrays (how flexible these are depends on your C compiler). Arrays are not necessarily initialised to zero (although single variables and type objects are zeroed like in Blitz3D).<br><br> - No banks, although recreating them would be pretty easy for the interested reader.<br><br> - Types are "plain" objects and aren't added to any kind of global list; also, the B3D type list commands aren't included, so don't let them fall out of scope! Delete() sets the given variable to Null, but unlike in B3D, not other variables referencing the same object, so beware.<br><br> - You can use "continue" as well as "exit" and "break". "Stop" is a Blitz debugger feature so obviously isn't included.<br><br> - ALL OPERATORS ARE C OPERATORS! Important: <b>this means = for assignment, == for comparison!</b> BASIC operators &lt;&gt;, Mod, Shr, Shl, And, Or, Xor, Not are all included as well, however. Note that And and Or are bitwise (same as in Blitz3D). ^ is the C Xor operator; % (as Mod) is not available because we need it for the int type sigil. You can also use C's compound assignment operators (+= etc.). Some C operators may fail if given the wrong type (eg. trying to give Mod a float) - you can use casts the same way you would in plain C.<br><br> - No string functions! The "$" or ":string" datatype is just a char *. Since string manipulation is BASIC's original big draw, this is a major omission, but oh well, too bad. String libraries are plentiful enough.<br><br> - Include is available, but as mentioned above, names declared in included files won't be recognised *above* the line the file is included on. Joining it are Import, which does the same thing but only includes a file once, and IncludeC, which lets you include C code directly.<br><br> - Function pointers are available, with the syntax: Local fptr1:int&lt;int,float&gt; , or: Local fptr4:int&lt;int,float&gt;&lt;int&gt; (that's a function pointer that returns a function pointer like the first).<br><br>I really don't expect anyone to use this for anything (I know I won't), but it was great fun to experiment! Sadly the code is waaaay too messy to be of much educational use...<br><br>Here's an example program (successfully tested with GCC):<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+;This is a comment
+
+Type myType
+	Field a,b#
+	Field c$[10]
+	Field d:myType
+End Type
+
+Global a1,b2#
+Global c3$[5]
+
+Function main:void(a,b#[30],c$)
+	Local dog, cat=3, fish#,i, t, face
+	Local mica:myType
+	
+	Local fptr1:int&lt;int,float&gt;
+	Local fptr3:int&lt;int,float&gt;[5]
+	Local fptr4:int&lt;int,float&gt;&lt;int&gt;
+	
+	fptr4=fptest2
+	fptr1=fptr4(6)
+	face=fptr1(6,7.5)
+	
+	mica = new(myType)
+	mica.a=dog
+	mica.c[mica.a] = c
+	delete(mica)
+	
+	While i&lt;&gt;0
+		For i=1 To 9
+			Something()
+			dog = cat + fish
+			fish++
+			cat = i Mod (int)fish Shl dog + 1
+		Next
+		Repeat
+			fptr1(6,7.5)
+		Forever
+	Wend
+	
+	If i&lt;(t And 56)
+		;
+	ElseIf i&gt;t
+		;
+	Else
+		;
+	Endif
+	
+	Select something()+4
+		Case 1
+			;
+		Case 2
+			;
+		Case 3,4,5
+			;
+		Default
+			;
+	End Select
+	
+	If face == 34 Then something()
+	
+	For i=1 To -112 Step -4
+		Repeat
+			cat++
+		Until i&lt;10
+	Next
+End Function
+
+rem
+Just testing the block comments...
+end rem
+
+Function something()	;...whatever. Comment doesn't interfere with line endings
+	Return 5
+EndFunction
+
+Function fpTest1(i,f#)
+	Return 4
+End		Function
+
+Rem
+Function notIncluded()
+	This isn't valid syntax, but it's OK because this IS a block comment
+End Function
+EndRem
+
+Function fpTest2:int&lt;int,float&gt;(i)
+	Local ptr:int&lt;int,float&gt;=fptest1
+	Return ptr
+End Function
+</textarea><br><br><font class="tiny">Last edited 2010</font> <br><br></td></tr></table><br>
+<a name="1016091"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >puki</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> This looks interesting. <br><br></td></tr></table><br>
+<a name="1016110"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jiffy</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cool. <br><br></td></tr></table><br>
+<a name="1055044"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >slenkar</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> what does this do?<br><br>Local fptr4:int&lt;int,float&gt;&lt;int&gt; <br><br></td></tr></table><br>
+<a name="1055047"></a>
+
+<a name="1055048"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>Local fptr4:int&lt;int,float&gt;&lt;int&gt;</pre><br><br>Assuming this code works as intended (well, it does for this because this was in the successful test) -<br><br>Declares the variable "fptr4" as a pointer to a function, which accepts one int as its parameter and returns a pointer to a function, which in turn accepts an int and a float and returns an int.<br><br>It is translated to this C declaration:<br><pre class=code>int(*(* fptr4)(int))(int, float);</pre><br>...which I believe is enough justification by itself for anyone to want a different function pointer syntax.<br><br>The angle-brackets are used for function pointer parameter types because C doesn't have generics (actually C1X will have generics, of a sort, but not using angle brackets), so I thought it would help alleviate the confusion when declaring actual functions that accept or return function pointers. Pointers are called the same way as declared functions - with parentheses.<br><br>In hindsight actually I think the biggest problem was trying to force function pointers to look like BlitzMax - if it weren't that compatibility with Blitz was important on these forums, I would actually have gone for something like Pascal or Go with the return type/value <i>after</i> the parameters - clearer and easier to parse. Or even something like SPECS for C++ ( <a href="http://en.wikipedia.org/wiki/Significantly_Prettier_and_Easier_C%2B%2B_Syntax" target="_blank">http://en.wikipedia.org/wiki/Significantly_Prettier_and_Easier_C%2B%2B_Syntax</a> ), which is lovely to look at but takes forever to type out.<br><br><font class="tiny">Last edited 2010</font> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,90 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Does Bah.Magick has a memory leak?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Does Bah.Magick has a memory leak?</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=124" >Brucey's Modules</a>/<a href="#bottom" >Does Bah.Magick has a memory leak?</a><br><br>
+<a name="1294479"></a>
+
+<a name="1294480"></a>
+
+<a name="1294481"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is the code I'm using to convert several images - I load the image with LoadMagickImage and pass the resulting TMImage into this function:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Function convertFromImage(cimg:TMImage, size:String, fileOut:String)
+	Local img:TMImage = cimg.Copy()
+	If img Then
+		img.zoom(size)
+		img.WriteFile(fileOut)
+	Else
+		Notify("Error loading image!")
+		Return
+	End If	
+	img = Null
+	GCCollect()
+ 	curFile = curFile + 1
+End Function
+</textarea><br><br>This is taking loads of memory, and never going down. Ran the program 3 times in a row, and got myself over 1GB of memory consumption. You can see I even tried adding a GCCollect in the function hoping it would take the memory leak down.<br><br>Then, I just added a "img.zoom("1x1")" after img.WriteFile.<br>Memory consumption went WAY LOWER. There is still a memory leak, but it never reaches even 50mb!<br><br>Is this something to do with Blitzmax GC? Or is it a leak in Bah.Magick itself? <br><br></td></tr></table><br>
+<a name="1294492"></a>
+
+<a name="1294494"></a>
+
+<a name="1294508"></a>
+
+<a name="1294509"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Added to common.bmx:<br><pre class=code>
+	Function bmx_magick_image_free(img:Byte Ptr
+</pre><br>Added to glue.cpp:<br><pre class=code>
+	void bmx_magick_image_free(MaxMImage * img);
+</pre><br>and later:<br><pre class=code>
+void bmx_magick_image_free(MaxMImage * img) {
+	delete img;
+}
+</pre><br><br>And on magick.bmx / TImage class<br><pre class=code>
+	Method free()
+		If imagePtr Then 
+			bmx_magick_image_free(imagePtr)
+			imagePtr = Null
+		End If
+	End Method
+</pre><br><br>Now I don't need the img.zoom("1x1") - I'm getting even better results by calling image.free()<br><br>But there is still some memory footprint - my app still gains around 0.7Mb each time I convert a bunch of images :P <br><br></td></tr></table><br>
+<a name="1294566"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here is a small sample showing the  memory leak:<br><pre class=code>
+Framework BRL.glmax2d
+Import bah.magick
+
+Graphics 800,600,0
+
+While Not KeyHit(KEY_SPACE)
+	Cls
+	DrawText "PRESS SPACE TO START",10,10
+	Flip
+Wend
+
+Cls
+Flip
+
+For Local f:Int = 0 To 100
+ 	Local img:TMImage = New TMImage
+ 	img = LoadMagickImage("icongames.png")
+ 	img = Null
+	GCCollect
+	Delay 100
+Next
+
+While Not KeyHit(KEY_ESCAPE)
+	Cls
+	DrawText "PRESS ESC TO CLOSE",10,10
+	Flip
+Wend
+</pre><br><br>With this, the program compiled starts with 33.3Mb in memory. After the 101 images loaded, it takes 42.2mb.<br><br>I then added a img.free() before the img = null in the code above, and re-ran the test. Result: 34.1mb after loading images.<br><br>So, I am still missing something that should be released from TMImage - or something somewhere else, I'm not entirely sure. But it is obvious that there is a memory leak somewhere :/ <br><br></td></tr></table><br>
+<a name="1294571"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> I did not dig in the code, but they have a "***cacheTreshold"-Function - maybe it does not get rid of that cache ?<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1294583"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Trying to set bmx_magick_image_cachethreshold() to any value gives me an access violation :( <br><br></td></tr></table><br>
+<a name="1294584"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yikes! Things are much worse than I tought. I converted my test image to BMP, and the memory consumption went to almost 100mb in the test above - even with my img.free() :( <br><br></td></tr></table><br>
+<a name="1294585"></a>
+
+<a name="1294586"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> (While on my way to create an issue on github I just saw, that Brucey was aware of this thread...)<br><br>Brucey just commited some changes to "bah.mod/magick.mod".<br><a href="https://github.com/maxmods/bah.mod" target="_blank">https://github.com/maxmods/bah.mod</a><br><br>Next to your change he also removes "blob"-data.<br><br><br>Maybe this solves your issue?<br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1294596"></a>
+
+<a name="1294597"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes! Brucey is the man :)<br><br>I don't know what kind of magic (heh) he did, but I can confirm it has zero leak now :) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

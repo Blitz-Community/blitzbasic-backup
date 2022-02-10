@@ -1,0 +1,1010 @@
+<!DOCTYPE html><html lang="en" ><head ><title >FBO Shader + Multiple Render Targets Example</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >FBO Shader + Multiple Render Targets Example</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=103" >OpenGL Module</a>/<a href="#bottom" >FBO Shader + Multiple Render Targets Example</a><br><br>
+<a name="1092992"></a>
+
+<a name="1092993"></a>
+
+<a name="1092994"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >tesuji</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> With help from this <a href="/posts.php?topic=85608" target="_blank">thread</a>, I've managed to get a basic working example of a FBO rendering to multiple targets using GLSL shaders gl_Fragdata[n] output as described in this  <a href="http://www.gamedev.net/page/resources/_/reference/programming/opengl/opengl-frame-buffer-object-201-r2333" target="_blank">article</a>.<br><br>Hopefully this technique is a step towards implementing <a href="http://http.developer.nvidia.com/GPUGems/gpugems_ch38.html" target="_blank">http://http.developer.nvidia.com/GPUGems/gpugems_ch38.html</a> (once I can get my head round the maths).<br>Storing extra state in the additional textures allows for a whole load of GPU based opportunities (outside of OpenCL). <br>Given how finickity it was to get working with Max2D, thought I'd share the output.<br><br>FBO example<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+Import "glsl.bmx"
+
+'-----------------------------------------------
+' FBO + Shader + Multiple Render Targets Example
+' Uses a single FBO with 4 attached color buffers for render to texture
+' See <a href="http://www.gamedev.net/page/resources/_/reference/programming/opengl/opengl-frame-buffer-object-201-r2333" target="_blank">http://www.gamedev.net/page/resources/_/reference/programming/opengl/opengl-frame-buffer-object-201-r2333</a>
+' Press &lt;right&gt; to view separate textures
+
+SetGraphicsDriver GLMax2DDriver()
+Graphics 1024,768,32,0
+glewInit()
+
+' create a FBO with 4 textures attached. The 4 additional textures are swapped in on alternate frames to avoid corruption
+Local size:Int = 512
+
+Local image0:TImage = CreateImage(size,size)
+Local image1:TImage = CreateImage(size,size)
+Local image2:TImage = CreateImage(size,size)
+Local image3:TImage = CreateImage(size,size)
+
+Local flipimage0:TImage = CreateImage(size,size)
+Local flipimage1:TImage = CreateImage(size,size)
+Local flipimage2:TImage = CreateImage(size,size)
+Local flipimage3:TImage = CreateImage(size,size)
+
+Local fbo:TFboDoubleBuffer = New TFboDoubleBuffer.Create([image0,image1,image2,image3],[flipimage0,flipimage1,flipimage2,flipimage3])
+
+' compile shaders
+Local vertexShader:String = ..
+"void main()                                                                       ~n"+..
+"{                                                                                 ~n"+..
+"       // Passing The Texture Coordinate Of Texture Unit 0 To The Fragment Shader ~n"+..
+"        gl_TexCoord[0] = gl_MultiTexCoord0;                                       ~n"+..
+"                                                                                  ~n"+..
+"       // Transforming The Vertex                                                 ~n"+..
+"       gl_Position = ftransform();                                                ~n"+..
+"                                                                                  ~n"+..
+"}                                                                                 ~n"
+
+' a fragment shader that can read from 4 textures &amp; writes to 4 FBO attached textures
+Local fragmentShader:String = ..
+"#ifdef GL_ES                                                                             ~n"+..
+"precision highp float;                                                                   ~n"+..
+"#endif                                                                                   ~n"+..
+"                                                                                         ~n"+..
+"uniform vec2 resolution;                                                                 ~n"+..
+"uniform sampler2D tex0;                                                                  ~n"+..
+"uniform sampler2D tex1;                                                                  ~n"+..
+"uniform sampler2D tex2;                                                                  ~n"+..
+"uniform sampler2D tex3;                                                                  ~n"+..
+"                                                                                         ~n"+..
+"void main(void)                                                                          ~n"+..
+"{                                                                                        ~n"+..
+"    vec2 uv = gl_TexCoord[0].xy;                                                         ~n"+..
+"    vec2 p = 1.0 / resolution;                                                           ~n"+..
+"                                                                                         ~n"+..
+"    vec3 col0 = texture2D(tex0,vec2(uv.x-p.x,uv.y)).xyz;                                 ~n"+..
+"    vec3 col1 = texture2D(tex1,vec2(uv.x+p.x,uv.y)).xyz + mod((uv.x*uv.y)*.05,p.y)*2.0;  ~n"+..
+"    vec3 col2 = texture2D(tex2,vec2(uv.x,uv.y+p.y)*1.005).xyz;                           ~n"+..
+"    vec3 col3 = texture2D(tex3,vec2(uv.x+p.x,uv.y-p.y)).xyz;                             ~n"+..
+"                                                                                         ~n"+..
+"    gl_FragData[0] = vec4(col0*vec3(1.0,0.0,0.0),uv.y);                                  ~n"+..
+"    gl_FragData[1] = vec4(col1*vec3(0.95,1.0,0.0),uv.x);                                 ~n"+..
+"    gl_FragData[2] = vec4(col2*vec3(0.0,1.0,uv.x*1.2),uv.y);                             ~n"+..
+"    gl_FragData[3] = vec4(col3*vec3(0.0,0.95,1.0),uv.x);                                 ~n"+..
+"}                                                                                        ~n"
+
+ 
+Local shader:tProgramObject = compileShader(vertexShader, fragmentShader) 
+
+Local frame:Int = 0
+Local separated:Int = 0
+Local ovals:Int = True
+Local zoom:Float = 1.0
+
+While Not KeyDown(KEY_ESCAPE) And Not AppTerminate()	
+
+	Cls
+
+	If KeyHit(KEY_RIGHT) separated = Not separated
+	If KeyHit(KEY_LEFT) ovals = Not ovals
+	If KeyDown(KEY_UP) zoom :+ .0001
+	If KeyDown(KEY_DOWN) zoom :- .0001
+
+	If KeyDown(KEY_SPACE) ' draw a rectangle on just a single texture
+		fbo.bind([0]) ' only bind fbo to the first attached texture (image0)	
+		SetColor Rnd(64),Rnd(64),Rnd(64)
+		Local rsize:Int = Rnd(128)
+		DrawRect Rnd(image0.width),Rnd(image0.height),rsize,rsize
+		fbo.unbind();
+	End If 
+
+	' render to FBO bound textures with shader - all off screen
+	fbo.bind()
+    shader.activate() 
+	shader.setUF2("resolution",image0.width,image0.height)
+	' bind read textures to shader uniforms	so the fragment shader can get at them
+	For Local i:Int = 0 To fbo.images.length-1
+	    glActiveTexture(GL_TEXTURE0+i)
+    	glBindTexture(GL_TEXTURE_2D, TGLImageFrame(fbo.images[i].frame(0)).name)
+    	shader.setUI1("tex"+i,i) 
+	Next
+
+    glActiveTexture(GL_TEXTURE0)
+	SetScale 1.0075*zoom,zoom
+	SetRotation Sin(frame*.125)*0.5  
+    DrawImage fbo.images[0],0,1 ' draw image will invoke pixel shader
+    shader.DeActivate()
+
+	' draw some text
+	SetScale 2*(MouseDown(1)+1),2*(MouseDown(1)+1)
+	SetBlend ALPHABLEND
+	SetAlpha .5
+	SetColor 0,0,0
+	DrawText "FBO",MouseX(),MouseY()
+	SetColor 255,255,255
+	DrawText "FBO",MouseX()-2,MouseY()-2
+	SetAlpha 1.0
+	SetBlend SOLIDBLEND
+	SetScale 1,1
+
+	If ovals
+		Local r:Int = Rnd(255)
+		Local g:Int = Rnd(255)
+		Local b:Int = Rnd(255)
+		SetColor r,g,b
+		Local osize:Int = Rnd(32)
+		Local x:Int = Rnd(image0.width)
+		Local y:Int = Rnd(image0.width)  
+		DrawOval x,y,osize,osize
+		SetColor r*.25,g*.25,b*.25
+		DrawOval x+(osize*.125),y+(osize*.125),osize,osize
+	End If
+
+	fbo.unbind(); ' normal screen buffer takes over from here
+
+	' render textures to screen
+	Local xscale:Float = GraphicsWidth()/Float(image0.width)
+	Local yscale:Float = GraphicsHeight()/Float(image0.height)
+	If separated	
+		SetBlend SOLIDBLEND
+		SetAlpha 1.0
+		xscale :* .5
+		yscale :* .5
+	Else
+		SetBlend LIGHTBLEND
+		SetAlpha 1.0
+	End If
+	SetScale xscale,yscale
+	SetRotation 0
+    SetColor 255,255,255
+	Local x:Int = (image0.width*xscale)*separated
+	Local y:Int = (image0.height*yscale)*separated
+	DrawImage image0,0,0
+	DrawImage image1,x,0
+	DrawImage image2,0,y
+	DrawImage image3,x,y
+	SetBlend SOLIDBLEND
+	SetScale 1,1
+
+	Flip 1
+	frame :+ 1
+Wend
+
+End
+
+' -----------------------------
+
+Function compileShader:tProgramObject(vsSource:String,fsSource:String)
+
+	Local vs:tShaderObject=New tShaderObject
+	Local error:String = vs.compileVertex(vsSource)
+	If error &lt;&gt; Null Then Print "Drat. Shader failed to compile (again) ~n" + error + "~n" + vsSource
+	
+	Local fs:tShaderObject=New tShaderObject
+	error = fs.compileFragment(fsSource)
+	If error &lt;&gt; Null Then Print "Drat. Shader failed to compile (again) ~n" + error + "~n" + fsSource
+	
+	Local shader:tProgramObject=New tProgramObject 
+	shader=tProgramObject.Create("test")
+	shader.AttachVertShader(vs)
+	shader.AttachFragShader(fs)
+	
+	Print "Shaders Compiled &amp; Linked OK"
+	Return shader
+End Function
+
+
+Type TFboDoubleBuffer
+
+	Field colorBuffers:Int[]
+    Field fb:Int[1]
+    Field OrigX:Int,OrigY:Int
+    Field OrigW:Int,OrigH:Int
+    Field width:Int,height:Int
+    Field images:TImage[]
+    Field images1:TImage[]
+    Field images2:TImage[]
+    Field flipBit:Int = False
+
+    Method Create:TFboDoubleBuffer(images1:TImage[],images2:TImage[])
+
+        Self.images1 = images1
+        Self.images2 = images2
+        Self.images = images1
+		Self.width = images[0].width
+		Self.height = images[0].height
+
+		If (colorBuffers.length = 0) Then
+			Local maxBuffers:Int = 0
+			glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, Varptr(maxBuffers))
+			Local idx:Int = GL_COLOR_ATTACHMENT0_EXT;
+			colorBuffers = New Int[maxBuffers];
+			For Local n:Int = 0 To maxBuffers - 1
+				colorBuffers[n] = idx + n;
+			Next
+		End If
+		
+		Print "Maximum color buffers supported by your gfx card : "+colorBuffers.length
+
+        createFBO()
+  
+      Return Self
+    End Method
+                
+    Function initGraphics(width:Int,height:Int,bit:Int=0,mode:Int=60)
+        SetGraphicsDriver(GLMax2DDriver())
+        Graphics width,height,bit,mode
+        glewInit()
+     End Function
+        
+     Method createFBO()
+
+        glGenFramebuffersEXT(1, fb)           
+		Assert glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT) = GL_FRAMEBUFFER_COMPLETE_EXT, "glCheckFramebufferStatusEXT != GL_FRAMEBUFFER_COMPLETE_EXT"
+   
+    End Method
+
+    Method bindTextures(textures:Int[]=Null)
+        glBindFramebufferEXT(GL_FRAMEBUFFER_EXT , fb[0]) ;
+		If textures = Null
+			textures = New Int[images.length]
+			For Local i:Int = 0 To images.length-1
+				textures[i] = i
+			Next
+		End If
+		
+		For Local i:Int = 0 To textures.length-1
+			Local tid:Int = TGLImageFrame(images[textures[i]].frame(0)).name
+			glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT+i, GL_TEXTURE_2D, tid, 0);
+			'Print "colorbuffer "+(GL_COLOR_ATTACHMENT0_EXT+i)+" textureId "+tid
+		Next
+		Local drawBuffers:Int = True
+		If drawBuffers
+			Local buffers:Int[] = New Int[textures.length];
+			For Local i:Int = 0 To buffers.length-1
+				buffers[i] = colorBuffers[i]
+				'Print "drawBuffer "+colorBuffers[i]
+			Next
+			glDrawBuffers(buffers.length, buffers);
+
+		End If		
+		'Print "------------"
+		
+    End Method
+        
+    Method bind(textures:Int[]=Null, noFlip:Int=False)
+        GetViewport(OrigX,OrigY,OrigW,OrigH)
+        bindTextures(textures)
+        glMatrixMode GL_PROJECTION
+        glLoadIdentity
+        glOrtho 0,width,0,width,-1,1
+        glMatrixMode GL_MODELVIEW 
+        glViewport 0,0,width,height
+        glScissor 0,0,width,height
+
+		If Not noFlip flipBuffer()
+
+    End Method
+
+	Method flipBuffer()
+        If flipBit 
+           	images = images1
+         Else
+          	images = images2
+         End If
+       	flipBit = Not flipBit
+	End Method
+        
+    Method unbind()
+		For Local i:Int = 0 To images.length-1
+        	glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT+i, GL_TEXTURE_2D,  0, 0);
+		Next
+        glBindFramebufferEXT(GL_FRAMEBUFFER_EXT , 0)
+        glMatrixMode GL_PROJECTION
+        glLoadIdentity
+        glOrtho 0,OrigW,Origh,0,-1,1
+        glMatrixMode GL_MODELVIEW 
+        glViewport 0,0,OrigW,OrigH
+        glScissor 0,0,OrigW,OrigH
+    End Method
+    
+End Type
+
+
+</textarea><br><br>glsl.max<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+'Strict
+Rem
+Module pub.glsl
+
+ModuleInfo "Version: 1.00"
+ModuleInfo "Author: Tom Speed set uniforms bodged by ChrisC"
+ModuleInfo "License: Blitz Shared Source Code"
+ModuleInfo "Copyrights: Unknown"
+ModuleInfo "Modserver: PUB"
+EndRem
+
+Import brl.linkedlist
+Import brl.standardio
+Import brl.filesystem
+Import brl.system
+Import pub.glew
+
+Global ProgramObjectList:TList = CreateList()
+Global ShaderObjectList:TList = CreateList()
+Global shaderCompileError:String
+
+Global clog:Byte[1024]' = MemAlloc(linked)
+
+'Shader Object Type
+Type tShaderObject
+	Field ShaderObject:Int
+	Field Attached:TList			' Shaders can be attached, or 'referenced by', more than 1 ProgramObject
+	Field shaderName:String
+	Field source:Byte[]
+	Field src:String
+	
+	Method compile:String(source:String, shaderType:Int)
+		Local sourcePtr:Byte Ptr = source.ToCString()
+	    Local sourceLength:Int = source.length
+
+		ShaderObject = glCreateShader(shaderType)
+		src = source
+		glShaderSourceARB(ShaderObject,1, Varptr sourcePtr, Varptr sourceLength)
+		glCompileShaderARB(ShaderObject)
+		
+		Attached = New TList
+	    shaderName = "foo "+shaderType
+		ListAddLast ShaderObjectList, Self
+				
+		Return TShaderObject.compileError(ShaderObject)
+	End Method
+	
+	Method compileFragment:String(source:String)
+		Return compile(source,GL_FRAGMENT_SHADER)
+	End Method
+
+	Method compileVertex:String(source:String)
+		Return compile(source,GL_VERTEX_SHADER)
+	End Method
+
+
+	Function compileError:String(id:Int)
+
+		Local error:String = Null
+		'Did the shader compile successfuly?
+		Local compiled:Int
+		glGetObjectParameterivARB(id,GL_OBJECT_COMPILE_STATUS_ARB, Varptr(compiled))
+		If Not compiled
+			Local logLength:Int
+			glGetObjectParameterivARB(id,GL_OBJECT_INFO_LOG_LENGTH_ARB, Varptr(logLength))
+			Local slen:Int = 0
+			glGetInfoLogARB(id,1024,Varptr(slen), Varptr clog[0])
+			Local err:String
+			For i = 0 To logLength-1
+				err:+Chr(clog[i])
+			Next
+			error = err
+		End If
+		Return error
+
+	End Function
+	
+End Type
+
+'Program Object Type
+Type tProgramObject
+	Field Program:Int		' The ProgramObject
+	Field vList:TList		' Vertex shader list. A List of what Vert shaders are attached to this ProgramObject
+	Field fList:TList		' Frag shader list. A List of what Frag shaders are attached to this ProgramObject
+	Field progName:String
+	
+	Field vertShaderCount:Int
+	Field fragShaderCount:Int
+
+
+
+	'----------------------------------------------------
+	'tProgramObject.Create(name:String)
+	'
+	'Creates a new Shader Program Object to which
+	'multiple Vert and/or Frag Shaders can be attached to
+	'
+	'Returns: The newly created Program Objects ID if
+	'         successful, or Null if it failed.
+	'----------------------------------------------------
+	Function Create:tProgramObject(name:String = "null")
+		Local p:tProgramObject = New tProgramObject
+		
+		'Create a new GL ProgramObject
+		p.Program = glCreateProgramObjectARB()
+		If p.Program=0
+			p = Null
+			?Debug
+				Print "Error: glCreateProgramObjectARB() failed"
+			?
+			Return Null
+		End If
+		
+		'---------------------------------
+		'The amount of Vert &amp; Frag Shaders
+		'attached to this Program Object
+		'---------------------------------
+		p.vertShaderCount = 0
+		p.fragShaderCount = 0
+	
+		'---------------------------------------
+		'These lists contain any Vert or Frag
+		'Shader Objects Attached to this Program
+		'---------------------------------------
+		p.vList:TList = CreateList()
+		p.fList:TList = CreateList()
+		
+		'This Program Objects Name
+		p.progName = name
+		
+		'------------------------------
+		'Add this Program Object to the
+		'Global list of ProgramObjects
+		'------------------------------
+		ListAddLast ProgramObjectList, p
+		Return p
+	End Function
+
+	
+	'---------------------------------
+	'tProgramObject.Activate()
+	'
+	'Activates (uses!) a ProgramObject
+	'---------------------------------
+	Method Activate()
+		glUseProgramObjectARB(Program)
+	End Method
+
+	'----------------------------
+	'tProgramObject.DeActivate()
+	'
+	'Turns off this ProgramObject
+	'----------------------------
+	Method DeActivate()
+		glUseProgramObjectARB(0)
+	End Method
+
+	' Get the Uniform Variable Location from a ProgramObject
+	Method GetUniLoc:Int(name:String)
+		Return glGetUniformLocationARB(Program, Varptr name)
+	End Method
+
+	' Get the Attribute Variable Location from a ProgramObject
+	Method GetAttribLoc:Int(name:String)
+		Return glGetAttribLocationARB(Program, Varptr name)
+	End Method
+	
+
+	' Set Uniform Variable Integer(s)
+	Method setUI1(name:String,val:Int)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetUniformLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Uniform Var Location '"+name+"' in Method setUI1"
+				Return
+			End If
+		?
+		glUniform1iARB(loc,val)
+		MemFree namePtr
+	End Method
+
+	Method setUI2(name:String,val1:Int,val2:Int)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetUniformLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Uniform Var Location '"+name+"' in Method setUI2"
+				Return
+			End If
+		?
+		glUniform2iARB(loc,val1,val2)
+		MemFree namePtr
+	End Method
+
+	Method setUI3(name:String,val1:Int,val2:Int,val3:Int)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetUniformLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Uniform Var Location '"+name+"' in Method setUI3"
+				Return
+			End If
+		?
+		glUniform3iARB(loc,val1,val2,val3)
+		MemFree namePtr
+	End Method
+
+	Method setUI4(name:String,val1:Int,val2:Int,val3:Int,val4:Int)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetUniformLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Uniform Var Location '"+name+"' in Method setUI4"
+				Return
+			End If
+		?
+		glUniform4iARB(loc,val1,val2,val3,val4)
+		MemFree namePtr
+		
+	End Method
+
+	Method getUI1:Int(name:String)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetUniformLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Uniform Var Location '"+name+"' in Method getUI1"
+				Return
+			End If
+		?
+		Local val:Int = 10
+		glGetUniformivARB(Program, loc, Varptr(val))
+		MemFree namePtr
+		Return val
+	End Method
+	
+	
+	' Set Uniform Variable Float(s)
+	Method setUF1(name:String,val:Float)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetUniformLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Uniform Var Location '"+name+"' in Method setUF1"
+				Return
+			End If
+		?
+		glUniform1fARB(loc,val)
+		MemFree namePtr
+	End Method
+
+	Method setUF2(name:String,val1:Float,val2:Float)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetUniformLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "&gt;Error getting Uniform Var Location '"+name+"' in Method setUF2"
+				Return
+			End If
+		?
+		glUniform2fARB(loc,val1,val2)
+		MemFree namePtr
+	End Method
+
+	Method setUF3(name:String,val1:Float,val2:Float,val3:Float)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetUniformLocationARB(Program, namePtr)
+
+		?Debug
+			If loc&lt;0
+				Print "Error getting Uniform Var Location '"+name+"' in Method setUF3"
+				Return
+			End If
+		?
+		glUniform3fARB(loc, val1, val2, val3)
+		MemFree namePtr
+	End Method
+
+	Method setUF4(name:String,val1:Float,val2:Float,val3:Float,val4:Float)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetUniformLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Uniform Var Location '"+name+"' in Method setUF4"
+				Return
+			End If
+		?
+		glUniform4fARB(loc,val1,val2,val3,val4)
+		MemFree namePtr
+	End Method
+
+	' Set Attribute Variable Short(s)
+	Method setAS1(name:String, val1:Short)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetAttribLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Attribute Var Location '"+name+"' in Method setAS1"
+				Return
+			End If
+		?
+		glVertexAttrib1sARB(loc, val1)
+		MemFree namePtr
+	End Method
+
+	Method setAS2(name:String, val1:Short, val2:Short)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetAttribLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Attribute Var Location '"+name+"' in Method setAS2"
+				Return
+			End If
+		?
+		glVertexAttrib2sARB(loc, val1, val2)
+		MemFree namePtr
+	End Method
+
+	Method setAS3(name:String, val1:Short, val2:Short, val3:Short)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetAttribLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Attribute Var Location '"+name+"' in Method setAS3"
+				Return
+			End If
+		?
+		glVertexAttrib3sARB(loc, val1, val2, val3)
+		MemFree namePtr
+	End Method
+
+	Method setAS4(name:String, val1:Short, val2:Short, val3:Short, val4:Short)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetAttribLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Attribute Var Location '"+name+"' in Method setAS4"
+				Return
+			End If
+		?
+		glVertexAttrib4sARB(loc, val1, val2, val3, val4)
+		MemFree namePtr
+	End Method
+	
+	' Set Attribute Variable Float(s)
+	Method setAF1(name:String, val1:Float)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetAttribLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Attribute Var Location '"+name+"' in Method setAF1"
+				Return
+			End If
+		?
+		glVertexAttrib1fARB(loc, val1)
+		MemFree namePtr
+	End Method
+
+	Method setAF2(name:String, val1:Float, val2:Float)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetAttribLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Attribute Var Location '"+name+"' in Method setAF2"
+				Return
+			End If
+		?
+		glVertexAttrib2fARB(loc, val1, val2)
+		MemFree namePtr
+	End Method
+
+	Method setAF3(name:String, val1:Float, val2:Float, val3:Float)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetAttribLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Attribute Var Location '"+name+"' in Method setAS3"
+				Return
+			End If
+		?
+		glVertexAttrib3fARB(loc, val1, val2, val3)
+		MemFree namePtr
+	End Method
+
+	Method setAF4(name:String, val1:Float, val2:Float, val3:Float, val4:Float)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetAttribLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Attribute Var Location '"+name+"' in Method setAF4"
+				Return
+			End If
+		?
+		glVertexAttrib4fARB(loc, val1, val2, val3, val4)
+		MemFree namePtr
+	End Method
+
+	' Set Attribute Variable Double(s)
+	Method setAD1(name:String, val1:Double)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetAttribLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Attribute Var Location '"+name+"' in Method setAD1"
+				Return
+			End If
+		?
+		glVertexAttrib1fARB(loc, val1)
+		MemFree namePtr
+	End Method
+
+	Method setAD2(name:String, val1:Double, val2:Double)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetAttribLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Attribute Var Location '"+name+"' in Method setAD2"
+				Return
+			End If
+		?
+		glVertexAttrib2fARB(loc, val1, val2)
+		MemFree namePtr
+	End Method
+
+	Method setAD3(name:String, val1:Double, val2:Double, val3:Double)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetAttribLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Attribute Var Location '"+name+"' in Method setAD3"
+				Return
+			End If
+		?
+		glVertexAttrib3fARB(loc, val1, val2, val3)
+		MemFree namePtr
+	End Method
+
+	Method setAD4(name:String, val1:Double, val2:Double, val3:Double, val4:Double)
+	    Local namePtr:Byte Ptr = name.ToCString()
+		Local loc:Int = glGetAttribLocationARB(Program, namePtr)
+		?Debug
+			If loc&lt;0
+				Print "Error getting Attribute Var Location '"+name+"' in Method setAD4"
+				Return
+			End If
+		?
+		glVertexAttrib4fARB(loc, val1, val2, val3, val4)
+		MemFree namePtr
+	End Method
+
+
+	'----------------------------------------------------------
+	'Attach &amp; Link a Vertex Shader Object to this ProgramObject
+	'----------------------------------------------------------
+	Method AttachVertShader:Int(myShader:tShaderObject)
+		?Debug
+			If Program = 0
+				Print "Error: Invalid tProgramObject in method AddVertShader()"
+				Print "-------------------------------------------------------"
+				Print
+			Else If Not myShader
+				Print "Error: Invalid tShaderObject passed to method AddVertShader()"
+				Print "-------------------------------------------------------------"
+				Print
+				Return
+			End If
+		?
+
+
+		'--------------------------
+		'Attach &amp; Link a VertShader
+		'--------------------------
+		glAttachObjectARB(Program, myShader.ShaderObject)
+		glLinkProgramARB(Program)
+
+
+		'-------------------------------
+		'Check if it Linked successfully
+		'-------------------------------
+		Local linked:Int
+		glGetObjectParameterivARB(Program,GL_OBJECT_LINK_STATUS_ARB, Varptr(linked))
+		
+		If Not linked
+			?Debug
+				'An Error occured during Linking
+				'dump the error logfile to console
+'				Local clog:Byte Ptr
+				Local slen:Int = 0
+
+				glGetInfoLogARB(Program,1023,Varptr slen, Varptr clog[0])
+				Local err:String
+				Local i:Int
+				For i = 0 To slen-1
+					err:+Chr(clog[i])
+				Next
+
+				Print
+				Print "Failed to link VertexShader "+myShader.shaderName
+				Print
+				Print err+"  "+slen
+			?
+'			FlushMem
+			Return 0
+		End If
+		?Debug
+			Print "VertexShader "+myShader.shaderName+" attached &amp; linked ok!"
+			Print
+		?
+	
+		'Add this VertShaderObject to this ProgramObjects list
+		ListAddLast vList, myShader
+
+		'Add this ProgramObject to this Shaders 'attached to' list
+		ListAddLast myShader.Attached, Self
+		Return 1
+	End Method
+
+	'------------------------------------------------------------
+	'Attach &amp; Link a Fragment Shader Object to this ProgramObject
+	'------------------------------------------------------------
+	Method AttachFragShader:Int(myShader:tShaderObject)
+		?Debug
+			If Program = 0
+				Print "Error: Invalid tProgramObject in method AddFragShader()"
+				Print "-------------------------------------------------------"
+				Print
+			Else If Not myShader
+				Print "Error: Invalid tShaderObject passed to method AddFragShader()"
+				Print "-------------------------------------------------------------"
+				Print
+				Return
+			End If
+		?
+
+
+		'--------------------------
+		'Attach &amp; Link a FragShader
+		'--------------------------
+		glAttachObjectARB(Program, myShader.ShaderObject)
+		glLinkProgramARB(Program)
+
+
+		'-------------------------------
+		'Check if it Linked successfully
+		'-------------------------------
+		Local linked:Int
+		glGetObjectParameterivARB(Program,GL_OBJECT_LINK_STATUS_ARB, Varptr(linked))
+
+		If Not linked
+			?Debug
+				'An Error occured during Linking
+				'dump the error logfile to console
+'				Local clog:Byte Ptr
+				Local slen:Int = 0
+
+				glGetInfoLogARB(Program,1023,Varptr slen, Varptr clog[0])
+				Local err:String
+				Local i:Int
+				For i = 0 To slen-1
+					err:+Chr(clog[i])
+				Next
+
+				Print
+				Print "Failed to link FragShader '"+myShader.shaderName+"'"
+				Print
+				Print err
+			?
+			
+'			FlushMem
+			Return 0
+		End If
+
+		?Debug
+			Print "FragShader '"+myShader.shaderName+"' attached &amp; linked ok!"
+			Print
+		?
+		
+		'Add this FragShaderObject to this ProgramObjects list
+		ListAddLast fList, myShader
+		
+		'Add this ProgramObject to this Shaders 'attached to' list
+		ListAddLast myShader.Attached, Self
+		
+		'Return Ok!
+		Return 1
+	End Method	
+
+	'-------------------------------------------------------
+	'Detach a VertShader:tShaderObject from a tProgramObject
+	'-------------------------------------------------------
+	Method DetachVertShader(vShader:tShaderObject)
+		If ListContains(vList,vShader)
+			glDetachObjectARB(Program, vShader.ShaderObject)
+			RemoveLink(ListFindLink(vList,vShader))
+			RemoveLink(ListFindLink(vShader.Attached, Self))
+			?Debug
+				Print "Detached '"+vShader.shaderName+"' from ProgramObject '"+Self.progName+"'"
+			?
+		End If
+	End Method
+
+	'-------------------------------------------------------
+	'Detach a FragShader:tShaderObject from a tProgramObject
+	'-------------------------------------------------------
+	Method DetachFragShader(fShader:tShaderObject)
+		If ListContains(fList,fShader)
+			glDetachObjectARB(Program, fShader.ShaderObject)
+			RemoveLink(ListFindLink(fList,fShader))
+			RemoveLink(ListFindLink(fShader.Attached, Self))
+			?Debug
+				Print "Detached '"+fShader.shaderName+"' from ProgramObject '"+Self.progName+"'"			
+			?
+		End If
+	End Method
+	
+	'------------------------------------------------------
+	'Dump a list of Shaders attached to this tProgramObject
+	'------------------------------------------------------
+	Method ListAttachedShaders()
+		Print "Vertex Shader(s) attached to ProgramObject '"+Self.progName+"'"
+		Print "----------------------------------------------------------------------"
+		If vList.Count() = 0
+			Print "No Vertex Shaders attached"
+		Else
+			For Local v:tShaderObject = EachIn vList
+				Print v.shaderName
+			Next
+		End If
+		
+		Print
+		Print "Fragment Shader(s) attached to ProgramObject '"+Self.progName+"'"
+		Print "-----------------------------------------------------------------------"
+		If fList.Count() = 0
+			Print "No Fragment Shaders attached"
+		Else
+			For Local f:tShaderObject = EachIn fList
+				Print f.shaderName
+			Next
+		End If
+		Print
+	End Method
+End Type
+
+Function DeleteVertShader(vShader:tShaderObject Var)
+	If Not vShader Return
+
+	RemoveLink(ListFindLink(ShaderObjectList,vShader))
+	
+	' Detach this ShaderObject from all ProgramObjects it was attached to
+	For Local p:tProgramObject = EachIn ProgramObjectList
+		If ListContains(p.vList, vShader)
+			p.DetachVertShader(vShader)
+		End If
+	Next
+	
+	' Delete the shader
+	glDeleteObjectARB(vShader.ShaderObject)
+	?Debug
+		Print "Deleted ShaderObject '"+vShader.shaderName+"'"
+		Print
+	?
+	vShader = Null
+End Function
+	
+Function DeleteFragShader(fShader:tShaderObject Var)
+	If Not fShader Return
+	
+	RemoveLink(ListFindLink(ShaderObjectList,fShader))
+		
+	' Detach this ShaderObject from all ProgramObjects it was attached to
+	For Local p:tProgramObject = EachIn ProgramObjectList
+		If ListContains(p.fList, fShader)
+			p.DetachFragShader(fShader)
+		End If
+	Next
+	
+	' Delete the shader
+	glDeleteObjectARB(fShader.ShaderObject)
+	?Debug
+		Print "Deleted ShaderObject '"+fShader.shaderName+"'"
+		Print
+	?
+	fShader = Null
+End Function
+
+
+
+
+</textarea><br><br><font class="tiny">Last edited 2011</font><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1099940"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cool, very useful thanks. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

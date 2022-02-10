@@ -1,0 +1,1061 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Carmack's Reverse - (stencil shadows) here it is.</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Carmack's Reverse - (stencil shadows) here it is.</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >Carmack's Reverse - (stencil shadows) here it is.</a><br><br>
+<a name="480390"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Braincell</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> After a number of weeks of trying to optimize a number of different 'routines' i came up with for creating shadow volumes of unboned meshes, i concluded that a fast way of dynamicaly drawing a satisfactory number of shadows is not really possible using b3d commands alone. I only have partialy done a routine to build a volume with a minimum number of polys but this is for levels only - where the level and the light source is stationary. I don't think too many people would have a use for that. It (probably) IS possible to have fast stencil shadows in b3d but with help from a very good c++ coder who can make a number of DLLs that will work well with blitz3d.<br><br>Anyway, here is the code based on Tom's code, only now Depth-Fail (Carmacks reverse) technique is used. This way its very robust, and when you enter the volumes (in this example 2 cylinders) they dont disappear or get drawn incorrectly, as was the case with original Tom's code which used the Depth-Pass technique. I have included basic code to make shadow volumes in b3d so if you want to test around yourself, do it. It can be useful for very simple objects (if you get it to work like you want it).<br><br>EDIT: The first code i posted i forgot to include the ATI fix. This one should work, try it and tell me.<br><br>If youre interested in what problems i ran into, read on. If not, get the code from the box below and the needed userlibs from:<br><a href="http://www.geocities.com/spirala7/dx7sshad.htm" target="_blank">http://www.geocities.com/spirala7/dx7sshad.htm</a><br><br><br><br>The main problem is that commercial games which are written in c++ have a number of keywords and maths that are integral to the language. For example there is the D3DMATRIX which is used to take positions of vertices (directly using D3DVERTEXBUFFER... , CreateVertexBuffer() ) and simply extrude them by a vector, when the volume is capped as well. In Blitz however we have to use TFormPoint to even get the global position of a vertex, and then TFormVector to even stand a chance of checking where the edges are, or which triangles are facing the light source, etc. You COULD do it without TFormVector also perhaps, but the maths would be as slow as that command. I tried everything possible. It's not to blame blitz for not having this kind of thing, if it did it would be a considerably more complex language. Another thing which i find is pretty slow is creation of triangles. In C++ the vertexes are just copied and then "extruded" or projected, this includes creation of the triangles and is obviously faster. <br><br>In other words, Mark! Do something :D make us stencil shadows for blitz3d, you see how simple it is if you know c++? Yeah! COME ON!<br><br>Here's the code (should work on ATI?):<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+;This is a demo to show implementation of "Carmacks Reverse" way of drawing
+;stencil shadows. It is also known as the Depth-Fail or the Z-Fail technique.
+;
+;			Lenn , 21.01.2005
+
+;D3DCULL
+Const D3DCULL_NONE				= 1
+Const D3DCULL_CW					= 2
+Const D3DCULL_CCW					= 3
+		
+;D3DSHADE_MODE
+Const D3DSHADE_FLAT			= 1
+Const D3DSHADE_GOURAUD	= 2
+Const D3DSHADE_PHONG		= 3
+
+;D3DFILL_MODE
+Const D3DFILL_POINT			= 1
+Const D3DFILL_WIREFRAME	= 2
+Const D3DFILL_SOLID			= 3
+
+;D3DSTENCILOP
+Const D3DSTENCILOP_KEEP           = 1
+Const D3DSTENCILOP_ZERO           = 2
+Const D3DSTENCILOP_REPLACE        = 3
+Const D3DSTENCILOP_INCRSAT        = 4
+Const D3DSTENCILOP_DECRSAT        = 5
+Const D3DSTENCILOP_INVERT         = 6
+Const D3DSTENCILOP_INCR           = 7
+Const D3DSTENCILOP_DECR           = 8
+Const D3DSTENCILOP_FORCE_DWORD    = $7fffffff	;force 32-bit size enum
+
+;D3DCMPFUNC
+Const D3DCMP_NEVER               = 1
+Const D3DCMP_LESS                = 2
+Const D3DCMP_EQUAL               = 3
+Const D3DCMP_LESSEQUAL           = 4
+Const D3DCMP_GREATER             = 5
+Const D3DCMP_NOTEQUAL            = 6
+Const D3DCMP_GREATEREQUAL        = 7
+Const D3DCMP_ALWAYS              = 8
+Const D3DCMP_FORCE_DWORD         = $7fffffff	;force 32-bit size enum
+
+;D3DBLEND
+Const D3DBLEND_ZERO              = 1
+Const D3DBLEND_ONE               = 2
+Const D3DBLEND_SRCCOLOR          = 3
+Const D3DBLEND_INVSRCCOLOR       = 4
+Const D3DBLEND_SRCALPHA          = 5
+Const D3DBLEND_INVSRCALPHA       = 6
+Const D3DBLEND_DESTALPHA         = 7
+Const D3DBLEND_INVDESTALPHA      = 8
+Const D3DBLEND_DESTCOLOR         = 9
+Const D3DBLEND_INVDESTCOLOR      = 10
+Const D3DBLEND_SRCALPHASAT       = 11
+Const D3DBLEND_BOTHSRCALPHA      = 12
+Const D3DBLEND_BOTHINVSRCALPHA   = 13
+Const D3DBLEND_FORCE_DWORD       = $7fffffff	;force 32-bit size enum
+
+
+
+Const D3DRS_ANTIALIAS          = 2    ; D3DANTIALIASMODE */
+Const D3DRS_TEXTUREPERSPECTIVE = 4    ; True For perspective correction */
+Const D3DRS_ZENABLE            = 7    ; D3DZBUFFERTYPE (Or True/False For legacy) */
+Const D3DRS_FILLMODE           = 8    ; D3DFILL_MODE        */
+Const D3DRS_SHADEMODE          = 9    ; D3DFILL_MODE */
+Const D3DRS_LINEPATTERN        = 10   ; D3DLINEPATTERN */
+Const D3DRS_ZWRITEENABLE       = 14   ; True To enable z writes */
+Const D3DRS_ALPHATESTENABLE    = 15   ; True To enable alpha tests */
+Const D3DRS_LASTPIXEL          = 16   ; True For Last-pixel on lines */
+Const D3DRS_SRCBLEND           = 19   ; D3DBLEND */
+Const D3DRS_DESTBLEND          = 20   ; D3DBLEND */
+Const D3DRS_CULLMODE           = 22   ; D3DCULL */
+Const D3DRS_ZFUNC              = 23   ; D3DCMPFUNC */
+Const D3DRS_ALPHAREF           = 24   ; D3DFIXED (long) */
+Const D3DRS_ALPHAFUNC          = 25   ; D3DCMPFUNC */
+Const D3DRS_DITHERENABLE       = 26   ; True To enable dithering */
+Const D3DRS_ALPHABLENDENABLE   = 27   ; True To enable alpha blending */
+Const D3DRS_FOGENABLE          = 28   ; True To enable fog blending */
+Const D3DRS_SPECULARENABLE     = 29   ; True To enable specular */
+Const D3DRS_ZVISIBLE           = 30   ; True To enable z checking */
+Const D3DRS_STIPPLEDALPHA      = 33   ; True To enable stippled alpha (RGB device only) */
+Const D3DRS_FOGCOLOR           = 34   ; D3DCOLOR */  INT (((a) &lt;&lt; 24) Or ((r) &lt;&lt; 16) Or ((g) &lt;&lt; 8) Or (b)))
+Const D3DRS_FOGTABLEMODE       = 35   ; D3DFOGMODE */
+Const D3DRS_FOGSTART           = 36   ; Float Fog start (For both vertex And pixel fog) 
+Const D3DRS_FOGEND             = 37   ; Float Fog End      */
+Const D3DRS_FOGDENSITY         = 38   ; Fog density  */
+Const D3DRS_EDGEANTIALIAS      = 40   ; True To enable edge antialiasing */
+Const D3DRS_COLORKEYENABLE     = 41   ; True To enable source colorkeyed textures */
+Const D3DRS_ZBIAS              = 47   ; LONG Z bias */
+Const D3DRS_RANGEFOGENABLE     = 48   ; Enables range-based fog */
+
+; *** STENCIL OPS ***
+Const D3DRS_STENCILENABLE      = 52   ; BOOL enable/disable stenciling
+Const D3DRS_STENCILFAIL        = 53   ; D3DSTENCILOP To do If stencil test fails
+Const D3DRS_STENCILZFAIL       = 54   ; D3DSTENCILOP To do If stencil test passes And Z test fails
+Const D3DRS_STENCILPASS        = 55   ; D3DSTENCILOP To do If both stencil And Z tests pass */
+Const D3DRS_STENCILFUNC        = 56   ; D3DCMPFUNC fn.  Stencil Test passes If ((ref &amp; mask) stencilfn (stencil &amp; mask)) is True */
+Const D3DRS_STENCILREF         = 57   ; INT Reference value used in stencil test */
+Const D3DRS_STENCILMASK        = 58   ; Mask value used in stencil test  e.g (0xffffffff)
+Const D3DRS_STENCILWRITEMASK   = 59   ; Write mask applied To values written To stencil buffer e.g (0xffffffff)
+Const D3DRS_TEXTUREFACTOR      = 60   ; D3DCOLOR used For multi-texture blend */
+
+Const D3DCLEAR_TARGET					= $00000001	;Clear target surface
+Const D3DCLEAR_ZBUFFER				= $00000002	;Clear target z buffer
+Const D3DCLEAR_STENCIL				= $00000004	;Clear Stencil
+
+
+;ERRORS
+Const D3DERR_ZBUFFER_NOTPRESENT					= 2070
+Const D3DERR_STENCILBUFFER_NOTPRESENT		= 2071
+Const D3DERR_VIEWPORTHASNODEVICE				= 774
+Const DDERR_INVALIDOBJECT								= 130
+Const DDERR_INVALIDPARAMS								= $80070057
+
+Type BBRect
+	Field x1%
+	Field lX1%
+
+	Field y1%
+	Field lY1%
+
+	Field x2%
+	Field lX2%
+	
+	Field y2%
+  Field lY2%
+End Type
+
+Graphics3D 1027,768,32,2
+
+Direct3D7=SystemProperty$("Direct3D7")
+Direct3DDevice7=SystemProperty$("Direct3DDevice7")
+DirectDraw7=SystemProperty$("DirectDraw7")
+DirectInput7=SystemProperty$("DirectInput7")
+AppHWND=SystemProperty$("AppHWND")
+AppHINSTANCE=SystemProperty$("AppHINSTANCE")
+
+
+
+
+cam=CreateCamera()
+piv=CreatePivot()
+PositionEntity cam,-5,3,-5
+PointEntity cam,piv
+CameraRange cam,.1,50
+
+light=CreateLight()
+RotateEntity light,60,30,0
+
+tex=CreateTexture(512,512)
+ScaleTexture tex,.2,.5
+SetBuffer TextureBuffer(tex)
+Color 100,100,100
+Rect 0,0,512,512
+Color 200,200,200
+Rect 8,8,496,496
+Color 255,255,255
+SetBuffer BackBuffer()
+
+cyl1=CreateCylinder()
+EntityAlpha cyl1,.3
+PositionEntity cyl1,2,0,0
+ScaleEntity cyl1,3,3,3
+
+cyl2=CreateCylinder()
+EntityAlpha cyl2,.3
+PositionEntity cyl2,2,0,5
+ScaleEntity cyl2,3,3,3
+
+cube=CreateCube()
+PositionEntity cube,0,0,0
+ScaleEntity cube,5,.2,10
+EntityTexture cube,tex
+
+
+
+spa#=.3
+shadowplane=CreateCube() ; squished Z cube infront of cam
+ScaleMesh shadowplane,10,10,.01
+EntityParent shadowplane,cam,0
+MoveEntity shadowplane,0,0,.2
+EntityColor shadowplane,0,0,0
+EntityAlpha shadowplane,spa#
+;Shadow plane is the object infront of the screen which is drawn where
+;the stencil shadow should be drawn (on certain pixels). It means that
+;where the shadow volume and scenery intersect, that is where the plane
+;will be drawn. Because the color is black, and alpha is spa# its darkness
+;will depend on spa#. You can put any other object in its place...
+
+
+sv=1
+
+; AREA TO CLEAR
+r.BBRect=New BBRect
+r\lX1=0
+r\lY1=0
+;r\lX2=GraphicsWidth()/2 ; half the screen (used to show what happens if only half the screen is cleared)
+r\lX2=GraphicsWidth() 
+r\lY2=GraphicsHeight()
+
+
+CameraClsMode cam,False,False
+
+While Not KeyHit(1)
+
+.start
+	PositionEntity cyl1,(MouseX()-(GraphicsWidth()*.5)) * .01,-(MouseY()-(GraphicsWidth()*.5)) * .02,0
+	PositionEntity cyl2,(MouseX()-(GraphicsWidth()*.5)) * .01,-(MouseY()-(GraphicsWidth()*.5)) * .02,2
+	
+	
+	t=MilliSecs()
+
+	;-----------------------------------------------------------------------------------render start	
+	HideEntity shadowplane;1-hide plane
+	;I =think= that it might be better to hide the volumes here
+	HideEntity cyl1  ;1a-hide volumes
+	HideEntity cyl2 
+	ShowEntity cube  ;2-show scene
+
+	SetRenderState(Direct3DDevice7, D3DRS_ZWRITEENABLE, True) 
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILENABLE, False)
+	SetRenderState(Direct3DDevice7, D3DRS_ALPHABLENDENABLE, False)
+
+
+;	DeviceClear2(Direct3DDevice7, r, D3DCLEAR_TARGET Or D3DCLEAR_ZBUFFER Or D3DCLEAR_STENCIL,$00008080,1.0,0)
+;	RenderWorld 
+DeviceClear(Direct3DDevice7, 7,$00008080,1,0)
+CameraClsMode cam,True,True
+RenderWorld
+CameraClsMode cam,False,False
+
+
+	ShowEntity cyl1 ;3-show volume
+	ShowEntity cyl2
+	HideEntity cube ;4-hide scene
+
+
+; *** RenderShadow() START *** -------- &lt;&lt; name of the function as found in C++ DX7SDK examples
+
+
+	SetRenderState(Direct3DDevice7, D3DRS_ZWRITEENABLE,False)
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILENABLE,True)
+	
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILFUNC, D3DCMP_ALWAYS)
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP)
+	
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILPASS, D3DSTENCILOP_KEEP)
+	
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILREF, 1)
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILMASK,$ffffffff)
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILWRITEMASK,$ffffffff)
+
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILZFAIL, D3DSTENCILOP_INCR)
+	
+	SetRenderState(Direct3DDevice7, D3DRS_ALPHABLENDENABLE, True)
+	SetRenderState(Direct3DDevice7, D3DRS_SRCBLEND, D3DBLEND_ZERO)
+	SetRenderState(Direct3DDevice7, D3DRS_DESTBLEND, D3DBLEND_ONE)
+	
+	RenderWorld	
+	
+	SetRenderState(Direct3DDevice7, D3DRS_CULLMODE, D3DCULL_CW)
+	RenderWorld
+	
+	SetRenderState(Direct3DDevice7, D3DRS_CULLMODE, D3DCULL_CCW)
+	
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILZFAIL, D3DSTENCILOP_DECR)
+	RenderWorld 
+	
+	SetRenderState(Direct3DDevice7, D3DRS_ZWRITEENABLE,     True )
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILENABLE,    False )
+	SetRenderState(Direct3DDevice7, D3DRS_ALPHABLENDENABLE, False )			
+	
+
+	
+; *** RenderShadow() END *** --------
+
+
+
+; *** DrawShadow() START *** -----------  &lt;&lt; name of the function as found in C++ DX7SDK examples
+	SetRenderState(Direct3DDevice7, D3DRS_ZENABLE,       False )
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILENABLE, True )
+	SetRenderState(Direct3DDevice7, D3DRS_FOGENABLE, False)	
+
+	SetRenderState(Direct3DDevice7, D3DRS_ALPHABLENDENABLE, True )
+	SetRenderState(Direct3DDevice7, D3DRS_SRCBLEND, D3DBLEND_SRCALPHA )
+	SetRenderState(Direct3DDevice7, D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA )
+
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILREF,  1 )
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILFUNC, D3DCMP_LESSEQUAL )
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILPASS, D3DSTENCILOP_KEEP )
+
+	ShowEntity shadowplane ;5-show plane
+	RenderWorld
+
+	SetRenderState(Direct3DDevice7, D3DRS_ZENABLE,          True )
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILENABLE,    False )
+	SetRenderState(Direct3DDevice7, D3DRS_ALPHABLENDENABLE, True )
+
+; *** DrawShadow() END *** -----------
+
+	HideEntity shadowplane ;6-hide plane
+
+	RenderWorld;--------------------------------------------------------------------------render end
+	
+
+	SetRenderState(Direct3DDevice7, D3DRS_ALPHABLENDENABLE, False )
+	Text 0,0,"Move cylinders (volumes) with mouse/"+"     MS: "+(MilliSecs() - t)
+	Text 0,10,"Shadow Alpha: "+spa+ "    LMB/RMB to change value, SPACE to toggle visibility"
+	Text 0,20, "A/Z to move back/forward. Enter the volumes and see that it works."
+
+	If MouseDown(1)
+		spa=spa-.01
+		If spa&lt;0 spa=0
+		EntityAlpha shadowplane,spa
+	Else If MouseDown(2)
+		spa=spa+.01
+		If spa&gt;1.0 spa=1.0
+		EntityAlpha shadowplane,spa
+	End If
+	
+	If KeyHit(30)
+		MoveEntity cam, 0,0,0.1
+	End If
+	
+	If KeyHit(44)
+		MoveEntity cam, 0,0,-0.1
+	End If	
+	
+
+	If KeyHit(57)
+		sv=Not sv
+		If sv
+			EntityAlpha cyl1,.3
+			EntityAlpha cyl2,.3
+		Else
+			EntityAlpha cyl1,0.001
+			EntityAlpha cyl2,0.001
+		End If
+	End If
+	
+	If KeyHit(24) tra=Not tra 
+
+
+Flip
+
+Wend
+
+
+End
+
+
+
+
+
+
+
+
+Type volumes
+	Field mesh
+End Type
+
+Function CreateVolume(entity, light)
+;entity - the entity that casts the shadow
+;light - the light entity from which the light
+;
+;This function is included in case somebody wants to build shadow volumes and try stuff out.
+;This is fairly slow because it extrudes and caps every triangle on a mesh. This means
+;that 6 times more triangles need to be made for each one on the mesh.
+;(I tried faster methods but trust me its not easy)
+;It may be useful only for very basic geometry.
+
+
+lx#=EntityX(light,True)
+ly#=EntityY(light,True)
+lz#=EntityZ(light,True)
+
+	a_vol.volumes=New volumes
+		a_vol\mesh=CreateMesh()
+		
+		;EntityBlend a_vol\mesh,2
+		;EntityFX a_vol\mesh,1
+		EntityColor a_vol\mesh,0,0,0
+		EntityAlpha a_vol\mesh,0.001
+
+		volsurf=CreateSurface(a_vol\mesh)
+		numsurf=CountSurfaces(entity)		
+		vpos=CreatePivot()
+		vposend=CreatePivot()
+		VolumeDepth#=1000
+		
+		
+		
+		;For surfcount=1 To numsurf-1
+		surfcount=1
+
+		While surfcount &lt;= numsurf
+			cursurface=GetSurface(entity, surfcount)
+			maxtricount=CountTriangles (cursurface)
+			;For tricount=0 To tricount-1
+							
+			While tricount &lt; maxtricount
+			v1x#=VertexX(cursurface, TriangleVertex(cursurface, tricount, 0))
+			v1y#=VertexY(cursurface, TriangleVertex(cursurface, tricount, 0))
+			v1z#=VertexZ(cursurface, TriangleVertex(cursurface, tricount, 0))
+			TFormPoint v1x#,v1y#,v1z#, entity, 0
+			v1x#=TFormedX()
+			v1y#=TFormedY()
+			v1z#=TFormedZ()
+			
+			v2x#=VertexX(cursurface, TriangleVertex(cursurface, tricount, 1))
+			v2y#=VertexY(cursurface, TriangleVertex(cursurface, tricount, 1))
+			v2z#=VertexZ(cursurface, TriangleVertex(cursurface, tricount, 1))			
+			TFormPoint v2x#,v2y#,v2z#, entity, 0
+			v2x#=TFormedX()
+			v2y#=TFormedY()
+			v2z#=TFormedZ()
+			
+			v3x#=VertexX(cursurface, TriangleVertex(cursurface, tricount, 2))
+			v3y#=VertexY(cursurface, TriangleVertex(cursurface, tricount, 2))
+			v3z#=VertexZ(cursurface, TriangleVertex(cursurface, tricount, 2))
+			TFormPoint v3x#,v3y#,v3z#, entity, 0
+			v3x#=TFormedX()
+			v3y#=TFormedY()
+			v3z#=TFormedZ()
+			
+			
+			PositionEntity vpos,v1x#,v1y#,v1z#
+			PositionEntity vposend, lx#,ly#,lz#,1
+			PointEntity vposend, vpos
+			MoveEntity vposend, 0,0,VolumeDepth#
+			v1xe#=EntityX(vposend, True)
+			v1ye#=EntityY(vposend, True)
+			v1ze#=EntityZ(vposend, True)
+			
+			PositionEntity vpos,v2x#,v2y#,v2z#
+			PositionEntity vposend, lx#,ly#,lz#,1
+			PointEntity vposend, vpos
+			MoveEntity vposend, 0,0,VolumeDepth#
+			v2xe#=EntityX(vposend, True)
+			v2ye#=EntityY(vposend, True)
+			v2ze#=EntityZ(vposend, True)
+			
+			PositionEntity vpos,v3x#,v3y#,v3z#
+			PositionEntity vposend, lx#,ly#,lz#,1
+			PointEntity vposend, vpos
+			MoveEntity vposend, 0,0,VolumeDepth#
+			v3xe#=EntityX(vposend, True)
+			v3ye#=EntityY(vposend, True)
+			v3ze#=EntityZ(vposend, True)
+			
+			v1=AddVertex(volsurf,v1x#,v1y#,v1z#)
+			v1e=AddVertex(volsurf,v1xe#,v1ye#,v1ze#)
+			v2=AddVertex(volsurf,v2x#,v2y#,v2z#)
+			v2e=AddVertex(volsurf,v2xe#,v2ye#,v2ze#)
+			v3=AddVertex(volsurf,v3x#,v3y#,v3z#)
+			v3e=AddVertex(volsurf,v3xe#,v3ye#,v3ze#)			
+
+			AddTriangle (volsurf, v1,v1e,v2)
+			AddTriangle (volsurf, v2,v1e,v2e)
+			AddTriangle (volsurf, v1,v3,v1e)
+			AddTriangle (volsurf, v3,v3e,v1e)
+			AddTriangle (volsurf, v3,v2,v3e)
+			AddTriangle (volsurf, v2,v2e,v3e)
+			AddTriangle (volsurf, v1,v2,v3) 	;cap top
+			AddTriangle (volsurf, v1e,v2e,v3e) 	;cap bottom			
+			
+			tricount=tricount+1
+			Wend 
+			;Next		
+		surfcount=surfcount+1
+		Wend
+		;Next
+
+FreeEntity vpos
+FreeEntity vposend
+
+End Function
+
+Function HideVolumes()
+	For a_vol.volumes=Each volumes
+		HideEntity a_vol\mesh
+	Next
+End Function
+Function ShowVolumes()
+	For a_vol.volumes=Each volumes
+		ShowEntity a_vol\mesh
+	Next
+End Function
+Function DeleteVolumes()
+	For a_vol.volumes=Each volumes
+		FreeEntity a_vol\mesh
+		Delete a_vol
+	Next
+End Function
+
+</textarea> <br><br></td></tr></table><br>
+<a name="480393"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Beaker</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looks very corrupt on my machine. <br><br></td></tr></table><br>
+<a name="480394"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> hey, that's dead easy. just tell me what's this c++. Seriously - I'm looking forward to finally see smooth shadows with blitz3D. Especially something that would work nicely with an FPS enviroment. <br><br></td></tr></table><br>
+<a name="480439"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >VIP3R</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Corrupt display here too, probably an ATI thing? <br><br></td></tr></table><br>
+<a name="480484"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >wizzlefish</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Function "SetRenderState" not found. <br><br></td></tr></table><br>
+<a name="480488"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> You have to download the userlibs.<br><br>I get a MAV on SetRenderState(). <br><br></td></tr></table><br>
+<a name="480524"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Picklesworth</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Um... I'm guessing that I do not see it properly. Basically all I am getting is a very white sort of thing that looks like garbag eand a ton of messed up charcters overlappig eachother at the top. I can still recognise and move about what I'm guessing is the cylinder, but that's about it.<br>I have a Radeon 9600 Pro as well, so I would guess that it very probably is an ATI thing.<br><br>I hope this can be made working across all platforms :D <br><br></td></tr></table><br>
+<a name="480581"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Genexi2</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Works here on my nVidia Geforce6800 GT....<br><br><img src="http://img.photobucket.com/albums/v607/Genexi2/BBstencil.jpg"><br><br>I'm guessin card-compatiblity would be the biggest pain in te rear here, considerin alot of the people who posted received graphical glitches... <br><br></td></tr></table><br>
+<a name="480659"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Beaker</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> I think Tom (who made the original DLL) sorted any ATI glitch issues. <br><br></td></tr></table><br>
+<a name="480670"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Braincell</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes, i just posted the wrong version which was not fixed. Here is the fixed version,it should work, tell me if it doesnt:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+;This is a demo to show implementation of "Carmacks Reverse" way of drawing
+;stencil shadows. It is also known as the Depth-Fail or the Z-Fail technique.
+;
+;			Lenn , 21.01.2005
+
+;D3DCULL
+Const D3DCULL_NONE				= 1
+Const D3DCULL_CW					= 2
+Const D3DCULL_CCW					= 3
+		
+;D3DSHADE_MODE
+Const D3DSHADE_FLAT			= 1
+Const D3DSHADE_GOURAUD	= 2
+Const D3DSHADE_PHONG		= 3
+
+;D3DFILL_MODE
+Const D3DFILL_POINT			= 1
+Const D3DFILL_WIREFRAME	= 2
+Const D3DFILL_SOLID			= 3
+
+;D3DSTENCILOP
+Const D3DSTENCILOP_KEEP           = 1
+Const D3DSTENCILOP_ZERO           = 2
+Const D3DSTENCILOP_REPLACE        = 3
+Const D3DSTENCILOP_INCRSAT        = 4
+Const D3DSTENCILOP_DECRSAT        = 5
+Const D3DSTENCILOP_INVERT         = 6
+Const D3DSTENCILOP_INCR           = 7
+Const D3DSTENCILOP_DECR           = 8
+Const D3DSTENCILOP_FORCE_DWORD    = $7fffffff	;force 32-bit size enum
+
+;D3DCMPFUNC
+Const D3DCMP_NEVER               = 1
+Const D3DCMP_LESS                = 2
+Const D3DCMP_EQUAL               = 3
+Const D3DCMP_LESSEQUAL           = 4
+Const D3DCMP_GREATER             = 5
+Const D3DCMP_NOTEQUAL            = 6
+Const D3DCMP_GREATEREQUAL        = 7
+Const D3DCMP_ALWAYS              = 8
+Const D3DCMP_FORCE_DWORD         = $7fffffff	;force 32-bit size enum
+
+;D3DBLEND
+Const D3DBLEND_ZERO              = 1
+Const D3DBLEND_ONE               = 2
+Const D3DBLEND_SRCCOLOR          = 3
+Const D3DBLEND_INVSRCCOLOR       = 4
+Const D3DBLEND_SRCALPHA          = 5
+Const D3DBLEND_INVSRCALPHA       = 6
+Const D3DBLEND_DESTALPHA         = 7
+Const D3DBLEND_INVDESTALPHA      = 8
+Const D3DBLEND_DESTCOLOR         = 9
+Const D3DBLEND_INVDESTCOLOR      = 10
+Const D3DBLEND_SRCALPHASAT       = 11
+Const D3DBLEND_BOTHSRCALPHA      = 12
+Const D3DBLEND_BOTHINVSRCALPHA   = 13
+Const D3DBLEND_FORCE_DWORD       = $7fffffff	;force 32-bit size enum
+
+
+
+Const D3DRS_ANTIALIAS          = 2    ; D3DANTIALIASMODE */
+Const D3DRS_TEXTUREPERSPECTIVE = 4    ; True For perspective correction */
+Const D3DRS_ZENABLE            = 7    ; D3DZBUFFERTYPE (Or True/False For legacy) */
+Const D3DRS_FILLMODE           = 8    ; D3DFILL_MODE        */
+Const D3DRS_SHADEMODE          = 9    ; D3DFILL_MODE */
+Const D3DRS_LINEPATTERN        = 10   ; D3DLINEPATTERN */
+Const D3DRS_ZWRITEENABLE       = 14   ; True To enable z writes */
+Const D3DRS_ALPHATESTENABLE    = 15   ; True To enable alpha tests */
+Const D3DRS_LASTPIXEL          = 16   ; True For Last-pixel on lines */
+Const D3DRS_SRCBLEND           = 19   ; D3DBLEND */
+Const D3DRS_DESTBLEND          = 20   ; D3DBLEND */
+Const D3DRS_CULLMODE           = 22   ; D3DCULL */
+Const D3DRS_ZFUNC              = 23   ; D3DCMPFUNC */
+Const D3DRS_ALPHAREF           = 24   ; D3DFIXED (long) */
+Const D3DRS_ALPHAFUNC          = 25   ; D3DCMPFUNC */
+Const D3DRS_DITHERENABLE       = 26   ; True To enable dithering */
+Const D3DRS_ALPHABLENDENABLE   = 27   ; True To enable alpha blending */
+Const D3DRS_FOGENABLE          = 28   ; True To enable fog blending */
+Const D3DRS_SPECULARENABLE     = 29   ; True To enable specular */
+Const D3DRS_ZVISIBLE           = 30   ; True To enable z checking */
+Const D3DRS_STIPPLEDALPHA      = 33   ; True To enable stippled alpha (RGB device only) */
+Const D3DRS_FOGCOLOR           = 34   ; D3DCOLOR */  INT (((a) &lt;&lt; 24) Or ((r) &lt;&lt; 16) Or ((g) &lt;&lt; 8) Or (b)))
+Const D3DRS_FOGTABLEMODE       = 35   ; D3DFOGMODE */
+Const D3DRS_FOGSTART           = 36   ; Float Fog start (For both vertex And pixel fog) 
+Const D3DRS_FOGEND             = 37   ; Float Fog End      */
+Const D3DRS_FOGDENSITY         = 38   ; Fog density  */
+Const D3DRS_EDGEANTIALIAS      = 40   ; True To enable edge antialiasing */
+Const D3DRS_COLORKEYENABLE     = 41   ; True To enable source colorkeyed textures */
+Const D3DRS_ZBIAS              = 47   ; LONG Z bias */
+Const D3DRS_RANGEFOGENABLE     = 48   ; Enables range-based fog */
+
+; *** STENCIL OPS ***
+Const D3DRS_STENCILENABLE      = 52   ; BOOL enable/disable stenciling
+Const D3DRS_STENCILFAIL        = 53   ; D3DSTENCILOP To do If stencil test fails
+Const D3DRS_STENCILZFAIL       = 54   ; D3DSTENCILOP To do If stencil test passes And Z test fails
+Const D3DRS_STENCILPASS        = 55   ; D3DSTENCILOP To do If both stencil And Z tests pass */
+Const D3DRS_STENCILFUNC        = 56   ; D3DCMPFUNC fn.  Stencil Test passes If ((ref &amp; mask) stencilfn (stencil &amp; mask)) is True */
+Const D3DRS_STENCILREF         = 57   ; INT Reference value used in stencil test */
+Const D3DRS_STENCILMASK        = 58   ; Mask value used in stencil test  e.g (0xffffffff)
+Const D3DRS_STENCILWRITEMASK   = 59   ; Write mask applied To values written To stencil buffer e.g (0xffffffff)
+Const D3DRS_TEXTUREFACTOR      = 60   ; D3DCOLOR used For multi-texture blend */
+
+Const D3DCLEAR_TARGET					= $00000001	;Clear target surface
+Const D3DCLEAR_ZBUFFER				= $00000002	;Clear target z buffer
+Const D3DCLEAR_STENCIL				= $00000004	;Clear Stencil
+
+
+;ERRORS
+Const D3DERR_ZBUFFER_NOTPRESENT					= 2070
+Const D3DERR_STENCILBUFFER_NOTPRESENT		= 2071
+Const D3DERR_VIEWPORTHASNODEVICE				= 774
+Const DDERR_INVALIDOBJECT								= 130
+Const DDERR_INVALIDPARAMS								= $80070057
+
+Type BBRect
+	Field x1%
+	Field lX1%
+
+	Field y1%
+	Field lY1%
+
+	Field x2%
+	Field lX2%
+	
+	Field y2%
+  Field lY2%
+End Type
+
+Graphics3D 1027,768,32,2
+
+Direct3D7=SystemProperty$("Direct3D7")
+Direct3DDevice7=SystemProperty$("Direct3DDevice7")
+DirectDraw7=SystemProperty$("DirectDraw7")
+DirectInput7=SystemProperty$("DirectInput7")
+AppHWND=SystemProperty$("AppHWND")
+AppHINSTANCE=SystemProperty$("AppHINSTANCE")
+
+
+
+
+cam=CreateCamera()
+piv=CreatePivot()
+PositionEntity cam,-5,3,-5
+PointEntity cam,piv
+CameraRange cam,.1,50
+
+light=CreateLight()
+RotateEntity light,60,30,0
+
+tex=CreateTexture(512,512)
+ScaleTexture tex,.2,.5
+SetBuffer TextureBuffer(tex)
+Color 100,100,100
+Rect 0,0,512,512
+Color 200,200,200
+Rect 8,8,496,496
+Color 255,255,255
+SetBuffer BackBuffer()
+
+cyl1=CreateCylinder()
+EntityAlpha cyl1,.3
+PositionEntity cyl1,2,0,0
+ScaleEntity cyl1,3,3,3
+
+cyl2=CreateCylinder()
+EntityAlpha cyl2,.3
+PositionEntity cyl2,2,0,5
+ScaleEntity cyl2,3,3,3
+
+cube=CreateCube()
+PositionEntity cube,0,0,0
+ScaleEntity cube,5,.2,10
+EntityTexture cube,tex
+
+
+
+spa#=.3
+shadowplane=CreateCube() ; squished Z cube infront of cam
+ScaleMesh shadowplane,10,10,.01
+EntityParent shadowplane,cam,0
+MoveEntity shadowplane,0,0,.2
+EntityColor shadowplane,0,0,0
+EntityAlpha shadowplane,spa#
+;Shadow plane is the object infront of the screen which is drawn where
+;the stencil shadow should be drawn (on certain pixels). It means that
+;where the shadow volume and scenery intersect, that is where the plane
+;will be drawn. Because the color is black, and alpha is spa# its darkness
+;will depend on spa#. You can put any other object in its place...
+
+
+sv=1
+
+; AREA TO CLEAR
+r.BBRect=New BBRect
+r\lX1=0
+r\lY1=0
+;r\lX2=GraphicsWidth()/2 ; half the screen (used to show what happens if only half the screen is cleared)
+r\lX2=GraphicsWidth() 
+r\lY2=GraphicsHeight()
+
+
+CameraClsMode cam,False,False
+
+While Not KeyHit(1)
+
+.start
+	PositionEntity cyl1,(MouseX()-(GraphicsWidth()*.5)) * .01,-(MouseY()-(GraphicsWidth()*.5)) * .02,0
+	PositionEntity cyl2,(MouseX()-(GraphicsWidth()*.5)) * .01,-(MouseY()-(GraphicsWidth()*.5)) * .02,2
+	
+	
+	t=MilliSecs()
+
+	;-----------------------------------------------------------------------------------render start	
+	HideEntity shadowplane;1-hide plane
+	;I =think= that it might be better to hide the volumes here
+	HideEntity cyl1  ;1a-hide volumes
+	HideEntity cyl2 
+	ShowEntity cube  ;2-show scene
+
+	SetRenderState(Direct3DDevice7, D3DRS_ZWRITEENABLE, True) 
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILENABLE, False)
+	SetRenderState(Direct3DDevice7, D3DRS_ALPHABLENDENABLE, False)
+
+
+;	DeviceClear2(Direct3DDevice7, r, D3DCLEAR_TARGET Or D3DCLEAR_ZBUFFER Or D3DCLEAR_STENCIL,$00008080,1.0,0)
+;	RenderWorld 
+DeviceClear(Direct3DDevice7, 7,$00008080,1,0)
+CameraClsMode cam,True,True
+RenderWorld
+CameraClsMode cam,False,False
+
+
+	ShowEntity cyl1 ;3-show volume
+	ShowEntity cyl2
+	HideEntity cube ;4-hide scene
+
+
+; *** RenderShadow() START *** -------- &lt;&lt; name of the function as found in C++ DX7SDK examples
+
+
+	SetRenderState(Direct3DDevice7, D3DRS_ZWRITEENABLE,False)
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILENABLE,True)
+	
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILFUNC, D3DCMP_ALWAYS)
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP)
+	
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILPASS, D3DSTENCILOP_KEEP)
+	
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILREF, 1)
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILMASK,$ffffffff)
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILWRITEMASK,$ffffffff)
+
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILZFAIL, D3DSTENCILOP_INCR)
+	
+	SetRenderState(Direct3DDevice7, D3DRS_ALPHABLENDENABLE, True)
+	SetRenderState(Direct3DDevice7, D3DRS_SRCBLEND, D3DBLEND_ZERO)
+	SetRenderState(Direct3DDevice7, D3DRS_DESTBLEND, D3DBLEND_ONE)
+	
+	RenderWorld	
+	
+	SetRenderState(Direct3DDevice7, D3DRS_CULLMODE, D3DCULL_CW)
+	RenderWorld
+	
+	SetRenderState(Direct3DDevice7, D3DRS_CULLMODE, D3DCULL_CCW)
+	
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILZFAIL, D3DSTENCILOP_DECR)
+	RenderWorld 
+	
+	SetRenderState(Direct3DDevice7, D3DRS_ZWRITEENABLE,     True )
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILENABLE,    False )
+	SetRenderState(Direct3DDevice7, D3DRS_ALPHABLENDENABLE, False )			
+	
+
+	
+; *** RenderShadow() END *** --------
+
+
+
+; *** DrawShadow() START *** -----------  &lt;&lt; name of the function as found in C++ DX7SDK examples
+	SetRenderState(Direct3DDevice7, D3DRS_ZENABLE,       False )
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILENABLE, True )
+	SetRenderState(Direct3DDevice7, D3DRS_FOGENABLE, False)	
+
+	SetRenderState(Direct3DDevice7, D3DRS_ALPHABLENDENABLE, True )
+	SetRenderState(Direct3DDevice7, D3DRS_SRCBLEND, D3DBLEND_SRCALPHA )
+	SetRenderState(Direct3DDevice7, D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA )
+
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILREF,  1 )
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILFUNC, D3DCMP_LESSEQUAL )
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILPASS, D3DSTENCILOP_KEEP )
+
+	ShowEntity shadowplane ;5-show plane
+	RenderWorld
+
+	SetRenderState(Direct3DDevice7, D3DRS_ZENABLE,          True )
+	SetRenderState(Direct3DDevice7, D3DRS_STENCILENABLE,    False )
+	SetRenderState(Direct3DDevice7, D3DRS_ALPHABLENDENABLE, True )
+
+; *** DrawShadow() END *** -----------
+
+	HideEntity shadowplane ;6-hide plane
+
+	RenderWorld;--------------------------------------------------------------------------render end
+	
+
+	SetRenderState(Direct3DDevice7, D3DRS_ALPHABLENDENABLE, False )
+	Text 0,0,"Move cylinders (volumes) with mouse/"+"     MS: "+(MilliSecs() - t)
+	Text 0,10,"Shadow Alpha: "+spa+ "    LMB/RMB to change value, SPACE to toggle visibility"
+	Text 0,20, "A/Z to move back/forward. Enter the volumes and see that it works."
+
+	If MouseDown(1)
+		spa=spa-.01
+		If spa&lt;0 spa=0
+		EntityAlpha shadowplane,spa
+	Else If MouseDown(2)
+		spa=spa+.01
+		If spa&gt;1.0 spa=1.0
+		EntityAlpha shadowplane,spa
+	End If
+	
+	If KeyHit(30)
+		MoveEntity cam, 0,0,0.1
+	End If
+	
+	If KeyHit(44)
+		MoveEntity cam, 0,0,-0.1
+	End If	
+	
+
+	If KeyHit(57)
+		sv=Not sv
+		If sv
+			EntityAlpha cyl1,.3
+			EntityAlpha cyl2,.3
+		Else
+			EntityAlpha cyl1,0.001
+			EntityAlpha cyl2,0.001
+		End If
+	End If
+	
+	If KeyHit(24) tra=Not tra 
+
+
+Flip
+
+Wend
+
+
+End
+
+
+
+
+
+
+
+
+Type volumes
+	Field mesh
+End Type
+
+Function CreateVolume(entity, light)
+;entity - the entity that casts the shadow
+;light - the light entity from which the light
+;
+;This function is included in case somebody wants to build shadow volumes and try stuff out.
+;This is fairly slow because it extrudes and caps every triangle on a mesh. This means
+;that 6 times more triangles need to be made for each one on the mesh.
+;(I tried faster methods but trust me its not easy)
+;It may be useful only for very basic geometry.
+
+
+lx#=EntityX(light,True)
+ly#=EntityY(light,True)
+lz#=EntityZ(light,True)
+
+	a_vol.volumes=New volumes
+		a_vol\mesh=CreateMesh()
+		
+		;EntityBlend a_vol\mesh,2
+		;EntityFX a_vol\mesh,1
+		EntityColor a_vol\mesh,0,0,0
+		EntityAlpha a_vol\mesh,0.001
+
+		volsurf=CreateSurface(a_vol\mesh)
+		numsurf=CountSurfaces(entity)		
+		vpos=CreatePivot()
+		vposend=CreatePivot()
+		VolumeDepth#=1000
+		
+		
+		
+		;For surfcount=1 To numsurf-1
+		surfcount=1
+
+		While surfcount &lt;= numsurf
+			cursurface=GetSurface(entity, surfcount)
+			maxtricount=CountTriangles (cursurface)
+			;For tricount=0 To tricount-1
+							
+			While tricount &lt; maxtricount
+			v1x#=VertexX(cursurface, TriangleVertex(cursurface, tricount, 0))
+			v1y#=VertexY(cursurface, TriangleVertex(cursurface, tricount, 0))
+			v1z#=VertexZ(cursurface, TriangleVertex(cursurface, tricount, 0))
+			TFormPoint v1x#,v1y#,v1z#, entity, 0
+			v1x#=TFormedX()
+			v1y#=TFormedY()
+			v1z#=TFormedZ()
+			
+			v2x#=VertexX(cursurface, TriangleVertex(cursurface, tricount, 1))
+			v2y#=VertexY(cursurface, TriangleVertex(cursurface, tricount, 1))
+			v2z#=VertexZ(cursurface, TriangleVertex(cursurface, tricount, 1))			
+			TFormPoint v2x#,v2y#,v2z#, entity, 0
+			v2x#=TFormedX()
+			v2y#=TFormedY()
+			v2z#=TFormedZ()
+			
+			v3x#=VertexX(cursurface, TriangleVertex(cursurface, tricount, 2))
+			v3y#=VertexY(cursurface, TriangleVertex(cursurface, tricount, 2))
+			v3z#=VertexZ(cursurface, TriangleVertex(cursurface, tricount, 2))
+			TFormPoint v3x#,v3y#,v3z#, entity, 0
+			v3x#=TFormedX()
+			v3y#=TFormedY()
+			v3z#=TFormedZ()
+			
+			
+			PositionEntity vpos,v1x#,v1y#,v1z#
+			PositionEntity vposend, lx#,ly#,lz#,1
+			PointEntity vposend, vpos
+			MoveEntity vposend, 0,0,VolumeDepth#
+			v1xe#=EntityX(vposend, True)
+			v1ye#=EntityY(vposend, True)
+			v1ze#=EntityZ(vposend, True)
+			
+			PositionEntity vpos,v2x#,v2y#,v2z#
+			PositionEntity vposend, lx#,ly#,lz#,1
+			PointEntity vposend, vpos
+			MoveEntity vposend, 0,0,VolumeDepth#
+			v2xe#=EntityX(vposend, True)
+			v2ye#=EntityY(vposend, True)
+			v2ze#=EntityZ(vposend, True)
+			
+			PositionEntity vpos,v3x#,v3y#,v3z#
+			PositionEntity vposend, lx#,ly#,lz#,1
+			PointEntity vposend, vpos
+			MoveEntity vposend, 0,0,VolumeDepth#
+			v3xe#=EntityX(vposend, True)
+			v3ye#=EntityY(vposend, True)
+			v3ze#=EntityZ(vposend, True)
+			
+			v1=AddVertex(volsurf,v1x#,v1y#,v1z#)
+			v1e=AddVertex(volsurf,v1xe#,v1ye#,v1ze#)
+			v2=AddVertex(volsurf,v2x#,v2y#,v2z#)
+			v2e=AddVertex(volsurf,v2xe#,v2ye#,v2ze#)
+			v3=AddVertex(volsurf,v3x#,v3y#,v3z#)
+			v3e=AddVertex(volsurf,v3xe#,v3ye#,v3ze#)			
+
+			AddTriangle (volsurf, v1,v1e,v2)
+			AddTriangle (volsurf, v2,v1e,v2e)
+			AddTriangle (volsurf, v1,v3,v1e)
+			AddTriangle (volsurf, v3,v3e,v1e)
+			AddTriangle (volsurf, v3,v2,v3e)
+			AddTriangle (volsurf, v2,v2e,v3e)
+			AddTriangle (volsurf, v1,v2,v3) 	;cap top
+			AddTriangle (volsurf, v1e,v2e,v3e) 	;cap bottom			
+			
+			tricount=tricount+1
+			Wend 
+			;Next		
+		surfcount=surfcount+1
+		Wend
+		;Next
+
+FreeEntity vpos
+FreeEntity vposend
+
+End Function
+
+Function HideVolumes()
+	For a_vol.volumes=Each volumes
+		HideEntity a_vol\mesh
+	Next
+End Function
+Function ShowVolumes()
+	For a_vol.volumes=Each volumes
+		ShowEntity a_vol\mesh
+	Next
+End Function
+Function DeleteVolumes()
+	For a_vol.volumes=Each volumes
+		FreeEntity a_vol\mesh
+		Delete a_vol
+	Next
+End Function
+
+</textarea><br><br>You also need V1.88 of blitz3d running.<br><br>jfk, i heard Mark may be working on stencil shadows for BMax and may just convert them to blitz3d so lets wait for a bit and see what he does. If you dont want to wait, email me (email provided in my details) and i'll reply to you with the stuff i think can be done. <br><br></td></tr></table><br>
+<a name="480679"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yep, that works here on ATI where the previous one didn't. Nice! <br><br></td></tr></table><br>
+<a name="480707"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Braincell</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Good! <br><br></td></tr></table><br>
+<a name="480715"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> Lenn, thanks. Well, I think I'll wait and see :) <br><br></td></tr></table><br>
+<a name="480813"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Beaker</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Works fine now. <br><br></td></tr></table><br>
+<a name="480994"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >VIP3R</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> Great stuff Lenn, works fine here now :) <br><br></td></tr></table><br>
+<a name="481007"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kalisme</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> wasn't someone trying to get this code working with animated *.B3d files? I'm still very interested in that... and I agree... this should be intergrated into Bitz3d... (that would make it faster, right?) Very kewl... it does remind me of the shadows in DOOM3... great work :D <br><br></td></tr></table><br>
+<a name="484238"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Canali</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> Still gettin function "setrenderstate" no found.<br>:( <br><br></td></tr></table><br>
+<a name="484258"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Rook Zimbabwe</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> I think the important thing is :<br><br>Did you update your drivers for ATI? <br><br>I had no probs. I am using an ATI Radeon 7000 on a Athlon 64 3200+ with 1 gig...etc...<br><br>-RZ <br><br></td></tr></table><br>
+<a name="484354"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Braincell</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> Canali, you should read the first post completely and it says<br><br><div class="quote">  get the code from the box below and the needed userlibs from: <br>www.geocities.com/spirala7/dx7sshad.htm  <br></div><br><br>make sure you do that, and put the files into the userlibs folder <br><br></td></tr></table><br>
+<a name="484428"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >VIP3R</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> Rook, you should read the entire thread, it says...<br><div class="quote"> <br>Beaker: I think Tom (who made the original DLL) sorted any ATI glitch issues...<br><br>Lenn: Yes, i just posted the wrong version which was not fixed. Here is the fixed version...<br> <br></div><br>Make sure you do that and you'll discover it was fixed well before you posted ;) <br><br></td></tr></table><br>
+<a name="484698"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Shifty Geezer</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> <b>You also need V1.88 of blitz3d running. </b><br><br>Where does one get v1.88 from? <br><br></td></tr></table><br>
+<a name="484726"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Caff</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#22">[#22]</a></td></tr></table></td></tr><tr ><td class="posttext"> Check the forum called 'Blitz 3d Updates' - there's a post in there with the latest upgrades in. <br><br></td></tr></table><br>
+<a name="484780"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Shifty Geezer</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#23">[#23]</a></td></tr></table></td></tr><tr ><td class="posttext"> I get a "function SetRenderState not found" error even after updating to 1.88 <br><br></td></tr></table><br>
+<a name="485164"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RiverRatt</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#24">[#24]</a></td></tr></table></td></tr><tr ><td class="posttext"> The example runs, but I don,t see shadows, like the screenshot has. I just see two alpha cylinders.<br>Prosavage graphics. <br><br></td></tr></table><br>
+<a name="485197"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >cermit</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#25">[#25]</a></td></tr></table></td></tr><tr ><td class="posttext"> It works for me, i have geforce fx 5200 or something. just had to update blitz3d and put the dll and decls file in the userlib folder : ) <br><br></td></tr></table><br>
+<a name="485258"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Zmatrix</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#26">[#26]</a></td></tr></table></td></tr><tr ><td class="posttext"> @RiverRatt<br>Prosavage onboard video or (savage4 cards) , have a stencil buffer.<br>You may need to turn it on in the cards control panel. <br>and on some cards it wont work with a 32bit Zbuffer<br><br>Zmatrix <br><br></td></tr></table><br>
+<a name="589317"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Spacemonkey</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#27">[#27]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi there,<br><br>If you want to test my shadow contribution to this thread, please download the file.<br><a href="http://www.spacemonkeys.dk/blitz/CVC-SDtest.rar" target="_blank">http://www.spacemonkeys.dk/blitz/CVC-SDtest.rar</a><br><br>I want to improve my edge method before a release :)<br><br><br>First Anim Test...  use key 1,2,3<br><a href="http://www.spacemonkeys.dk/blitz/CVC-SDtestAnim.rar" target="_blank">http://www.spacemonkeys.dk/blitz/CVC-SDtestAnim.rar</a> <br><br></td></tr></table><br>
+<a name="589564"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Stevie G</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#28">[#28]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is what I see with the Amin Test <br><br><img src="http://www.steviegoodwin.plus.com/images/Shadow.PNG"><br><br>I have a Geforce 440mx so it should support stencil shadows .. at least all the other demos I tried worked? <br><br></td></tr></table><br>
+<a name="589663"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RGR</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#29">[#29]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Spacemonkey<br>I have about the same picture as Stevie G - a green donut and a cute figure appears after long press on 2 running the Anim<br>The other shows 2 donuts (red and green) but the result on the floor looks as in the above picture.<br>The Demos above were working. <br><br></td></tr></table><br>
+<a name="589844"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Spacemonkey</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#30">[#30]</a></td></tr></table></td></tr><tr ><td class="posttext"> Strange! I use the same main loop as Lenn..<br>Is this the same all over? <br><br></td></tr></table><br>
+<a name="673089"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >bytecode77</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#31">[#31]</a></td></tr></table></td></tr><tr ><td class="posttext"> hm... if i use this, the self-shadding looks a lil bit strange!?!<br>why is this so? <br><br></td></tr></table><br>
+<a name="673407"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Chroma</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#32">[#32]</a></td></tr></table></td></tr><tr ><td class="posttext"> Very nice work here.  I'm wondering though.  Can that shader.dll be used to allow us tron glow effects that are stated here in this thread?<br><br><a href="http://collective.valve-erc.com/index.php?go=tron2" target="_blank">http://collective.valve-erc.com/index.php?go=tron2</a> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,259 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Read wave and write to bb data file</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='For packing wave files in executable, language=bb, category=Audio'><meta name='author' content='markcw'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=3>Audio</a>/Read wave and write to bb data file</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="1818.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Read wave and write to bb data file by markcw</td><td align="right">2006 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This is a 2-part code entry. It is designed to pack any wave sounds inside a blitz executable and then write them with data labels.<br><br>The first part is to read wave files and write the data to a bb data file. The second is to read the data (as an include) and write the wave file.<br><br>You can read/write various samplerates and in 8 or 16-bit quality. there is some kind of issue when using 8-bit waves as source, but it still works.<br><br>There is an end of data signature fourcc "end " to avoid out of data errors. I decided this was better than trying to calculate it. <br><br>edit: i have updated this to check the values written are never the fourcc "end ", so it should work 100% of the time now. </td></tr><tr ><td class="cell"><pre class="code">;Read Wave Write Data, on 19/9/06
+
+Graphics 640,480,0,2
+SetBuffer BackBuffer()
+
+fileout$="temp.bb"
+filein$="yourname.wav" ;wave in
+
+ok=ReadWaveWriteData(filein$,fileout$,12000) ;comprate
+
+chnsnd=PlayMusic(filein$) ;play wave in
+
+;Main loop
+While Not KeyHit(1)
+ Cls
+
+ Text 0,0,"ok="+ok+" filein="+filein$+" fileout$="+fileout$
+
+ Flip
+Wend
+
+;Functions
+Function ReadWaveWriteData(filein$,fileout$,comprate)
+ ;Read a wave file and write data to bb file
+ ;filein$=wave file, fileout$=bb file, comprate=compression rate
+ ;From PureBasic CodeArchiv, by Froggerprogger on 4/9/03
+
+ Local rfile,datasize,pcm,channels,samplesps,avgbytesps,blockalign,bps
+ Local mssize,wfile,time,side,value,lastms,mstime,x,integer
+
+ If filein$="" Then Return False ;fail code
+ rfile=ReadFile(filein$)
+ If Not rfile Then Return False ;read fail
+
+ ;RIFF Chunk, Resource Interchange File Format
+ If ReadInt(rfile)&lt;&gt;MakeFourCC("R","I","F","F") ;dwChunkID, "RIFF"
+  CloseFile rfile : Return False ;not riff file
+ EndIf
+ datasize=ReadInt(rfile) ;dwChunkSize, filesize-8
+ If ReadInt(rfile)&lt;&gt;MakeFourCC("W","A","V","E") ;dwTypeID, "WAVE"
+  CloseFile rfile : Return False ;not wave file
+ EndIf
+
+ ;Format Chunk, RIFF Subchunk
+ If ReadInt(rfile)&lt;&gt;MakeFourCC("f","m","t"," ") ;dwChunkID, "fmt "
+  CloseFile rfile : Return False ;not PCM format
+ EndIf
+ datasize=ReadInt(rfile) ;dwChunkSize, sizeof(PCMWAVEFORMAT)
+ ;PCMWAVEFORMAT structure, uncompressed wave data
+ pcm=ReadShort(rfile) ;wFormatTag, WAVE_FORMAT_PCM=1
+ channels=ReadShort(rfile) ;wChannels, mono=1/stereo=2
+ samplesps=ReadInt(rfile) ;dwSamplesPerSec, samplerate in hertz
+ avgbytesps=ReadInt(rfile) ;dwAvgBytesPerSec
+ blockalign=ReadShort(rfile) ;wBlockAlign, bytes per sample
+ bps=ReadShort(rfile) ;wBitsPerSample, PCM=8/16
+
+ ;Data Chunk, RIFF Subchunk
+ SeekFile(rfile,20+datasize)
+ If ReadInt(rfile)&lt;&gt;MakeFourCC("d","a","t","a") ;dwChunkID, "data"
+  CloseFile rfile : Return False ;not PCM data
+ EndIf
+ datasize=ReadInt(rfile) ;dwChunkSize, sizeof(DataSamples)
+ ;calculate compressed size, make sure value not too big
+ mssize=(datasize*(comprate/1000))/((samplesps/1000)*blockalign)
+
+ ;Write fileout.bb
+ If fileout$="" Then Return False ;fail code
+ wfile=WriteFile(fileout$)
+ If Not wfile Then Return False ;write fail
+
+ ;write title comment, wave data label and data command
+ WriteStringAscii(wfile,";"+fileout$)
+ WriteByte wfile,13 : WriteByte wfile,10 ;newline
+ WriteByte wfile,13 : WriteByte wfile,10 ;newline
+ WriteStringAscii(wfile,"."+Left(filein$,Len(filein$)-4))
+ WriteStringAscii(wfile,"_"+Right(filein$,3))
+ WriteByte wfile,13 : WriteByte wfile,10 ;newline
+ WriteStringAscii(wfile,"Data ")
+ WriteValueAscii(wfile,mssize) ;first value is compressed size
+
+ ;Data Samples
+ While time&lt;datasize
+  ;read value according to bits per sample
+  For side=1 To channels
+   If bps=8
+    value=ReadByte(rfile) ;range 0..255
+   Else
+    value=ReadShort(rfile) ;range -32767..32767
+    value=value/256 ;convert short to byte
+    If value&lt;128 Then value=value+128 Else value=value-128
+   EndIf
+  Next
+  ;calculate compressed time interval, make sure value not too big
+  lastms=mstime
+  mstime=(time*(comprate/1000))/((samplesps/1000)*blockalign)
+  If lastms&lt;&gt;mstime ;time reached, write integer
+   If x=0 Then integer=integer Or value ;set bytes to integer
+   If x=1 Then integer=integer Or (value Shl 8)
+   If x=2 Then integer=integer Or (value Shl 16)
+   If x=3 Then integer=integer Or (value Shl 24)
+   If x=3 ;write integer, make sure not fourcc "end "
+    If integer=MakeFourCC("e","n","d"," ") Then integer=integer+1
+    WriteByte wfile,Asc(",")
+    WriteValueAscii(wfile,integer)
+   EndIf
+   x=x+1 : If x&gt;3 Then x=0 : integer=0 ;reset
+  EndIf
+  time=time+blockalign
+ Wend
+ If x&gt;0 ;last integer not aligned
+  WriteByte wfile,Asc(",")
+  WriteValueAscii(wfile,integer)
+ EndIf
+ ;write end fourcc and end comment
+ WriteByte wfile,Asc(",")
+ WriteValueAscii(wfile,MakeFourCC("e","n","d"," ")) ;avoid out of data
+ WriteByte wfile,13 : WriteByte wfile,10 ;newline
+ WriteStringAscii(wfile,";end "+Left(filein$,Len(filein$)-4))
+ WriteStringAscii(wfile,"_"+Right(filein$,3))
+
+ CloseFile rfile
+ CloseFile wfile
+ Return True ;success code
+
+End Function
+
+Function MakeFourCC(c0$,c1$,c2$,c3$)
+
+ Return (Asc(c0$)+(Asc(c1$) Shl 8)+(Asc(c2$) Shl 16)+(Asc(c3$) Shl 24))
+
+End Function
+
+Function WriteValueAscii(file,value)
+ ;file=file handle, value=byte/short/integer
+
+ Local ascii$,i,char$
+ ascii$=Str(value)
+ For i=1 To Len(ascii$)
+  char$=Mid(ascii$,i,1)
+  WriteByte(file,Asc(char$))
+ Next
+
+End Function
+
+Function WriteStringAscii(file,ascii$)
+ ;file=file handle, ascii$=ascii string
+
+ Local i,char$
+ For i=1 To Len(ascii$)
+  char$=Mid(ascii$,i,1)
+  WriteByte(file,Asc(char$))
+ Next
+
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >markcw</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> This is the second part. It writes waves from the data labels.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;Read Data Write Wave, on 19/9/06
+
+Graphics 640,480,0,2
+SetBuffer BackBuffer()
+
+fileout$="temp.wav" ;wave out
+Restore yourname_wav ;wave data label
+
+ok=ReadDataWriteWave(fileout$,11000,12000,8,1) ;wave parameters
+
+chnsnd=PlayMusic(fileout$) ;play wave out
+
+;Main loop
+While Not KeyHit(1)
+ Cls
+
+ Text 0,0,"ok="+ok+" fileout$="+fileout$
+
+ Flip
+Wend
+
+;Includes
+Include "temp.bb"
+
+;Functions
+Function ReadDataWriteWave(fileout$,comprate,samplesps,bps,channels)
+ ;Read a data label and write to wave file
+ ;fileout$=wave file, comprate=compression rate
+ ;samplesps=sample rate, bps=bits per sample 8/16, channels=1/2
+ ;From PureBasic CodeArchiv, by Froggerprogger on 4/9/03
+
+ Local file,blockalign,avgbytesps,mssize,datasize
+ Local value,time,lastms,mstime,x,enddata,integer,side
+
+ If fileout$="" Then Return False ;fail code
+ file=WriteFile(fileout$)
+ If Not file Then Return False ;write fail
+
+ ;calculate datasize, make sure value not too big
+ blockalign=channels*(bps/8)
+ avgbytesps=samplesps*blockalign
+ Read mssize ;first value is compressed size
+ datasize=(mssize*(samplesps/1000)*blockalign)/(comprate/1000)
+
+ ;RIFF Chunk, Resource Interchange File Format
+ WriteInt file,MakeFourCC("R","I","F","F") ;dwChunkID, "RIFF"
+ WriteInt file,36+datasize ;dwChunkSize, filesize-8
+ WriteInt file,MakeFourCC("W","A","V","E") ;dwTypeID, "WAVE"
+
+ ;Format Chunk, RIFF Subchunk
+ WriteInt file,MakeFourCC("f","m","t"," ") ;dwChunkID, "fmt "
+ WriteInt file,16 ;dwChunkSize, sizeof(PCMWAVEFORMAT)
+ ;PCMWAVEFORMAT structure, uncompressed wave data
+ WriteShort file,1 ;wFormatTag, WAVE_FORMAT_PCM=1
+ WriteShort file,channels ;wChannels, mono=1/stereo=2
+ WriteInt file,samplesps ;dwSamplesPerSec, samplerate in hertz
+ WriteInt file,avgbytesps ;dwAvgBytesPerSec
+ WriteShort file,blockalign ;wBlockAlign, bytes per sample
+ WriteShort file,bps ;wBitsPerSample, 8/16
+
+ ;Data Chunk, RIFF Subchunk
+ WriteInt file,MakeFourCC("d","a","t","a") ;dwChunkID, "data"
+ WriteInt file,datasize ;dwChunkSize, sizeof(DataSamples)
+ ;Data Samples
+ value=127 ;zero first byte
+ While time&lt;datasize
+  ;calculate compressed time interval, make sure value not too big
+  lastms=mstime
+  mstime=(time*(comprate/1000))/((samplesps/1000)*blockalign)
+  If lastms&lt;&gt;mstime ;time reached, read byte
+   If x=0 And enddata=0 Then Read integer ;avoid out of data
+   If integer=MakeFourCC("e","n","d"," ") Then enddata=1
+   If enddata=1 Then integer=$7F7F7F7F ;zero integer
+   If x=0 Then value=integer And $000000FF ;get bytes from integer
+   If x=1 Then value=(integer And $0000FF00) Shr 8
+   If x=2 Then value=(integer And $00FF0000) Shr 16
+   If x=3 Then value=(integer And $FF000000) Shr 24
+   If bps=16
+    If value&lt;128 Then value=value-128 Else value=value+128
+    value=value*256 ;convert byte to short
+   EndIf
+   x=x+1 : If x&gt;3 Then x=0 ;reset
+  EndIf
+  ;write value according to bits per sample
+  For side=1 To channels
+   If bps=8
+    WriteByte file,value ;range 0..255
+   Else
+    WriteShort file,value ;range -32767..32767
+   EndIf
+  Next
+  time=time+blockalign
+ Wend
+
+ CloseFile file
+ Return True ;success code
+
+End Function
+
+Function MakeFourCC(c0$,c1$,c2$,c3$)
+
+ Return (Asc(c0$)+(Asc(c1$) Shl 8)+(Asc(c2$) Shl 16)+(Asc(c3$) Shl 24))
+
+End Function
+</textarea> <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

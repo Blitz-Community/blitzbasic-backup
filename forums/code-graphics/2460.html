@@ -1,0 +1,215 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Simple delta timing and jitter correction module</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='A module to handle automatically delta timing on games, language=bmx, category=Graphics'><meta name='author' content='ziggy'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=1>Graphics</a>/Simple delta timing and jitter correction module</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2460.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Simple delta timing and jitter correction module by ziggy</td><td align="right">2009 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> I find it very useful.<br>You only have to call Delta.Factor() to get the current delta factor. The code is thread safe.<br>Example usage:<br><pre class=code>'This file was written with BLIde
+Import blide.deltatiming
+Strict
+Graphics(800, 600, 0, 0)
+SetBlend ALPHABLEND
+Local Waiter:Int = 0
+Local L:TList = New TList
+For Local i:Int = 0 To 500
+	L.AddFirst(New TBall)
+Next
+
+SetColor 255, 255, 255
+SetClsColor(0, 0, 0)
+While (Not KeyHit(KEY_ESCAPE)) And (AppTerminate() = False)
+	Cls
+	DrawText("Delta factor: " + Delta.Factor() + " Press Q-W to add Delay to the sample.", 0, 0)
+	DrawText("E-To enable/disable delta time calculation.", 0, 20)
+	DrawText("Current FPS: " + Delta.GetFPS(), 0, 40)
+	DrawText("Current delay: " + Waiter, 0, 60)
+	For Local MyBall:TBall = EachIn L
+		MyBall.Update()
+	Next
+	If KeyHit(KEY_Q) Then
+		waiter:+1
+	ElseIf KeyHit(KEY_W) And waiter &gt; 0 Then
+		waiter:-1
+	ElseIf KeyHit(KEY_E) Then
+		If Delta.IsPaused() = True Then
+			Delta.ResumeDeltaTiming()
+		Else
+			Delta.PauseDeltaTiming()
+		End If
+	End If
+	If waiter &gt; 0 Then Delay(waiter)
+	Flip()
+Wend
+
+Type TBall
+	Field X:Double = Rand(0, GraphicsWidth())
+	Field Y:Double = Rand(150, GraphicsHeight())
+	Field SpeedX:Double = Rnd(- 2, 2)
+	Field SpeedY:Double = Rnd(- 2, 2)
+	Method Update()
+		x:+SpeedX * Delta.Factor()
+		y:+Speedy * Delta.Factor()
+		If x &gt; GraphicsWidth() And SpeedX &gt; 0 Then SpeedX = -SpeedX
+		If x &lt; 0 And SpeedX &lt; 0 Then SpeedX = -SpeedX
+		If Y &gt; GraphicsHeight() And Speedy &gt; 0 Then Speedy = -Speedy
+		If y &lt; 150 And SpeedY &lt; 0 Then SpeedY = -SpeedY
+		DrawOval(x - 5, y - 5, 10, 10)
+	End Method
+End Type
+</pre><br>As you can see in the example, the module does not need to be initialited or anything. It works automatically, and provide very interesting methods such as GetFPS(), IsComputerSlow (if the delta factor is getting too big becouse the computer is too old, or the calculations in the game too complex), PauseDeltaTime (suspends the delta-time calculation), ResumeDeltaTime (resumes the delta-time calculation), etc.<br>Hope you'll find it usefull. </td></tr><tr ><td class="cell"><pre class="code">Import brl.hook
+Import brl.basic
+Import brl.Graphics
+rem
+	bbdoc: Automatic Delta Timing Module.
+end rem
+Module blide.deltatiming
+ModuleInfo "Author: Manel Ibáñez"
+ModuleInfo "Version: 0.0.1 - First Release!"
+
+Strict
+
+Const DefaultMinimumTimeFactor:Double = 0.25
+Const DefaultMaximumTimeFactor:Double = 5
+
+Private
+	Global Handler:Int = AddHook(FlipHook, DeltaHook)
+	Global Paused:Int = False
+	
+	Global DeltaTime:Double
+	Global LastTiming:Double = MilliSecs()
+	Global MinimumTimeFactor:Double = DefaultMinimumTimeFactor
+	Global MaximumTimeFactor:Double = DefaultMaximumTimeFactor
+	
+	Global LastMillisecs:Int = Millisecs()
+	Global Counter:Int = 0
+	
+	Global FPS:Int = 0'MilliSecs()
+	
+	Global slow:Int = False
+	Function DeltaHook:Object(id, data:Object, context:Object)
+		If Not Paused UpdateTiming()
+	End Function
+	
+	Function UpdateTiming()
+		Local MLS:Double = MilliSecs()
+		DeltaTime = Abs(MLS - LastTiming) / 10.0
+		If DeltaTime &lt; MinimumTimeFactor Then
+			While DeltaTime &lt; MinimumTimeFactor
+				Delay(1)
+				MLS = MilliSecs()
+				DeltaTime = Abs(MLS - LastTiming) / 10.0
+				Print DeltaTime + ", " + MLS
+			Wend
+		End If
+		LastTiming = MLS
+		If DeltaTime &gt; MaximumTimeFactor Then
+			DeltaTime = MaximumTimeFactor
+			slow = True
+		Else
+			slow = False
+		EndIf
+		Counter:+1
+		If Abs(LastMillisecs - MLS) &gt; 1000 Then
+			FPS = Counter
+			Counter = 0
+			LastMillisecs = MLS
+		End If
+	End Function
+Public
+
+rem
+	bbdoc:This shared class provides an automated delta-timing factor to be used in games.
+	about: this is a shared class, so there's no need to instantiate it, just use its functions.
+end rem
+Type Delta Abstract
+	rem
+		bbdoc: This function returns the current delta-timing factor.
+	end rem
+	Function Factor:Double()
+		Return DeltaTime
+	End Function
+	rem
+		bbdoc: This function sets the minimum time factor expected.
+		about: so if the computer is too fast, the engine automatically adds the needed sleep calls, to avoid a too small delta factor, that could introduce some maths precision issues.&lt;br&gt;
+			   Usually a minimum of 0.5 millisec of time per frame is good for calculations.
+			   This has a pretended impact on FPS, making them more stable. After setting this, you should not be getting framerates superior to 100/Factor
+	end rem
+	Function SetMinimumTimeFactor(Factor:Double = DefaultMinimumTimeFactor)
+		MinimumTimeFactor = Factor
+	End Function
+	rem
+		bbdoc: This function returns the minimum time factor. Usually 1 millisec per frame is good for calculations. smalle values can introduce visualization glitches.
+	end rem
+	Function GetMinimumTimeFactor:Double()
+		Return MinimumTimeFactor
+	End Function
+	rem
+		bbdoc: This function sets the maximum time factor expected.
+		about: This is important becouse if the computer is too slow, we avoid too many frames to be dropped, at a cost of the game being shown a bit slower.&lt;br&gt;Otherwise the game could drop too many frames, affecting calculations.
+	end rem
+	Function SetMaximumTimeFactor(Factor:Double = DefaultMaximumTimeFactor)
+		MaximumTimeFactor = Factor
+	End Function
+	rem
+		bbdoc: This function gets the maximum time factor expected
+		about:This is important becouse if the computer too slow, the engine mimics the computer is faster, to avoid getting dropping too many frames, and having too big values on calculation. The game will then be slowed to prevent errors on calculations.
+	end rem
+	Function GetMaximumTimeFactor:Double()
+		Return MaximumTimeFactor
+	End Function
+	rem
+		bbdoc: This function returns TRUE if the game is being slowed due bad hardware, to prevent bad calculations.
+	end rem
+	Function IsComputerSlow:Int()
+		Return slow
+	End Function
+	rem
+		bbdoc: This function will return the curret frames per second.
+	end rem
+	Function GetFPS:Int()
+		Return FPS
+	End Function
+	
+	rem
+		bbdoc: Pauses the automatic DeltaTiming engine
+	end rem
+	Function PauseDeltaTiming()
+			Paused = True
+	End Function
+	
+	rem
+		bbdoc: Resumes the automatic DeltaTiming engine
+	end rem
+	Function ResumeDeltaTiming()
+		If Paused = True Then
+			Self.FlushTiming
+			Paused = False
+		End If
+	End Function
+	
+	rem
+		bbdoc: Resets the delta timing engine. Usefull after a 
+	end rem
+	Function FlushTiming()
+			LastTiming = MilliSecs()
+			LastMillisecs:Int = MilliSecs()
+			Counter = 0		
+	End Function
+	
+	Function IsPaused:Int()
+		Return Paused
+	End Function
+	
+	Function DebugString:String()
+		Local Ret:String
+		Ret = "Current delta time factor: " + DeltaTime + "~n"
+		Ret:+"Current FPS: " + FPS + "~n"
+		If Self.IsPaused() Then
+			Ret:+"Delta time paused.~n"
+		Else
+			Ret:+"Delta time running.~n"
+		EndIf
+		Ret:+"Minimum time factor: " + MinimumTimeFactor + "~n"
+		Ret:+"Maximum time factor: " + MaximumTimeFactor + "~n"
+		If slow Then
+			Ret:+"Application running slowly: TRUE~n"
+		Else
+			Ret:+"Application running slowly: FALSE~n"
+		EndIf
+		Return ret
+	End Function
+End Type</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Cruis.In</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> this is an excellent piece of code. Thanks. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,158 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Strange behaviour/bug, need your help</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Strange behaviour/bug, need your help</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >Strange behaviour/bug, need your help</a><br><br>
+<a name="550703"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jake L.</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi everyone,<br><br>I ran into a strange behaviour that drives me crazy. I've checked my code again and again the last 4 hours and I don't understand it. Could you do me a favour, run the code on your machine and see for yourself. It's part of my surface-manager I'm currently working on - i removed everything except the parts where my problem occurs.<br><br>All this code does is creating some test-quads and storing them for later use. Everytime you press &lt;Space&gt; a quad will be created. And now the weird thing: The fourth quad makes the three previous disappear, the fifth makes them appear again. Same happens with 6th, 9th and 11th quad (didn't tested further). I cannot find any error in my code and this happens either with debugmode on or off. BUT if you uncomment the line with "debuglog" in the mainloop (and turn debugmode on), this bug will not show up. Here's the code:<br><br><pre class=code>
+Type SM_Entity
+	Field msh%
+	Field srf%
+	Field NewObj.SM_Object	; points to object we process
+	Field NewObjVt%			; Stores Vertex-IDs for NewObj until SM_EndObject
+	Field NewObjVtPtr%		; "Pointer" to last offset
+	Field NewObjTris%		; stores Tri-IDs for NewObj until SM_EndObject
+	Field NewObjTrisPtr%	; "Pointer" to last offset
+End Type
+
+Type SM_Object
+	Field par.SM_Entity
+	Field Tris%				; Int-Bank of tris belonging to this object
+End Type
+
+Function SM_CreateEntity%(parent%=0,entity_fx%=2)
+;returns new entity
+	Local sm.SM_Entity=New SM_Entity
+	sm\msh=CreateMesh()
+	sm\srf=CreateSurface(sm\msh)
+
+	EntityFX (sm\msh,entity_fx)
+	NameEntity (sm\msh,Handle(sm))
+	Return sm\msh
+End Function
+
+Function SM_BeginObject%(smid%,estimated_vt%=0,estimated_tri%=0)
+;prepare a new object to add vertices/triangles
+;RETURNS: handle of SM_Object
+	Local sm.SM_Entity=Object.SM_Entity(EntityName(smid))
+	If sm=Null Then RuntimeError ("SM_BeginObject: Invalid SM_Entity")
+	If sm\NewObj&lt;&gt;Null Then RuntimeError ("SM_BeginObject: Can't create two objects at once. Call SM_EndObject first")
+
+		sm\NewObj=New SM_Object
+		sm\NewObj\par=sm
+		sm\NewObjTris=CreateBank (estimated_tri*4) : sm\NewObjTrisPtr=0
+		sm\NewObjVt=CreateBank (estimated_vt*4) : sm\NewObjVtPtr=0
+		
+	Return Handle(sm\NewObj)
+End Function
+
+Function SM_EndObject%(smid%)
+; finalize object-creation
+;RETURNS: number of vertices added
+	Local sm.SM_Entity=Object.SM_Entity(EntityName(smid))
+	If sm=Null Then RuntimeError ("SM_EndObject: Invalid SM_Object")
+	If sm\NewObj=Null Then RuntimeError ("SM_EndObject: No SM_Object open")
+	
+	sm\NewObj\Tris=CreateBank(sm\NewObjTrisPtr)
+	CopyBank(sm\NewObjTris,0,sm\NewObj\Tris,0,sm\NewObjTrisPtr)
+	Local cnt%=sm\NewObjVtPtr/4	
+	SMInt_UpdateNormals (sm\NewObj)
+	
+	FreeBank(sm\NewObjTris) : sm\NewObjTrisPtr=0
+	FreeBank(sm\NewObjVt) : sm\NewObjVtPtr=0
+	sm\NewObj=Null
+	Return (cnt%)
+End Function
+
+Function SMInt_UpdateNormals (obj.SM_Object)
+;maybe optimize this later and calculate just the new object	
+	If obj=Null Then RuntimeError ("SMInt_UpdateNormals: Invalid SM_Object - ERROR IN LIB, THIS SHOULD NOT HAPPEN")
+	
+	UpdateNormals (obj\par\msh)
+End Function
+
+Function SM_AddVertex% (smid%,x#=0,y#=0,z#=0,u#=0,v#=0)
+;adds a vertex to current object
+;RETURNS: Vertex-ID
+	Local sm.SM_Entity=Object.SM_Entity(EntityName(smid))
+	If sm=Null Then RuntimeError ("SM_AddVertex: Invalid SM_Object")
+	
+	Local size%=BankSize(sm\NewObjVt)
+	Local vt%=AddVertex(sm\srf,x,y,z,u,v)
+	
+	sm\NewObjVtPtr=sm\NewObjVtPtr+4
+	If sm\NewObjVtPtr &gt; size Then ResizeBank(sm\NewObjVt,sm\NewObjVtPtr)
+	PokeInt (sm\NewObjVt,sm\NewObjVtPtr-4,vt%)
+	
+	Return (vt%)
+End Function
+
+Function SM_AddTriangle% (smid%,v0%,v1%,v2%)
+;adds a triangle to current object
+;RETURNS: Triangle-ID
+	Local sm.SM_Entity=Object.SM_Entity(EntityName(smid))
+	If sm=Null Then RuntimeError ("SM_AddTriangle: Invalid SM_Object")
+	
+	Local size%=BankSize(sm\NewObjTris)
+	Local t%=AddTriangle(sm\srf,v0,v1,v2)
+	
+	sm\NewObjTrisPtr=sm\NewObjTrisPtr+4
+	If sm\NewObjTrisPtr &gt; size Then ResizeBank(sm\NewObjTris,sm\NewObjTrisPtr)
+	PokeInt (sm\NewObjTris,sm\NewObjTrisPtr-4,t)
+	
+	Return (t%)
+End Function
+
+;================================================================
+
+Graphics3D 1024,768,32,2
+SetBuffer BackBuffer()
+
+cam=CreateCamera()
+PositionEntity cam,0,0,-20
+AmbientLight(255,255,255)
+
+Local ent=SM_CreateEntity()
+Local v0,v1,v2,v3,px,py
+; Hit &lt;Space&gt; to create a quad at random position. If you create the 4th quad, the previous three disappear.
+; Create the 5th, and they appear again. The 6th makes all previous quads disappear again, then the 9th, the 11th =&gt; Stopped cheching
+While Not KeyDown(1)
+		If KeyHit(57)
+			SM_BeginObject (ent)
+				px=Rnd(-8,8) : py=Rnd(-8,8)
+				v0=SM_AddVertex (ent,px-1,py-1,0)
+				v1=SM_AddVertex (ent,px-1,py+1,0)
+				v2=SM_AddVertex (ent,px+1,py+1,0)
+				v3=SM_AddVertex (ent,px+1,py-1,0)
+				SM_AddTriangle (ent,v0,v1,v2)
+				SM_AddTriangle (ent,v0,v2,v3)
+			SM_EndObject (ent)
+			; !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+			; !!!! Uncommenting this debuglog will prevent this strange behaviour - if you run in debugmode 
+			; !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+			; DebugLog "WHAT THE HELL!!!!"
+			; !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+		EndIf
+	RenderWorld
+	Flip False
+Wend
+End
+</pre><br><br>Any hints or ideas to hunt this evil bug could save an old man's day...<br><br>Sincerly<br><br>Jake <br><br></td></tr></table><br>
+<a name="550711"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Wings</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> This code works.. no quads disapear on my machine.<br>AMD Athalon XP2200+ 256mb ram<br>NVIDIA GeForce4 Ti4200 AGP8X <br><br></td></tr></table><br>
+<a name="550721"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jake L.</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm, really strange. On my machine (Athlon 1800, GForce6800 GT) this bug is reproducable, even after reboot.<br><br>My driver is Detonator 6.14.10.6681 and I'm using dx9.0c<br>and blitzcc v1.89 (I've read nothing good about 1.90, is this true?)<br><br>Please could you post your driver/compiler-versions ? <br><br></td></tr></table><br>
+<a name="550750"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >John Blackledge</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> No problem here.<br>Blitz 1.90<br>DX 9.0c <br><br></td></tr></table><br>
+<a name="550755"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Clarks</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> in runs pretty fine on my machine, debug on and off, GForce 5200 ultra <br><br></td></tr></table><br>
+<a name="550758"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >MadJack</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> No prob here (tried dif colour depths windowed/full screen too without issue)<br><br>Blitz1.90<br>W2000<br>Nvidia Quadro2<br>DX9.0b <br><br></td></tr></table><br>
+<a name="550784"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >big10p</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Wow, that code causes absolute havoc on my machine - completely crashing windows. :/<br><br>After several attempts, I managed to narrow the cause down to the Flip False! On my PC, at least, it seems this is the trouble because the buffers are getting flipped at VERY high speed because there's nothing to render, to begin with. My PC really doesn't like this. Changing to Flip True fixes it.<br><br>My specs: Athlon 850Mhz, Win98SE, 128MB RAM, GeForce 256, DX8, Blitz3D 1.88<br><br>The good news is, nothing appears to be wrong with your code. The reason you <b>think</b> some quads aren't getting created is because they're being positioned exactly on top of other quads. Use EntityAlpha to make the quads semi transparent and you'll see them.<br><br>The reason the same quads don't seem to appear every time you run is because you're not seeding the random number generator with SeedRnd MilliSecs(). <br><br></td></tr></table><br>
+<a name="550837"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jake L.</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> I will check everything again later this day, trying Blitz v1.90, Flip True and maybe a newer gfx-driver. Thanks to all of you!<br><br>@big10p<br><br>They're really disappearing on my screen, this is not just about positioning. <br><br></td></tr></table><br>
+<a name="550857"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >D4NM4N</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> ok here, tried it on my old duron 800 w/gforce4mx <br><br></td></tr></table><br>
+<a name="550858"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Naughty Alien</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> ..working fine here..<br><br>P4 2.8GHz, 4 Gigz RAM, NVidia A310 256 MB VRAM, WinXP Pro <br><br></td></tr></table><br>
+<a name="550888"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jake L.</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Finally, I figured it out. It's the problem big10p mentioned, when a loop is running too fast. a debuglog is very slow, "flip true" makes the whole loop slower, too.<br><br>So when used in a game with Timing and a nice filled mainloop everything works well.<br><br>Thanks again for all responses <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

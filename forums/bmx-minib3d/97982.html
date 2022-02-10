@@ -1,0 +1,719 @@
+<!DOCTYPE html><html lang="en" ><head ><title >TBatchSprite -- batch sprites for minib3d</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >TBatchSprite -- batch sprites for minib3d</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=119" >MiniB3D Module</a>/<a href="#bottom" >TBatchSprite -- batch sprites for minib3d</a><br><br>
+<a name="1141515"></a>
+
+<a name="1141516"></a>
+
+<a name="1141518"></a>
+
+<a name="1141594"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> TBatchSprite is an addon to minib3d which allows sprites to be drawn into one surface, thus saving opengl overhead and resulting in speed increases.<br><br>TO ADD:<br>- copy TBatchSprite.bmx into the minib3d/inc folder.<br>- add Include "inc/TBatchSprite.bmx" to the "minib3d.bmx" file.<br><br>TO USE:<br>- TBatchSprite.LoadBatchTexture(imagefile)<br>- entity=TBatchSprite.CreateSprite()<br>- entity is then treated like any other entity<br><br>- the base controller (TBatchSpriteMesh) can be controlled via batchmesh_entity = TBatchSprite.BatchSpriteEntity() or via LoadBatchTexture() and treated like any entity<br>- multiple batches: to CreateSprite(parent), set parent to specific TBatchSpriteMesh (via TBatchSprite.BatchSpriteEntity() or when loading)<br><br>LIMITATIONS:<br>- textures must be all the same (per batch)<br>- if camera and the controller (TBatchSpriteMesh) are in the same position, alpha problems may occur. to resolve, TBatchSprite.BatchSpriteEntity().PositionEntity(x,y,z)<br><br>----------------<br><br>TBatchSprite.bmx<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+
+''batchsprites
+''
+'' these batchsprites are one mesh
+''
+'' - notes:
+'' - may have to add a check that camera position &lt;&gt; origin position. If so, move origin out away from camera
+Type TBatchSpriteMesh Extends TMesh
+
+	Field surf:TSurface 
+	Field free_stack:Int[1] ''list of available vertex
+	Field num_sprites =0
+	Field sprite_list:TList
+	'Field mat_sp:Matrix = New Matrix
+	Field id:Int=0
+	
+	Field cam_sprite:TSprite ''use this to get cam info
+	
+	''create batch controller
+	Function Create:TBatchSpriteMesh(parent_ent:TEntity=Null)
+	
+		Local mesh:TBatchSpriteMesh = New TBatchSpriteMesh
+		
+		mesh.AddParent(parent_ent)
+		'mesh.entity_link = entity_list.EntityListAdd(mesh)
+		mesh.EntityListAdd(entity_list)
+
+		' update matrix
+		If mesh.parent&lt;&gt;Null
+			mesh.mat.Overwrite(mesh.parent.mat)
+			mesh.UpdateMat()
+		Else
+			mesh.UpdateMat(True)
+		EndIf
+		
+		mesh.surf = mesh.CreateSurface()
+		mesh.surf.ClearSurface()
+		'mesh.surf.vbo_dyn = True
+		mesh.num_sprites = 0
+		'mesh.free_stack = New IntStack
+				'mainlist
+				
+		mesh.EntityFX 1+2+32 '' full bright+ use vertex colors + alpha
+		mesh.brush.shine=0.0	
+				
+		mesh.class = "BatchSpriteMesh"
+		'mesh.is_sprite = True 'no
+		'mesh.is_update = True
+		mesh.cull_radius = -999999.0
+		
+		''add invisible sprite to get camera info for batch
+		mesh.cam_sprite = CreateSprite(mesh)
+		Local sf:TSurface = TSurface(mesh.cam_sprite.surf_list.First())
+		mesh.cam_sprite.EntityFX(3+32)
+		sf.VertexColor(0,0,0,0,0)
+		sf.VertexColor(1,0,0,0,0)
+		sf.VertexColor(2,0,0,0,0)
+		sf.VertexColor(3,0,0,0,0)
+		
+		mesh.sprite_list = CreateList()
+	
+		Return mesh
+	EndFunction
+	
+	Method Update()
+		
+		'' wipe out rotation matrix
+		mat.grid[0,0] = 1.0; mat.grid[0,1] = 0.0; mat.grid[0,2] = 0.0
+		mat.grid[1,0] = 0.0; mat.grid[1,1] = 1.0; mat.grid[1,2] = 0.0
+		mat.grid[2,0] = 0.0; mat.grid[2,1] = 0.0; mat.grid[2,2] = 1.0
+		
+		TBatchSprite.min_x=999999999.0
+		TBatchSprite.max_x=-999999999.0
+		TBatchSprite.min_y=999999999.0
+		TBatchSprite.max_y=-999999999.0
+		TBatchSprite.min_z=999999999.0
+		TBatchSprite.max_z=-999999999.0
+		
+		For Local ent:TBatchSprite = EachIn sprite_list
+			
+			ent.UpdateBatch(cam_sprite)
+			
+			surf.reset_vbo=surf.reset_vbo|16
+			
+		Next
+
+		
+		''do our own bounds
+		
+		If num_sprites&gt;0
+		
+			Local width#=TBatchSprite.max_x-TBatchSprite.min_x
+			Local height#=TBatchSprite.max_y-TBatchSprite.min_y
+			Local depth#=TBatchSprite.max_z-TBatchSprite.min_z
+	
+			' get bounding sphere (cull_radius#) from AABB
+			' only get cull radius (auto cull), if cull radius hasn't been set to a negative no. by TEntity.MeshCullRadius (manual cull)
+	
+			If width&gt;=height And width&gt;=depth
+				cull_radius=width
+			Else
+				If height&gt;=width And height&gt;=depth
+					cull_radius=height
+				Else
+					cull_radius=depth
+				EndIf
+			EndIf
+			cull_radius=cull_radius * 0.5
+			Local crs#=cull_radius*cull_radius
+			cull_radius= Sqr(crs+crs+crs)
+		
+		
+			min_x = TBatchSprite.min_x
+			min_y = TBatchSprite.min_y
+			min_z = TBatchSprite.min_z
+			max_x = TBatchSprite.max_x
+			max_y = TBatchSprite.max_y
+			max_z = TBatchSprite.max_z
+			
+			'If brush.tex[0] Then brush.tex[0].flags = brush.tex[0].flags | 16 |32 ''always clamp
+			'If surf.brush.tex[0] Then surf.brush.tex[0].flags = surf.brush.tex[0].flags | 16 |32 ''always clamp
+			
+		Else
+			''no more sprites in batch, reduce overhead
+			surf.ClearSurface()
+			sprite_list.Clear()
+			'free_stack.Clear()
+			free_stack = [0]
+			
+		EndIf
+		
+		Super.Update()
+		
+	EndMethod
+EndType
+
+Type TBatchSprite Extends TSprite
+		
+		Field batch_id:Int ''ids start at 1
+		Field vertex_id:Int
+		'Field sprite_link:list.Node&lt;TBatchSprite&gt;
+		Field sprite_link:TLink
+		
+		Global min_x:Float, min_y:Float, max_x:Float, max_y:Float, min_z:Float, max_z:Float
+		
+		Global mainsprite:TBatchSpriteMesh[] = New TBatchSpriteMesh[10]	
+		Global total_batch:Int =0
+		
+
+	
+		Global temp_mat:TMatrix = New TMatrix
+	
+
+		
+		Method New()
+			
+			''new batch sprite, not added to entity list
+						
+		EndMethod
+		
+		Method FreeEntity()
+			
+			mainsprite[batch_id].surf.VertexColor(vertex_id+0, 0,0,0,0)
+			mainsprite[batch_id].surf.VertexColor(vertex_id+1, 0,0,0,0)
+			mainsprite[batch_id].surf.VertexColor(vertex_id+2, 0,0,0,0)
+			mainsprite[batch_id].surf.VertexColor(vertex_id+3, 0,0,0,0)
+			
+			'mainsprite[batch_id].free_stack.Push(vertex_id) 
+			''stack push
+			
+			Local st:Int = mainsprite[batch_id].free_stack.length
+			mainsprite[batch_id].free_stack = mainsprite[batch_id].free_stack[0..st+1]
+			mainsprite[batch_id].free_stack[st] = vertex_id
+			
+			mainsprite[batch_id].num_sprites :- 1
+			
+			Self.sprite_link.Remove()
+			
+			' free self from parent's child_list
+			If parent&lt;&gt;Null
+				For Local ent:TEntity=EachIn parent.child_list
+					If ent=Self Then ListRemove(parent.child_list,Self)
+				Next
+			EndIf
+			
+			mat.LoadIdentity()
+			'brush=Null
+			
+		EndMethod
+		
+		
+		Method Copy()
+			
+			''use CreateSprite(), since they should all be the same
+			
+		EndMethod
+		
+				
+		''
+		''add a parent to the entire batch mesh
+		''-- position only
+		Function BatchSpriteParent(id:Int=0, ent:TEntity,glob:Int=True)
+			
+			If id = 0 Then id = total_batch
+			If id = 0 Then Return
+			
+			mainsprite[id].EntityParent(ent, glob)
+		
+		EndFunction
+		
+		''
+		''return the sprite batch main mesh entity
+		''
+		Function BatchSpriteEntity:TEntity(batch_sprite:TBatchSprite=Null)
+			
+			If batch_sprite Then Return mainsprite[batch_sprite.batch_id]
+		
+			If mainsprite Then Return mainsprite[total_batch]
+			
+		EndFunction
+		
+
+		
+		''
+		''move the batch sprite origin for depth sorting
+		''
+		Method BatchSpriteOrigin(x:Float,y:Float,z:Float)
+			
+			mainsprite[batch_id].PositionEntity(x,y,z)
+			
+		EndMethod
+		
+		
+		Function CreateBatchMesh:TBatchSpriteMesh( batchid:Int )
+
+			While total_batch &lt; batchid Or total_batch =0
+			
+				total_batch :+1
+				If total_batch &gt;= mainsprite.length Then mainsprite = mainsprite[..total_batch+5]
+		
+				mainsprite[total_batch] = TBatchSpriteMesh.Create()
+				mainsprite[total_batch].id = total_batch
+				
+			Wend
+			
+			Return mainsprite[total_batch]
+		EndFunction
+
+
+		''add sprite to batch
+		''use this instead of TSprite.CreateSprite()
+		''if you want to add to specifc batch controller, use BatchSpriteEntity as parent_ent
+		Function CreateSprite:TBatchSprite(parent_ent:TEntity=Null)
+			
+			'' never added to entity_list
+			'' if idx=0 add to last created batch
+			
+			Local idx:Int=0
+			
+			If TBatchSpriteMesh(parent_ent)&lt;&gt;Null Then idx = TBatchSpriteMesh(parent_ent).id
+			
+			
+			Local sprite:TBatchSprite=New TBatchSprite
+			sprite.class="BatchSprite"
+	
+			' update matrix
+			If sprite.parent&lt;&gt;Null
+				sprite.mat.Overwrite(sprite.parent.mat)
+				sprite.UpdateMat()
+			Else
+				sprite.UpdateMat(True)
+			EndIf
+			
+			If idx = 0 Then sprite.batch_id = total_batch Else sprite.batch_id = idx
+			If sprite.batch_id = 0 Then sprite.batch_id = 1
+			Local id:Int = sprite.batch_id
+			
+			''create main mesh
+			Local mesh:TBatchSpriteMesh
+	
+			If id &gt; total_batch
+			
+				mesh = CreateBatchMesh(id)
+				If id=0 Then id = 1
+				
+			Else
+			
+				mesh = mainsprite[id]
+				
+			EndIf
+
+			''get vertex id
+			Local v:Int, v0:Int
+	
+			If mesh.free_stack.length&lt;1
+				
+				mesh.num_sprites :+1
+				v = (mesh.num_sprites-1) * 4 '4 vertex per quad
+				'v = (mesh.num_sprites-1) * 3 '3 vertex per sprite
+				
+				mesh.surf.AddVertex(-1,-1,0, 0, 1) ''v0
+				mesh.surf.AddVertex(-1, 1,0, 0, 0)
+				mesh.surf.AddVertex( 1, 1,0, 1, 0)
+				mesh.surf.AddVertex( 1,-1,0, 1, 1)
+				'mesh.surf.AddVertex(-1,-3,0, 0, 2) ''v0
+				'mesh.surf.AddVertex(-1, -1,0, 0, 0)
+				'mesh.surf.AddVertex( 3, -1,0, 2, 0)
+				mesh.surf.AddTriangle(0+v,1+v,2+v)
+				mesh.surf.AddTriangle(0+v,2+v,3+v)
+				''v isnt guarateed to be v0, but seems to match up
+
+				''since vbo expands, make sure to reset so we dont use subbuffer
+				mesh.surf.reset_vbo=-1
+				
+			Else
+				
+				Local st:Int = mesh.free_stack.length
+				v = mesh.free_stack[st-1] ''pop stack
+				mesh.free_stack = mesh.free_stack[0..st-1]
+				mesh.num_sprites :+1
+				
+			EndIf
+					
+			
+			mesh.reset_bounds = False ''we control our own bounds
+		
+			sprite.vertex_id = v
+			'sprite.sprite_link = mesh.sprite_list.AddLast(sprite)
+			sprite.sprite_link = ListAddLast(mesh.sprite_list, sprite)
+			
+			If TBatchSpriteMesh(parent_ent)=Null And parent_ent Then sprite.EntityParent(parent_ent); sprite.mat.Overwrite(parent_ent.mat)
+			
+			Return sprite
+	
+		EndFunction 
+		
+		
+		Function LoadBatchTexture:TBatchSpriteMesh(tex_file$,tex_flag:Int=1,id:Int=0)
+			''
+			''does not create sprite, just loads texture
+			''
+			
+			If id&lt;=0 Or id&gt;total_batch Then id=total_batch
+			If id=0 Then id=1
+			
+			CreateBatchMesh(id)
+	
+			Local tex:TTexture=TTexture.LoadTexture(tex_file,tex_flag)
+			mainsprite[id].EntityTexture(tex)
+
+			' additive blend if sprite doesn't have alpha or masking flags set
+			If tex_flag&amp;2=0 And tex_flag&amp;4=0
+			
+				mainsprite[id].EntityBlend 3
+				
+			EndIf
+			
+			Return mainsprite[id]
+			
+		EndFunction
+		
+		
+		Method UpdateBatch(cam_sprite:TSprite)
+			
+			'invisible
+			If brush.alpha =0.0 Then Return 
+			
+			If view_mode&lt;&gt;2
+				
+				'' add in mainsprite position offset
+				
+				Local x#=mat.grid[3,0] - mainsprite[batch_id].mat.grid[3,0]
+				Local y#=mat.grid[3,1] - mainsprite[batch_id].mat.grid[3,1]
+				Local z#=mat.grid[3,2] - mainsprite[batch_id].mat.grid[3,2]
+			
+				temp_mat.Overwrite(cam_sprite.mat)
+				temp_mat.grid[3,0]=x
+				temp_mat.grid[3,1]=y
+				temp_mat.grid[3,2]=z
+				mat_sp.Overwrite(temp_mat)
+
+				
+				If angle&lt;&gt;0.0
+					mat_sp.RotateRoll(angle)
+				EndIf
+				
+				If scale_x&lt;&gt;1.0 Or scale_y&lt;&gt;1.0
+					mat_sp.Scale(scale_x,scale_y,1.0)
+				EndIf
+				
+				If handle_x&lt;&gt;0.0 Or handle_y&lt;&gt;0.0
+					mat_sp.Translate(-handle_x,-handle_y,0.0)
+				EndIf
+				
+			Else
+				
+				mat_sp.Overwrite(mat)
+			
+				If scale_x&lt;&gt;1.0 Or scale_y&lt;&gt;1.0
+					mat_sp.Scale(scale_x,scale_y,1.0)
+				EndIf
+				
+			EndIf
+					
+			''update main mesh
+			
+			'' rotate each point corner offset to face the camera with cam_mat
+			'' use the mat.x.y.z for position and offset from that
+			Local p0:Float[], p1:Float[], p2:Float[], p3:Float[]
+			'Local temp_mat:Matrix = mat_sp.Copy() 'Inverse()
+			Local o:Float[] = [mat_sp.grid[3,0],mat_sp.grid[3,1],mat_sp.grid[3,2]]
+			
+			Local m00:Float = mat_sp.grid[0,0]
+			Local m01:Float = mat_sp.grid[0,1]
+			Local m10:Float = mat_sp.grid[1,0]
+			Local m11:Float = mat_sp.grid[1,1]
+			Local m02:Float = mat_sp.grid[0,2]
+			Local m12:Float = mat_sp.grid[1,2]
+			
+			'p0 = mat_sp.TransformPoint(-1.0,-1.0,0.0)
+			p0 = [-m00 + -m10 + o[0] , -m01 + -m11 + o[1], m02 + m12 - o[2]]		
+			'p1 = mat_sp.TransformPoint(-1.0,1.0,0.0)		
+			p1 = [-m00 + m10 + o[0] , -m01 + m11 + o[1], m02 - m12 - o[2]]	
+			'p2 = mat_sp.TransformPoint(1.0,1.0,0.0)
+			p2 = [m00 + m10 + o[0] , m01 + m11 + o[1], -m02 - m12 - o[2]]			
+			'p3 = mat_sp.TransformPoint(1.0,-1.0,0.0)
+			p3 = [m00 - m10 + o[0] , m01 - m11 + o[1], -m02 + m12 - o[2]]
+			
+			'3 triangle sprite trick (does not work for all conditions, animated sprites)
+			'p0 = [-m00 + -(m10+m10+m10) + o[0] , -m01 + -(m11+m11+m11) + o[1], m02 + m12+m12+m12 - o[2]]				
+			'p1 = [-m00 + m10 + o[0] , -m01 + m11 + o[1], m02 - m12 - o[2]]	
+			'p2 = [m00+m00+m00 + m10 + o[0] , m01+m01+m01 + m11 + o[1], -(m02+m02+m02) - m12 - o[2]]			
+			'p3 = [0.0,0.0,0.0]
+			
+			mainsprite[batch_id].surf.VertexCoords(vertex_id+0,p0[0],p0[1],p0[2])
+			mainsprite[batch_id].surf.VertexCoords(vertex_id+1,p1[0],p1[1],p1[2])
+			mainsprite[batch_id].surf.VertexCoords(vertex_id+2,p2[0],p2[1],p2[2])
+			mainsprite[batch_id].surf.VertexCoords(vertex_id+3,p3[0],p3[1],p3[2])
+			
+			Local r# = brush.red'*brush.alpha
+			Local g# = brush.green'*brush.alpha
+			Local b# = brush.blue'*brush.alpha
+			Local a# = brush.alpha '*0.5
+			
+						
+			Local vid:Int=vertex_id*4
+			mainsprite[batch_id].surf.vert_col[vid]=r
+			mainsprite[batch_id].surf.vert_col[vid+1]=g
+			mainsprite[batch_id].surf.vert_col[vid+2]=b
+			mainsprite[batch_id].surf.vert_col[vid+3]=a
+			vid=(vid+4)
+			mainsprite[batch_id].surf.vert_col[vid]=r
+			mainsprite[batch_id].surf.vert_col[vid+1]=g
+			mainsprite[batch_id].surf.vert_col[vid+2]=b
+			mainsprite[batch_id].surf.vert_col[vid+3]=a
+			vid=(vid+4)
+			mainsprite[batch_id].surf.vert_col[vid]=r
+			mainsprite[batch_id].surf.vert_col[vid+1]=g
+			mainsprite[batch_id].surf.vert_col[vid+2]=b
+			mainsprite[batch_id].surf.vert_col[vid+3]=a
+			vid=(vid+4)
+			mainsprite[batch_id].surf.vert_col[vid]=r
+			mainsprite[batch_id].surf.vert_col[vid+1]=g
+			mainsprite[batch_id].surf.vert_col[vid+2]=b
+			mainsprite[batch_id].surf.vert_col[vid+3]=a
+			
+			' mesh state has changed - update reset flags
+			mainsprite[batch_id].surf.reset_vbo:|8
+			
+			
+			''determine our own bounds
+			
+			min_x = Min5(p0[0],p1[0],p2[0],p3[0],min_x )
+			min_y = Min5(p0[1],p1[1],p2[1],p3[1],min_y )
+			min_z = Min5(p0[2],p1[2],p2[2],p3[2],min_z )
+			
+			max_x = Max5(p0[0],p1[0],p2[0],p3[0],max_x )
+			max_y = Max5(p0[1],p1[1],p2[1],p3[1],max_y )
+			max_z = Max5(p0[2],p1[2],p2[2],p3[2],max_z )
+			
+		EndMethod
+		
+EndType
+
+Function Min5:Float(a:Float, b:Float, c:Float, d:Float, e:Float)
+	
+	Local r:Float = a
+	Local t:Float = c
+	
+	If b&lt;r Then r=b
+	If d&lt;t Then t=d
+	If t&lt;r Then r=t
+	
+	If r &lt; e Then Return r Else Return e
+	
+EndFunction
+
+Function Max5:Float(a:Float, b:Float, c:Float, d:Float, e:Float)
+	
+	Local r:Float = a
+	Local t:Float = c
+	
+	If b&gt;r Then r=b
+	If d&gt;t Then t=d
+	If t&gt;r Then r=t
+	
+	If r &gt; e Then Return r Else Return e
+	
+EndFunction
+
+
+</textarea><br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1141517"></a>
+
+<a name="1141520"></a>
+
+<a name="1141521"></a>
+
+<a name="1141522"></a>
+
+<a name="1141523"></a>
+
+<a name="1141524"></a>
+
+<a name="1141525"></a>
+
+<a name="1141526"></a>
+
+<a name="1141593"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> firepaint 3d example:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+' Original firepaint3d.bb program by Mark Sibly
+
+Import "../../minib3d.bmx"
+
+
+width=640;height=480;depth=16;mode=0
+
+Graphics3D width,height,depth,mode
+
+AmbientLight 0,0,0
+
+Const grav#=-.02,intensity=5
+
+Type Frag
+	Field ys#,alpha#,entity:TBatchSprite
+End Type
+
+fraglist:TList=CreateList()
+
+pivot=CreatePivot()
+
+camera=CreateCamera(pivot)
+CameraClsMode camera,False,True
+
+camera2=CreateCamera(pivot)
+RotateEntity camera2,90,0,0
+CameraViewport camera2,0,0,100,100
+
+'create blitzlogo 'cursor'
+
+Local cursor:TMesh =CreateSphere(8,camera)
+EntityTexture cursor,LoadTexture("media/blitzlogo.bmp")
+MoveEntity cursor,0,0,25
+EntityBlend cursor,3
+EntityFX cursor,1
+
+'create sky sphere
+sky=CreateSphere()
+tex=LoadTexture( "media/stars.bmp" )
+ScaleTexture tex,.125,.25
+EntityTexture sky,tex
+ScaleEntity sky,500,500,500
+EntityFX sky,1
+FlipMesh sky
+
+'spark=LoadSprite("media/bluspark.bmp")
+Local batch_controller = TBatchSprite.LoadBatchTexture("media/bluspark.bmp") ''loads into batch 0
+
+time=MilliSecs()
+
+' used by fps code
+Local old_ms=MilliSecs()
+Local renders
+Local fps
+
+MoveMouse 0,0
+
+While Not KeyDown(KEY_ESCAPE)
+
+	'Repeat
+		elapsed=MilliSecs()-time
+	'Until elapsed&gt;0
+	
+	time=time+elapsed
+	dt#=elapsed*60.0/1000.0
+	
+	Local x_speed#,y_speed#
+	
+	x_speed=((MouseX()-320)-x_speed)/4+x_speed
+	y_speed=((MouseY()-240)-y_speed)/4+y_speed
+	MoveMouse 320,240
+
+	TurnEntity pivot,0,-x_speed,0	'turn player Left/Right
+	TurnEntity camera,-y_speed,0,0	'tilt camera
+	TurnEntity cursor,0,dt*5,0
+	
+	TBatchSprite.BatchSpriteEntity().PositionEntity (cursor.EntityX(1), cursor.EntityY(1),cursor.EntityZ(1))
+	
+	If MouseDown(1)
+		For t=1 To intensity *3
+			f:Frag=New Frag
+			f.ys=0
+			f.alpha=Rnd(2,3)
+			'f.entity=CopyEntity( spark,cursor )
+			f.entity=TBatchSprite.CreateSprite(cursor)
+			ShowEntity f.entity
+			EntityColor f.entity,Rnd(255),Rnd(255),Rnd(255)
+			EntityParent f.entity,0
+			RotateEntity f.entity,Rnd(360),Rnd(360),Rnd(360)
+			
+			
+			
+			num=num+1
+			ListAddLast(fraglist,f)
+		Next
+	EndIf
+	
+	n_parts=0
+	n_surfs=0
+	For f:Frag=EachIn Fraglist
+		f.alpha=f.alpha-dt*.01
+		If f.alpha&gt;0
+			al#=f.alpha
+			If al&gt;1 Then al=1
+			EntityAlpha f.entity,al
+			MoveEntity f.entity,0,0,dt*.4
+			ys#=f.ys+grav*dt
+			dy#=f.ys*dt
+			f.ys=ys
+			TranslateEntity f.entity,0,dy,0
+		Else
+			FreeEntity f.entity
+			ListRemove(fraglist,f)
+			num=num-1
+		EndIf
+	Next
+	
+	RenderWorld
+	renders=renders+1
+
+	' calculate fps
+	If MilliSecs()-old_ms&gt;=1000
+		old_ms=MilliSecs()
+		fps=renders
+		renders=0
+	EndIf
+	
+	Text 0,0,"FPS: "+String(fps)+" "+num
+
+	Flip
+Wend
+
+End
+</textarea><br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1141722"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pete Carter</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> You my friend are awesome :-) <br><br></td></tr></table><br>
+<a name="1141844"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pete Carter</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok can't get it to run I followed the above instuctions and I get an error <br><br>Compile Error: Identifier 'TBatchSprite' not found <br><br>I used Import sidesign.minib3d does that make any difference? <br><br></td></tr></table><br>
+<a name="1141846"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> You might need to recompile your modules if you added it under there... <br><br></td></tr></table><br>
+<a name="1141848"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pete Carter</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> God how stupid. thanks! think thats it now just to put the media in the right place <br><br></td></tr></table><br>
+<a name="1141850"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pete Carter</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes working now. I've just printed it out I must work out how this works :O) <br><br></td></tr></table><br>
+<a name="1143779"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pete Carter</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok just one question about Tbatchsprite. Its working great but is there a way to make the particles move with the emiter I thought i could parent the particles to the ship model but it compiles with no error but doen't make a difference the particles still don't move with the ship. I know the natural movement of the particles is realistic but it would look better in this intance if the particle did follow the ship. I may be misunderstanding how it works. <br><br></td></tr></table><br>
+<a name="1143788"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> I haven't played with the above implementation but what did you try parenting, looks like theres a mesh as well as sprite extensions involved did you try parenting both? <br><br></td></tr></table><br>
+<a name="1143839"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pete Carter</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thats what ive been trying but i must be missing something because i can't get it to work <br><br></td></tr></table><br>
+<a name="1144021"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> spritebatch.EntityParent(parent, false)<br><br>I think the default is true (true = keep global position, false = use parent position). <br><br></td></tr></table><br>
+<a name="1144037"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pete Carter</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh so it would effect all sprites not just the one batchcontroller? <br><br></td></tr></table><br>
+<a name="1144045"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pete Carter</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> spritebatch.EntityParent(parent, false) <br></div><br><br>Where is this as its not in TBatchSprite or your sample? <br><br></td></tr></table><br>
+<a name="1144082"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pete Carter</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm also trying to get a second batch to work. Do you need a controller for each and how do you sort out the id. The introductions at the top of the page confuse me. I've tried looking at the comments in the TBatchSprite code but its very had to follow as the function and method names are so similar. Sorry I'm sure you are beginning to regret posting the code but I am very grateful. <br><br></td></tr></table><br>
+<a name="1144378"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes, the code and example I wrote is very confusing, as it was done quickly.<br><br>re:Parenting<br>by each sprite entitiy <pre class=code>
+sprite.EntityParent(parent, false)</pre> is just like any other entity in minib3d.<br><br>The trick comes when the "controller mesh" needs to be located for depth testing, if you have alpha sorting problems.<br><br><br>re:second batch<br><pre class=code>
+'' you will need to create each additional batch by an id number
+'' id's can be 0,1,2,3,4, etc
+'' then use that new batch controller as the parent (although it doesn't have to be the parent) to CreateSprite()
+Local batch0:TBatchSpriteMesh = TBatchSprite.CreateBatchMesh(0)
+local mysprite0:TBatchSprite = CreateSprite(batch0)
+
+Local batch1:TBatchSpriteMesh = TBatchSprite.CreateBatchMesh(1)
+local mysprite1:TBatchSprite = CreateSprite(batch1)
+
+</pre><br>Let me know if you have problems with this. (I don't think I tested multiple sprites... shame on me!)<br><br>Also let me know if this is a bad implementation, as CreateSprite() could be broken out into CreateSprite(parent, batchmesh)  or even CreateSprite(parent, batchid) instead for clarity. <br><br></td></tr></table><br>
+<a name="1144557"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pete Carter</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> thanks for explaining much clearer now :O) <br><br></td></tr></table><br>
+<a name="1226379"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sonic</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> hi Adam,<br><br>i wonder if you could clarify about how you'd go about implementing animated textures with this system?<br><br>or is that not possible?<br><br>cheers! <br><br></td></tr></table><br>
+<a name="1227681"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sonic</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> never mind, i have implemented it, by passing texture coordinates. it works great. thanks for this, Adam! <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

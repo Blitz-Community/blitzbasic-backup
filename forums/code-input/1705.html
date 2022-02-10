@@ -1,0 +1,94 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Mouse as Pseudo-Proportional Controller (Smooth, Boundary-Free Mouse)</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Mimics proportional controller input using existing BMAX mouse routines, language=bmx, category=User Input'><meta name='author' content='Tom Darby'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=5>User Input</a>/Mouse as Pseudo-Proportional Controller (Smooth, Boundary-Free Mouse)</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="1705.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Mouse as Pseudo-Proportional Controller (Smooth, Boundary-Free Mouse) by Tom Darby</td><td align="right">2006 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> If you're using the mouse for game input in BlitzMax, you know that you can only move your mouse so far before it stops against the edge of the screen/window.  For point-and-click games, this is fine, but if you want to use a more advanced control system such as mouselook or camera pan, you won't want your mouse "hitting the edge" and not registering movement.  This can be achieved by simply re-positioning the mouse to the center of the screen every time it moves, but there are issues with this approach.  For one, you lose your mouse's sub-pixel motion whenever you call MoveMouse().  This can be noticeable if the user is making very minute mouse movements or if their mouse sensitivity is set very low; it manifests itself in "jerky" or "weird" movement.  <br><br>If the above doesn't really make sense, or if you're mathematically inclined, think of it this way: the mouse itself (and the underlying system routines) registers far more sensitive movement than actually registers on the screen, which is an integer value.  It's what allows you to adjust your mouse sensitivity; all mouse sensitivity is is a factor by which you amplify whatever input is coming in from the mouse.  The computer remembers very slight changes in mouse position, but BlitzMax only reveals the integer pixel coordinates of your cursor after the system is done factoring in sensitivity and such.<br><br>If your user is moving the mouse at a rate of 0.9 "pixels per loop", then it'll take 2 loops for the position of the mouse pointer to actually change on screen.  In a basic repositioning system, you reset your mouse position every time the mouse cursor moves, so on the second game loop, your mouse has moved 1.8 "pixels", and the on-screen cursor has accordingly moved 1 pixel (since MouseX and MouseY are ints, not floats.)  When you reposition your mouse, though, you have no way of knowing just how far your mouse is between pixels; it simply resets to a predetermined "center" point, and you lose whatever "float" data the mouse was keeping track of.  Thus, if your user moves the mouse at 0.9 pixels per loop, a basic repositioning method would re-center your mouse every 2 loops after it had moved 1 pixel--making the effective pixels-per-loop speed 0.5 instead of 0.9.<br><br>To eliminate this admittedly uncommonly-noticed but real side effect of mouse repositioning, I've created a little routine which only repositions the mouse once it has left a "safe" zone.  While you'll still lose subpixel movement information every time you reposition the mouse, calls to MoveMouse() are much less frequent when using this routine, and any lost subpixel positioning data is effectively unnoticeable, even to the most sensitive users.<br><br>This handly little bit of code allows you to mimic a proportional controller using BlitzMax's existing mouse routines.  Basically, it creates a bounding box for the mouse and two global variables to report your proportional controller's change in position, MouseXSpeed and MouseYSpeed.  If the mouse ever leaves its bounding box, it gets re-centered in the middle of the screen; thus, your mouse will never "peg" the sides of the screen area and stop reporting movement in that particular direction.  <br><br>The smaller you make the box defined by SAFEZONE, the "jerkier" movement will seem (when the mouse resets position, you lose whatever sub-pixel motion there may be.)  You'll also lose some of your faster mouse movements; set SAFEZONE to 1 to see what happens.<br><br>The larger you make the box, the smoother overall motion will be, but be careful not to set the box -too- large, as the mouse could conceivably "skip" out of a windowed-mode canvas and cease to respond to MouseX/MouseY calls properly (until the mouse returns to the window, that is.)  Careful, too, not to make the bounding box larger than the actual resolution, or your mouse will never reposition and you'll lose the "proportional controller" part of the proportional controller!  I've found that 100 is a pretty good value, but feel free to play with it.<br><br>Use is farily straightforward: call the SampleMouse() function once per game loop, and use the MouseXSpeed and MouseYSpeed global variables to calculate ALL mouse-related movement.  It is important that you NOT use the standard mouse position functions at the same time you're using the mouse as a proportional controller, as you'll get weird results (for obvious reasons.)  Checking for mouseclicks is fine. </td></tr><tr ><td class="cell"><pre class="code">SuperStrict
+
+Const DEPTH:Int = 32
+Const WIDTH:Int = 1024
+Const HEIGHT:Int = 768
+Const SAFEZONE:Int = 100 ' set this high to disable repositioning; set to 0 to always reposition
+
+Global MouseXSpeed:Int,MouseYSpeed:Int, prevMouseX:Int, prevMouseY:Int, movementZone:Int
+Global controllerX#, controllerY#, slowControllerX#, slowControllerY#
+
+Function SampleMouse()
+	
+	Local curMouseX:Int, curMouseY:Int
+	curMouseX = MouseX()
+	curMouseY = MouseY()
+
+	MouseXSpeed=curMouseX - prevMouseX
+	MouseYSpeed=curMouseY - prevMouseY
+	If Abs(centerX - curMouseX) &gt; movementZone Or Abs(centerY - curMouseY) &gt; movementZone Then
+		MoveMouse centerX, centerY
+		prevMouseX = centerX - MouseXSpeed
+		prevMouseY = centerY - MouseYSpeed
+	Else
+		prevMouseX = curMouseX
+		prevMouseY = curMouseY
+	EndIf
+End Function
+
+Graphics WIDTH, HEIGHT, DEPTH
+
+Global centerX:Int, centerY:Int
+
+Function Reset()
+	centerX = GraphicsWidth() / 2
+	centerY = GraphicsHeight() / 2
+	movementZone = SAFEZONE
+	controllerX# = centerX
+	controllerY# = centerY
+	slowControllerX# = centerX
+	slowControllerY# = centerY
+	prevMouseX = centerX
+	prevMouseY = centerY
+	mouseXSpeed = 0
+	mouseYSpeed = 0
+	MoveMouse centerX, centerY
+End Function
+
+HideMouse
+
+Reset()
+
+While Not KeyHit(KEY_ESCAPE)
+
+	If MouseHit(1) Then
+		Reset()
+	EndIf	
+	SampleMouse()
+	
+	' reposition "controllers"
+	controllerX# = controllerX# + Float(MouseXSpeed)
+	controllerY# = controllerY# + Float(MouseYSpeed)
+
+	slowControllerX# = slowControllerX# + (Float(MouseXSpeed) / 2)
+	slowControllerY# = slowControllerY# + (Float(MouseYSpeed) / 2)
+	
+	Cls
+
+	' draw 'movement zone'
+	SetColor 50,0,0
+	DrawRect(centerX - movementZone, centerY - movementZone, movementZone * 2, movementZone * 2)
+	
+	' draw actual mouse location
+	SetColor 255, 0, 0
+	DrawLine(prevMouseX - 4, prevMouseY, prevMouseX + 4, prevMouseY)
+	DrawLine(prevMouseX, prevMouseY - 4, prevMouseX, prevMouseY + 4)
+	
+	' draw "controller" locations
+	SetColor 0,255,0
+	DrawLine(controllerX - 4, controllerY - 4,controllerX + 4, controllerY + 4)
+	DrawLine(controllerX + 4, controllerY - 4, controllerX - 4, controllerY + 4)
+	
+	SetColor 0,255,255
+	DrawLine(slowControllerX - 4, slowControllerY - 4, slowControllerX + 4, slowControllerY + 4)
+	DrawLine(slowControllerX + 4, slowControllerY - 4, slowControllerX - 4, slowControllerY + 4)
+	
+	
+	SetColor 255, 255, 255
+	DrawText "Click to reset, [ESC] to exit.  Green x: full speed controlled object.",0,0
+	DrawText "Blue x: 1/2 speed controlled object.  Red +: actual mouse position.",0, 12
+	DrawText "Red square: mouse movement area.",0,24
+	DrawText "MouseXSpeed="+MouseXSpeed,0,36
+	DrawText "MouseYSpeed="+MouseYSpeed,0,48
+	Flip
+Wend</pre></td></tr></table><br><a name="comments">Comments</a><br><br>None.<br><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

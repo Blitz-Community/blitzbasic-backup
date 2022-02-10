@@ -1,0 +1,145 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Lua-Scriptable Type</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Small type that allows for easily binding Lua functions to objects, language=bmx, category=Miscellaneous'><meta name='author' content='N'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=9>Miscellaneous</a>/Lua-Scriptable Type</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2616.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Lua-Scriptable Type by N</td><td align="right">2009 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This is sort of a rudimentary example of using <a href="http://github.com/nilium/lugi.mod" target="_blank">LuGI</a> to bind Lua functions to objects in Lua.  It could be expanded upon (e.g., binding closures for different messages and such), but it works well enough for the sake of example.<br><br>Speaking of examples, here's some code and a script to accompany it:<br><br>woop.bmx<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Strict
+
+Import LuGI.Core
+Import "scriptable.bmx"
+
+Local st@Ptr = luaL_newstate()
+
+luaopen_base(st)
+InitLuGI(st)
+
+If luaL_dofile(st, "woop.lua") Then
+	RuntimeError("Error in woop.lua: "+lua_tostring(st, -1))
+EndIf
+
+Local sc:Scriptable = New Scriptable.Init(st)
+
+lua_getglobal(st, "main")
+lua_pushbmaxobject(st, sc)
+If lua_pcall(st, 1, 0, 0) Then
+	RuntimeError("Error running woop.lua:main(...): "+lua_tostring(st, -1))
+EndIf
+
+sc.GetScriptFunc(st, "Update")
+lua_pushbmaxobject(st, sc)
+lua_pcall(st, 1, 0, 0)
+sc.Dispose		' Disposal is sort of important here since we're holding a reference to something in
+				' Lua that will be disposed of when the object is deleted.  If the object is deleted
+				' after the Lua state is closed, then you'll have a pretty interesting error.
+
+lua_close(st)
+</textarea><br><br>woop.lua<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">function main(obj)
+	obj:SetScript( "Update",
+		function (self)
+			print(self:ToString()..": Congratulations, you've successfully shattered minds everywhere")
+		end )
+	
+end
+</textarea><br><br>Bear in mind that this requires the most recent version of LuGI's master branch, since I added a handy method for binding glue functions to types.  This was already possible, it just required you to be aware of the private API, which seems like a bad idea to me since it's only documented in the headers. </td></tr><tr ><td class="cell"><pre class="code">SuperStrict
+
+?Debug
+Import LuGI.Generator
+?
+Import LuGI.Core
+
+Include "scriptable_glue.bmx"
+
+'LUGI_CATEGORIES="scriptable"
+'GenerateGlueCode("scriptable_glue.bmx")
+'End
+
+Type Scriptable {expose disablenew category="scriptable"}
+	Field _state@Ptr
+	Field _closures%=-2
+	
+	Method Delete()
+		Dispose
+	End Method
+	
+	Method Init:Scriptable(state@Ptr) {hidden}
+		_state = state
+		lua_newtable(state)
+		_closures = luaL_ref(state, LUA_REGISTRYINDEX)
+		Return Self
+	End Method
+	
+	Method GetScriptFunc:Int(L@Ptr, name$)
+		Assert L=_state Else "Invalid Lua state for scriptable object"
+		
+		If _closures = -1 Then
+			Return False
+		EndIf
+		
+		lua_rawgeti(L, LUA_REGISTRYINDEX, _closures)	'-1=table
+		lua_pushstring(L, name)							'-2=table,-1=name
+		lua_gettable(L, -2)								'-2=table,-1=value
+		
+		If lua_isfunction(L, -1) Then
+			lua_remove(L, -2)							'-1=value
+			Return True
+		Else
+			lua_pop(L, 2)								'clear
+			Return False
+		EndIf
+	End Method
+	
+	Method Dispose()
+		If _state And _closures &lt;&gt; -2 Then
+			If GetScriptFunc(_state, "Dispose") Then
+				lua_pushbmaxobject(_state, Self)
+				lua_pcall(_state, 1, 0, 0)
+			EndIf
+			
+			luaL_unref(_state, LUA_REGISTRYINDEX, _closures)
+			_closures = -2
+		EndIf
+	End Method
+	
+	Method ToString$()
+		Return "Scriptable"
+	End Method
+End Type
+
+'metadata isn't used since there's currently no way to use reflection to grab it for functions anyway
+Function l_Scriptable_SetScript%(L@Ptr) {bindto="Scriptable" as="SetScript"}
+	Local so:Scriptable
+	
+ 	If lua_gettop(L) &lt;&gt; 3 Then
+		lua_pushstring(L, "Invalid number of arguments to SetScript - expected 3, got "+lua_gettop(L))
+		lua_error(L)
+	EndIf
+	
+	luaL_argcheck(L, lua_isbmaxobject(L, 1) And (Not lua_isnoneornil(L, 1)), 1, "must be a subclass of the Scriptable type")
+	luaL_argcheck(L, lua_isstring(L, 2), 2, "must be a string naming the routine added to the object")
+	luaL_argcheck(L, lua_isfunction(L, 3) Or lua_isnil(L, 3), 3, "must be a function or nil")
+	
+	so = Scriptable(lua_tobmaxobject(L, 1))
+	If Not so Then
+		luaL_argerror(L, 1, "must be a subclass of the Scriptable type")
+	EndIf
+	
+	If so._closures &lt;&gt; -2 Then
+		lua_rawgeti(L, LUA_REGISTRYINDEX, so._closures)
+		lua_insert(L, -3)
+		lua_settable(L, -3)
+	EndIf
+End Function
+
+Function l_Scriptable_GetScript%(L@Ptr)
+	Local so:Scriptable
+	luaL_argcheck(L, lua_isbmaxobject(L, 1) And (Not lua_isnoneornil(L, 1)), 1, "must be a subclass of the Scriptable type")
+	so = Scriptable(lua_tobmaxobject(L, 1))
+	If Not so Then
+		luaL_argerror(L, 1, "must be a subclass of the Scriptable type")
+	EndIf
+	Local args:Int = lua_gettop(L)
+	For Local i:Int = 2 To args
+		luaL_argcheck(L, lua_isstring(L, i), i, "must be a string naming a requested routine")
+		If Not so.GetScriptFunc(L, lua_tostring(L, i)) Then
+			lua_pushnil(L)
+		EndIf
+	Next
+	Return args-1
+End Function
+BindFunctionToType(l_Scriptable_SetScript, "SetScript", TTypeID.ForName("Scriptable"))
+BindFunctionToType(l_Scriptable_GetScript, "GetScript", TTypeID.ForName("Scriptable"))</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >rs22</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for all the stuff you've posted to do with Lua. It's helping me to understand the language and how to implement it in BlitzMax a lot. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >N</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Updated this to make it slightly more versatile (and probably usable for whatever you wanted now).  You can now assign functions with names, so you could have an "Update" routine, a "ReceiveHitDamage" routine, etc.<br><br>Also fixed a bug from when I forgot to use SuperStrict - LUA_NOREF is apparently undefined.  Odd, but it's just -2, so I changed it out. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,154 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Monkey's GC, what's going on?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Monkey's GC, what's going on?</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=507" >Monkey Programming</a>/<a href="#bottom" >Monkey's GC, what's going on?</a><br><br>
+<a name="2038417"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm attempting to dissect Monkey's GC to help put together wxWidgets.<br><br>My understanding is the GC will mark everything to be kept each sweep. Right now I think I default continuous GC (CFG_CPP_GC_TRIGGER 0).<br><br>So here's my example:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+
+Import mojo.app
+Import mojo.input
+Import "gc_testing.cpp"
+
+Extern
+
+	Class Sunshine = "Sunshine"		
+		Method Pop()		
+	End	
+
+Public
+
+
+Class Sunshine2 Extends Sunshine
+
+	
+End
+
+
+Class MyApp Extends App
+
+	Field list:List&lt;Int&gt;
+	
+	Field sun:Sunshine2
+	
+	Method OnCreate()
+		SetUpdateRate 5
+		list = New List&lt;Int&gt;
+		sun = New Sunshine2
+	End
+	
+	Method OnUpdate()
+
+		'For Local b:Int=Eachin list
+			'do
+		'Next
+		
+		sun.Pop()
+		Print "---"
+	End
+	
+	Method OnRender()
+
+	End
+End
+
+Function Main()
+	Local x:MyApp = New MyApp
+End
+</textarea><br><br>extern code<br>gc_testing.cpp<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+class Popper {
+public:
+
+	void Pop() {
+		printf("popperClass\n");
+		fflush(stdout);
+	}
+	
+};
+
+class Sunshine : public Object, public Popper {
+public:
+
+	Sunshine() ;
+	~Sunshine() ;
+	void mark() { 
+		printf("ssMARK\n");
+		fflush(stdout);
+		//Object::mark();
+	};
+	
+	void *operator new( size_t size ){
+		printf("ssNEW: %i\n",size);
+		fflush(stdout);
+		return gc_malloc( size );
+	}
+	
+	void operator delete( void *p ){
+		printf("ssDELETE\n");
+		fflush(stdout);
+		gc_free( (gc_object*)p );
+	}
+
+};
+
+Sunshine::Sunshine() {};
+Sunshine::~Sunshine() {};
+
+
+</textarea><br><br>You'll see I'm using extern objects, trying to get them to cooperate with the GC. I've overloaded the GC calls to tell me whats going on.<br><br>So far, the above code calls Sunshine::mark() twice-- but that's all.<br>Shouldn't the GC be calling mark() every time gc_collect() is called (which is after every OnUpdate() )??<br><br>Now, if you add in the List&lt;Int&gt; loop, suddenly we are calling Sunshine::mark() every gc_collect as expected.<br><br><br><br>Question 2, so if I change this:<br><pre class=code>
+	Method OnUpdate()
+
+		'For Local b:Int=Eachin list
+			'do
+		'Next
+		
+		If KeyDown(KEY_SPACE)
+			sun = Null
+		Endif
+		
+		If sun Then sun.Pop()
+		Print "---"
+	End
+</pre><br><br>Then when I press space, sun is gone... but when is it gc deleted? When i add the loop iterator, it is gc deleted there.<br><br>Why? Is it because I'm not triggering a gc_assign() which does the actual memory freeing? Even if I add this routine in, or create a new instance of some other class, it does not delete my Sunshine Object. Only if I use the eachin iterator.<br><br>I think I am missing something, but I'm not sure what it is.<br>Thanks! <br><br></td></tr></table><br>
+<a name="2038416"></a>
+
+<a name="2038415"></a>
+
+<a name="2038414"></a>
+
+<a name="2038413"></a>
+
+<a name="2038412"></a>
+
+<a name="2038420"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>Bytes allocated since last sweep must be &gt;TRIGGER for GC to occur, so you must allocate at least 1 byte, which the For Eachin loop does since it allocates the iterator. <br><br></td></tr></table><br>
+<a name="2038419"></a>
+
+<a name="2038418"></a>
+
+<a name="2038424"></a>
+
+<a name="2038425"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, that actually pointed me in the right direction, thanks.<br><br>So, what about if I add "n=New WhateverClass()" every frame? Doing this does not trigger. I realize it will be the same size allocated every time, but aren't we allocating new data, THEN releasing the old?<br><br>EDIT:<br>i guess this is what i'm stuck on, since I cannot get wxBitmap to release the old data, even when creating a new instance. it doesn't trigger. <br><br></td></tr></table><br>
+<a name="2038423"></a>
+
+<a name="2038422"></a>
+
+<a name="2038421"></a>
+
+<a name="2038451"></a>
+
+<a name="2038452"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> calling this before gc_collect seems to work:<br><pre class=code>
+void gc_force() {
+	gc_object* force = new gc_object();
+}
+</pre><br><br>But I still have a memory leak somewhere, but probably somewhere else. <br><br></td></tr></table><br>
+<a name="2039347"></a>
+
+<a name="2039348"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've noticed that the GC does not work with separate processes.<br>In wxWidgets, when a file dialog request window pops up, I have the GC running on a one second interval in a separate process, which then dtors the file dialog object.<br><br>I'm thinking this isn't the best way to do the GC, since it seems it will destroy any locally defined objects, while a file dialog is up. There also doesn't seem to be a way to destroy objects based only on scope.<br><br>Not sure how to handle this since wxWidgets is event based, so calling GC from MainLoop() would have the same effect. Ideas?<br><br>EDIT:<br>well, i discovered that wxIdle on the main app window isn't called when a modal window has control, so that takes care of most of that. I just wonder about other processes/non-modal and if i should allow them. <br><br></td></tr></table><br>
+<a name="2039345"></a>
+
+<a name="2039346"></a>
+
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,871 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Speed Test: Conways Life</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Speed Test: Conways Life</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Speed Test: Conways Life</a><br><br>
+<a name="490932"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >EOF</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> <a href="http://www.bitstorm.org/gameoflife" target="_blank">Conways Life</a> comes to Max.<br><br>(Note: 2 versions here for speed testers)<br><br>On my rig the Max version hammers the Blitz3D/2D equivalent. Try watching the gliders. The FPS and timers will indicate this as well.<br><br>BlitzMax version<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Rem
+ MaxLife - a fast implementation of Conway's Life in BlitzMax.
+  by Mike Keith, Feb 2002
+  Re-coded for BlitzMax by jb, Feb 2005
+ 
+ Optimizations implemented here include:
+ (1) Cell neighbors are not counted each time; rather, the state and number of
+   neighbors each cell has are kept continually updated in an array.  This array only
+   needs to be updated when a cell changes.
+ (2) When neighbors _do_ have to be updated, it's done with an average of 4.5 operations
+   instead of 9, via pseudo-SIMD.
+ (3) Single cells and groups of 4x1 cells that are not alive and have no neighbors
+   are quickly skipped.
+ (4) The world is tiled, and tiles that do not need to be copied or updated are quickly skipped.
+   (Skipping the copy is the big win here.)
+
+ Overall speed depends on how many active cells there are.
+EndRem
+
+Strict
+Framework BRL.GLMax2D
+Import BRL.Retro
+Import BRL.System
+
+
+
+Const xres=512,yres=384
+
+Graphics xres,yres
+SetClsColor 0,20,70
+	
+Const col=$ffff, BlockSize = 40
+Global stride,arraysize, back, offset,val,x,y, changed
+
+arraysize = xres*yres/4
+Global world1[arraysize+1],world2[arraysize+1]
+Global table[32+1],ClearAction[32+1],SetAction[32+1],DrawAction[32+1]
+Global xresb,yresb,occupied
+
+xresb = xres/blocksize; yresb = yres/blocksize
+Global BlockState1[xresb+1,yresb+1],BlockState2[xresb+1,yresb+1],haschanged[xresb+1,yresb+1],foo[2+1]
+
+Global GenStop=99999
+
+stride = xres/4
+'back = BackBuffer()
+
+For Local i=0 To 31; ReadData DrawAction[i]; Next
+DefData 0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
+DefData 0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0
+
+For Local i=0 To 31
+	Local state = i/16
+	Local nxt = DrawAction[i]
+	
+	If (state=0 And nxt=1) Then SetAction[i] = 1
+	If (state=1 And nxt=0) Then ClearAction[i] = 1
+Next
+
+''font = LoadImageFont("Verdana",14)
+''SetImageFont font
+
+' Set up initial population here.  A few different ones can be selected below by setting
+' "If 0" to "If 1".  Of course we need a better interface for inputting patterns...
+
+' This is "rabbits".  It only has 9 live cells, yet lasts for 17,331 generations.
+' Its final state is a period-2 oscillator, and during its evolution it emits 39 gliders.
+If 1
+	set 0,0
+	set 1,0
+	set 0,1
+	set 0,2
+	set -1,1
+	set 1,4
+	set 1,5
+	set 1,6
+	set 0,5
+	GenStop=17331
+EndIf
+
+' This one is the F pentomino, which lasts for 1103 generations
+
+If 0
+	set 0,0
+	set 1,0
+	set 0,1
+	set 0,2
+	set -1,1
+	GenStop=1103
+EndIf
+
+' A beautiful Nx1 pattern whose population grows without bound (the smallest
+'  such Nx1 pattern known).  Of course the finite grid limits it to a finite size.
+
+If 0
+	Local s$ = "********.*****...***......*******.*****9"
+	For Local i=1 To 100
+		Local t$ = Mid$(s,i,1)
+		If t="9" Then Exit
+		If t="*" Then set i-20,0
+	Next
+EndIf
+
+' Random soup.  Unlike the other patterns above, the FPS will start low and gradually
+' rise, since the soup tends to thin itself out.
+
+If 0
+	For x=blocksize To xres-blocksize
+		For y=blocksize To yres-blocksize
+			If Rand(0,100)&lt;50 Then set x-xres/2,y-yres/2
+		Next
+	Next
+EndIf
+
+CopyWorld
+
+
+Global lasttime = MilliSecs()
+Global starttime=MilliSecs()
+Global time
+
+bglSetSwapInterval 0 ' flip false
+
+While Not KeyHit(KEY_ESCAPE)
+	Global gen=0 , fps
+	Cls
+
+	SetColor 80,80,40
+	glPolygonMode(GL_BACK, GL_LINE)
+	DrawRect blocksize-1,blocksize-1,(xres-blocksize-1)/blocksize*blocksize+2,(yres-blocksize-1)/blocksize*blocksize+2
+	glPolygonMode(GL_BACK, GL_FILL)
+
+	SetColor $3a,$b1,$fc
+	glDisable GL_TEXTURE_2D
+	glBegin GL_POINTS
+	NextGen
+	glEnd
+	glEnable GL_TEXTURE_2D
+	
+	If (gen Mod 50 = 0)
+		Local now = MilliSecs()
+		fps = 50000.0/(now - lasttime)
+		lasttime = now
+	EndIf
+	
+	SetColor $44,$ef,$29
+	DrawText fps+" fps",xres-200,10
+	DrawText "Gen. "+gen,60,10
+	
+	gen:+1
+	If gen&lt;=GenStop
+		time=MilliSecs()-starttime
+	EndIf
+
+	DrawText "Total Time (millisecs): "+time,20,yres-22
+	Flip
+	FlushMem
+
+
+Wend
+End
+
+
+
+
+'----------------------------------------------------------------------
+Function set(x,y)
+	x:+xres/2
+	y:+yres/2
+	offset = y*stride + x/4
+	Local m = x Mod 4
+	Select m
+		Case 0 ; SetCell0 offset
+		Case 1 ; SetCell1 offset
+		Case 2 ; SetCell2 offset
+		Case 3 ; SetCell3 offset
+	End Select
+	blockstate1[x/blocksize,y/blocksize] = 1
+End Function
+
+'----------------------------------------------------------------------
+Function CopyWorld()
+	For Local i=0 Until arraysize
+		world2[i] = world1[i]
+	Next
+End Function
+
+'----------------------------------------------------------------------
+Function SetCell0(offset)
+	world1[offset] = world1[offset] + $10010000
+	world1[offset-stride] = world1[offset-stride] + $01010000
+	world1[offset+stride] = world1[offset+stride] + $01010000
+	world1[offset-1] = world1[offset-1] + 1
+	world1[offset-stride-1] = world1[offset-stride-1] + 1
+	world1[offset+stride-1] = world1[offset+stride-1] + 1
+	changed = 1
+End Function
+
+'----------------------------------------------------------------------
+Function SetCell1(offset)
+	world1[offset] = world1[offset] + $01100100
+	world1[offset-stride] = world1[offset-stride] + $01010100
+	world1[offset+stride] = world1[offset+stride] + $01010100
+	changed = 1
+End Function
+
+'----------------------------------------------------------------------
+Function SetCell2(offset)
+	world1[offset] = world1[offset] + $00011001
+	world1[offset-stride] = world1[offset-stride] + $00010101
+	world1[offset+stride] = world1[offset+stride] + $00010101
+	changed = 1	
+End Function
+
+'----------------------------------------------------------------------
+Function SetCell3(offset)
+	world1[offset] = world1[offset] + $00000110
+	world1[offset-stride] = world1[offset-stride] + $00000101
+	world1[offset+stride] = world1[offset+stride] + $00000101
+	world1[offset+1] = world1[offset+1] + $01000000
+	world1[offset-stride+1] = world1[offset-stride+1] + $01000000
+	world1[offset+stride+1] = world1[offset+stride+1] + $01000000
+	changed = 1
+End Function
+
+'----------------------------------------------------------------------
+Function ClearCell0(offset)
+	world1[offset] = world1[offset] - $10010000
+	world1[offset-stride] = world1[offset-stride] - $01010000
+	world1[offset+stride] = world1[offset+stride] - $01010000
+	world1[offset-1] = world1[offset-1] - 1
+	world1[offset-stride-1] = world1[offset-stride-1] - 1
+	world1[offset+stride-1] = world1[offset+stride-1] - 1
+	changed = 1
+End Function
+
+'----------------------------------------------------------------------
+Function ClearCell1(offset)
+	world1[offset] = world1[offset] - $01100100
+	world1[offset-stride] = world1[offset-stride] - $01010100
+	world1[offset+stride] = world1[offset+stride] - $01010100
+	changed = 1
+End Function
+
+'----------------------------------------------------------------------
+Function ClearCell2(offset)
+	world1[offset] = world1[offset] - $00011001
+	world1[offset-stride] = world1[offset-stride] - $00010101
+	world1[offset+stride] = world1[offset+stride] - $00010101
+	changed = 1
+End Function
+
+'----------------------------------------------------------------------
+Function ClearCell3(offset)
+	world1[offset] = world1[offset] - $00000110
+	world1[offset-stride] = world1[offset-stride] - $00000101
+	world1[offset+stride] = world1[offset+stride] - $00000101
+	world1[offset+1] = world1[offset+1] - $01000000
+	world1[offset-stride+1] = world1[offset-stride+1] - $01000000
+	world1[offset+stride+1] = world1[offset+stride+1] - $01000000
+	changed = 1
+End Function
+
+'----------------------------------------------------------------------
+Function Process0()
+	Local k = val Shr 24
+	If SetAction[k]
+		SetCell0 offset
+	ElseIf ClearAction[k]
+		ClearCell0 offset
+	EndIf
+	If DrawAction[k]
+		glVertex2f x,y
+		occupied=1
+	EndIf
+End Function
+
+'----------------------------------------------------------------------
+Function Process1()
+	Local k = (val Shr 16) &amp; $ff
+	If SetAction[k]
+		SetCell1 offset
+	ElseIf ClearAction[k]
+		ClearCell1 offset
+	EndIf
+	If DrawAction[k]
+		glVertex2f x+1,y
+		occupied=1
+	EndIf
+End Function
+
+'----------------------------------------------------------------------
+Function Process2()
+	Local k = (val Shr 8) &amp; $ff
+	If SetAction[k]
+		SetCell2 offset
+	ElseIf ClearAction[k]
+		ClearCell2 offset
+	EndIf
+	If DrawAction[k]
+		glVertex2f x+2,y
+		occupied=1
+	EndIf
+End Function
+
+'----------------------------------------------------------------------
+Function Process3()
+	Local k = val &amp; $ff
+	If SetAction[k]
+		SetCell3(offset)
+	ElseIf ClearAction[k]
+		ClearCell3 offset
+	EndIf
+	If DrawAction[k]
+		glVertex2f x+3,y
+		occupied=1
+	EndIf
+End Function
+
+'----------------------------------------------------------------------
+Function Process4Cells()
+	val = world2[offset]
+	If (val &amp; $ff000000) Process0
+	If (val &amp; $00ff0000) Process1
+	If (val &amp; $0000ff00) Process2
+	If (val &amp; $000000ff) Process3
+End Function
+
+'----------------------------------------------------------------------
+
+Function NextGen()
+	Global x1,y1
+	' Copy blockstates
+	For y=0 Until yresb
+		For x=0 Until xresb
+			blockstate2[x,y] = blockstate1[x,y]
+		Next
+	Next
+	y1 = 1
+	For Local yo=BlockSize Until yres-Blocksize Step blocksize
+		x1 = 1
+		For Local xo=BlockSize Until xres-Blocksize Step blocksize
+			' check if this block is empty and surrounded by empties.  If so, do nothing
+			Local occ = blockstate2[x1,y1]+blockstate2[x1-1,y1]+blockstate2[x1+1,y1]
+			occ:+blockstate2[x1,y1-1]+blockstate2[x1-1,y1-1]+blockstate2[x1+1,y1-1]
+			occ:+blockstate2[x1,y1+1]+blockstate2[x1-1,y1+1]+blockstate2[x1+1,y1+1]
+			changed = 0
+			If occ
+				occupied = 0
+				Local lasty = yo+blocksize-1
+				Local off = yo*stride + (xo Shr 2)
+				For y=yo To lasty
+					If world2[off+0] Then offset=off+0 ; x=xo+00 ; Process4Cells
+					If world2[off+1] Then offset=off+1 ; x=xo+04 ; Process4Cells
+					If world2[off+2] Then offset=off+2 ; x=xo+08 ; Process4Cells
+					If world2[off+3] Then offset=off+3 ; x=xo+12 ; Process4Cells
+					If world2[off+4] Then offset=off+4 ; x=xo+16 ; Process4Cells
+					If world2[off+5] Then offset=off+5 ; x=xo+20 ; Process4Cells
+					If world2[off+6] Then offset=off+6 ; x=xo+24 ; Process4Cells
+					If world2[off+7] Then offset=off+7 ; x=xo+28 ; Process4Cells
+					If world2[off+8] Then offset=off+8 ; x=xo+32 ; Process4Cells
+					If world2[off+9] Then offset=off+9 ; x=xo+36 ; Process4Cells
+					off:+stride
+				Next
+				blockstate1[x1,y1] = occupied
+			EndIf
+			If changed
+				haschanged[x1,y1] = 1
+				haschanged[x1-1,y1] = 1
+				haschanged[x1+1,y1] = 1
+				haschanged[x1,y1-1] = 1
+				haschanged[x1-1,y1-1] = 1
+				haschanged[x1+1,y1-1] = 1
+				haschanged[x1,y1+1] = 1
+				haschanged[x1-1,y1+1] = 1
+				haschanged[x1+1,y1+1] = 1
+			EndIf
+			x1:+1
+		Next
+		y1:+1
+	Next
+	y1 = 1
+	For Local yo=BlockSize Until yres-Blocksize Step blocksize
+		x1 = 1
+		For Local xo=BlockSize Until xres-Blocksize Step blocksize
+			If haschanged[x1,y1]
+				Local addr = yo*stride + (xo Shr 2)
+				For y=1 To blocksize
+					world2[addr] = world1[addr]
+					world2[addr+1] = world1[addr+1]
+					world2[addr+2] = world1[addr+2]
+					world2[addr+3] = world1[addr+3]
+					world2[addr+4] = world1[addr+4]
+					world2[addr+5] = world1[addr+5]
+					world2[addr+6] = world1[addr+6]
+					world2[addr+7] = world1[addr+7]
+					world2[addr+8] = world1[addr+8]
+					world2[addr+9] = world1[addr+9]
+					addr:+stride
+				Next
+			EndIf 
+			x1:+1
+		Next
+		y1:+1
+	Next
+End Function
+</textarea><br><br><br>Blitz3D/2D version<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">; BlitzLife - a fast implementation of Conway's Life in Blitz Basic.
+;  by Mike Keith, Feb 2002
+;
+; Optimizations implemented here include:
+; (1) Cell neighbors are not counted each time; rather, the state and number of
+;   neighbors each cell has are kept continually updated in an array.  This array only
+;   needs to be updated when a cell changes.
+; (2) When neighbors _do_ have to be updated, it's done with an average of 4.5 operations
+;   instead of 9, via pseudo-SIMD.
+; (3) Single cells and groups of 4x1 cells that are not alive and have no neighbors
+;   are quickly skipped.
+; (4) The world is tiled, and tiles that do not need to be copied or updated are quickly skipped.
+;   (Skipping the copy is the big win here.)
+;
+; Overall speed depends on how many active cells there are.  The program uses FLIP FALSE
+;  so as to go as fast as possible; change this to TRUE if you want to limit it to monitor
+;  refresh rate.  At max speed it's often hard to see period-2 oscillators change at all!
+
+Const xres=512,yres=384
+
+Graphics xres,yres,16
+
+Const col=$ffff, BlockSize = 40
+Global stride,arraysize, back, offset,val,x,y, changed
+
+arraysize = xres*yres/4
+Dim world1(arraysize),world2(arraysize)
+Dim table(32),ClearAction(32),SetAction(32),DrawAction(32)
+Global xresb,yresb,occupied
+
+xresb = xres/blocksize: yresb = yres/blocksize
+Dim BlockState1(xresb,yresb),BlockState2(xresb,yresb),haschanged(xresb,yresb),foo(2)
+
+Global GenStop=99999
+
+stride = xres/4
+back = BackBuffer()
+
+For i=0 To 31: Read DrawAction(i): Next
+Data 0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
+Data 0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0
+
+For i=0 To 31
+	state = i/16
+	nxt = DrawAction(i)
+	
+	If (state=0 And nxt=1) Then SetAction(i) = 1
+	If (state=1 And nxt=0) Then ClearAction(i) = 1
+Next
+
+font = LoadFont("Verdana",14,True)
+SetFont font
+
+; Set up initial population here.  A few different ones can be selected below by setting
+; "If 0" to "If 1".  Of course we need a better interface for inputting patterns...
+
+; This is "rabbits".  It only has 9 live cells, yet lasts for 17,331 generations.
+; Its final state is a period-2 oscillator, and during its evolution it emits 39 gliders.
+
+If 1
+set(0,0)
+set(1,0)
+set(0,1)
+set(0,2)
+set(-1,1)
+set(1,4)
+set(1,5)
+set(1,6)
+set(0,5)
+GenStop=17331
+EndIf
+
+; This one is the F pentomino, which lasts for 1103 generations
+
+If 0
+set(0,0)
+set(1,0)
+set(0,1)
+set(0,2)
+set(-1,1)
+GenStop=1103
+EndIf
+
+; A beautiful Nx1 pattern whose population grows without bound (the smallest
+;  such Nx1 pattern known).  Of course the finite grid limits it to a finite size.
+
+If 0
+s$ = "********.*****...***......*******.*****9"
+For i=1 To 100
+	t$ = Mid$(s,i,1)
+	If t="9" Then Exit
+	If t="*" Then set(i-20,0)
+Next
+EndIf
+
+; Random soup.  Unlike the other patterns above, the FPS will start low and gradually
+; rise, since the soup tends to thin itself out.
+
+If 0
+For x=blocksize To xres-blocksize: For y=blocksize To yres-blocksize
+If Rand(0,100)&lt;50 Then set(x-xres/2,y-yres/2)
+Next: Next
+EndIf
+
+CopyWorld
+
+gen = 0
+Global lasttime = MilliSecs()
+Global starttime=MilliSecs()
+Global time
+
+While Not KeyHit(1)
+	SetBuffer BackBuffer()
+	ClsColor 0,20,70
+	Cls
+	LockBuffer BackBuffer()
+	NextGen
+	UnlockBuffer BackBuffer()
+	
+	Color 80,80,40
+	Rect blocksize-1,blocksize-1,(xres-blocksize-1)/blocksize*blocksize+2,(yres-blocksize-1)/blocksize*blocksize+2,False
+	
+	Color 200,200,0
+	If (gen Mod 50 = 0)
+		now = MilliSecs()
+		fps = 50000.0/(now - lasttime)
+		lasttime = now
+	EndIf
+	
+	Text xres-200,10,fps+" fps"
+	Text 60,10,"Gen. "+Str$(gen)
+	
+	gen = gen+1
+	If gen&lt;=GenStop
+		time=MilliSecs()-starttime
+	EndIf
+	
+	Text 20,yres-22,"Total Time (millisecs): "+Str(time)
+	Flip False
+
+Wend
+End
+
+;----------------------------------------------------------------------
+Function set(x,y)
+
+	x = x + xres/2
+	y = y + yres/2
+	offset = y*stride + x/4
+	m = x Mod 4
+
+	If (m=0) 
+		SetCell0(offset)
+	ElseIf (m=1) 
+		SetCell1(offset)
+	ElseIf (m=2) 
+		SetCell2(offset)
+	ElseIf (m=3) 
+		SetCell3(offset)
+	EndIf
+	
+	blockstate1(x/blocksize,y/blocksize) = 1
+	
+End Function
+
+;----------------------------------------------------------------------
+Function CopyWorld()
+
+	For i=0 To arraysize-1
+		world2(i) = world1(i)
+	Next
+	
+End Function
+;----------------------------------------------------------------------
+Function SetCell0(offset)
+
+	world1(offset) = world1(offset) + $10010000
+	world1(offset-stride) = world1(offset-stride) + $01010000
+	world1(offset+stride) = world1(offset+stride) + $01010000
+
+	world1(offset-1) = world1(offset-1) + 1
+	world1(offset-stride-1) = world1(offset-stride-1) + 1
+	world1(offset+stride-1) = world1(offset+stride-1) + 1
+	
+	changed = 1
+
+End Function
+
+;----------------------------------------------------------------------
+Function SetCell1(offset)
+	
+	world1(offset) = world1(offset) + $01100100
+	world1(offset-stride) = world1(offset-stride) + $01010100
+	world1(offset+stride) = world1(offset+stride) + $01010100
+
+	changed = 1
+
+End Function
+
+;----------------------------------------------------------------------
+Function SetCell2(offset)
+
+	world1(offset) = world1(offset) + $00011001
+	world1(offset-stride) = world1(offset-stride) + $00010101
+	world1(offset+stride) = world1(offset+stride) + $00010101
+	
+	changed = 1	
+
+End Function
+
+;----------------------------------------------------------------------
+Function SetCell3(offset)
+
+	world1(offset) = world1(offset) + $00000110
+	world1(offset-stride) = world1(offset-stride) + $00000101
+	world1(offset+stride) = world1(offset+stride) + $00000101
+
+	world1(offset+1) = world1(offset+1) + $01000000
+	world1(offset-stride+1) = world1(offset-stride+1) + $01000000
+	world1(offset+stride+1) = world1(offset+stride+1) + $01000000
+
+	changed = 1
+
+End Function
+
+;----------------------------------------------------------------------
+Function ClearCell0(offset)
+
+	world1(offset) = world1(offset) - $10010000
+	world1(offset-stride) = world1(offset-stride) - $01010000
+	world1(offset+stride) = world1(offset+stride) - $01010000
+
+	world1(offset-1) = world1(offset-1) - 1
+	world1(offset-stride-1) = world1(offset-stride-1) - 1
+	world1(offset+stride-1) = world1(offset+stride-1) - 1
+
+	changed = 1
+
+End Function
+
+;----------------------------------------------------------------------
+Function ClearCell1(offset)
+
+	world1(offset) = world1(offset) - $01100100
+	world1(offset-stride) = world1(offset-stride) - $01010100
+	world1(offset+stride) = world1(offset+stride) - $01010100
+
+	changed = 1
+
+End Function
+
+;----------------------------------------------------------------------
+Function ClearCell2(offset)
+
+	world1(offset) = world1(offset) - $00011001
+	world1(offset-stride) = world1(offset-stride) - $00010101
+	world1(offset+stride) = world1(offset+stride) - $00010101
+
+	changed = 1
+
+End Function
+
+;----------------------------------------------------------------------
+Function ClearCell3(offset)
+
+	world1(offset) = world1(offset) - $00000110
+	world1(offset-stride) = world1(offset-stride) - $00000101
+	world1(offset+stride) = world1(offset+stride) - $00000101
+
+	world1(offset+1) = world1(offset+1) - $01000000
+	world1(offset-stride+1) = world1(offset-stride+1) - $01000000
+	world1(offset+stride+1) = world1(offset+stride+1) - $01000000
+
+	changed = 1
+
+End Function
+
+;----------------------------------------------------------------------
+Function Process0()
+
+	k = val Shr 24
+	If (SetAction(k))
+		SetCell0(offset)
+	ElseIf (ClearAction(k))
+		ClearCell0(offset)
+	EndIf
+	
+	If (DrawAction(k)) Then WritePixel x,y,col: occupied=1
+
+End Function
+
+;----------------------------------------------------------------------
+Function Process1()
+
+	k = (val Shr 16) And $ff
+	If (SetAction(k))
+		SetCell1(offset)
+	ElseIf (ClearAction(k))
+		ClearCell1(offset)
+	EndIf
+	
+	If (DrawAction(k)) Then WritePixel x+1,y,col: occupied=1
+
+End Function
+
+;----------------------------------------------------------------------
+Function Process2()
+
+	k = (val Shr 8) And $ff
+	If (SetAction(k))
+		SetCell2(offset)
+	ElseIf (ClearAction(k))
+		ClearCell2(offset)
+	EndIf
+	
+	If (DrawAction(k)) Then WritePixel x+2,y,col: occupied=1
+
+End Function
+
+;----------------------------------------------------------------------
+Function Process3()
+
+	k = val And $ff
+	If (SetAction(k))
+		SetCell3(offset)
+	ElseIf (ClearAction(k))
+		ClearCell3(offset)
+	EndIf
+	
+	If (DrawAction(k)) Then WritePixel x+3,y,col: occupied=1
+	
+End Function
+
+;----------------------------------------------------------------------
+Function Process4Cells()
+
+	val = world2(offset)
+	If (val And $ff000000) Then Process0()				
+	If (val And $00ff0000) Then Process1()
+	If (val And $0000ff00) Then Process2()
+	If (val And $000000ff) Then Process3()
+
+End Function
+
+;----------------------------------------------------------------------
+
+Function NextGen()
+	
+	; Copy blockstates
+	
+	For y=0 To yresb-1
+		For x=0 To xresb-1
+			blockstate2(x,y) = blockstate1(x,y)
+		Next
+	Next
+	
+	y1 = 1
+	For yo=BlockSize To yres-Blocksize-1 Step blocksize
+	x1 = 1
+	For xo=BlockSize To xres-Blocksize-1 Step blocksize
+	
+	; check if this block is empty and surrounded by empties.  If so, do nothing
+	
+	occ = blockstate2(x1,y1)+blockstate2(x1-1,y1)+blockstate2(x1+1,y1)
+	occ = occ + blockstate2(x1,y1-1)+blockstate2(x1-1,y1-1)+blockstate2(x1+1,y1-1)
+	occ = occ + blockstate2(x1,y1+1)+blockstate2(x1-1,y1+1)+blockstate2(x1+1,y1+1)
+	changed = 0
+	
+	If (occ)
+		occupied = 0
+		lasty = yo+blocksize-1
+		off = yo*stride + (xo Shr 2)
+		For y=yo To lasty
+		
+			If (world2(off)) Then offset=off: x=xo: Process4Cells()
+			If (world2(off+1)) Then offset=off+1: x=xo+4: Process4Cells()
+			If (world2(off+2)) Then offset=off+2: x=xo+8: Process4Cells()
+			If (world2(off+3)) Then offset=off+3: x=xo+12: Process4Cells()
+			If (world2(off+4)) Then offset=off+4: x=xo+16: Process4Cells()
+			If (world2(off+5)) Then offset=off+5: x=xo+20: Process4Cells()
+			If (world2(off+6)) Then offset=off+6: x=xo+24: Process4Cells()
+			If (world2(off+7)) Then offset=off+7: x=xo+28: Process4Cells()
+			If (world2(off+8)) Then offset=off+8: x=xo+32: Process4Cells()
+			If (world2(off+9)) Then offset=off+9: x=xo+36: Process4Cells()
+			
+			off = off + stride			
+		Next	
+				
+		blockstate1(x1,y1) = occupied
+	EndIf
+	
+	If (changed)
+		haschanged(x1,y1) = 1
+		haschanged(x1-1,y1) = 1
+		haschanged(x1+1,y1) = 1
+		haschanged(x1,y1-1) = 1
+		haschanged(x1-1,y1-1) = 1
+		haschanged(x1+1,y1-1) = 1
+		haschanged(x1,y1+1) = 1
+		haschanged(x1-1,y1+1) = 1
+		haschanged(x1+1,y1+1) = 1
+	EndIf
+	x1 = x1+1
+	Next
+	y1 = y1+1
+	Next
+	
+	y1 = 1
+	For yo=BlockSize To yres-Blocksize-1 Step blocksize
+	x1 = 1
+	For xo=BlockSize To xres-Blocksize-1 Step blocksize
+		If (haschanged(x1,y1))
+			addr = yo*stride + (xo Shr 2)
+			For y=1 To blocksize
+				world2(addr) = world1(addr)
+				world2(addr+1) = world1(addr+1)
+				world2(addr+2) = world1(addr+2)
+				world2(addr+3) = world1(addr+3)
+				world2(addr+4) = world1(addr+4)
+				world2(addr+5) = world1(addr+5)
+				world2(addr+6) = world1(addr+6)
+				world2(addr+7) = world1(addr+7)
+				world2(addr+8) = world1(addr+8)
+				world2(addr+9) = world1(addr+9)
+				addr = addr + stride
+			Next
+		EndIf 
+	x1 = x1+1
+	Next
+	y1 = y1+1
+	Next
+
+End Function</textarea> <br><br></td></tr></table><br>
+<a name="491041"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Perturbatio</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I get 800fps more with Max over B3D <br><br></td></tr></table><br>
+<a name="491056"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >EOF</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Both Updated. A timer is now available which stops at a specifed 'GenStop' value.<br><br>Max version has gone Strict and is blistering along now.<br><br>Under the default settings in both versions (with DEBUG off) I get:<br><br>Blitz3D = 72417 milliseconds<br>BlitzMax = 26555 milliseconds <br><br></td></tr></table><br>
+<a name="491058"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> In B3D,<br>At Gen 100000 I got avg 800fps<br><br>In BMax,<br>At Gen 100000 I get avg 2000fps<br><br>both with DEBUG OFF <br><br></td></tr></table><br>
+<a name="491191"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> I think the proper title is Conway's Game of Life but whatever :)<br><br>Nice job, cruises on my comp, although...... it seems to mess with my gfx car... could be a overheating problem or something... its pretty freaky.. windowed mode is cool though. prolly cuz its running at like 2000 fps, and either the lcd or the gfx card doesnt like it. yeah, the gfx card is pretty hot.. not too hot but eh (new comp i built last week :))<br><br>A standard implementations would wrap over on the sides so cells dont just stick - i remember doing this in qbasic :P<br><br>Also, the implementation seems very laborious, prolly just optimization though.  my old qbasic one was only 20 lines :) prolly the optimization is what prevents doing the wrapping stuff.<br><br>[edit] AH! the resolution was non-standard.  My card likes 640x480 way more.  Actually, could have been the LCD's problem. <br><br></td></tr></table><br>
+<a name="492156"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Xip</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> hmm... i get the same problem i have in alot of other situations, the bmax source compiled and then nothing happend, no errors, no exeptions, nothing... in both normal and debug mode.<br><br>this is somting that is realy getting on my nerves, i have goten this error ALOT lately using bmax, and it makes max imposible to work with =(<br><br>i doubth a reinstall will do mutsh difference, since i had simular probs in both v02 and v03 since i started using it.<br><br>i was working on a huge isometric game engine(with realtime dynamic shadows for example) in bmax, but all the debugging for stuff that isent even in my source/engine, has almost kill the projekt alredy, i cant work like this :(<br><br>but i will try and view this demo in b3d-trial if it works :) <br><br></td></tr></table><br>
+<a name="492160"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bot Builder</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> hmm.  What's the output say, xip?<br><br>The output for say, the program i last compiled says:<br><br><div class="quote"> Building Parser v0.003<br>Compiling:Constants.bmx<br>flat assembler  version 1.51<br>3 passes, 8006 bytes.<br>Compiling:StringFunctions2.bmx<br>flat assembler  version 1.51<br>5 passes, 9955 bytes.<br>Compiling:Parser v0.003.bmx<br>flat assembler  version 1.51<br>3 passes, 4467 bytes.<br>Linking:Parser v0.003.exe<br><br>Process complete<br>"E:/BlitzMax/Projects/Interpreter/Parser v0.003.exe"<br><br>Process complete <br></div>Note that string functions and constants are imported modules. <br><br></td></tr></table><br>
+<a name="492177"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Xip</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Building test<br>Compiling:test.bmx<br>flat assembler  version 1.51<br>11 passes, 47591 bytes.<br>Linking:test.debug.exe<br><br>Process complete<br>"C:/blitzmax/projekts/test/test.debug.exe"<br><br>-----------------------------<br><br>and that is all :( <br><br></td></tr></table><br>
+<a name="492250"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Beaker</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looks like you are clicking "Build" instead of "Build and Run" maybe? <br><br></td></tr></table><br>
+<a name="492260"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Floyd</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> The final line "C:/blitzmax/projekts/test/test.debug.exe" is an attempt to run the exe.<br><br>Whatever is happening seems to be a genuine problem. From the description it sounds like the programs have bugs. But on his particular machine they are failing in a mysterious, silent manner. <br><br></td></tr></table><br>
+<a name="492274"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> When I was in school I wrote a life simulation.  <br><br>I had a neat idea for a prank to pull with it too, but I never actually bothered to code it.<br><br>My idea was this.<br><br>I would make an editor which would allow me to draw to the game board.  On this board I would write a message using the little critters.  Then I would run the simulation backwards from that point for a minute, and then record that point to restart it from later.  Then when my teacher ran the simulation after a minute my message would appear, and then dissapear. :-)<br><br>Thinking back on it now though, I'm not sure if they would have worked.  It is possible that the game is not time reversiable, and that though you could run backwards from a certain board configuration, running forwards again would not reproduce the original board state because some of the configurations of points (which I created manually) would violate the rules of the game.  Part of my message might appear for example, but there might be large gaps in the middle, or bits along the edges missing. <br><br></td></tr></table><br>
+<a name="492411"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>I had trouble running it here too. The problem was unsupported 512,384 graphics mode.<br><br>Try changing the Graphics command to:<br><br>Graphics xres,yres,0<br><br>to see if it works in windowed mode. <br><br></td></tr></table><br>
+<a name="492427"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >rdodson41</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yeah, I found that too. It works fine in window mode. Pretty cool prgm, should make it so that you can edit the cells and make your own. <br><br></td></tr></table><br>
+<a name="493328"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Xip</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> yeas, wen i run the exe created, it complains somthing about the graphic mode, dont know why i dident se that before (dohh!)<br><br>problem solved :) <br><br></td></tr></table><br>
+<a name="493413"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >PGF</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> sswift,<br><br>Nice idea but you've realised the problem - Life is not reversible, not even remotely.<br><br>One of the cleverest small Life configurations I've seen was a bunch of Gliders (8 from memory) that would collide and form a 'Glider Gun' that then spews out a glider every cycle which was something like 12 generations.<br><br>There are some astounding configurations out there.  Much more complicated and I'm not sure quite how they are discovered or created but it must involve a bit of design and a lot of trial and error.<br><br>Some automata are reversible so your idea would work on them - but not Life.<br><br>PGF <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

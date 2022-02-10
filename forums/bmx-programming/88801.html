@@ -1,0 +1,80 @@
+<!DOCTYPE html><html lang="en" ><head ><title >TCondVar broken?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >TCondVar broken?</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >TCondVar broken?</a><br><br>
+<a name="1008235"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BORNtobeNAMELESS</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> If i understood TCondVar right(Read some stuff about them on google and think i know what they should be doing), shouldn't this Code wait forever, as there is no thread which will ever Signal the condvar?<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Framework BRL.Threads
+
+Global mut:TMutex = TMutex.Create()
+Global cond:TCondVar = TCondVar.Create()
+
+mut.Lock()
+cond.Wait(mut)
+mut.Unlock()
+
+WriteStdOut("Juche!~n")
+
+End
+</textarea><br><br>But instead of blocking forever, it just prints out Juche! and exits?!<br>Am i doing something wrong with CondVars, or is this a bug in BRL.Threads?<br><br>Edit: Seems to happen only on Windows. On Linux and MacOS people say it's waiting.<br>Edit2: Even locking the same mutex 2 times doesn't stop the program from running. Is there something broken concerning mutexes? <br><br></td></tr></table><br>
+<a name="1008308"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dreamora</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> It seems like the code in the threads.c is broken.<br><br>In threads_WaitCond, replace: <br>SignalObjectAndWait( mutex,cond-&gt;queue_sem,INFINITE,FALSE );<br><br>with:<br>bb_mutex_unlock( mutex );<br>WaitForSingleObject( cond-&gt;queue_sem,INFINITE );<br><br>that cures it at least on Win7 and fixes both issues (1. not waiting at all and once you get waiting fixed -&gt; not releasing the mutex as it enters the wait for signal)<br><br>I'm not 100% sure I got the real reason, but to my understanding the problem seems to be that BM pretends to use mutexes but in reality uses EnterCriticalSection macros instead of using Mutex, yet SignalObjectAndWait would require a mutex. <br><br></td></tr></table><br>
+<a name="1008379"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BORNtobeNAMELESS</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Works great, thanks.<br><br>Here's an other solution i wrote for this, but it only works on Win Vista and higher, not XP and/or 2k:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Type TMyCondVar
+	Const INFINITE:Int = -1
+
+	Global _llib:Int = 0
+	Global InitializeConditionVariable(cvar:Byte Ptr Ptr)"win32" = Null
+	Global SleepConditionVariableCS(cvar:Byte Ptr Ptr, critSect:Int, msec:Int)"win32" = Null
+	Global WakeAllConditionVariable(cvar:Byte Ptr Ptr)"win32" = Null
+	Global WakeConditionVariable(cvar:Byte Ptr Ptr)"win32" = Null
+
+	Field _handle:Byte Ptr
+
+	Method New()
+		If _llib = 0 Then
+			_llib = LoadLibraryA("kernel32.dll")
+			InitializeConditionVariable = GetProcAddress(_llib, "InitializeConditionVariable")
+			SleepConditionVariableCS = GetProcAddress(_llib, "SleepConditionVariableCS")
+			WakeAllConditionVariable = GetProcAddress(_llib, "WakeAllConditionVariable")
+			WakeConditionVariable = GetProcAddress(_llib, "WakeConditionVariable")
+		EndIf
+
+		Assert InitializeConditionVariable
+		Assert SleepConditionVariableCS
+		Assert WakeAllConditionVariable
+		Assert WakeConditionVariable
+
+		InitializeConditionVariable(Varptr _handle)
+	EndMethod
+
+	Method Close()
+		' Just for compatiblity
+	EndMethod
+	
+	Method Wait(mut:TMutex)
+		SleepConditionVariableCS(Varptr _handle, mut._handle, INFINITE)
+	EndMethod
+	
+	Method Signal()
+		WakeConditionVariable(Varptr _handle)
+	EndMethod
+	
+	Method Broadcast()
+		WakeAllConditionVariable(Varptr _handle)
+	EndMethod
+
+	Function Create:TMyCondVar()
+		Return New TMyCondVar
+	EndFunction
+EndType</textarea><br><br>Behaves exactly like the regular CondVar, except that it works. Should be possible to combine this with the normal CondVar in case loading the funktions failed. <br><br></td></tr></table><br>
+<a name="1009319"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>The problem is indeed due to the new 'fast' Win32 mutexes, but the above solution does not look threadsafe to me - SignalObjectAndWait is atomic; unlock/wait is not.<br><br>I still have no real idea what condvars are all about (and regret adding them now!) but will see if I can come with a solution to this that doesn't involve reverting to 'slow' mutexes.<br><br>I am also curious to know what people are actually using condvars for - and whether they could achieve the same thing with a semaphore (which also 'counts'). <br><br></td></tr></table><br>
+<a name="1009401"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dreamora</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> I guess the solution isn't fully "clean" myself, but I just wanted to offer a simple solution that works without replacing the whole critical section code that "fakes mutex on windows" to the correct mutex calls<br><br><br>took me a bit of time and BtbNs help to understand the direct use of condvars, but from what I understand, they are really strong and usefull to "pause threads" and wake them on signal (up to a given point replicable through semaphores, with a bit deeper implementation fully replicable as the condvars near granted use semaphores behind the scenes anyway) <br><br></td></tr></table><br>
+<a name="1009447"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Eek,<br><br>Ok, not really sure what to do here.<br><br>* I could revert to 'old style' mutexes, which fixes all this but are significantly slower and KILLS performance of the GC in threaded mode.<br><br>* We could introduce another type of mutex purely for the sake of this issue.<br><br>* We could in fact use dreamoras fix above - it is apparently 'safe', just 'unfair', the problem being that a context switch between the unlock and the wait (which is likely if another thread is trying to lock) could end up starving the thread. There are some pretty horrific solutions to this out there, but they're beyond my meagre MT skills.<br><br>Again, I'd like to know what people are actually using condvars for in the real world - just saying 'they're really strong' is a little vague, sorry! <br><br></td></tr></table><br>
+<a name="1009449"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>Ok, I've decided to implement my own version of condvars that uses the new fast mutexes. This version may not be quite as 'fair' as the unix version, but I expect to improve it over time as I learn more.<br><br>So...has someone got a decent example of condvar usage? Something practical would be nice, but just anything that highlights how they work would be enough. <br><br></td></tr></table><br>
+<a name="1009519"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BORNtobeNAMELESS</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> If you're looking for a decent explanation what CondVars are and do, IBM got something for you:<br><br><a href="http://www.ibm.com/developerworks/linux/library/l-posix3/" target="_blank">http://www.ibm.com/developerworks/linux/library/l-posix3/</a><br><br>I'm currently using CondVars to send events to my threads and wait for them without the need for active polling.<br>In Windows Vista and higher there are native CondVars in the WinApi, which use CriticalSections, but they are not available on 2k and XP, which is quite bad.<br><br>My solution to this is a to make a check if the user is on Vista, and if so, load the CondVar-Functions(They are not available in MinGW, don't know why), and use them and CriticalSections for mutexes.<br>If the user is on a system where loading the CondVar-Function fails, Mutexes use the old, slow, Windows-Mutex-Functions, and CondVars work like they did before.<br><br>I created some kind of fork from BRL.Threads, which implements all this. You can find it in my git:<br><br>http://git.btbn.de/btbn.mod.git/blob_plain/HEAD:/threads.mod/threads.bmx <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,245 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Message-based networking</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Simple example for message-based networking, language=bmx, category=Networking'><meta name='author' content='plash'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=4>Networking</a>/Message-based networking</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2732.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Message-based networking by plash</td><td align="right">2010 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This is a simplified form of the model used in the network module from <a href="http://github.com/komiga/duct" target="_blank">duct</a>.<br>I recommend using types for each message, but I've to keep it out of this example for the sake of simplicity.<br><br>See the comments below for example code (multiple source files). </td></tr><tr ><td class="cell"><pre class="code">' common.bmx
+
+Const MSGID_PING:Int = 10
+Const MSGID_PONG:Int = 11
+
+Type TBaseClient Extends TStream Abstract
+	
+	Field m_socket:TSocket, m_sip:Int
+	
+	Method Init(socket:TSocket)
+		m_socket = socket
+		If m_socket
+			m_sip = m_socket.RemoteIP()
+		End If
+	End Method
+	
+	Method Read:Int(buf:Byte Ptr, count:Int)
+		Return m_socket.Recv(buf, count)
+	End Method
+	
+	Method Write:Int(buf:Byte Ptr, count:Int)
+		Return m_socket.Send(buf, count)
+	End Method
+	
+	Method ReadAvail:Int()
+		Return m_socket.ReadAvail()
+	End Method
+	
+	Method Eof:Int()
+		If m_socket
+			If m_socket.Connected() = True
+				Return False
+			End If
+		End If
+		Close()
+		Return True
+	End Method
+	
+	Method Close()
+		If m_socket
+			m_socket.Close()
+			m_socket = Null
+		End If
+	End Method
+	
+	Method Connect:Int(remoteip:Int, remoteport:Int)
+		m_sip = remoteip
+		Return m_socket.Connect(remoteip, remoteport)
+	End Method
+	
+	Method Connected:Int()
+		If m_socket
+			Return m_socket.Connected()
+		End If
+		Return False
+	End Method
+	
+	Method Update()
+		If Not Eof()
+			If ReadAvail() &gt; 0
+				HandleMessage(ReadInt())
+			End If
+		End If
+	End Method
+	
+	Method GetIPAddressAsInt:Int()
+		Return m_sip
+	End Method
+	
+	Method GetIPAddressAsString:String(separator:String = ".")
+		Return (m_sip Shr 24) + separator + (m_sip Shr 16 &amp; 255) + separator + (m_sip Shr 8 &amp; 255) + separator + (m_sip &amp; 255)
+	End Method
+	
+	Method HandleMessage(id:Int) Abstract
+	
+End Type</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >plash</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Example code.<br><br><b>server.bmx</b><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+Framework brl.blitz
+Import brl.standardio
+Import brl.stream
+Import brl.socket
+Import brl.linkedlist
+Import brl.glmax2d
+
+Include "common.bmx"
+
+AppTitle = "Server"
+Graphics(320, 240, 0)
+
+Local server:TServer = New TServer.Create(TSocket.CreateTCP(), 35111)
+If server.Start()
+	Print("Server started")
+	While Not AppTerminate() And Not KeyHit(KEY_ESCAPE)
+		server.Update()
+		Delay(10)
+	End While
+Else
+	Print("Failed to start server")
+End If
+
+Type TServer
+	
+	Field m_port:Int
+	Field m_socket:TSocket
+	Field m_clients:TList
+	
+	Method New()
+		m_clients = New TList
+	End Method
+	
+	Method Create:TServer(socket:TSocket, port:int)
+		m_port = port
+		m_socket = socket
+		Return Self
+	End Method
+	
+	Method Start:Int()
+		If m_socket &lt;&gt; Null
+			If m_socket.Bind(m_port) = True
+				m_socket.Listen(0)
+				Return True
+			End If
+		End If
+		Return False
+	End Method
+	
+	Method Update()
+		For Local client:TServerClient = EachIn m_clients
+			client.Update()
+		Next
+		Local socket:TSocket = m_socket.Accept(0)
+		If socket
+			AddClient(New TServerClient.Create(socket))
+		End If
+	End Method
+	
+	Method AddClient(client:TServerClient)
+		client.SetLink(m_clients.AddLast(client))
+		client.SendPing()
+	End Method
+	
+	Method Disconnect()
+		For Local client:TServerClient = EachIn m_clients
+			client.Close()
+		Next
+		If m_socket
+			m_socket.Close()
+		End If
+	End Method
+	
+End Type
+
+Type TServerClient Extends TBaseClient
+	
+	Field m_link:TLink
+	
+	Method Create:TServerClient(socket:TSocket)
+		Init(socket)
+		Return Self
+	End Method
+	
+	Method SetLink(link:TLink)
+		m_link = link
+	End Method
+	
+	Method RemoveLink()
+		If m_link
+			m_link.Remove()
+			m_link = Null
+		End If
+	End Method
+	
+	Method Close()
+		Super.Close()
+		RemoveLink()
+		Print(GetIPAddressAsString() + " disconnected")
+	End Method
+	
+	Method SendPing()
+		WriteInt(MSGID_PING)
+	End Method
+	
+	Method HandleMessage(id:Int)
+		Select id
+			Case MSGID_PONG
+				Print("Pong from " + GetIPAddressAsString())
+				SendPing()
+			Default
+				Print("Unknown message id: " + id)
+		End Select
+	End Method
+	
+End Type
+</textarea><br><br><b>client.bmx</b><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+Framework brl.blitz
+Import brl.standardio
+Import brl.stream
+Import brl.socket
+Import brl.glmax2d
+
+Include "common.bmx"
+
+AppTitle = "Client"
+Graphics(320, 240, 0)
+
+Local client:TMasterClient = New TMasterClient.Create(TSocket.CreateTCP())
+If client.Connect(HostIP("localhost"), 35111)
+	While Not AppTerminate() And Not KeyHit(KEY_ESCAPE)
+		client.Update()
+		If Not client.Connected()
+			Print("Lost connection to server")
+			Exit
+		End If
+	End While
+	client.Close()
+Else
+	Print("Failed to connect to localhost")
+End If
+
+Type TMasterClient Extends TBaseClient
+	
+	Method Create:TMasterClient(socket:TSocket)
+		Init(socket)
+		Return Self
+	End Method
+	
+	Method SendPong()
+		WriteInt(MSGID_PONG)
+	End Method
+	
+	Method HandleMessage(id:Int)
+		Select id
+			Case MSGID_PING
+				Print("Ping from " + GetIPAddressAsString())
+				SendPong()
+			Default
+				Print("Unknown message id: " + id)
+		End Select
+	End Method
+	
+End Type
+</textarea> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Czar Flavius</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>"Ping from " + GetIPAddressAsString()</pre><br>Won't this just print the local IP and not the IP address of the sender? <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >plash</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Won't this just print the local IP and not the IP address of the sender? <br></div>No. GetIPAddressAsString is a method of TBaseClient which returns the socket's RemoteIP. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Drackbolt</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> First, thanks for this!<br>I have what is probably a newbie question about this and/or Sockets in general.  Is each Int sent in a separate packet or is it packed/optimized ?  Can this code be quickly modified to transfer string lines instead of integers, or is this code far underneath that layer of control?<br>I've read up on Stream Sockets where I could but I apologize if I'm asking confused questions. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

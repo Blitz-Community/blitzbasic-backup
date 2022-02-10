@@ -1,0 +1,663 @@
+<!DOCTYPE html><html lang="en" ><head ><title >EventSource Wrapper</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >EventSource Wrapper</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=524" >User Modules</a>/<a href="#bottom" >EventSource Wrapper</a><br><br>
+<a name="2119905"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >k.o.g.</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> ** 18.05.2016 **<br>[CHANGED] Name of Subscribe / Unsubscribe to On / Off<br>[ADDED] Custom Events<br><br>** 18.05.2016 **<br>Initial Release<br> <br></div><br> <br> <br>Hello<br><br>I'm presenting a little module for using EventSource on all Targets, which supports brl.socket and the HTML5 Target<br><br>Here you got some infos about EventSource:<br><a href="http://www.html5rocks.com/en/tutorials/eventsource/basics/" target="_blank">http://www.html5rocks.com/en/tutorials/eventsource/basics/</a><br><br>Custom Events are not supported.<br><br>Currently is nothing documented and only tested Platforms are:<br>HTML5, iOS, Stdcpp, GLFW(3)<br><br>For Android i need a Milliseconds function and then i will test it. Have fun with using, maybe i will update some days the code.<br><br>interfaces.monkey<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Strict
+
+Private
+
+Public
+
+Interface IEventSource
+	Method OnOpen:Void(callback:IOnEventSourceOpen) Property
+	Method OnMessage:Void(callback:IOnEventSourceMessage) Property
+	Method OnError:Void(callback:IOnEventSourceError) Property
+	
+	Method Url:String() Property
+	Method ReadyState:Int() Property
+	Method Disconnect:Void()
+		
+	Method On:Bool(event:String, callback:IOnEventSourceEventMessage)
+	Method Off:Bool(event:String, callback:IOnEventSourceEventMessage)
+End
+Interface IOnEventSourceOpen
+	Method OnEventSourceOpen:Void(source:IEventSource)
+End
+Interface IOnEventSourceMessage
+	Method OnEventSourceMessage:Void(source:IEventSource, message:String, id:String = "")
+End
+Interface IOnEventSourceEventMessage
+	Method OnEventSourceEventMessage:Void(source:IEventSource, event:String, message:String, id:String = "")
+End
+Interface IOnEventSourceError
+	Method OnEventSourceError:Void(source:IEventSource)
+End</textarea><br><br>eventsource.monkey<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">' 2016 Benjamin 'k.o.g.' Aregger
+
+Strict
+
+Public
+Import interfaces
+
+Private
+
+#If LANG = "js" Then
+Import dom.dom
+
+Extern Private
+Function NewEventSource:_EventSource(url:String) = "new EventSource"
+Class _EventSource Extends EventTarget = "EventSource"
+	Field readyState:Int
+	Field url:String
+		
+	Method close:Void()
+End
+	
+Private
+
+Class EventSourceListener Extends EventListener Final
+Private
+	Field _source:EventSource
+	
+	Method New(source:EventSource)
+		_source = source
+	End
+	
+	Method handleEvent:Int(event:Event)
+		Select event.type
+			Case "open"
+				_source.OnOpen()
+			
+			Case "message"
+				Local msg:MessageEvent = MessageEvent(event)
+				If msg = Null Return 1
+				
+				_source.Fire("", msg.data, msg.lastEventId)
+				
+			Case "error"
+				_source.OnError()
+				
+			Default
+				Local msg:MessageEvent = MessageEvent(event)
+				If msg = Null Return 1
+				
+				_source.Fire(event.type, msg.data, msg.lastEventId)
+		End
+
+		Return 1
+	End
+	
+	Method Discard:Void()
+		_source = Null
+	End
+End
+
+Public
+
+#Else
+Import brl.socket
+Import brl.databuffer
+Import brl.datastream
+Import brl.asyncevent
+
+Import "time.${LANG}"
+
+Extern Private
+Function NativeMillisecs:Int()
+Private
+Global _dummy:Int = NativeMillisecs()
+
+#End
+
+Public
+
+Private
+Class EventSourceBase Implements IEventSource Abstract
+Private
+	Field _onOpen:IOnEventSourceOpen
+	Field _onMessage:IOnEventSourceMessage
+	Field _onError:IOnEventSourceError
+	
+	Field _subscriptions:StringMap&lt;List&lt;IOnEventSourceEventMessage&gt;&gt;
+	
+	
+	Method New()
+		_subscriptions = New StringMap&lt;List&lt;IOnEventSourceEventMessage&gt;&gt;()
+	End
+	
+	Method SubscriptionListByName:List&lt;IOnEventSourceEventMessage&gt;(event:String)
+		Return _subscriptions.ValueForKey(event)
+	End
+	
+	Method Fire:Void(event:String, message:String, id:String = "")
+		If event = "" Then
+			OnMessage(message, id)
+		Else
+			Local list:List&lt;IOnEventSourceEventMessage&gt; = SubscriptionListByName(event)
+			If list And list.Count() &gt; 0 Then
+				For Local callback:IOnEventSourceEventMessage = Eachin list
+					callback.OnEventSourceEventMessage(Self, event, message, id)
+				Next
+			End
+		End
+	End
+	
+	Method OnOpen:Void()
+		If _onOpen _onOpen.OnEventSourceOpen(Self)
+	End
+	Method OnMessage:Void(message:String, id:String = "")
+		If _onMessage _onMessage.OnEventSourceMessage(Self, message, id)
+	End
+	Method OnError:Void()
+		If _onError _onError.OnEventSourceError(Self)
+	End
+	
+	Method Discard:Void()
+	End
+	
+Public
+	Const NONE:Int = -1
+	Const CONNECTING:Int = 0
+	Const OPEN:Int = 1
+	Const CLOSED:Int = 2
+
+	Method OnOpen:Void(callback:IOnEventSourceOpen) Property
+		_onOpen = callback
+	End
+	Method OnMessage:Void(callback:IOnEventSourceMessage) Property
+		_onMessage = callback
+	End
+	Method OnError:Void(callback:IOnEventSourceError) Property
+		_onError = callback
+	End
+	
+	Method Url:String() Property Abstract
+	Method ReadyState:Int() Property Abstract
+	
+	Method Disconnect:Void()
+		If _subscriptions Then
+			For Local list:List&lt;IOnEventSourceEventMessage&gt; = Eachin _subscriptions.Values()
+				list.Clear()
+			Next
+			_subscriptions.Clear()
+		End
+		_subscriptions = Null
+	End
+	
+	Method On:Bool(event:String, callback:IOnEventSourceEventMessage)
+		Local list:List&lt;IOnEventSourceEventMessage&gt; = SubscriptionListByName(event)
+		If list = Null Then
+			list = New List&lt;IOnEventSourceEventMessage&gt;()
+			_subscriptions.Add(event, list)
+		Else If list.Contains(callback) Then
+			Return False
+		End
+		Local n:list.Node&lt;IOnEventSourceEventMessage&gt; = list.AddLast(callback)
+		Return n &lt;&gt; Null
+	End
+	
+	Method Off:Bool(event:String, callback:IOnEventSourceEventMessage)
+		Local list:List&lt;IOnEventSourceEventMessage&gt; = SubscriptionListByName(event)
+		If list = Null Or list.Contains(callback) = False Return False
+		list.Remove(callback)
+		If list.Count() &lt;= 0 Then
+			_subscriptions.Remove(event)
+		End
+		Return True
+	End
+End
+
+Public
+
+#If LANG = "js" Then
+
+Class EventSource Extends EventSourceBase Final
+	Global BUFFERSIZE:Int = 2048
+	
+Private
+	Field _source:_EventSource
+	Field _listener:EventSourceListener
+	
+	Method New()
+	End
+	
+	Method Discard:Void()
+		If _source Then
+			_source.removeEventListener("open", _listener)
+			_source.removeEventListener("message", _listener)
+			_source.removeEventListener("error", _listener)
+			
+			_source.close()
+		End
+		
+		If _listener _listener.Discard()
+			
+		_listener = Null
+		_source = Null
+		
+		Super.Discard()
+	End
+	
+Public
+	Method New(url:String)
+		_source = NewEventSource(url)
+		_listener = New EventSourceListener(Self)
+		
+		_source.addEventListener("open", _listener, True)
+		_source.addEventListener("message", _listener, True)
+		_source.addEventListener("error", _listener, True)
+	End
+	
+	Method Url:String() Property
+		Return _source.url
+	End
+	
+	Method ReadyState:Int() Property
+		Return _source.readyState
+	End
+	
+	Method Disconnect:Void()
+		Discard()
+		
+		Super.Disconnect()
+	End
+	
+	Method On:Bool(event:String, callback:IOnEventSourceEventMessage)
+		_source.addEventListener(event, _listener, True)
+		Return Super.On(event, callback)
+	End
+	
+	Method Off:Bool(event:String, callback:IOnEventSourceEventMessage)
+		_source.removeEventListener(event, _listener, True)
+		Return Super.Off(event, callback)
+	End
+End
+
+#Else
+
+Class EventSource Extends EventSourceBase Implements IOnConnectComplete, IOnSendComplete, IOnReceiveComplete, IAsyncEventSource Final
+	Global BUFFERSIZE:Int = 2048
+	
+Private
+	Const NEWLINE:String = "~r~n"
+	
+	Field _socket:Socket
+	Field _buffer:DataBuffer
+	Field _connected:Bool = False
+	
+	
+	Field _url:String = ""
+	Field _host:String = ""
+	Field _port:Int = 80
+	Field _path:String = "/"
+	Field _headers:StringMap&lt;String&gt;
+	
+	Field _retry:Int = 3000
+	Field _readyState:Int = EventSource.NONE
+	
+	Field _connectionLost:Int = -1
+	Field _wasConnected:Bool = False
+	
+	Field _asyncAdded:Bool = False
+	
+	Method New()
+	End
+	
+	Method OnError:Void()
+		_readyState = EventSource.CONNECTING
+		Super.OnError()
+	End
+	
+	Method OnConnectComplete:Void( connected:Bool, source:Socket )
+		If connected = False Then
+			OnError()
+			Return
+		EndIf
+		
+		_connected = True
+		_wasConnected = True
+		
+		Local request:DataBuffer = New DataBuffer(103 + _path.Length() + _host.Length() + String(_port).Length())
+		Local stream:DataStream = New DataStream(request)
+		
+		stream.WriteString("GET " + _path + " HTTP/1.1" + NEWLINE , "ascii")
+		stream.WriteString("Host: " + _host+":"+_port + NEWLINE, "ascii")
+		stream.WriteString("Accept: text/event-stream" + NEWLINE, "ascii")
+		stream.WriteString("Connection: keep-alive" + NEWLINE, "ascii")
+		stream.WriteString("Cache-Control: no-cache" + NEWLINE, "ascii")
+		stream.WriteString(NEWLINE)
+		
+		Local length:Int = stream.Position()
+		
+		stream.Close()
+		stream = NULL
+		
+		source.SendAsync(request, 0, length, Self)
+	End
+	
+	Method OnReceiveComplete:Void( data:DataBuffer, offset:Int, count:Int, source:Socket )
+		If count = 0 Then
+			OnError()
+			Discard()
+			_connectionLost = NativeMillisecs()
+			Return
+		Endif
+			
+		Local stream:DataStream = New DataStream(data, offset, count)
+		
+		If _headers = Null Then
+			_headers = New StringMap&lt;String&gt;()
+			
+			While stream.Eof() = False
+				Local tmp:String = stream.ReadLine()
+				If tmp.Length() &lt;= 0 Exit
+				Local chunk:String[] = tmp.Split(":")
+				If chunk.Length() &lt;= 1 Then Continue
+				
+				_headers.Add(chunk[0], chunk[1])
+			Wend
+			offset += stream.Position()
+			
+			
+			_readyState = EventSource.OPEN
+			OnOpen()
+		End
+		
+		Local event:String = ""
+		Local id:String = ""
+		Local message:String = ""
+		
+		While stream.Eof() = False
+			Local line:String = stream.ReadLine().Trim()
+			If line.Length() &lt;= 0 Then
+				If message Then
+					message = message[0 .. (-NEWLINE.Length())]
+					
+					Fire(event, message, id)
+				End
+				event = ""
+				id = ""
+				message = ""
+				Continue
+			End
+			Local pos:Int = line.Find(":")
+			If pos = -1 Continue
+			Local chunk:String[2]
+			chunk[0] = line[0..pos]
+			chunk[1] = line[pos + 1..].Trim()
+			
+			Select chunk[0]
+				Case "id"
+					id = chunk[1]
+					
+				Case "event"
+					event = chunk[1]
+					
+				Case "retry"
+					_retry = Int(chunk[1])
+					If _retry = 0 _retry = 3000
+					
+				Case "data"
+					message += chunk[1] + NEWLINE
+				
+				Default
+					'Print "Unknown: "+chunk[0]
+			End
+		Wend
+		
+		stream.Close()
+		stream = Null
+		
+		source.ReceiveAsync(data, 0, data.Length(), Self)
+	End
+	
+	Method OnSendComplete:Void( data:DataBuffer, offset:Int, count:Int, source:Socket )
+		data.Discard()
+		
+		If _asyncAdded = False AddAsyncEventSource(Self)
+		_asyncAdded = True
+		
+		source.ReceiveAsync(_buffer, 0, _buffer.Length(), Self)
+	End
+	
+	Method UpdateAsyncEvents:Void ()
+		If _connectionLost &gt; -1 Then
+			If NativeMillisecs() - _connectionLost &gt; _retry Then
+				Connect()
+			End
+		End
+	End
+	
+	Method Connect:Void()
+		Discard()
+		
+		_readyState = EventSource.CONNECTING
+		
+		_buffer = New DataBuffer(BUFFERSIZE)
+		_socket = New Socket("stream")
+		_socket.ConnectAsync(_host, _port, Self)
+	End
+	
+	Method Discard:Void()
+		If _socket _socket.Close()
+		If _buffer _buffer.Discard()
+		If _headers _headers.Clear()
+		
+		_socket = Null
+		_buffer = Null
+		_headers = Null
+		
+		_connected = False
+		
+		_dummy = 0
+		_connectionLost = -1
+		
+		Super.Discard()
+	End
+
+Public
+	Method New(url:String)
+		_url = url
+		
+		Local pos:Int = -1, pos2:Int = -1
+		
+		' Protocol
+		pos = url.Find("http://")
+		If pos = -1 Then
+			Error("Protocol not supported!")
+		End
+		url = url[7..]
+		
+		' Host &amp; Port
+		pos = url.Find(":")
+		pos2 = url.Find("/")
+		If pos2 = -1 pos2 = url.Length()
+			
+		If pos &gt; -1 Then
+			_host = url[0..pos]
+			_port = Int(url[pos+1..pos2])
+		Else
+			_host = url[0..pos2]
+			_port = 80
+		End
+		url = url[pos2..]
+		
+		' Path
+		pos = -1
+		pos2 = -1
+		If url.Length() &gt; 1 Then
+			pos = url.Find("#")
+			If pos = -1 pos = url.Length()
+			_path = url[0 .. pos]
+		End
+		
+		Connect()
+	End
+	
+	Method OnError:Void(callback:IOnEventSourceError) Property
+		Super.OnError(callback)
+	End
+	
+	Method Url:String() Property
+		Return _url
+	End
+	Method ReadyState:Int() Property
+		Return _readyState
+	End
+	
+	Method Disconnect:Void()
+		_wasConnected = False
+		RemoveAsyncEventSource(Self)
+		_asyncAdded = False
+		Discard()
+		_readyState = EventSource.CLOSED
+		
+		Super.Disconnect()
+	End
+End
+
+#End</textarea><br><br>demo.monkey<br><pre class=code>' 2016 Benjamin 'k.o.g.' Aregger
+Strict
+
+#If TARGET &lt;&gt; "stdcpp" Then
+Import mojo
+#End
+Import brl.asyncevent
+Import eventsource
+
+Class Listener Implements IOnEventSourceMessage, IOnEventSourceEventMessage, IOnEventSourceOpen, IOnEventSourceError
+	Method OnEventSourceOpen:Void(source:IEventSource)
+		Print "Open"
+		Print source.ReadyState
+	End
+	
+	Method OnEventSourceError:Void(source:IEventSource)
+		Print "Error"
+		Print source.ReadyState
+	End
+	
+	Method OnEventSourceMessage:Void(source:IEventSource, message:String , id:String = "")
+		Print "Message"
+		Print source.ReadyState
+		Print message
+	End
+	
+	Method OnEventSourceEventMessage:Void(source:IEventSource, event:String, message:String, id:String = "")
+		Print "Custom Event: "+event
+		Print source.ReadyState
+		Print message
+	End
+End
+
+Const URL:String = "http://reallocalhost:8888/tests/eventsource/test.php?blabla#asd"
+
+#If TARGET &lt;&gt; "stdcpp" Then
+	
+	Class TestApp Extends App
+		Field _source:EventSource
+		
+		Method OnCreate:Int()
+			SetUpdateRate(60)
+			
+			Local listener:Listener = New Listener()
+			
+			_source = New EventSource(URL)
+			_source.OnOpen = listener
+			_source.OnMessage = listener
+			_source.OnError = listener
+			
+			_source.On("test", listener)
+			
+			Print "Connecting"
+			Print _source.ReadyState
+			
+			Return 0
+		End
+		
+		Method OnUpdate:Int()
+			UpdateAsyncEvents()
+			Return 0
+		End
+		Method OnRender:Int()
+			Cls(0, 0, 0)
+			DrawText(Millisecs(), DeviceWidth() / 2, DeviceHeight() / 2, 0.5, 0.5)
+			Return 0
+		End
+	End
+	
+	Function Main:Int()
+		New TestApp()
+		Return 0
+	End
+
+#Else
+
+Extern Private
+#If HOST = "winnt" Then
+	Function usleep:Void(ms:Int) = "::Sleep"
+#Else
+	Function usleep:Void(ms:Int)
+#End
+	
+Private
+	
+	Function Sleep:Void(ms:Int)
+		usleep(ms)
+	End
+
+Public
+
+	Function Main:Int()
+		Local listener:Listener = New Listener()
+		
+		Local source:EventSource = New EventSource(URL)
+		
+		Print "Connecting"
+		Print source.ReadyState
+		
+		source.OnOpen = listener
+		source.OnMessage = listener
+		source.OnError = listener
+		
+		source.On("test", listener)
+		
+		While True
+			UpdateAsyncEvents()
+			
+			Sleep(1000)
+		Wend
+		Return 0
+	End
+	
+#End</pre> <br><br></td></tr></table><br>
+<a name="2119901"></a>
+
+<a name="2119900"></a>
+
+<a name="2119899"></a>
+
+<a name="2119898"></a>
+
+<a name="2119897"></a>
+
+<a name="2119896"></a>
+
+<a name="2119888"></a>
+
+<a name="2119887"></a>
+
+<a name="2119880"></a>
+
+<a name="2119879"></a>
+
+<a name="2119878"></a>
+
+<a name="2119877"></a>
+
+<a name="2119875"></a>
+
+<a name="2119862"></a>
+
+<a name="2119861"></a>
+
+<a name="2119859"></a>
+
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

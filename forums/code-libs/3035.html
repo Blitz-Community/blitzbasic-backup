@@ -1,0 +1,305 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Minimalist exceptions</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Use setjmp/longjmp to make a mess of B3D code, language=bb, category=User Libs'><meta name='author' content='Yasha'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=14>User Libs</a>/Minimalist exceptions</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="3035.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Minimalist exceptions by Yasha</td><td align="right">2013 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This code requires <a href="http://www.fastlibs.com/index.php" target="_blank">MikhailV's free FastPointer DLL</a>.<br><br><br>This pair of rather unpleasant C functions lets you clunkily imitate exception handling in Blitz3D. For those who haven't used it before, exception handling lets you define control points with "handlers", and if you encounter an error deep inside many nested function calls, jump straight up the stack to the control point without having to mess about with returning error codes and have each function report that it failed to its individual call site and so on and so forth. Very good for the lazy coder.<br><br>In BlitzMax, you'd define the control point and handler with a Try/Catch block. We don't have those in Blitz3D, and have no way to define new syntax, so instead what we do is define the body and handler as two separate functions, and pass their function pointers to WithExceptionHandler (this is why you need the FastPointer DLL: this can't be done without function pointers), along with an argument for the body code.<br><br>Here's a demonstration:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Function Foo(a)
+	Print "Opening Foo with argument " + a
+	Bar(42)
+	Print "Ending Foo (never reached!)"
+End Function
+
+Function Bar(a)
+	Print "In Bar with " + a
+	
+	;Oh no! An 'exceptional situation' requires special abort procedure!
+	ThrowException(42)
+	
+	Print "We never get here!"
+End Function
+
+Function Hdl(e)
+	Print "Handled exception code: " + e
+	Return 64
+End Function
+
+Local fptr = FunctionPointer() : Goto skipF : Foo(0)
+.skipF
+
+Local hptr = FunctionPointer() : Goto skipH : Hdl(0)
+.skipH
+
+Print "WithResult: " + WithExceptionHandler(fptr, hptr, 47)
+
+WaitKey
+End
+</textarea><br><br><br>In the event you hit an "exceptional situation", calling ThrowException will jump right out of whatever you were doing, all the way back to the level of WithExceptionHandler, and call the handler function with whatever you passed as the exception code, which can then take any necessary steps to rectify the situation using this code (use this to signal a particular flag or perhaps pass a data object). WithExceptionHandler will then return the result of the handler function instead of whatever would have been returned had no exception been thrown.<br><br>So in the above example:<br>-- WithExceptionHandler is called with Foo, Hdl and 47<br>-- WithExceptionHandler calls Foo with 47<br>-- Foo does some stuff and calls Bar with 42<br>-- Bar panics, as its mathematics breaks down around the non-value that is 42<br>-- Bar calls ThrowException with 42<br><b>-- ThrowException nukes the call stack all the way down to WithExceptionHandler again</b><br>-- WithExceptionHandler is informed that something went wrong, and calls Hdl to deal with it<br>-- Hdl deals with the problem, and returns a final value<br><br><br>It's not that difficult once you get used to it: it's basically just a way to immediately return past more than one function call at a time. Note that this doesn't catch or otherwise interact with system or hardware exceptions (division by zero, MAV, etc.) - it only works with your own "soft" errors.<br><br><br><b>Be warned</b> however, that bypassing everything that happens in the rest of the function will <i>also</i> bypass B3D's own internal cleanup instructions! These are important for dealing with object reference counts, string memory, and other things that it manages to keep things safe. If you jump out of the middle of a function (or there's one in the middle of the nuked section of stack) that would have needed to cleanup strings or type objects, you will likely get memory leaks as the hidden cleanup code is also bypassed! Not to mention that of course any Free calls of your own will be skipped over too.<br><br>So, I suggest for safety:<br><br>-- preferably only use this code with functions that deal in integers and floats (you should be safe with entities, images, banks and other "int handle"-style objects)<br><br>-- if you have to use type objects, <i>only</i> pass them in parameter slots or via global variables. DO NOT use anything that would "return" an object (this includes the Object command itself) if there's a risk that the cleanup code will be skipped over. Simple parameters appear to be OK as B3D optimises out their refcounts anyway. If in doubt, do not use.<br><br>-- Do not use unboxed strings anywhere near this code. Literals should be OK, but I expect using string variables is asking for disaster. Pass them in globals or type objects if necessary.<br><br>-- finally, <b>this code is not safe</b>. If in doubt, do not use it at all! This is for advanced users who want to "play about" only! "Using setjmp for exception handling" is one of those things that almost everyone on the internet will tell you never to do, and with good reason.<br><br><br>Stern warnings aside... enjoy! The entry below contains both .decls and DLL (that's all! really! I can't believe it's that simple either); alternatively, <a href="https://sites.google.com/site/nangdongseng/downloads/B3D%20exceptions.zip?attredirects=0&amp;d=1" target="_blank">download a prebuilt version</a>. </td></tr><tr ><td class="cell"><pre class="code">;/* Exceptions.decls:
+
+.lib "Exceptions.dll"
+
+WithExceptionHandler%(proc%, handler%, arg%) : "WithExceptionHandler@12"
+ThrowException(code%) : "ThrowException@4"
+
+; */
+
+#include &lt;stdlib.h&gt;
+#include &lt;setjmp.h&gt;
+
+#define BBCALL __attribute((stdcall))
+
+static jmp_buf * topBuffer;
+static int code;
+
+BBCALL int WithExceptionHandler(int (* proc)(int) BBCALL,
+                         int (* handler)(int) BBCALL,
+                         int arg) {
+	jmp_buf env;
+	jmp_buf * prev;
+	prev = topBuffer;
+	topBuffer = &amp;env;
+	int res;
+	if (!setjmp(env)) {
+		res = proc(arg);
+		topBuffer = prev;
+	} else {
+		topBuffer = prev;	// Can't return here on further problems
+		res = handler(code);
+	}
+	return res;
+}
+
+BBCALL void ThrowException(int c) {
+	code = c;
+	longjmp(*topBuffer, 1);
+}</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >virtlands</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> Fascinating. I shall look into this further.  <br>As it seems to be very complex from a first glance, then first I shall not use it casually.<br><br>You said, "doesn't catch division by zero". Is there anything else you're not telling us. <img src="http://i411.photobucket.com/albums/pp194/aeDream/CodeProjEmoticons/smiley_OMG_zpsa0fb9143.gif"><br><br>Great job, by the way,... <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> The reason it can't catch "hard" errors like division by zero or an illegal memory instruction is that there's already one exception system in place, provided by the OS: when the processor or MMU or whatever encounters something it considers illegal, it invokes that exception system; since B3D doesn't include an exception system of its own, the only handler for these is the one that the OS wrapped around the whole program on program startup (this is overly simplified). So the only control point <i>it</i> can see is the one wrapping the entire program structure.<br><br>Languages designed with exceptions from the start can be designed to make the compiler "aware" of OS exceptions (C++ can be designed to do this; BlitzMax does not as far as I can tell). But because this is a low-level system feature involving processor interrupts and the like, there's no easy way to write code that can integrate with it without the compiler having been designed to do it from the start.<br><br>This code provides a <i>second</i> exception system internal to your program logic. It is not tied to the hardware, and that means it can only catch exceptions that you threw <i>by hand</i> using ThrowException. The OS doesn't know about it and can't hook it's own existing exception system into it.<br><br>You could use it to deal with things like that, but only by writing wrapper code that detects the exceptional situation using the same kind of guards that you'd use to detect them in exceptionless B3D code:<br><br><pre class=code>
+Const DIV_BY_ZERO_CODE = ...
+
+Function SafeDivide(l, r)
+    If r = 0 Then ThrowException DIV_BY_ZERO_CODE
+    Return l / r
+End Function
+
+Function MathStuff(a, b, c)
+    ;Math
+    ;Math
+    Local d = SafeDivide(a, b)
+    ;Math
+    Return ...
+End Function
+
+Function Handler(code)
+    Select code
+        Case DIV_BY_ZERO_CODE
+            Print "I'm sorry, I can't divide by zero Dave"
+    End Select
+    Return 0
+End Function
+
+Function DoAllTheMath(arg)
+    ;...
+    Return MathStuff(42, 0, 47)    ;This 0 is going to be a problem later
+End Function
+
+Local MathAllPtr = ..., HdlPtr = ...  ; ... get fn pointers
+
+Local result = WithExceptionHandler(MathAllPtr, HdlPtr, something)
+</pre><br><br>The "hard" error is checked the same way it normally would be, but it saves you having to do this:<br><br><pre class=code>
+Global ErrorStatusMonitor
+
+Function SafeDivide(l, r)
+    If r = 0 Then ErrorStatusMonitor = True : Return 0
+    Return l / r
+End Function
+
+Function MathStuff(a, b, c)
+    ;Math
+    If Not ErrorStatusMonitor
+         Local d = SafeDivide(a, b)
+        If Not ErrorStatusMonitor
+            ;Math
+            Return ...
+        EndIf
+    EndIf
+    Return 0
+End Function
+
+Local res = MathStuff(42, 0, 47)
+If ErrorStatusMonitor Then Print "res is 0, but not a valid result, because something went wrong deep in the code"
+</pre><br><br>(Extreme and ugly example.)<br><br>Anything you can do with exceptions, you can also do with error codes. Exceptions are just a shortcut to allow the code to more closely reflect your intent by removing the safety clutter that's necessary, but not related to the task at hand. Similar to garbage collection in that respect. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >virtlands</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> Here's a simple + very safe (experimental) program I made to detect some math <b>overflows</b> and <b>underflows</b>.  <img src="http://i411.photobucket.com/albums/pp194/aeDream/smiley_suss_zps2e5366f6.gif"><br><br> Download link: <a href="http://uploadingit.com/file/ygba9xfllnxtkthe/SafeMath32_By_Virt.zip" target="_blank">http://uploadingit.com/file/ygba9xfllnxtkthe/SafeMath32_By_Virt.zip</a><br><br> <br>It involves melding PureBasic, Blitz3d, and some assembly language together.   As usual, B3D accesses some special functions through a DLL.  Only those DLL functions supplied can detect overflows &amp; underflows, so it's not '<i>exception</i>' code in the same sense as yours.<br><br>An <b>underflow</b> occurs when a math calculation becomes so low that it can't be stored in a regular 32-bit variable, and it tends towards zero.<br>A <b>gradual underflow</b> occurs when any calculation loses precision by losing decimal point digits.<br>( Gradual underflows are too laborious to keep track off, so this program only tries with simple underflows. )<br><a href="http://en.wikipedia.org/wiki/Arithmetic_underflow" target="_blank">http://en.wikipedia.org/wiki/Arithmetic_underflow</a><br><br>It's too bad that we can't put assembly language directly into Blitz3D.   Or can we? <img src="http://i411.photobucket.com/albums/pp194/aeDream/smiley_wink_zps431da1e0.gif"><br><br> { a multiplication that's too large can cause a 'carry' }<br><img src="http://uploadingit.com/file/s7jplzxb4eghrdy0/DetectCarries.jpg"><br><br> { an addition that's too large can cause an 'overflow' }<br><img src="http://uploadingit.com/file/mhzo9zttuub1n5rg/DetectOverflow.jpg"><br>;----------------------------------------------------------<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80"> ;; This code demonstrates my "SafeMath32" experiment.
+ ;; The DLL functions detect and count overflows + underflows.
+
+ ;; created by VirtLands, March 11,2013
+
+ ;; This program requires the accompanying DLL called "SafeMath32.DLL"
+
+ ;; Programming Notes: 
+ ;;       SafeAdd32i_A(a,b)   is a faster version of SafeAdd32i (a,b)
+ ;;       SafeMult32i_A(a,b)   is a faster version of SafeMult32i (a,b)
+
+ Graphics 800,600,32,2 : ClsColor 222,227,231 : Color 10,10,10
+ Cls
+
+ Global MaxPos32bit = 2147483647
+ Global MaxNeg32bit = -2147483648
+
+ ;; --  All this does is reset error counts to zero, so that  GetMath32Errors() = 0
+ ResetMath32Errors()  
+
+ Print"  This program demonstrates overflow and underflow detection on 32-bit variables. ": Print 
+
+ ;; ----- Generate an INTEGER OVERFLOW using addition ---------------------------------------------  
+ a=1000000000     ;; a = 1 billion 
+
+ Repeat
+        b = a
+        a = SafeAdd32i_A (a,a)     ;; Keep doing this until an overflow happens
+ Until GetMath32Errors()
+
+ Print 
+ Print"  Integer Overflow example:  "+b+" + "+b+" = "+a
+ DisplayOver()  : ResetMath32Errors()
+
+  ;; ----- Generate an INTEGER OVERFLOW using multiplication -----------------------------------------
+ a=10   
+ Repeat
+        b = a
+        a = SafeMult32i_A (a,a)     ;; Keep doing this until an overflow happens
+ Until GetMath32Errors()
+
+ Print 
+ Print"  Integer Overflow example:  "+b+" * "+b+" = "+a
+ DisplayOver()  : ResetMath32Errors()
+
+ ;; ----- Generate a FLOAT UNDERFLOW using multiplication ---------------------------------------------      
+ f1# = 0.1 :  f2# = 0.0
+
+ Repeat
+         f2 = f1
+         f1 = SafeMult32f (f1,f1)       ;; Keep doing this until an underflow happens
+ Until GetMath32Errors()&gt;0
+
+ Print 
+ Print"  Float Underflow example:  "+f2+" * "+f2+" = "+f1 
+ DisplayOver()  : ResetMath32Errors()
+
+ ;; ----- Generate a DIVISION BY ZERO using FLOATS ---------------------------------------------      
+ f1# = 0.1 :  f2# = 0.0
+
+ Repeat
+         f1 = f1*f1
+         f2 = SafeDiv32f (1, f1)       ;; Keep doing this until a division by zero occurs
+ Until GetMath32Errors()&gt;0
+
+ Print 
+ Print"  Division By Zero example:   1/"+f1+" = "+f2
+ DisplayOver()  : ResetMath32Errors()
+
+ ;; ---- Now demonstrate some friendly divisions -------
+ Print"  -------------------------------------------------------------- "
+ Print"  Now demonstrating simple divisions ... :"
+ For z = 0 To 1000 Step 100
+         f1 = SafeDiv32f(1,z)
+         Print"  1/"+z+" = "+f1
+ Next  
+ DisplayOver()  : ResetMath32Errors()
+ Print"  -------------------------------------------------------------- "
+ Print"  Some more overflow examples: "
+
+ errors=0 :  a =MaxPos32bit-100 : old_error_count=0 : s$ = ""
+ Repeat
+        If a=0 Then Exit
+        b=a
+        a = SafeAdd32i_A(a,a)     ;; Try to create an overflow whenever possible
+        If GetMath32Errors()&lt;&gt;old_error_count
+                  old_error_count = GetMath32Errors()  
+                  errors = errors +1
+                  s = "  "+b+" + "+b+" = "+a : Print s
+        End If             
+ Forever
+
+ errors=0 : a =MaxPos32bit-100   
+ Repeat 
+        b=a 
+        a = SafeMult32i_A(a,a)
+        If GetMath32Errors()&lt;&gt;old_error_count
+                  old_error_count = GetMath32Errors()  
+                  errors = errors +1
+                  s = "  "+b+" * "+b+" = "+a : Print s
+        End If  
+ Until errors=6 
+ DisplayOver()  : ResetMath32Errors()
+
+ we()
+
+;;  errcounts = 3 possible variables stored within 1 32-bit INTEGER, 
+;;  therefore each variable can only have 10 bits for its own storage
+;;  ( Can record error counts of each type of error for a total of 1023 per error type. )
+;;
+Function DisplayOver()          ;; DISPLAYS overflows and underflows, etc...
+        Local errcounts, overflow, underflow, Div_by_zero
+        errcounts = GetMath32Errors()   
+
+        overflow   = errcounts And 1023
+        errcounts  = errcounts Shr 10
+        underflow = errcounts And 1023
+        errcounts = errcounts Shr 10
+        Div_by_zero = errcounts        
+
+        If overflow      Then Print"  overflow count = "+overflow
+        If underflow    Then Print"  underflow count = "+underflow
+        If Div_by_zero Then Print"  divisions by zero = "+Div_by_zero   
+End Function  
+
+Function we()
+      WaitKey():End 
+End Function  </textarea> <br><br> It has the usual logic, as in 1/0 = infinity.  <br><br> I don't know how to pass or return <b>TYPES</b> into a DLL, (I sure tried though). <br> I had to do this weird thing where I cram <b>3</b> variables into one, and return the result that way.<br>Each variable takes 10 bits, for a total of 30 bits, which fits just fine in an INT. <br><br>Oh, the things I've got to do to make things work. <img src="http://pcpuzzle.com/forum/images/smiles/icon_eek.gif"> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> It's too bad that we can't put assembly language directly into Blitz3D. Or can we? <br></div><br><br><a href="http://www.blitzbasic.com/Community/posts.php?topic=92323" target="_blank">TCC permits inline assembly within C functions</a>.<br><br>Not quite the same as your PureBasic use case: the asm has to be in a string, and then put inside a C function to be compiled at runtime, but it will work if you're desperate.<br><br><br><div class="quote"> I don't know how to pass or return TYPES into a DLL, (I sure tried though). <br></div><br><br>You can pass objects to the DLL using a .decls declaration like this:<br><br><pre class=code>SomeDLLFunction(obj*) : "_myFunc@4"</pre><br><br>This will pass the DLL function a pointer to the first field. You can treat it as a C struct pointer from here on (I don't know PureBasic and can't tell you what the equivalent there would be). You use the same star sigil for all types, meaning one DLL function can accept any type of objects (also banks: note that it can't tell the difference between a valid bank and an arbitrary integer though, except when the latter crashes).<br><br>There is no facility for returning objects. While I can think of a few hacks, I don't think there is any <i>safe</i> way to do this actually. Consider storing and returning Handles instead. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >virtlands</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> Okay, I shall study DLL parameters some more. Shall try to get it right this time.<br>What does the @4 mean?   ( as in func1@4 )  <img src="http://i411.photobucket.com/albums/pp194/aeDream/Yahoo%20emoticons/confused.gif"> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> The string in the quote marks is the function's name <i>as exported by</i> the DLL. You can apparently leave this off if it's identical to the name you're giving it in B3D on the left.<br><br>The @X is commonly added by GCC and similar compilers to represent the fact that the function takes four bytes' worth of arguments on the stack. It's just a naming convention that takes advantage of the fact that DLLs can export names with characters that would be illegal in C code (so you can use to @ to separate off a part of the name with more information). It does not have any practical implications and is not "checked" at runtime or anything like that.<br><br>Besides, in this case I just made the name up. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >virtlands</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> Aha!  I've figured out TYPE parameters with simple INT fields, however the one's with <u>string</u> fields don't work.<br><br>This old topic by Oldefoxx may do the trick:  I shall study this one.<br><b>String Pointers (Including NULL) For DLLs</b><br><a href="http://www.blitzbasic.com/Community/post.php?topic=33007&amp;post=354882" target="_blank">http://www.blitzbasic.com/Community/post.php?topic=33007&amp;post=354882</a><br>;------------------------------------------------------------------------------<br><br>I guess I should have started a new topic on this. <img src="http://i411.photobucket.com/albums/pp194/aeDream/CodeProjEmoticons/smiley_line_zps309c5136.gif"><br><br>Displayed here is a successful attempt at accessing B3D types in a PureBasic DLL:<br><br><img src="http://uploadingit.com/file/ugoxb7pgw236y3z1/B3D_DLL_parameters.jpg">  <img src="http://uploadingit.com/file/qeo4hyqyt2aav6bh/PureBasic_DLL_parameters.jpg">  <br><br>Basically, the structure in PureBasic is a duplication of the TYPE in Blitz3D.<br><br><b>func2</b> achieves the same result as <b>func1</b>, by using a kind of 'casting' of an INT to a structure pointer.<br><br>The corresponding DECLS file is very simple as follows:<br><br>.lib "<b>DLL1.DLL</b>"<br>func1%(a*)<br>func2%(a*)<br>func3%(a*)<br><br>;------------------------------------------<br>As for using string parameters, that's more complex, will be back... <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> Note that the TypePointer function is a FastPointer extension, not a part of B3D.<br><br>Strings.... strings in B3D are "complicated" and I would advise not tampering with them too much as you might break some of its essential background features.<br><br>I was able to discover some of the lowlevel information about them a while back though. This program demonstrates:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Type st
+	Field s$
+End Type
+
+Graphics 1280, 400, 32, 6
+
+Local s.st = New st
+s\s = "defn foo {a b} { puts $a; }; var a; $a$b; return [f g];"
+
+Local p = TypePointer(s)
+Local sp = MemoryFastPeekInt(p)
+
+Local s2.st = New st
+s2\s = s\s
+Local scr$ = s\s
+Local scr2$ = scr + " foo"
+Local scr3$ = "bar baz"
+;Local scr4$ = scr
+
+Local sp3 = MemoryFastPeekInt(TypePointer(s2))
+
+Local sp2 = sp
+Repeat
+	Write Hex(sp2) + ":  "
+	For i = 0 To 20 Step 4
+		Write Hex(MemoryFastPeekInt(sp2 + i)) + " "
+	Next
+	Print
+	sp2 = MemoryFastPeekInt(sp2 + 20)
+Until sp2 = sp
+
+
+Print
+
+sp = MemoryFastPeekInt(sp + 4)
+For i = 0 To Len(s\s) - 1
+	Write Chr(MemoryFastPeekByte(sp + i))
+Next
+Print
+
+Print
+Delete s2
+sp2 = sp3 : sp = sp2
+Repeat
+	For i = 0 To 20 Step 4
+		scount = scount + 1
+	Next
+	sp2 = MemoryFastPeekInt(sp2 + 20)
+Until sp2 = sp
+Print scount
+
+WaitKey
+End
+</textarea><br><br>i.e. Strings are a 24-byte (so six word) structure. The second word is a pointer to the actual string data buffer. The third and fourth words are the length of the string, and the length of the data buffer (allocated in blocks and therefore usually slightly longer than the string itself) respectively. The fifth and sixth words are pointers to the preceding and following strings in B3D's internal string management system. I was not able to work out what, if anything, the first data word represents, and I can't think of a use for it either (it doesn't appear to be a reference count).<br><br>Further thoughts:<br><br>-- the string headers are allocated from a free list to keep 'em small and fast<br>-- string buffer data looks to be handled similarly<br>-- every time a string is assigned to a variable, passed as a function parameter, or returned from a function, a new header is allocated which makes passing strings rather slow (stick them in an array or object for faster passing)<br>-- I was not able to work out/cannot remember how string buffers are shared, when B3D decides to copy them, or when it decides to free them. There is no obvious sign that it uses refcounting, but it might be using tracing instead which we can't easily tell from looking at memory dumps<br><br>Perhaps this helps (incidentally, if you want to investigate this further I suggest opening a forum thread, as we're no longer talking at all about the archive entry).<br><br><br><b>EDIT:</b> if you meant string parameters to DLL functions - those are copied into a temporary buffer before the DLL is called; B3D's internal string data never gets passed to the DLL. I take advantage of this fact in my <a href="/codearcs.php?code=2972" target="_blank">string to bank</a> trick. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >virtlands</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> Thanks Yasha, that's awesome.  It's going to take me over a day to absorb and study all that.  <br><br> <img src="http://i411.photobucket.com/albums/pp194/aeDream/CodeProjEmoticons/smiley_wink_zps7df7e11b.gif"> <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

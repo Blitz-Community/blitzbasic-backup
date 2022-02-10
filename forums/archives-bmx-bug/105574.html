@@ -1,0 +1,152 @@
+<!DOCTYPE html><html lang="en" ><head ><title >pub.mod/oggvorbis.mod: faulty loop?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >pub.mod/oggvorbis.mod: faulty loop?</h1><a href="forums.php" >Archives Forums</a>/<a href="topics.php?forum=105" >BlitzMax Bug Reports</a>/<a href="#bottom" >pub.mod/oggvorbis.mod: faulty loop?</a><br><br>
+<a name="1287822"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> the following code is currently used in pub.mod/oggvorbis.mod:<br><br><pre class=code>
+  int Read_Ogg(oggio *ogg,char *buf,int bytes)	// null buffer to close
+  {
+	int		res,bs;
+  
+  	if (buf==0) return ov_clear(&amp;ogg-&gt;vf);
+  
+  	while (bytes&gt;0)
+  	{
+  		res=ov_read(&amp;ogg-&gt;vf,buf,bytes,endian,bits/8,sign,&amp;bs);
+		if (res&lt;0)
+		{
+  			if (bs) return -1;	// Only one logical bitstream currently supported
+  			return -2;			// Warning: hole in data
+  		}
+  		buf+=res;
+  		bytes-=res;
+  	}
+	return 0;
+  }
+</pre><br><br><br>There are two issues:<br>- Read_Ogg() does return "0" instead of the amount of read bytes (which might differ from the param "bytes")<br>- what happens, if you read up to the last byte of the ogg file - so "ov_read" returns 0 ... I assume you are then trapped in the while-loop, as "bytes" will never reach "0"<br><br>I am not sure whether I have done it right, but I think this would solve both issues:<br><br><br><pre class=code>
+int Read_Ogg(oggio *ogg,char *buf,int bytes)	// null buffer to close
+{
+	int		res,bs,read;
+
+	if (buf==0) return ov_clear(&amp;ogg-&gt;vf);
+
+	read = 0;
+
+	while (bytes&gt;0)
+	{
+		res=ov_read(&amp;ogg-&gt;vf,buf,bytes,endian,bits/8,sign,&amp;bs);
+		if (res&lt;0)
+		{
+			if (bs) return -1;	// Only one logical bitstream currently supported
+			return -2;			// Warning: hole in data
+		}
+		else if (res == 0) // reached eof
+		{
+			return read;
+		}
+		read+=res;
+		buf+=res;
+		bytes-=res;
+	}
+	return read;
+}
+</pre><br><br>The returned value "read" contains the bytes loaded by the multiple calls of ov_read().<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1287831"></a>
+
+<a name="1287834"></a>
+
+<a name="1287835"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> . <br><br></td></tr></table><br>
+<a name="1287837"></a>
+
+<a name="1287841"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> ov_read():<br><div class="quote"> It returns up to the specified number of bytes of decoded PCM audio in the requested endianness, signedness, and word size.<br><br>[...]<br><br>Return Values<br>OV_HOLE<br>indicates there was an interruption in the data. <br>(one of: garbage between pages, loss of sync followed by recapture, or a corrupt page)<br><br>OV_EBADLINK<br>indicates that an invalid stream section was supplied to libvorbisfile, or the requested link is corrupt.<br><br>OV_EINVAL<br>indicates the initial file headers couldn't be read or are corrupt, or that the initial open call for vf failed.<br><br>0<br>indicates EOF<br><br>n<br>indicates actual number of bytes read. ov_read() will decode at most one vorbis packet per invocation, so the value returned will generally be less than length.<br> <br></div><br><a href="https://www.xiph.org/vorbis/doc/vorbisfile/ov_read.html" target="_blank">https://www.xiph.org/vorbis/doc/vorbisfile/ov_read.html</a><br><br><br>In oggvorbis.mod/libvorbis-1.3.4/include/vorbis/codec.h the following consts are defined:<br><br><pre class=code>
+#define OV_EOF        -2
+#define OV_HOLE       -3
+[...]
+#define OV_EBADLINK   -137
+</pre><br><br>So there is an error code for reaching EOF, while the documentation mentions a returned "0" is also EOF ?<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1287848"></a>
+
+<a name="1287849"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Perhaps the error code is only returned when continuing to read passed the EOF. So when an EOF is reached initially the return value will be 0, then upon trying again the error value is returned? <br><br></td></tr></table><br>
+<a name="1287905"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Something to try out (you need to supply your own "sound3.ogg" - and take a small one, so it has less than 1mio samples):<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Import Pub.OggVorbis
+
+
+local ogg:TOggFile = new TOggFile
+ogg.Test()
+print "finished"
+
+
+Type TOggFile
+	Field stream:TStream
+
+	Method Test()
+		local samplesCount:int
+		local channels:int
+		local freq:int
+		local ogg:Byte Ptr
+		local buffer:int[] = new Int[1000000]
+		local bufferPtr:Byte Ptr = Byte Ptr(buffer)
+
+		stream = ReadStream("sound3.ogg")
+		ogg = Decode_Ogg(stream, readfunc, seekfunc, closefunc, tellfunc, samplesCount, channels, freq)
+		local bytes:int = Read_Ogg(ogg, bufferPtr, 1000000)
+		print "samples:"+samplesCount+"  channels:"+channels +"  maxBytes:"+bytes
+		'close
+		Read_Ogg(ogg, null, 0)
+		stream.Close()
+
+
+		local stream2:TStream = ReadStream("sound3.ogg")
+		local ogg2:Byte Ptr
+		ogg2 = Decode_Ogg(stream2, readfunc, seekfunc, closefunc, tellfunc, samplesCount, channels, freq)
+		print "result with max bytecount +1 (EOF):" +Read_Ogg(ogg2, bufferPtr, bytes)
+		print "result with max bytecount +1 (EOF):" +Read_Ogg(ogg2, bufferPtr, 1)
+		'close
+		Read_Ogg(ogg, null, 0)
+		stream2.Close()
+	End Method
+
+	'adjusted from brl.mod/oggloader.mod/oggloader.bmx
+	'they are "private" there... so this is needed to expose them
+	Function readfunc:Int( buf:Byte Ptr, size:Int, nmemb:Int, src:Object )
+		Return TStream(src).Read(buf, size * nmemb) / size
+	End Function
+
+
+	Function seekfunc:Int(src_obj:Object, off0:Int, off1:Int, whence:Int)
+		Local src:TStream=TStream(src_obj)
+	?X86
+		Local off:Int = off0
+	?PPC
+		Local off:Int = off1
+	?
+		Local res:Int = -1
+		Select whence
+			Case 0 'SEEK_SET
+				res = src.Seek(off)
+			Case 1 'SEEK_CUR
+				res = src.Seek(src.Pos()+off)
+			Case 2 'SEEK_END
+				res = src.Seek(src.Size()+off)
+		End Select
+		If res &gt;= 0 Then Return 0
+		Return -1
+	End Function
+
+
+	Function closefunc(src:Object)
+		
+	End Function
+	
+
+	Function tellfunc:Int(src:Object)
+		Return TStream(src).Pos()
+	End Function
+End Type	
+</textarea><br><br>With the default implementation, it will get trapped in the second Read_Ogg(stream2...) call (application has to get force killed).<br><br>The first call to Read_ogg() returns 0 as it did not see another error, so we cannot know if we reached EOF yet.<br><br><br>With the adjusted Read_ogg the first call returns the "max bytes" while the second one returns 0 (the EOF-result).<br><br><br>Don't know which one is better ;-) <br><br></td></tr></table><br>
+<a name="1287907"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> ith the default implementation, it will get trapped in the second Read_Ogg(stream2...) call (application has to get force killed). <br></div><br>Oh, thats not good!<br>Well spotted!!<br><br><div class="quote"> Don't know which one is better ;-) <br></div><br>I'd say if one your algos can reflect a change of 'state' in the return value then that is the better way to go. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

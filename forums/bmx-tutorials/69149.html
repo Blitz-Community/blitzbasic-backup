@@ -1,0 +1,242 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Multitasking in BlitzMax</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Multitasking in BlitzMax</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=112" >BlitzMax Tutorials</a>/<a href="#bottom" >Multitasking in BlitzMax</a><br><br>
+<a name="773096"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> The following is an attempt at a TaskManager that lets you run services "asynchronously" in BlitzMax.<br><br>Tasks may be serviced whenever, not just when you call WaitEvent, but when calling any BlitzMax function that causes a PollSystem including KeyDown, WaitEvent and many others.<br><br>There is protection built into the TaskManager that will stop services being reentrant so your callback will never be called while its running it's current refresh cycle (see _busy field).<br><br>Basically the following creates a multitasking environment where any services (functions) you need to call on a regular basis can be easily added to a tasklist. <br><br>Note how the tasks keep printing even when you are dragging the Max2D window, the trick is to never call any Max2D drawing from such tasks as I think this will create a deadlock in Windows. MaxGUI offers more flexibility for graphics rendering where the GADGETPAINT event can be used to synchronize Max2D drawing with the operating systems own expectations / requirements.<br><br>Similar to a multithreading environment you need to be careful to cooperate with the main program and any other tasks. <br><br>Also, as timers are a limited resource on some systems (16 per Windows app etc.), a single 100hz timer is used by the TaskManager to service all threads.<br><br><pre class=code>
+' blitzmax multitasking example
+
+Strict
+
+Global TaskManager:TTaskManager=New TTaskManager
+
+Function task1()
+	Print "task1"
+End Function
+
+Function task2()
+	Print "task2"
+End Function
+
+TaskManager.StartTask 10,task1
+TaskManager.StartTask 20,task2
+
+Graphics 640,480
+
+While WaitEvent()
+	DebugLog CurrentEvent.toString()
+Wend
+
+End
+
+Type TTask
+	Field _hertz#
+	Field _count
+	Field _millis
+	Field _ticks
+	Field _callback()
+	Field _busy
+
+	Method Start(hz#,callback())
+		_count=0
+		_hertz=hz		
+		_millis=MilliSecs()
+		_callback=callback
+		TaskManager._tasklist.AddFirst Self
+	End Method
+
+	Method Stop()
+		_hertz=0
+		TaskManager._tasklist.Remove Self
+	End Method
+
+	Method Update(ms)
+		Local	count
+		If _busy Or _hertz=0 Return	'ignore if stopped or already in callback 
+		_busy=True
+		count=((ms-_millis)*_hertz)/1000
+		If count&gt;_count
+			_ticks:+1
+			_count=count
+			_callback()
+		EndIf
+		_busy=False
+	End Method
+
+End Type
+
+Type TTaskManager
+	Global _tasklist:TList 
+	Global _timer:TTimer
+	Global _event:TEvent
+	
+	Method New()
+		_tasklist=New TList
+		_event=CreateEvent( EVENT_TIMERTICK,Null,0 )
+		AddHook EmitEventHook,hook
+		_timer=CreateTimer(100,_event)
+	End Method
+
+	Function hook:Object( id,data:Object,context:Object )
+		Local ms
+		Local t:TTask
+		If data&lt;&gt;_event Return data
+		ms=MilliSecs()
+		For t=EachIn _tasklist
+			t.Update(ms)
+		Next
+	End Function
+
+	Method StartTask:TTask( hertz#,callback() )
+		Local t:TTask
+		t=New TTask
+		t.Start hertz,callback
+		Return t
+	End Method
+
+End Type
+</pre><br><br>Possibly all uses of the word Task should be replaced with Service as it is currently required that each task return from it's callback for the system to continue.<br><br>Will add more details after answering initial questions.... <br><br>yes, you sir at the back - <br><br></td></tr></table><br>
+<a name="773122"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looks nice. It runs fine on my system here. I don't entirely understand all of it but I presume, to simplify, it's basically a way of calling given functions at a given time interval using a system timer, as if each function is a `thread` of sorts, as callback functions. So you can do whatever you want from that function and then cooperatively return back to the system. Can I presume this means that until you return from the function, the system is `locked in`? Is the o/s locked-in or just the Blitz application? What happens when the timer says its time for another function to be called, but the one you're in hasn't returned yet because it's doing processing? Does it just skip the call or put it in a queue or something?<br><br>It's a nice little system. What I had been doing is check the Millisecs() timer and manually switching functions. So does your system not waste any cpu time when it's waiting for it to be time to trigger the function? ie you have to PollEvent in some way, to give control over to the o/s, to know if there's an event waiting there, otherwise you come back and sit there polling? <br><br></td></tr></table><br>
+<a name="773135"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >H&amp;K</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I use this<br><a href="http://www.blitzmax.com/codearcs/codearcs.php?code=1721" target="_blank">http://www.blitzmax.com/codearcs/codearcs.php?code=1721</a><br>I just say at at at what milli delay to call each function, and it sort of mutiltasks<br><br>(Ok what a really do is have the one function saying what task gets the time, but its the same principle)<br><br>@Skid, dont forget we have a limit of 20timers ;) <br><br></td></tr></table><br>
+<a name="773144"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> H&amp;K, the task manager allows limitless tasks serviced from the single timer.<br><br>AD, I've had a bit of a look and it turns out PollSystem does not allow reentrant usage so 1 task can't run above another,<br><br>however, a quick squizz at brl.system, and the solution seems to be:<br><br><pre class=code>
+Function task2()
+	For Local i=1 To 50
+		Delay(10)	'simulate big jobs
+		Print "task2"
+		Driver.poll
+	Next	
+	Print "DONE!"	
+End Function
+</pre><br><br>If you modify the original code, you will see task 1 being serviced while task2 is chomping through it's loop. However there is no way (short of threading) execution can return to task2 until task1 ends, but it does allow for some useful solutions I think. <br><br></td></tr></table><br>
+<a name="773161"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >H&amp;K</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> H&amp;K, the task manager allows limitless tasks serviced from the single timer <br></div>That will teach me to read the whole listing ;)<br>So its more like my solution than I thought ;)<br><br>One of either Flame or Dream said that if Bmax was redone with the Newer MiniGW then it would be mutli thread safe. Do you know if this is true? <br><br></td></tr></table><br>
+<a name="773442"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >morszeck</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> this is dangerous. the function must run 1000%! otherwise there is a trailer. but it is an alternative. <br><br></td></tr></table><br>
+<a name="773455"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >H&amp;K</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> OK, working on the assumtion that TTaskManager is a singleton.<br><br>Remove TaskManager:TTaskManager=New TTaskManager<br><br>Add this as a Global of TTaskManager<br>Global TaskManager:TaskManager=New TaskManager<br>Change TTaskManager to TaskManager and Change StartTask() into a Function<br><br><pre class=code>' blitzmax multitasking example
+
+Strict
+
+TaskManager.StartTask 10,task1
+TaskManager.StartTask 20,task2
+
+Graphics 640,480
+
+While WaitEvent()		
+
+	Select EventID()			
+	
+		Case EVENT_KEYDOWN
+			
+			If EventData() = KEY_SPACE
+				PostEvent( CreateEvent:TEvent (EVENT_APPTERMINATE) )
+			EndIf
+	
+		Case EVENT_APPTERMINATE
+		
+			End
+
+	End Select
+
+	DebugLog CurrentEvent.ToString()
+Wend
+
+End
+
+
+'=======================================================================
+
+
+Function task1()
+	Print "task1"
+End Function
+
+Function task2()
+	Print "task2"
+End Function
+
+
+'=======================================================================
+
+
+Type TTask
+	Field _hertz#
+	Field _count
+	Field _millis
+	Field _ticks
+	Field _callback()
+	Field _busy
+
+	Method Start(hz#,callback())
+		_count=0
+		_hertz=hz		
+		_millis=MilliSecs()
+		_callback=callback
+		TaskManager._tasklist.AddFirst Self
+	End Method
+
+	Method Stop()
+		_hertz=0
+		TaskManager._tasklist.Remove Self
+	End Method
+
+	Method Update(ms)
+		Local	Count
+		If _busy or _hertz=0 Return	'ignore if stopped or already in callback 
+		_busy=True
+		Count=((ms-_millis)*_hertz)/1000
+		If Count&gt;_count
+			_ticks:+1
+			_count=Count
+			_callback()
+		EndIf
+		_busy=False
+	End Method
+
+End Type
+
+Type TaskManager
+
+	Global TaskManager:TaskManager=New TaskManager
+	Global _tasklist:TList 
+	Global _timer:TTimer
+	Global _event:TEvent
+	
+	Method New()
+		_tasklist=New TList
+		_event=CreateEvent( EVENT_TIMERTICK,Null,0 )
+		AddHook EmitEventHook,hook
+		_timer=CreateTimer(100,_event)
+	End Method
+
+	Function hook:Object( id,data:Object,context:Object )
+		Local ms
+		Local t:TTask
+		If data&lt;&gt;_event Return data
+		ms=MilliSecs()
+		For t=EachIn _tasklist
+			t.Update(ms)
+		Next
+	End Function
+
+	Function StartTask:TTask( hertz#,callback() )
+		Local t:TTask
+		t=New TTask
+		t.Start hertz,callback
+		Return t
+	End Function
+
+End Type
+</pre>This way, the initialization of TaskManager is automatic<br><br>(Note: Because the original wasnt a singleton, was the reason I felt that Skid should limet the number of TaskManagers to less than 20, however having thought about it, limiting it to one seems a better Idea)<br><br>Oh and press space or click on the X to stop the program, (Really Skid ;) <br><br></td></tr></table><br>
+<a name="795027"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is cool. But isn't it wasting quite a lot of time waiting for events when it could be processing?<br><br>And isn't there some delay between the timer ticking and the event being detected and used, ie it's inaccurate?<br><br>Also, does this only run one function at a time or can a shorter function pre-empt a longer one? And if so, isn't there a lot of time being wasted checking if the timeslice is expired or whatever? ie isn't it checking all tasks upon every timer tick, rather than just pre-empting to the highest priority task? <br><br></td></tr></table><br>
+<a name="795091"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >H&amp;K</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> 1) Yep, if the processing is shorter than the time allocated for it, the program sits in the event loop<br><br>2) Yes ish. If everything is running under spec, then the tick is "accuarate"(ish:- like dont launch anti missile systems from it), however if the eventloop is too long (so the system cannot poll the ticks), or<br>3) As the ticks arnt pre-emptive, the just stackup oneach other, thus lossing accuracy. Generaly you have to make sure that everything is happening on a tick, so that the eventloop is simply posting/processing window/system events and not doing any of the "Program", and secondly you have to ensure that all subprocces you have Self-empt (just made that up), after whatever is your time slice for it. <br><br></td></tr></table><br>
+<a name="795828"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> [deleted] <br><br></td></tr></table><br>
+<a name="796049"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >errno!</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> A Linear multi-task executor? PARADOX :) <br><br></td></tr></table><br>
+<a name="796094"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> It's not really able to pre-empt because you have to choose a time to go and look for events, to trigger the hook. Ideally when the timer ticks it would be a real hook, ie hooked into the o/s, so that the o/s itself calls the hook function immediately, pre-empting whatever else your app is doing. But it can't do that, from what I can tell. All it can do is wait for you to give control to the o/s so that it can transfer events to your app, so that Blitz can trigger the hook, which means having to wait and detect the presence of a timer tick. I don't see that there is really any way in Blitz to truly pre-empt. We don't have interrupts. We don't have the ability to make something happen when a timer ticks all by itself. We don't have a timer that can count down from a number and then trigger something by itself. We don't have threads. Processes can't really talk to each other. Hooks aren't really hooked into the o/s system functionality. The app is kind of isolated in its own world. So this is about as good as it gets - cooperatively multiasking with the o/s in order to get the events so that you can call your own hook. And like Skid said you can't really pre-empt because a function needs to end and return before the next one starts.<br><br>I've come up with a similar solution using a timer to trigger a scheduling event which pre-empts a current *script*, as part of a script interpretation engine, but then this is only possible by a) occasionally polling for events to trigger the timer tick event, and b) abstracting program execution away from real direct programs and into a script layer - once removed. It acts as though it is pre-emptive but in the script interpreter there is still that requirement to poll the system manually to cause a pre-emption, which in part is cooperative, not pre-emptive. Having some kind of interrupt-driven function would be great. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

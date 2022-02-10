@@ -1,0 +1,161 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Compiling wiimote.mod</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Compiling wiimote.mod</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Compiling wiimote.mod</a><br><br>
+<a name="1178167"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Hezkore</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've been trying to use axe.mod/wiimote.mod, I've downloaded it via the SVN (http://max-edit.googlecode.com/svn/trunk/) and compiled it which does work just fine, no errors.<br>But when I compile the example that comes in the "doc" folder I get the following error:<pre class=code>D:/BlitzMax/bin/ld.exe: cannot find -lhid
+D:/BlitzMax/bin/ld.exe: cannot find -lsetupapi
+Build Error: Failed to link D:/BlitzMax/mod/axe.mod/wiimote.mod/doc/openwiimotes.exe</pre>Other modules compile just fine.<br>Any help on this? <br><br></td></tr></table><br>
+<a name="1178169"></a>
+
+<a name="1178170"></a>
+
+<a name="1178171"></a>
+
+<a name="1178172"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Hezkore</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well I managed to get it working by moving the MinGW lib folder into my BlitzMax lib folder (and not overriding any files).<br>But the wiimote.mod module doesn't seem to be working that well.. it only returns 0 wiimotes open, even though I have one connected (and it's tested and working via GlovePIE), it does however work if I connected the wiimote WHILE the example is running...<br>And ontop of that, PollWiimotes() is VERY slow, using this in a game would be impossible.<br><br>Is this outdated and broken or what's going on here? <br><br></td></tr></table><br>
+<a name="1178176"></a>
+
+<a name="1178177"></a>
+
+<a name="1178178"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Hezkore</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Turns out that the reason PollWiimotes() is slow is because it's looking for new Wiimotes every single time.<br>It looks to me like that should be done at OpenWiimotes() instead.<br><br>I did this change to "wiimote.mod/wiiyourself/wiiglue.cpp" and now the example works A LOT better.<pre class=code>#define _ASSERT
+
+#include "wiimote.h"
+
+extern "C"{
+	int OpenWiimotes();
+	int PollWiimotes();
+	int CloseWiimotes();
+	int WiimoteButton(int id);
+	float WiimoteAxis(int id);
+	int SetWiimoteLEDS(int wiimote_id,int bits);
+	int SetWiimoteRumble(int wiimote_id,int onoff);
+};
+
+#define MAX_PLAYERS 8
+#define MAX_BUTTONS 8
+#define MAX_AXIIS 32
+
+wiimote *wii_motes[MAX_PLAYERS];
+int wii_states[MAX_PLAYERS];	//0=unconnected 1=wiimote 2=addon1 etc.
+int wii_buttons[MAX_PLAYERS*MAX_BUTTONS];
+float wii_axiis[MAX_PLAYERS*MAX_AXIIS];
+int wii_count=0;
+int wii_connected=0;
+
+int OpenWiimotes(){
+// allow 1 player to join per update until fill
+	if (wii_count==wii_connected&amp;&amp;wii_count&lt;MAX_PLAYERS){
+		wii_states[wii_count]=0;
+		wii_motes[wii_count]=new wiimote();
+		wii_count++;
+	}
+	return wii_count;
+}
+
+int PollWiimotes(){
+	int i,j,b;
+	wiimote *w;
+	float *axis;
+// poll all active
+	for(i=0;i&lt;wii_count;i++){
+		w=wii_motes[i];
+		if(wii_states[i]==0){//disconnected
+			if (w-&gt;Connect(wiimote::FIRST_AVAILABLE)) {
+				wii_states[i]=1;
+				wii_connected++;
+				w-&gt;SetReportType(wiimote::IN_BUTTONS_ACCEL_IR_EXT);
+			}
+		}
+		if(wii_states[i]){
+			if (w-&gt;RefreshState() == NO_CHANGE) continue;
+						
+			wii_buttons[i*MAX_BUTTONS+0]=w-&gt;Button.Bits&amp;0x9f1f;
+
+			axis=wii_axiis+i*MAX_AXIIS;
+			axis[0]=w-&gt;Acceleration.X;
+			axis[1]=w-&gt;Acceleration.Y;
+			axis[2]=w-&gt;Acceleration.Z;
+			axis[3]=w-&gt;Acceleration.Orientation.X;
+			axis[4]=w-&gt;Acceleration.Orientation.Y;
+			axis[5]=w-&gt;Acceleration.Orientation.Z;
+			axis[6]=w-&gt;Acceleration.Orientation.Pitch;
+			axis[7]=w-&gt;Acceleration.Orientation.Roll;
+			
+			for (j=0;j&lt;4;j++){
+				axis[8+j*2]=w-&gt;IR.Dot[j].X;
+				axis[9+j*2]=w-&gt;IR.Dot[j].Y;
+			}
+						
+			switch(w-&gt;ExtensionType){
+				case 0:
+					break;
+				case 0xfefe://NUNCHUK
+					b=0;
+					if (w-&gt;Nunchuk.C) b=1;
+					if (w-&gt;Nunchuk.Z) b|=2;
+					wii_buttons[i*MAX_BUTTONS+1]=b;
+					axis[16]=w-&gt;Nunchuk.Joystick.X;
+					axis[17]=w-&gt;Nunchuk.Joystick.Y;
+					axis[18]=w-&gt;Nunchuk.Acceleration.X;
+					axis[19]=w-&gt;Nunchuk.Acceleration.Y;
+					axis[20]=w-&gt;Nunchuk.Acceleration.Z;
+					axis[21]=w-&gt;Nunchuk.Acceleration.Orientation.X;
+					axis[22]=w-&gt;Nunchuk.Acceleration.Orientation.Y;
+					axis[23]=w-&gt;Nunchuk.Acceleration.Orientation.Z;
+					axis[24]=w-&gt;Nunchuk.Acceleration.Orientation.Pitch;
+					axis[25]=w-&gt;Nunchuk.Acceleration.Orientation.Roll;
+					break;
+				case 0xfdfd://CLASSIC:
+				case 0xfbfd://CLASSIC_GUITAR
+					wii_buttons[i*MAX_BUTTONS+1]=w-&gt;ClassicController.Button.Bits;
+					axis[16]=w-&gt;ClassicController.JoystickL.X;
+					axis[17]=w-&gt;ClassicController.JoystickL.Y;
+					axis[18]=w-&gt;ClassicController.JoystickR.X;
+					axis[19]=w-&gt;ClassicController.JoystickR.Y;
+					axis[20]=w-&gt;ClassicController.TriggerL;
+					axis[21]=w-&gt;ClassicController.TriggerR;
+					break;
+			}
+		}
+	}
+	return wii_connected;
+}
+
+int WiimoteButton(int index){
+	return wii_buttons[index];
+}
+
+float WiimoteAxis(int index){
+	return wii_axiis[index];
+}
+
+int SetWiimoteLEDS(int wiimote_id,int bits){
+	wiimote *w;
+	if (wiimote_id&lt;0||wiimote_id&gt;=MAX_PLAYERS) return -1; //illegal id
+	if (wii_states[wiimote_id]==0) return -1; //not connected
+	w=wii_motes[wiimote_id];
+	if (!w) return -1;	//should never happen
+	w-&gt;SetLEDs(bits);
+	return 0;
+}
+
+int SetWiimoteRumble(int wiimote_id,int onoff){
+	wiimote *w;
+	if (wiimote_id&lt;0||wiimote_id&gt;=MAX_PLAYERS) return -1; //illegal id
+	if (wii_states[wiimote_id]==0) return -1; //not connected
+	w=wii_motes[wiimote_id];
+	if (!w) return -1;	//should never happen
+	w-&gt;SetRumble(onoff);
+	return 0;
+}
+
+int CloseWiimotes(){
+	int i;
+	for(i=0;i&lt;wii_count;i++){
+		delete wii_motes[i];
+		wii_motes[i]=0;
+	}
+	wii_count=0;
+}</pre>And if you change<pre class=code>import axe.Wiimote</pre>in the example to <pre class=code>Framework brl.standardio
+Import axe.Wiimote</pre>things will be ever faster! :) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

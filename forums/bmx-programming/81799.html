@@ -1,0 +1,740 @@
+<!DOCTYPE html><html lang="en" ><head ><title >MaGNet - GNet extension.</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >MaGNet - GNet extension.</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >MaGNet - GNet extension.</a><br><br>
+<a name="921472"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Mahan</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I wanted to share what I've been playing with this weekend: An extension to GNet to be able to have network-replicated instances of BlitzMax objects with native fields (instead of the TGNetObject slots).<br><br>Lots of people on this forums seem interessted in network-programming so I desided to post it here for everyone to share. If you find bugs or make updates I'd be very glad if you could post it back here.<br><br>have fun! :)<br><br>MaGNet.bmx:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+' **********************************************************************************************
+' Type TNetGameObject
+'
+' What:    MaGNet ([Ma]han extended [GNet]) is an overlay or extension to GNet aimed to making
+'          network game development easier and more intuitive for BlitzMax developers.
+'
+' purpose: It provides means to make networked classes (local/remote) with native fields that are
+'          replicated automatically through the network. (As opposed to using the "slots" in the
+'          GNetObject.)
+' 
+' Usage:
+'
+'  (note: It is strongly recommended that you briefly grasp the brl.gnet api first.)
+'
+'   1) Extend the TNetGameObject class and add your fields:
+'
+'			Type TNetworkPlayer Extends TNetGameObject
+'				Field name:String
+'				Field x:Float
+'				Field y:Float
+'               Field add_this_meta_tag_to_make_an_non_replicated_field:Int {MAGNET = "0"}
+'			End Type
+'
+'  (note: only String, Int and Float-fields are replicated)
+'
+'   2) Instanciate your class and initialize it:
+'
+'			Local client:TGNetHost = CreateGNetHost()
+'			If Not GNetConnect(client, "127.0.0.1", 12345) Then End
+'			
+'			Local player:TNetworkPlayer = New TNetworkPlayer
+'			player.Init(client)
+'
+'   3) Create a callback handler with prototype OnRemoteObjectCreated(obj:TNetGameObject) to
+'      get objects from other peers (players) when they connect:
+'
+'			Global otherPlayers:TList = CreateList()
+'			
+'			Function registerOtherPlayer(obj:TNetGameObject)
+'				otherPlayers.AddFirst(obj)
+'			End Function
+'
+'   4) Update the mainloop of your program so it handles updates from the network:
+'
+'			Repeat
+'
+'				'(your game code .... update your own player here)
+'
+'				TNetGameObject.syncLocalObjects()
+'				GNetSync(client)
+'				TNetGameObject.syncRemoteObjects(client, registerOtherPlayer)
+'				
+'				'handle remote players
+'				For Local rPlayer:TNetMessage = EachIn otherPlayers
+'					If rPlayer.deleted Then
+'						Print "(" + rPlayer.Ip() + ") Player disconnected"
+'					End If
+'                   'example how you can use the remote player:
+'					GLDrawText rPlayer.name, rPlayer.x, rPlayer.y
+'				Next
+'
+'				'flip(); bla..bla..bla (more of your game code)
+'			Forever
+'
+' Thats pretty much it.
+'
+' Additional info:
+' To speed things up TNetGameObject objects can also be made to use non-automatic mode.
+' This means that the implementator of the TNetGameObject extended class tells whenever
+' there have been changes made to the object. This can be done with setters:
+'
+'
+'			Type TNetworkPlayer Extends TNetGameObject
+'				Field name:String
+'				Field x:Float
+'				Field y:Float
+'               Field add_this_meta_tag_to_make_an_non_replicated_field:Int {MAGNET = "0"}
+'				Method setName(name:String)
+'					self.name=name
+'                   self.modified = True
+'               End Method
+'				Method setX(x:Float)
+'					self.x=x
+'                   self.modified = True
+'               End Method
+'				Method setY(y:Float)
+'					self.y=y
+'                   self.modified = True
+'               End Method
+'			End Type
+'
+'
+' 			player.Init(client, false) 'we set auto to false
+'
+' This will prevent MaGNet from manually scanning all local object fields each frame using
+' reflection to search for changes.
+'
+' **********************************************************************************************
+
+'uncomment (2 lines) when not in BLIde:
+SuperStrict
+Import "crc32.bmx"
+
+Type TNetGameObject
+	Global _ngoMap:TMap = CreateMap()
+	Global _ngoLocalObjs:TList = CreateList()
+	
+	Const NGO_RESERVED_FIELDS:Int = 1 'Today only slot#0 is used to hold the class-name of the replicated TNetGameObject descendant.
+	
+	Field _gnetObject:TGNetObject
+	Field deleted:Int = False {MAGNET = "0"}
+	
+	Field automatic:Int {MAGNET = "0"}
+	Field modified:Int = False {MAGNET = "0"}
+	Field _typeID:TTypeId
+	Field _host:TGNetHost
+	Field _crcFields:Int[] = New Int[32 - NGO_RESERVED_FIELDS] 'crc for each field
+	
+	Method _internalInit(gnetObject:TGNetObject)
+		_gnetObject = gnetObject
+		_ngoMap.Insert(Self._gnetObject, Self)
+		If GNetObjectLocal(gnetObject) Then
+			SetGNetString(gnetObject, 0, _typeId.Name())
+			_ngoLocalObjs.AddFirst(Self)
+		EndIf
+	End Method
+	
+	'Call this, in case you want to delete a local object, to release internal references
+	Method deleteLocal()
+		Assert GNetObjectLocal(_gnetObject), "TNetGameObject.deleteLocal() called on nonlocal object"
+		deleted = True
+		_ngoMap.Remove(_gnetObject)
+		_ngoLocalObjs.Remove(Self)
+		CloseGNetObject(Self._gnetObject)
+	End Method
+
+	'Call this after you instanciate a TNetGameObject descendant.
+	'If auto is true, changes to fields will be scanned automatically, each time syncObjects() is called.
+	' (this is convinient but slow)
+	'If auto is false then its up to the implementator or user of a TNetGameObject descendant to flag changes to the object by 
+	'setting modified to true each time a change occurs.
+	' (this is faster, and can be encapsulated by the implementator of a TNetGameObject descendant by the use of setters. example below.)
+	' example:
+	'   method setHealth(health:int)
+	'     _health = health
+	'     modified = True
+	'   end method
+	Method Init(host:TGNetHost, auto:Int = True)
+		_host = host
+		automatic = auto
+		_typeId = TTypeId.ForObject(Self)
+		Self._internalInit(CreateGNetObject(host))
+	End Method
+	 
+	Method _updateRemoteObjectFields()
+		Local id:TTypeId = TTypeId.ForObject(Self)
+		'Write type name first.
+		'result:+_serializeString(id.Name())
+		Local gnetFieldIndex:Int = NGO_RESERVED_FIELDS 'index 0 hold the classname (TNetGameObject descendant)
+		For Local fld:TField = EachIn id.EnumFields()
+			Local currTypeId:TTypeId = fld.TypeId()
+			'If fld.MetaData("MAGNET") = "0" Then
+			If (fld.MetaData("MAGNET") = "0") Or ((currTypeId &lt;&gt; IntTypeId) And (currTypeId &lt;&gt; FloatTypeId) And (currTypeId &lt;&gt; StringTypeId)) Then
+				Continue
+			EndIf
+			'debug info - uncomment line below
+			'Print "Ser type:" + fld.TypeId().Name() + ":" + fld.Name() + ":" + fld.TypeId().Name() + ":" + fld.GetString(currNetObj)
+			If currTypeId = IntTypeId Then
+				fld.SetInt(Self, GetGNetInt(Self._gnetObject, gnetFieldIndex))
+			ElseIf currTypeId = FloatTypeId Then
+				fld.SetFloat(Self, GetGNetFloat(Self._gnetObject, gnetFieldIndex))
+			ElseIf currTypeId = StringTypeId Then
+				fld.SetString(Self, GetGNetString(Self._gnetObject, gnetFieldIndex))
+			End If
+			gnetFieldIndex:+1
+			Assert gnetFieldIndex &lt; 32, "TNetGameObject descendant defines to many fields"
+			If Not (gnetFieldIndex &lt; 32) Then Exit
+		Next
+	End Method
+	
+	
+	'Call this right after GNetSync() to have automatic updates done.
+	Function syncRemoteObjects(host:TGNetHost, OnRemoteObjectCreated(obj:TNetGameObject) = Null)
+		Local currNetObj:TNetGameObject
+		'mark deleted
+		Local deletedList:TList = GNetObjects(host, GNET_CLOSED)
+		For Local deletedObject:TGNetObject = EachIn deletedList
+			currNetObj = TNetGameObject(_ngoMap.ValueForKey(deletedObject))
+			If currNetObj Then
+				currNetObj.deleted = True
+				_ngoMap.Remove(deletedObject)
+			EndIf
+		Next
+
+		'add created
+		Local createdList:TList = GNetObjects(host, GNET_CREATED)
+		For Local createdObject:TGNetObject = EachIn createdList
+			Local newTypeId:TTypeId = TTypeId.ForName(createdObject.GetString(0))
+			'If untrusted peer talks about illegal types we throw it out:
+			If (Not newTypeId) Or (Not newTypeId.ExtendsType(TTypeId.ForName("TNetGameObject"))) Then
+				?debug
+				Print "Class does not exist or does not extend TNetGameObject (peer disconnect):'" + createdObject.GetString(0) + "'"
+				?
+				createdObject._peer.Close() 'this is a hack. there should be a controlled disconnect with removal of all game objects
+			End If
+			Local t:TNetGameObject = TNetGameObject(newTypeId.NewObject())  'New TNetGameObject subclass
+			t._internalInit(createdObject)
+			t._updateRemoteObjectFields()
+			If OnRemoteObjectCreated Then OnRemoteObjectCreated(t)
+		Next
+		
+		'update modified
+		Local modifiedList:TList = GNetObjects(host, GNET_MODIFIED)
+		For Local modifiedObject:TGNetObject = EachIn modifiedList
+			currNetObj = TNetGameObject(_ngoMap.ValueForKey(modifiedObject))
+			If Not currNetObj Then Continue
+			currNetObj._updateRemoteObjectFields()
+		Next
+	End Function
+
+	'Call this right before GNetSync() to have automatic updates done.
+	Function syncLocalObjects()
+		For Local lo:TNetGameObject = EachIn _ngoLocalObjs
+			lo._updateLocalObjectFields()
+		Next
+	End Function
+		
+	Global _ngaCrc32:TCrc32
+	Method _updateLocalObjectFields()
+		If (Not Self.automatic) And (Not modified) Then Return
+		If Self.deleted Then Return
+	
+		If Not _ngaCrc32 Then _ngaCrc32 = New TCrc32
+		
+		Local id:TTypeId = TTypeId.ForObject(Self)
+		Local gnetFieldIndex:Int = NGO_RESERVED_FIELDS 'index 0 hold the classname (TNetGameObject descendant)
+		Local crcIndex:Int = 0
+		For Local fld:TField = EachIn id.EnumFields()
+			Local currTypeId:TTypeId = fld.TypeId()
+			If (fld.MetaData("MAGNET") = "0") Or ((currTypeId &lt;&gt; IntTypeId) And (currTypeId &lt;&gt; FloatTypeId) And (currTypeId &lt;&gt; StringTypeId)) Then
+				Continue
+			EndIf
+			'debug info - uncomment line below
+			'Print "Ser type:" + fld.TypeId().Name() + ":" + fld.Name() + ":" + fld.TypeId().Name() + ":" + fld.GetString(Self)
+			Local newCrc:Int
+			If currTypeId = IntTypeId Then
+				Local value:Int = fld.GetInt(Self)
+				newCrc = _ngaCrc32.crc_int(value)
+				If Not (_crcFields[crcIndex] = newCrc) Then
+					SetGNetInt(Self._gnetObject, gnetFieldIndex, value)
+					_crcFields[crcIndex] = newCrc
+				EndIf
+			ElseIf currTypeId = FloatTypeId Then
+				Local value:Float = fld.GetFloat(Self)
+				newCrc = _ngaCrc32.crc_float(value)
+				If Not (_crcFields[crcIndex] = newCrc) Then
+					SetGNetFloat(Self._gnetObject, gnetFieldIndex, value)
+					_crcFields[crcIndex] = newCrc
+				EndIf
+			ElseIf currTypeId = StringTypeId Then
+				Local value:String = fld.GetString(Self)
+				newCrc = _ngaCrc32.crc_string("q" + value) 'adding a char so that empty strings get a valid CRC too.
+				If Not (_crcFields[crcIndex] = newCrc) Then
+					SetGNetString(Self._gnetObject, gnetFieldIndex, value)
+					_crcFields[crcIndex] = newCrc
+				EndIf
+			End If
+			crcIndex:+1
+			gnetFieldIndex:+1
+			Assert gnetFieldIndex &lt; 32, "TNetGameObject descendant defines to many fields"
+			If Not (gnetFieldIndex &lt; 32) Then Exit
+		Next
+		modified = False
+	End Method
+	
+	'Unlike the function in enet.bmx this one is usable directly with a enet_peer pointer.
+	'(takes care of the offset into the enet_peer struct correctly)
+	Function _enet_peer_address(peer:Byte Ptr, host_ip:Int Var, host_port:Int Var)
+		Local ip:Int = (Int Ptr peer)[3]
+		Local port:Int = (Short Ptr peer)[8]
+		?LittleEndian
+			ip = (ip Shr 24) | (ip Shr 8 &amp; $ff00) | (ip Shl 8 &amp; $ff0000) | (ip Shl 24)
+		?
+		host_ip = ip
+		host_port = port
+	End Function
+	
+	Method Ip:String()
+		Local ip:Int
+		Local port:Int
+		_enet_peer_address(Self._gnetObject._peer._enetPeer, ip, port)
+		Local s:String
+		For Local i:Int = 3 To 0 Step - 1
+				s = s + String.FromInt((Byte Ptr Varptr ip)[i])
+			If i &gt; 0 Then s = s + "."
+		Next
+		Return s
+	End Method
+	
+	Method Port:Int()
+		Local ip:Int
+		Local port:Int
+		_enet_peer_address(Self._gnetObject._peer._enetPeer, ip, port)
+		Return port
+	End Method
+End Type
+
+</textarea><br><br>crc32.bmx:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+'
+' MattiasH: converted crc32 code from blitzmax forums to a class.
+'
+Type TCrc32
+	Global crc_table:Int[]
+
+	Method New()
+		If Not crc_table Then
+			crc_table = New Int[256]
+			crc_init()
+		End If
+	End Method
+	
+	Method crc_init()
+		Local i:Int
+		Local j:Int
+		Local value:Int
+		
+		For i=0 To 255
+			value=i
+			For j=0 To 7
+				If (value &amp; $1) Then
+					value = (value Shr 1) ~ $EDB88320
+				Else
+					value = (value Shr 1)
+				EndIf
+			Next
+			crc_table[i]=value
+		Next
+	End Method
+	
+	Method crc_bank:Int(bank:TBank)
+		Local bbyte:Int
+		Local crc:Int
+		Local i:Int
+		Local size:Int
+		
+		crc=$FFFFFFFF
+		size=BankSize(bank)-1
+		For i=0 To size
+			bbyte = PeekByte(bank, i)
+			crc = (crc Shr 8) ~ crc_table[bbyte ~ (crc &amp; $FF)]
+		Next
+		Return ~crc
+	End Method
+
+
+	Method crc_stream:Int(stream:TStream)
+		Local bbyte:Int
+		Local crc:Int
+		Local i:Int
+		Local size:Int
+		
+		crc = $FFFFFFFF
+		SeekStream(stream, 0)
+		size = StreamSize(stream) - 1
+		For i=0 To size
+		bbyte = stream.ReadByte()
+			crc = (crc Shr 8) ~ crc_table[bbyte ~ (crc &amp; $FF)]
+		Next
+		Return ~crc
+	End Method
+	
+	Method crc_int:Int(_int:Int)
+		Local bbyte:Int
+		Local crc:Int
+		Local i:Int
+		
+		crc = $FFFFFFFF
+		For i = 0 To 3
+			bbyte = (Byte Ptr Varptr _int)[i]
+			crc = (crc Shr 8) ~ crc_table[bbyte ~ (crc &amp; $FF)]
+		Next
+		Return ~crc
+	End Method
+
+	Method crc_float:Int(_float:Float)
+		Local bbyte:Int
+		Local crc:Int
+		Local i:Int
+		
+		crc = $FFFFFFFF
+		For i = 0 To 3
+			bbyte = (Byte Ptr Varptr _float)[i]
+			crc = (crc Shr 8) ~ crc_table[bbyte ~ (crc &amp; $FF)]
+		Next
+		Return ~crc
+	End Method
+	
+	
+	Function crc_string:Int(txt:String)
+		Local bbyte:Int
+		Local crc:Int
+		Local i:Int
+		Local size:Int
+		
+		crc=$FFFFFFFF
+		size = Len(txt)
+		For i = 0 To size - 1
+			bbyte = txt[i] 'Asc(Mid$(txt$,i,1))
+			crc = (crc Shr 8) ~ crc_table[bbyte ~ (crc &amp; $FF)]
+		Next
+		Return ~crc
+	End Function
+		
+End Type
+
+
+</textarea><br><br>magnetdemo.bmx (rewritten from siblys old gnetdemo):<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+SuperStrict
+
+'uncomment when not in BLIde:
+Import "MaGNet.bmx"
+
+Const GAMEPORT:Int = 12345
+
+Const SLOT_TYPE:Int = 0 'remove this
+
+
+Global GWIDTH:Int = 640
+Global GHEIGHT:Int = 480
+Global GDEPTH:Int = 0
+Global GHERTZ:Int = 30
+
+Graphics GWIDTH,GHEIGHT,GDEPTH,GHERTZ
+
+AutoMidHandle True
+Global playerImage:TImage = LoadImage("ship.png")
+Global bulletImage:TImage = LoadImage("bullet1.png")
+Global warpImage:TImage = LoadImage("sparkle.png")
+
+Local host:TGNetHost=CreateGNetHost()
+
+SeedRnd MilliSecs()
+
+
+Type TDemoNetObjectBase Extends TNetGameObject
+	Field X:Float = 0
+	Field Y:Float = 0
+	Field Vx:Float = 0
+	Field Vy:Float = 0
+End Type
+
+
+Type TPlayer Extends TDemoNetObjectBase
+	Field Name:String = "Player"
+	Field Chat:String = "Ready"
+	Field Rot:Float
+	Field Hit:Float
+	Field Score:Int
+	Field BulletCD:Int {MAGNET = "0"} 'bullet cooldown (frames before shoting is allowed again)
+	Field Bullets:TList = CreateList()
+	
+	Method New()
+		X = Rnd(GWIDTH - 64) + 32
+		Y = Rnd(GHEIGHT - 64) + 32
+	End Method
+	
+End Type
+
+Type TBullet Extends TDemoNetObjectBase
+	Field lifeTime:Int = 60
+End Type
+
+
+'create local player
+Global player:TPlayer = New TPlayer 'this is the local player
+player.Init(host)
+
+Global remotePlayers:TList = CreateList()
+Global remoteBullets:TList = CreateList()
+
+Global text_y:Int
+
+Function registerIncommingRemoteGameObject(obj:TNetGameObject)
+	If TBullet(obj)'ti.Name() = "TBullet" Then
+		remoteBullets.addFirst(obj)
+	ElseIf TPlayer(obj) 'ti.Name() = "TPlayer" Then
+		remotePlayers.addFirst(obj)
+	Else
+		Local ti:TTypeId = TTypeId.ForObject(obj)
+		Assert False, "Remote peer sent an invalid Object type to us: [" + ti.Name() + "]"
+	EndIf
+End Function
+
+Local chatText:String
+
+While Not KeyHit(KEY_ESCAPE)
+
+	'FlushMem
+
+	Local c:Int = GetChar()
+	Select c
+	Case 8
+		If chatText chatText = chatText[..chatText.length - 1]
+	Case 13
+		If chatText
+			If chatText[..1] = "/"
+				Local cmd:String = chatText[1..]
+				Local i:Int = cmd.Find(" "), arg:String
+				If i&lt;&gt;-1
+					arg=cmd[i+1..]
+					cmd=cmd[..i]
+				EndIf
+				Select cmd.ToLower()
+				Case "nick"
+					If arg
+						player.Name = arg
+						'SetGNetString player,SLOT_NAME,playerName
+					EndIf
+				Case "listen"
+					If Not GNetListen( host,GAMEPORT ) Notify "Listen failed"
+				Case "connect"
+					If Not arg arg="localhost"
+					If Not GNetConnect( host,arg,GAMEPORT ) Notify "Connect failed"
+				End Select
+			Else
+				player.Chat = chatText  'SetGNetString player,SLOT_CHAT,playerChat
+			EndIf
+			chatText = ""
+		EndIf
+	Default
+		If c &gt; 31 And c &lt; 127 chatText:+Chr(c)
+	End Select
+	
+	If KeyDown( KEY_LEFT )
+		player.Rot:-5
+		If player.Rot &lt; - 180 player.Rot:+360
+		
+		'SetGNetFloat player,SLOT_ROT,playerRot
+	Else If KeyDown( KEY_RIGHT )
+		player.Rot:+5
+		If player.Rot &gt;= 180 player.Rot:-360
+		'SetGNetFloat player,SLOT_ROT,playerRot
+	EndIf
+	
+	If KeyDown( KEY_UP )
+		player.Vx:+Cos(player.Rot) *.15
+		player.Vy:+Sin(player.Rot) *.15
+	Else
+		player.Vx:*.99
+		If Abs(player.Vx) &lt;.1 player.Vx = 0
+		player.Vy:*.99
+		If Abs(player.Vy) &lt;.1 player.Vy = 0
+	EndIf
+	
+	If player.Vx
+		player.X:+player.Vx
+		If player.X &lt; - 8 player.X:+GWIDTH + 16 Else If player.X &gt;= GWIDTH + 8 player.X:-GWIDTH + 16
+		'SetGNetFloat player,SLOT_X,playerX
+	EndIf
+	
+	If player.Vy
+		player.Y:+player.Vy
+		If player.Y &lt; - 8 player.Y:+GHEIGHT + 16 Else If player.Y &gt;= GHEIGHT + 8 player.Y:-GHEIGHT + 16
+		'SetGNetFloat player,SLOT_Y,playerY
+	EndIf
+	
+	If player.BulletCD player.BulletCD:-1
+	
+	If KeyHit(KEY_LALT) And Not player.BulletCD
+		Local newBullet:TBullet = New TBullet
+		newBullet.Init(host)
+		newBullet.X = player.X
+		newBullet.Y = player.Y
+		newBullet.Vx = player.Vx + Cos(player.Rot) * 10
+		newBullet.Vy = player.Vy + Sin(player.Rot) * 10
+		'newBullet.lifeTime = 60 'this is the default lifetime
+		player.Bullets.AddFirst(newBullet)
+		player.BulletCD = 5
+	EndIf
+	
+	'update local players bullets:
+	For Local bullet:TBullet = EachIn player.Bullets
+
+		If bullet.lifeTime = 0
+			bullet.deleteLocal()
+			player.Bullets.Remove(bullet)
+			Continue
+		End If
+		
+		Local dx:Float = bullet.X - GWIDTH / 2
+		Local dy:Float = bullet.Y - GHEIGHT / 2
+		Local rot:Float = ATan2(dy, dx)
+		Local accel:Float = 1 / (dx * dx + dy * dy) * 2000
+		bullet.Vx:-Cos(rot) * accel
+		bullet.Vy:-Sin(rot) * accel
+		bullet.X:+bullet.Vx
+		bullet.Y:+bullet.Vy
+		bullet.lifeTime:-1
+	Next
+	
+	'handle remote bullets:
+	For Local rBullet:TBullet = EachIn RemoteBullets
+		If rBullet.deleted Continue
+	
+		Local dx:Float = rBullet.X - player.X
+		Local dy:Float = rBullet.Y - player.Y
+		If dx * dx + dy * dy &lt; 256'144
+			Local msg:TGNetObject=CreateGNetMessage( host )
+			If player.Hit
+				SetGNetString MSG, SLOT_TYPE, "gotme"
+			Else
+				SetGNetString MSG, SLOT_TYPE, "hurtme"
+				player.Hit = 1
+			EndIf
+			SendGNetMessage(MSG, rBullet._gnetObject)
+		EndIf
+	Next
+	
+	If player.Hit
+		player.Hit:-.05
+		If player.Hit &lt; 0 player.Hit = 0
+		'SetGNetFloat player, SLOT_HIT, playerHit
+	EndIf
+	
+	TNetGameObject.syncLocalObjects()
+	GNetSync(host)
+	TNetGameObject.syncRemoteObjects(host, registerIncommingRemoteGameObject)
+	'GNetAccept host
+	
+	For Local MSG:TGNetObject = EachIn GNetMessages(host)
+		Local typ:String = GetGNetString (MSG, SLOT_TYPE)
+		Select typ
+		Case "gotme","hurtme"
+			Local obj:TGNetObject = GNetMessageObject(MSG)
+			Local bullet:TBullet = TBullet(TNetGameObject._ngoMap.ValueForKey(obj))
+			If bullet And (Not bullet.deleted)  'obj.State()&lt;&gt;GNET_CLOSED
+				If typ = "hurtme"
+					player.Score:+1
+					'SetGNetInt player,SLOT_SCORE,playerScore
+				EndIf
+				bullet.deleteLocal()
+				player.Bullets.Remove(bullet)
+				'CloseGNetObject obj
+				
+			EndIf
+		End Select
+	Next
+	
+	Cls
+
+	text_y = 0
+	DrawPlayer(player)
+	For Local localBullet:TBullet = EachIn player.Bullets
+		DrawBullet(localBullet)
+	Next
+	For Local remotePlayer:TPlayer = EachIn remotePlayers
+		If remotePlayer.deleted Then
+			remotePlayers.Remove(remotePlayer)
+		Else
+			DrawPlayer(remotePlayer)
+		End If
+	Next
+	For Local remoteBullet:TBullet = EachIn remoteBullets
+		If remoteBullet.deleted Then
+			remoteBullets.Remove(remoteBullet)
+		Else
+			DrawBullet(remoteBullet)
+		End If
+	Next
+	
+	If chatText
+		SetColor 255,255,0
+		DrawText "&gt;" + chatText, 0, GHEIGHT - 16
+		SetColor 0,255,0
+		DrawRect TextWidth("&gt;" + chatText), GHEIGHT - 16, 8, 16
+	EndIf
+	
+	SetColor 255,255,255
+	Local txt:String = "MemAllocd:" + GCMemAlloced()' + " BytesIn:" + GNettotalBytesIn() + " BytesOut:" + GNettotalBytesOut()
+	DrawText txt, GWIDTH - TextWidth(txt), 0
+	
+	SetBlend LIGHTBLEND
+	SetRotation Rnd(360)
+	SetScale Rnd(2,2.125),Rnd(2,2.125)
+	DrawImage warpImage,GWIDTH/2,GHEIGHT/2
+	SetScale 1,1
+	SetRotation 0
+	SetBlend MASKBLEND
+	
+	Flip
+
+Wend
+
+Function DrawBullet(bullet:TBullet)
+	SetBlend LIGHTBLEND
+	SetColor 255,255,255
+	DrawImage bulletImage, bullet.x, bullet.y
+	SetBlend MASKBLEND
+End Function
+
+Function DrawPlayer(p:TPlayer)
+	SetRotation p.Rot
+	SetColor 255,255,255
+	DrawImage playerImage, p.x, p.y
+	If p.hit
+		SetAlpha player.hit
+		SetBlend LIGHTBLEND
+		DrawImage playerImage, p.x, p.y
+		SetBlend MASKBLEND
+		SetAlpha 1
+		SetColor 255,255,255
+	EndIf
+	SetRotation 0
+	DrawText p.name + ":" + p.score, p.x, p.y + 16
+	If p = player SetColor 255, 255, 255 Else SetColor 0, 128, 255
+	DrawText p.name + ":" + p.chat, 0, text_y
+	text_y:+16
+End Function
+
+
+</textarea><br><br>To make the demo work:<br><br>1.) download www.blitzbasic.com/tmp/gnetdemo.zip (marks gnet demo)<br>2.) unzip it to a folder<br>3.) put all files from this post into the same folder as #2<br>4.) Build magnetdemo.bmx<br><br><br>edit: updates to sources and added example.<br>edit2: updated 20081205 - small error when creating remote object (internal). Added initial remote update that was missing. <br><br></td></tr></table><br>
+<a name="921619"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Foolish</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm getting a duplicate identifier error when I try to compile for the dx variable.  Perhaps this has something to do with your "uncomment when not in BLide" which I don't understand.<br><br>I did uncomment the include statements to ensure they were available.  Any thoughts?<br><br>It looks like variables like dx, dy, MSG, and value are used/reused repeatedly in the While loop. <br><br></td></tr></table><br>
+<a name="921623"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Mahan</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> My misstake. I tried this out in my normal MaxIDE on my other computer and had to change two things:<br><br>1) Uncommented the Include "crc32.bmx" - line. (as you mentioned)<br>2) Added "SuperStrict" on top of magnetdemo.bmx<br><br>Code above is updated and now tested from within MaxIDE.<br><br>Just update you code and press F5 when your in magnetdemo.bmx in MaxIDE and everything should work.<br><br>Btw some instructions:<br><br>When started you steer the ship with arrow-keys and shoot with left-ALT<br><br>commands (just write them right in):<br><br><br>Open a server for incomming connections (do this on one of your test processes):<br>/listen<br><br><br>To act as a client and connect to the server:<br>/connect [servername]<br><br>The servername is optional (default is localhost and will work if you run this game twice on the same computer)<br><br>Change your name in the game:<br>/nick &lt;new name&gt;<br><br>And just write text (not preceded by a /-char) to chat with the other clients.<br><br>EDIT: Posted FP once again this time with import instead of include. (I get so Lazy when using BLIde.) Now all files are correctly compilable from within MaxIDE. <br><br></td></tr></table><br>
+<a name="921655"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Foolish</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just did a quick test compiling through MaxIDE and it worked fine.  I set up a server with two clients on the same machine.  <br><br>I'll start playing around more seriously tonight and see what I find.  Looks promising though. <br><br>A quick question though, what is the SLOT_TYPE = 0 used for?  <br><br>Thanks much. <br><br></td></tr></table><br>
+<a name="921660"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Mahan</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> SLOT_TYPE is an old remenant from the old code. When someone shoots you the client detects this and sends a "raw gnet message" (i.e. not through MaGNet) informing the remote client that shot you that it scored a point.<br><br>But still the demo shows how both the bullets and the players (TBullet and TPlayer respectively) are actually running through MaGNet and that they are "pure blitzmax objects" that are automagically replicated through the network. That was that point of the demo.<br><br>Its very possible to rewrite the hit-information into a MaGNet object to (just make another class that extends TNetGameObject) but since it wasn't neccessary for the demo i just didn't bother. (laziness) :) <br><br></td></tr></table><br>
+<a name="921717"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Foolish</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> It definitely seems to meet the objective of simplifying things.  <br><br>Plus, I did run it on two computers side by side on the ol' home network LAN and it seemed to work really well.  Since I am more worried about LAN play, than internet play, this is well worth some more testing on my part.  <br><br>I'll look to create my own test project over the next several days.  Actually, I'll probably need the weekend to make real progress.  When I get something together that adds to your example from a demo perspective, I'll be sure to post it.<br><br>Thanks again for your inspired re-examination of GNET.  I think many of us may have been too quick to overlook it.  I'm happy to dig back in. <br><br></td></tr></table><br>
+<a name="921730"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Mahan</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thank you too for trying it out.<br><br>I wrote this for my own hobby-project "Maze Team" which is ment to be a very basic "instant dungeon" rpg for a few networked players. (idea: arm you char -&gt; jump into dungeon action with friends.)<br><br>It's worth to mention that this code is "alpha state" just so you know that it probably contains several bugs, and I'll be checking this thread each day for a week or two in case someone reports bugs. And I'll be posting back updates to the first post in case I fix something. (I think from now on I'll add a date on the "edit" so everybody else can see if they got the latest version)<br><br>Now that BlitzMax got both reflection and threads (of which I am very pleased!) I expect we'll see other intressting rewrites or extensions of other modules. So whats next? BlitzMax on Rails? My point is: the limitation is not longer in the language. The limitation now is the imagination of us using it :) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

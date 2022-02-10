@@ -1,0 +1,667 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Lambda</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Lambda</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Lambda</a><br><br>
+<a name="1206795"></a>
+
+<a name="1206796"></a>
+
+<a name="1206797"></a>
+
+<a name="1206798"></a>
+
+<a name="1206799"></a>
+
+<a name="1206862"></a>
+
+<a name="1206863"></a>
+
+<a name="1215454"></a>
+
+<a name="1218826"></a>
+
+<a name="1268561"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> <b>Update:</b> this has been much improved since the original post, <b>see <a href="/post.php?topic=101568&amp;post=1218825" target="_blank">post #6</a> for the current version</b>.<br><br>DO NOT USE THE VERSION IN THIS POST: it is here for thread-historical purposes only.<br><br><br>----<br><br><br>From the <a href="/posts.php?topic=100385" target="_blank">same school of thought as before</a>...<br><br>This is really silly, but anyway, just for fun: lambda functions in BlitzMax, attempt 1:<br><br>lambda.bmx:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import "lambda.o"
+
+SuperStrict
+
+Private
+Extern
+	Function GetStart:Byte Ptr() = "TLAMBDA_GetStart"
+	Function DoCall(_self:Object, f:Byte Ptr, r:Byte Ptr, b:Byte Ptr, s:Byte Ptr) = "TLAMBDA_DoCall"
+	Function EndCall(r:Byte Ptr, b:Byte Ptr, s:Byte Ptr) = "TLAMBDA_EndCall"
+'	Function GetEBP:Int() = "TLAMBDA_GetEBP"
+'	Function GetESP:Int() = "TLAMBDA_GetESP"
+End Extern
+Public
+
+Type TLambda
+	Field args:TFnArg[], clos:TFnArg[], cval:TBoxVal[], val:TBoxVal
+	Field start:Byte Ptr, ret:Byte Ptr, esp:Byte Ptr, ebp:Byte Ptr
+	Global _SELF:TLambda
+	
+	Function FN:TLambda(args:TFnArg[])
+		Local l:TLambda = New TLambda
+		l.args = args ; l.start = GetStart()	'Own return IP -&gt; start
+		Return l
+	End Function
+	
+	Method as:TLambda(term:TBoxVal)
+		If _SELF	'This is actually the end of a call
+			_SELF.val = term
+			EndCall _SELF.ret, _SELF.ebp, _SELF.esp		'Forcibly reset the stack position to where we started from
+			Return Null		'Never reach here
+		Else	'Actually setting up - nothing to do
+			Return Self
+		EndIf
+	End Method
+	Method over:TLambda(cl:TFnArg[])
+		If clos = Null
+			clos = cl ; cval = New TBoxVal[cl.length]
+		Else
+			clos = clos[..(clos.length + cl.length)]
+			cval = cval[..clos.length]
+			For Local v:Int = 1 To cl.length
+				clos[clos.length - v] = cl[cl.length - v]
+			Next
+		EndIf
+		For Local v:Int = 1 To cl.length
+			cval[cval.length - v] = cl[cl.length - v]._peek()
+		Next
+		Return Self
+	End Method
+	Method call:TBoxVal(a:TBoxVal[])
+		Local rv:TBoxVal
+		If a.length &gt; args.length Then Throw "Too many arguments to TLambda " + ToString()
+		For Local v:Int = 0 Until a.length	'Push down arg values onto arg objects
+			args[v]._push a[v]
+		Next
+		If a.length &lt; args.length	'Curry
+			Local curry:TLambda = FN(args[a.length ..]).over(args[.. a.length])
+			curry.start = start
+			rv = TBoxVal.BO(curry)
+		Else
+			If clos		'Push down closed over values as well
+				For Local v:Int = 0 Until clos.length
+					clos[v]._push cval[v]
+				Next
+			EndIf
+			
+			_SELF = Self
+			DoCall Self, start, Varptr ret, Varptr ebp, Varptr esp	'Post-jump -&gt; ret ; Jump to start IP
+			rv = val ; _SELF = Null
+			
+			If clos		'Pop closed over values
+				For Local v:Int = 0 Until clos.length
+					clos[v]._pop
+				Next
+			EndIf
+		EndIf
+		For Local v:Int = 0 Until a.length	'Pop arg values
+			args[v]._pop
+		Next
+		Return rv
+	End Method
+	
+	Function _init:Int()
+?Not X86
+		Throw "Error: TLambda is only designed for X86"
+?
+?Threaded
+		Throw "Error: TLambda is not even remotely thread safe"
+?
+	End Function
+	Global init:Int = TLambda._init()
+End Type
+
+Type TBoxVal
+	Field i:Int, f:Float, d:Double, l:Long, o:Object
+	Function BI:TBoxVal(v:Int)
+		Local b:TBoxVal = New TBoxVal ; b.i = v ; Return b
+	End Function
+	Function BF:TBoxVal(v:Float)
+		Local b:TBoxVal = New TBoxVal ; b.f = v ; Return b
+	End Function
+	Function BD:TBoxVal(v:Double)
+		Local b:TBoxVal = New TBoxVal ; b.d = v ; Return b
+	End Function
+	Function BL:TBoxVal(v:Long)
+		Local b:TBoxVal = New TBoxVal ; b.l = v ; Return b
+	End Function
+	Function BO:TBoxVal(v:Object)
+		Local b:TBoxVal = New TBoxVal ; b.o = v ; Return b
+	End Function
+End Type
+
+Type TFnArg Extends TBoxVal
+	Field _stk:TList
+	Method New()
+		_stk = New TList
+	End Method
+	Method _push(v:TBoxVal)
+		Local b:TBoxVal = New TBoxVal ; b.i = i ; b.f = f ; b.d = d ; b.l = l ; b.o = o ; _stk.AddLast b
+		i = v.i ; f = v.f ; d = v.d ; l = v.l ; o = v.o
+	End Method
+	Method _pop()
+		Local v:TBoxVal = TBoxVal(_stk.RemoveLast()) ; i = v.i ; f = v.f ; d = v.d ; l = v.l ; o = v.o
+	End Method
+	Method _peek:TBoxVal()
+		Local b:TBoxVal = New TBoxVal ; b.i = i ; b.f = f ; b.d = d ; b.l = l ; b.o = o ; Return b
+	End Method
+End Type
+
+</textarea><br><br>lambda.S (compile this with GCC to lambda.o, for the Import - and note the capital S in the filename, it's important):<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+#if defined(__WIN32__) || defined(__APPLE__)
+# define FUNC(s) _##s
+#else
+# define FUNC(s) s
+#endif
+
+.text
+.globl FUNC(TLAMBDA_GetStart)
+.globl FUNC(TLAMBDA_DoCall)
+.globl FUNC(TLAMBDA_EndCall)
+.globl FUNC(TLAMBDA_GetEBP)
+.globl FUNC(TLAMBDA_GetESP)
+
+FUNC(TLAMBDA_GetStart):
+    mov 4(%ebp), %eax
+    ret
+
+FUNC(TLAMBDA_DoCall):
+	mov (%esp), %eax
+	mov 12(%esp), %ecx
+	mov %eax, (%ecx)
+	
+	mov 16(%esp), %eax
+	mov 20(%esp), %ecx
+	mov %ebp, (%eax)
+	mov %esp, (%ecx)
+	addl $4, (%ecx)
+	
+	mov 4(%esp), %eax
+	mov 8(%esp), %ecx
+	sub $100, %esp
+	jmp *%ecx
+	ret
+
+FUNC(TLAMBDA_EndCall):
+	mov 4(%esp), %eax
+	mov 8(%esp), %ebp
+	mov 12(%esp), %esp
+	jmp *%eax
+
+FUNC(TLAMBDA_GetEBP):
+	mov %ebp, %eax
+	ret
+
+FUNC(TLAMBDA_GetESP):
+	mov %esp, %eax
+	ret
+
+</textarea><br><br>An example:<br><br><pre class=code>Import "lambda.bmx"
+SuperStrict
+
+
+Global FN:TLambda(_:TFnArg[]) = TLambda.FN		'Shorten the constructor names into something manageable
+Global I:TBoxVal(_:Int) = TBoxVal.BI, O:TBoxVal(_:Object) = TBoxVal.BO	'These will get a lot of use
+
+Global X:TFnArg = New TFnArg, Y:TFnArg = New TFnArg, Z:TFnArg = New TFnArg	'Some "variable" objects
+
+
+Local f:TLambda = FN([X, Y, Z]).as(I( X.i + Y.i * Z.i ))	'Simple function
+Print f.call([I(4), I(5), I(6)]).i
+
+Local f2:TLambda = TLambda(f.call([I(4)]).o)	'Calling with fewer arguments = currying
+Print f2.call([I(5), I(6)]).i
+
+X.i = 4 ; Local f3:TLambda = FN([Y]).as(I( X.i + Y.i )).over([X])	'Forming a closure needs to be done manually
+Print f3.call([I(5)]).i
+
+Local f4:TLambda = FN([X]).as( SideEffects(42) )	'Because the body runs, this will print now, even though we don't want it to yet
+Print f4.call([I(0)]).i	'Still prints again OK though
+
+Print UseLam( FN([X]).as(I( X.i + 13 )) )	'Use a lambda as part of an expression
+
+
+Function SideEffects:TBoxVal(n:Int)	'Used with f4: this function has a side effect
+	Print "function is running!"
+	Return I(n + 1)
+End Function
+
+Function UseLam:Int(f:TLambda)		'Pass a lambda to a higher-order function
+	Return f.call([I(4)]).i
+End Function
+</pre><br><br>Good grief, it somehow actually worked (tested on OSX and Linux).<br><br>If you don't know what lambdas are, this is (as with the other thing) definitely not the way to learn. This is for interest purposes only.<br><br><br><b>How to use:</b><br>- "variables" are actually TFnArg objects. They <i>need</i> to live in globals, so create some global TFnArgs with the names you want to use for lambda parameters (as in the example where X, Y and Z are used).<br>- "lambdas" are created with FN().as(), where FN (assuming you've shortened the name) takes an array of parameters and .as takes an expression to use as the body. Argument values are TBoxVals, so to get at an integer, object, or double respectively, use the .i, .o, .d fields. etc. The result needs to be packed into a TBoxVal as well.<br>- invoke the lambda with .call(array of argument values), and get its result with .i, .f, whatever.<br>- Currying is automatic if fewer than the expected number of arguments are passed, and the result of the curry call will be a TBoxVal with the new TLambda in its .o field<br>- closures are <i>not</i> automatic (left to itself, free variables will bind dynamically), and must be formed explicitly by putting a value in the variable(s) to bind, then calling .clos(variable array)<br>- it is "safe" to refer to globals in a lambda body<br>- it is <i>absolutely not</i> safe to refer to locals in a lambda body, and BlitzMax variables cannot be used to create closures in this way (must be done manually with .clos)<br>- the heavy reliance on global variables means it is <i>absolutely not</i> thread safe. (might not even be possible to make, haven't thought about it)<br>- code in the body will run when the lambda is created, so stick to "pure" (side-effect free, math) operations<br>- there are no control structures. Try writing an IfThenElse function or something.<br>- recursion and nested calls should be OK, as TFnArgs maintain a hidden stack<br>- X86 only<br><br><br><b>How does it actually work?</b><br><i>Ahahahaha.</i> Using one of the most dirty and evil hacks I've ever tried in BlitzMax.<br>FN stores its own return pointer (as in, the address of the machine code the program is supposed to jump back to when FN is done running) as the lambda's .start field. .as doesn't actually do anything at this point, it only guarantees (weakly, a different compiler might not do this) that the expression's code will appear after the call to FN because it's a method on the returned object.<br>When the lambda is invoked, assuming it's not being curried, the .call method stores the current stack frame, puts Self in EAX (as though it were being returned from FN), and jumps to the instruction held in .start. This is the code for the lambda body, which then runs. You can see why local variables are forbidden - mutilating the stack frame like this means it's impossible to access them.<br>When the code eventually gets around to .as, it detects that it's coming in from an invocation rather than creating the function, and restores the stack to where it was before the call (and jumps back to the body of .call).<br><br>Pure evil.<br><br>This method is entirely reliant on the fact that BlitzMax generates predictable code and doesn't perform optimisations. If it did anything "interesting", this would break. If it does anything "interesting" in places I haven't tested (most), this <i>will</i> break.<br><br><br>And yes, it would be much, <i>much</i> more sensible (and sane, and practical...) to represent lambdas as strings or computation-builders and then interpret or JIT them... but that way I wouldn't be able to use real BlitzMax operators like + in expressions (note that if BlitzMax supported operator overloading this would actually be quite easy to fake, c.f. Boost::Phoenix - but it doesn't). <br><br></td></tr></table><br>
+<a name="1206836"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GW</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I like it! I wouldn't use it over lua/bvm/coocoo, but its an impressive feat. <br><br></td></tr></table><br>
+<a name="1206873"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BLaBZ</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yasha you are an evil genius. <br><br></td></tr></table><br>
+<a name="1207015"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Danny</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hats off! <br><br></td></tr></table><br>
+<a name="1207023"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Who was John Galt?</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Genius and insanity are divided by a fine line, which Yasha seems to crossing all too often. ;) <br><br></td></tr></table><br>
+<a name="1215453"></a>
+
+<a name="1218825"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Attempt 2: <i>substantially</i> improved. Now features:<br><br>-- <i>much</i> better syntax (completely dropped the TFnArg objects and wrapper types, fewer brackets)<br>-- full integration with BlitzMax variables<br>-- closures <i>over BlitzMax local variables</i><br>-- thread safe (not for individual lambdas, but the library as a whole is, <i>except for...</i>)<br>-- reification (i.e. you can convert a lambda into a "real" BlitzMax function pointer, as long as it's not a closure)<br>-- should be faster<br><br>lambda.bmx:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import "lambda.o"
+Import "interface_allocprotect.c"	'Shared with TInterface
+
+SuperStrict
+
+Type TLambda
+	Field start:Byte Ptr, ret:Byte Ptr, esp:Byte Ptr, ebp:Byte Ptr, frame:Int Ptr
+	Field argofs:Int[], argc:Int, ready:Int, rType:Int, argTypes:String, _rei:Byte Ptr
+	Field i:Int, f:Float, o:Object, s:String	'Result fields
+	
+'	Function FN:TLambda()
+'		Local _:Int ; Return FN_Make(AllocFrame(FRAMESIZE), 0, Varptr _, Varptr _)
+'	End Function
+	Function FN_Int:TLambda(a0:Int Var)
+		Return FN_Make(AllocFrame(FRAMESIZE), 1, Varptr a0, Varptr a0, "I")	'These constructors are carefully calibrated to not use callee-save registers
+	End Function
+	Function FN_Float:TLambda(a0:Float Var)
+		Return FN_Make(AllocFrame(FRAMESIZE), 1, Varptr a0, Varptr a0, "F")	'...so don't change them without examining the resulting asm
+	End Function
+	Function FN_String:TLambda(a0:String Var)
+		Return FN_Make(AllocFrame(FRAMESIZE), 1, Varptr a0, Varptr a0, "S")
+	End Function
+	Function FN_Object:TLambda(a0:Object Var)
+		Return FN_Make(AllocFrame(FRAMESIZE), 1, Varptr a0, Varptr a0, "O")
+	End Function
+	Function FN_IntInt:TLambda(a0:Int Var, a1:Int Var)
+		Return FN_Make(AllocFrame(FRAMESIZE), 2, Varptr a0, Varptr a1, "II")
+	End Function
+	Function FN_FloatFloat:TLambda(a0:Float Var, a1:Float Var)
+		Return FN_Make(AllocFrame(FRAMESIZE), 2, Varptr a0, Varptr a1, "FF")
+	End Function
+	Function FN_StringString:TLambda(a0:String Var, a1:String Var)
+		Return FN_Make(AllocFrame(FRAMESIZE), 2, Varptr a0, Varptr a1, "SS")
+	End Function
+	Function FN_ObjectObject:TLambda(a0:Object Var, a1:Object Var)
+		Return FN_Make(AllocFrame(FRAMESIZE), 2, Varptr a0, Varptr a1, "OO")
+	End Function
+	
+	Method asInt:TLambda(val:Int)
+		Return FN_As(Self, val, 0.0, "", Null)
+	End Method
+	Method asFloat:TLambda(val:Float)
+		Return FN_As(Self, 0, val, "", Null)
+	End Method
+	Method asString:TLambda(val:String)
+		Return FN_As(Self, 0, 0.0, val, val)
+	End Method
+	Method asObject:TLambda(val:Object)
+		Return FN_As(Self, 0, 0.0, "", val)
+	End Method
+	
+	Method callI:TLambda(arg0:Int)
+		Return FN_Call(Self, 1, [arg0], "I")
+	End Method
+	Method callF:TLambda(arg0:Float)
+		Return FN_Call(Self, 1, [Int Ptr(Varptr arg0)[0]], "F")
+	End Method
+	Method callS:TLambda(arg0:String)
+		Return FN_Call(Self, 1, [Int(Byte Ptr(Object(arg0)) - 8)], "S")
+	End Method
+	Method callO:TLambda(arg0:Object)
+		Return FN_Call(Self, 1, [Int(Byte Ptr(arg0) - 8)], "O")
+	End Method
+	Method callII:TLambda(arg0:Int, arg1:Int)
+		Return FN_Call(Self, 2, [arg0, arg1], "II")
+	End Method
+	Method callFF:TLambda(arg0:Float, arg1:Float)
+		Return FN_Call(Self, 2, [Int Ptr(Varptr arg0)[0], Int Ptr(Varptr arg1)[0]], "FF")
+	End Method
+	Method callSS:TLambda(arg0:String, arg1:String)
+		Return FN_Call(Self, 2, [Int(Byte Ptr(Object(arg0)) - 8), Int(Byte Ptr(Object(arg1)) - 8)], "SS")
+	End Method
+	Method callOO:TLambda(arg0:Object, arg1:Object)
+		Return FN_Call(Self, 2, [Int(Byte Ptr(arg0) - 8), Int(Byte Ptr(arg1) - 8)], "OO")
+	End Method
+	
+	Global Reify:Byte Ptr(_self:TLambda, rType:String) = FN_Reify		'This "method" is not thread safe, so...
+	
+	Method Delete()
+		MemFree frame
+	End Method
+	
+	Global _init:Int = _initf()
+End Type
+
+
+Private
+Extern
+	Function GetStart:Byte Ptr(fr:Byte Ptr, _t1:Int Ptr, _t2:Int Ptr) = "TLAMBDA_GetStart"
+	Function DoCall:Int(fr:Byte Ptr, st:Byte Ptr, _self:Object, ret:Byte Ptr, ebp:Byte Ptr, esp:Byte Ptr) = "TLAMBDA_DoCall"
+	Function EndCall(ret:Byte Ptr, ebp:Byte Ptr, esp:Byte Ptr, fr:Byte Ptr) = "TLAMBDA_EndCall"
+	Function GetHostESP:Int() = "TLAMBDA_GetHostESP"
+	Function AllocFrame:Int Ptr(size:Int) = "TLAMBDA_AllocFrame"
+	
+	Function JitAlloc:Byte Ptr(sz:Int) = "tinterface_alloc"
+	Function JitRePro:Int(p:Byte Ptr, sz:Int) = "tinterface_reprotect"
+End Extern
+
+Const FRAMESIZE:Int = 256
+
+Function FN_Make:TLambda(frame:Int Ptr, nargs:Int, a0p:Byte Ptr, a1p:Byte Ptr, argTypes:String)', a2p:Byte Ptr, a3p:Byte Ptr)	'Can add more arguments if really necessary
+	Local l:TLambda = New TLambda
+	l.frame = frame ; Local _t1:Int, _t2:Int		'Callee-save registers (_t1 and _t2 are temporaries)
+	l.start = GetStart(l.frame, Varptr _t1, Varptr _t2)	'Own return IP -&gt; start, hosting stack frame -&gt; frame
+	l.argc = nargs ; l.argofs = New Int[nargs] ; l.argTypes = argTypes
+	Local argps:Byte Ptr[] = [a0p, a1p]', a2p, a3p]	'Extend to match parameter list (again, if req'd)
+	Local esp:Int = GetHostESP(), i:Int
+	For Local v:Int = 0 Until nargs
+		For i = 0 Until l.frame[6] Step 4
+			If Int(argps[v]) = esp + i
+				l.argofs[v] = 7 + (i / 4) ; Exit
+			EndIf
+		Next
+		If i = l.frame[6] Then RuntimeError "Unable to locate local corresponding to TLambda parameter slot (check that it is not a field or global)"
+	Next
+	Return l
+End Function
+
+Function FN_As:TLambda(this:TLambda, vali:Int, valf:Float, vals:String, valo:Object)
+	If this.ready	'This is actually the end of a call - reset the stack position to where we started from and jump home
+		this.i = vali ; this.f = valf ; this.s = vals ; this.o = valo
+		EndCall this.ret, this.ebp, this.esp, this.frame
+	Else	'Actually setting up - nothing to do, return self
+		this.ready = True
+	EndIf
+	Return this
+End Function
+
+Function FN_Call:TLambda(_s:TLambda, argc:Int, args:Int[], argTypes:String)
+?Debug
+	If _s.argc &lt;&gt; argc Then RuntimeError "Wrong number of arguments to TLambda: expected " + _s.argc + ", received " + argc
+	If argTypes &lt;&gt; _s.argTypes Then RuntimeError "Wrong arguument types to TLambda: expected " + _s.argTypes + ", received " + argTypes
+?
+	For Local i:Int = 0 Until _s.argc
+		_s.frame[_s.argofs[i]] = args[i]
+	Next
+	DoCall(_s.frame, _s.start, _s, Varptr _s.ret, Varptr _s.ebp, Varptr _s.esp)
+	Return _s
+End Function
+
+Function FN_Reify:Byte Ptr(f:TLambda, rType:String)
+	Global LMap:TMap = CreateMap()	'Keys = string form of f.start ; Vals = string form of JITted start ptr
+	
+	Local val:TLambda = TLambda(LMap.ValueForKey(String(Int(f.start))))
+	If val Then Return val._rei
+	
+	f._rei = JIT_Reify(f, rType)
+	LMap.Insert(String(Int(f.start)), f)
+	
+	Return f._rei
+End Function
+
+Function JIT_Reify:Byte Ptr(f:TLambda, rType:String)
+	Extern
+		Function bbRefMethodPtr:Byte Ptr(o:Object, i:Int)
+		Function bbRefFieldPtr:Byte Ptr(o:Object, i:Int)
+		Function bbGCRetain(obj:Object)
+	End Extern
+	Const BLOCKSIZE:Int = 4096 * 5
+	Global block:Byte Ptr, bytes:Int = 0
+	
+	bbGCRetain f	'Marked forever!
+	Local m:TMethod = TTypeId.ForObject(f).FindMethod("call" + f.argTypes)
+	Local mp:Byte Ptr = bbRefMethodPtr(f, m._index), mpp:Byte Ptr = Varptr(mp)
+	Local op:Byte Ptr = Byte Ptr(f) - 8, opp:Byte Ptr = Varptr(op)
+	Local fld:TField = TTypeId.ForObject(f).FindField(rType)
+	Local fofs:Int = bbRefFieldPtr(f, fld._index) - (Byte Ptr(f) - 8)
+	
+	Local vec:Int[] = ..
+	[$b9, $20, $00, $00, $00,..  'mov $32, %ecx
+	$8d, $54, $24, $dc,..        'lea -36(%esp), %edx
+	$83, $f9, $00,..             'cmp $0, %ecx
+	$74, $0b,..                  'je loopend
+	..'looptop:
+	$8b, $04, $0c,..             'mov (%esp, %ecx), %eax
+	$89, $04, $0a,..             'mov %eax, (%edx, %ecx)
+	$83, $e9, $04,..             'sub $4, %ecx
+	$75, $f5,..                  'jnz looptop
+	..'loopend:
+	$89, $d4,..                  'mov %edx, %esp
+	$ba, Int(opp[0]), Int(opp[1]), Int(opp[2]), Int(opp[3]),..   'mov {op}, %edx
+	$b8, Int(mpp[0]), Int(mpp[1]), Int(mpp[2]), Int(mpp[3]),..   'mov {mp}, %eax
+	$89, $14, $24, ..            'mov %edx, (%esp)
+	$ff, $d0,..                  'call *%eax
+	$83, $c4, $24,..             'add $36, %esp
+	$8b, $40, fofs,..            'mov {fofs}(%eax), %eax
+	$c3]                         'ret
+	
+	If bytes &lt; vec.Length + 2
+		If block Then JitRePro(block, 2)	'Remove write capability on old block
+		block = JitAlloc(BLOCKSIZE)
+		If Not block Then Throw "TLambda.Reify: unable to allocate memory for wrapper"
+		bytes = BLOCKSIZE
+	EndIf
+	
+	For Local c:Int = 0 Until vec.Length
+		block[c] = vec[c]
+	Next
+	Local newP:Byte Ptr = block
+	bytes :- vec.Length
+	block :+ vec.Length
+	Return newP
+End Function
+
+Function _initf:Int()
+?Not X86
+	RuntimeError "Error: TLambda is only designed for X86"
+?
+End Function
+Public
+</textarea><br><br>lambda.S (compile with 'gcc -m32 -c lambda.S -o lambda.o'):<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+#if defined(__WIN32__) || defined(__APPLE__)
+# define FUNC(s) _##s
+#else
+# define FUNC(s) s
+#endif
+
+.text
+.globl FUNC(TLAMBDA_GetStart)
+.globl FUNC(TLAMBDA_AllocFrame)
+//.globl FUNC(TLAMBDA_CalleeSave)
+.globl FUNC(TLAMBDA_GetHostESP)
+.globl FUNC(TLAMBDA_DoCall)
+.globl FUNC(TLAMBDA_EndCall)
+
+.globl FUNC(bbMemAlloc)
+
+FUNC(TLAMBDA_GetStart):  //(void * frame, tmpesi, tmpedi)
+        mov 4(%esp), %edx
+        add $24, %edx
+        // Temporarily save the callee-save registers
+        mov %esi, 8(%esp)
+        mov %edi, 12(%esp)
+        // Temporarily store the frame ptrs
+        mov %ebp, %esi
+        mov %esp, %edi
+        // Pop FN_Make() and its wrapper off the stack to get host frame
+        mov %ebp, %esp
+        pop %ebp
+        mov %ebp, %esp
+        pop %ebp
+        // Save the host stack frame
+	mov %ebp, %ecx
+        sub %esp, %ecx
+        mov %ecx, (%edx)    // Save the frame size
+        cmp $0, %ecx
+        je _end_gs
+        add $4, %edx
+        mov %esp, %ecx
+    _top_gs:
+        mov (%ecx), %eax
+        mov %eax, (%edx)
+        add $4, %ecx
+        add $4, %edx
+        cmp %ebp, %ecx
+        jne _top_gs
+    _end_gs:
+        // Return the return pointer
+        mov (%esp), %eax
+        // Restore the frame pointers and index registers
+        mov %esi, %ebp
+        mov %edi, %esp
+        mov 8(%esp), %esi
+        mov 12(%esp), %edi
+        ret
+
+FUNC(TLAMBDA_AllocFrame):     //(size)
+	push %ebp
+	mov %esp, %ebp
+	sub $16, %esp
+        mov %ebx, 4(%esp)
+        mov %esi, 8(%esp)
+        mov %edi, 12(%esp)
+        mov 8(%ebp), %eax
+	mov %eax, (%esp)
+	call FUNC(bbMemAlloc)
+	mov 4(%esp), %ebx
+        mov %ebx, (%eax)
+        mov 8(%esp), %esi
+        mov %esi, 4(%eax)
+        mov 12(%esp), %edi
+        mov %edi, 8(%eax)
+	mov %ebp,%esp
+	pop %ebp
+	ret
+
+//FUNC(TLAMBDA_CalleeSave):   //(&amp;frame)
+//        mov 4(%esp), %eax
+//        mov %ebx, (%eax)
+//        mov %esi, 4(%eax)
+//        mov %edi, 8(%eax)
+//        ret
+
+FUNC(TLAMBDA_GetHostESP):
+        mov %esp, %ecx
+        mov %ebp, %edx
+        // Pop FN_Make() and its wrapper off the stack to get host frame
+        mov %ebp, %esp
+        pop %ebp
+        mov %ebp, %esp
+        pop %ebp
+        mov %esp, %eax
+        mov %ecx, %esp
+        mov %edx, %ebp
+        ret
+
+FUNC(TLAMBDA_DoCall):  //(void * frame, void * ins, Self, &amp;RET, &amp;EBP, &amp;ESP)
+        mov (%esp), %eax    // ret -&gt; *RET
+        mov 16(%esp), %ecx
+        mov %eax, (%ecx)
+        mov 20(%esp), %eax  // ebp -&gt; *EBP
+        mov %ebp, (%eax)
+        mov 24(%esp), %ecx  // esp -&gt; *ESP
+        mov %esp, (%ecx)
+        //
+        mov 4(%esp), %edx   // frame
+        // Save the local callee-save registers
+        mov %ebx, 12(%edx)
+        mov %esi, 16(%edx)
+        mov %edi, 20(%edx)
+        // Restore the callee-save registers
+        mov (%edx), %ebx
+        mov 4(%edx), %esi
+        mov 8(%edx), %edi
+        add $24, %edx
+        // Restore the stack frame pointers
+        push %ebp
+        mov %esp, %ebp
+        sub (%edx), %esp
+        // Restore the stack frame content
+        mov (%edx), %eax
+        cmp $0, %eax
+        je _end_dc
+        add $4, %edx
+        mov %esp, %ecx
+    _top_dc:
+        mov (%edx), %eax
+        mov %eax, (%ecx)
+        add $4, %ecx
+        add $4, %edx
+        cmp %ebp, %ecx
+        jne _top_dc
+    _end_dc:
+        mov 12(%ebp), %ecx  // Jump to saved instruction
+        mov 16(%ebp), %eax
+        jmp *%ecx
+        //
+
+FUNC(TLAMBDA_EndCall):  // (RETP, EBP, ESP, void * frame)
+        // Restore the local callee-save registers
+        mov 16(%esp), %edx
+        mov 12(%edx), %ebx
+        mov 16(%edx), %esi
+        mov 20(%edx), %edi
+	mov 4(%esp), %ecx
+	mov 8(%esp), %ebp
+	//mov 20(%esp), %eax
+        mov 12(%esp), %esp
+        add $4, %esp    // esp was stored after a call so it's off by one
+	jmp *%ecx
+</textarea><br><br>The reification functionality also depends on the simple Alloc/Protect wrapper C file used by TInterface (don't need to duplicate it): <a href="http://www.blitzbasic.com/Community/posts.php?topic=100385" target="_blank">http://www.blitzbasic.com/Community/posts.php?topic=100385</a><br><br><br>...and an updated example:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import "lambda.bmx"
+
+SuperStrict
+
+'Shorten the constructor names into something manageable
+Global FN_i:TLambda(_:Int Var) = TLambda.FN_Int, FN_ii:TLambda(_0:Int Var, _1:Int Var) = TLambda.FN_IntInt
+
+Local x:Int, y:Int, z:Int	'Parameters need to exist as local variable names... otherwise unremarkable
+
+Local f0:TLambda = FN_i(x).asInt( x + 6 )	'Simple functions
+Print f0.callI(15).i
+Local f1:TLambda = FN_ii(x, y).asInt( x * 2 + y * 3 )
+Print f1.callII(9, 5).i
+
+
+Local f0func:Int(x:Int) = TLambda.Reify(f0, "i")	'Simple functions (not closures, below) can be reified into real function pointers
+Print f0func(13)	'Normal call syntax!
+
+
+For Local i:Int = 5 To 7		'Closures over real locals
+	Local f2:TLambda = MakeAdder(i)
+	Print "Adder " + i + " plus 10 = " + f2.callI(10).i
+Next
+Function MakeAdder:TLambda(n:Int)
+	Local x:Int		'Still need a local to be the parameter
+	Return FN_i(x).asInt( n + x )	'Closes over n - a real BlitzMax local!
+End Function
+
+
+Local f3:TLambda = FN_i(x).asInt( SideEffects(42) )	'Because the body runs, this will print now, even though we don't want it to yet
+Print f3.callI(0).i	'Still prints again OK though
+
+Print UseLam( FN_i(x).asInt( x + 13 ) )	'Use a lambda as part of an expression
+
+Function SideEffects:Int(n:Int)	'Used with f3: this function has a side effect
+	Print "function is running!"
+	Return n + 1
+End Function
+Function UseLam:Int(f:TLambda)		'Pass a lambda to a higher-order function
+	Return f.callI(4).i
+End Function
+
+
+Local u:Float, v:Float
+Print TLambda.FN_FloatFLoat(u, v).asFloat( ..
+	u + v ..
+).callFF(16.5, 3.75).f
+
+
+Local s:String, t:String
+Local f4:TLambda = TLambda.FN_String(s).asInt( s.Length )
+Print f4.callS("four").i
+Print TLambda.FN_StringString(s, t).asString( ..
+	t.ToLower() + s.ToUpper() ..
+).callSS("Foo", "Bar").s
+
+
+Print "~ndone."
+</textarea><br><br><br>Individual TLambda objects are non-reentrant, so don't attempt to make them recursive, and don't call the same object from different threads. The library itself no longer uses any global variables so it should be fine to create lambdas in different threads and use them separately.<br><br>The autocurrying feature is gone; it didn't add much anyway that you couldn't do by hand. In its stead is the ability to form closures over real BlitzMax local variables, which is a pretty good trade. Parameters are now real locals - they still have to be declared in the surrounding scope (there are limits to my magic), but they otherwise work normally, and both globals and locals can appear in lambda bodies. You can select the types of arguments and the return type of the lambda using the selection of different FN_... and as... constructors (argument types are not checked at runtime, because effort, so be careful).<br><br>It strikes me that this library probably doesn't do good things when exceptions try to rise through a lambda's call frame. I suggest avoiding this scenario. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

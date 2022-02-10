@@ -1,0 +1,135 @@
+<!DOCTYPE html><html lang="en" ><head ><title >String banks/data buffers</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Very fast access to string data; modify strings in-place!, language=bb, category=Miscellaneous'><meta name='author' content='Yasha'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=9>Miscellaneous</a>/String banks/data buffers</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="3017.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >String banks/data buffers by Yasha</td><td align="right">2013 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This code requires <a href="http://www.fastlibs.com/index.php" target="_blank">MikhailV's free FastPointer DLL</a>.<br><br><br>This tiny library lets you treat strings <i>exactly</i> as you would a Blitz bank: peek and poke bytes, shorts, ints and floats.<br><br>Strings make a great way to store binary data: they're basically the same as banks, a flat data buffer, but you don't need to worry about freeing them! Unfortunately, they have a couple of major drawbacks: it's really slow to extract data as characters using the Mid command, and it's even more annoying to set data by building up a whole new string - it's even slower, and you have to return it, pass it back to wherever the old string was, etc.<br><br>No longer!<br><br>This library provides the eight Peek and Poke functions familiar from banks, but for use with strings.<br><br>The Peek functions are nothing that can't be done in pure Blitz code using Mid, but are implemented (hopefully) faster here thanks to dark pointer magic. This makes it more convenient to store data in strings to access later, because accessing the data becomes a little bit easier.<br><br>The Poke functions, on the other hand... provide something new: the ability to modify strings <i>in-place</i>, exactly as you would poke to a bank! Normally, Blitz strings are immutable, and when you want to change a value in your highly-complex string data type, you need to recreate and return a whole new string with the new data. But these new Poke functions mean that the string you pass into the function <i>will be modified by it</i>, exactly as a bank would be! This means it's now possible to set the character data within existing strings, without the massive overhead of building new strings! This is really great for speeding up code that relies on modifying very large string structures, which would take a lot of time and memory to recreate.<br><br>Tiny example:<br><br><pre class=code>Include "StringBanks.bb"
+
+Print Hex(StrPeekShort("abcde", 1)) : Print ""
+
+Local s$ = String("-", 8)	;Simplest way to pre-create a string of given length
+StrPokeFloat s, 0, 42.6
+StrPokeFloat s, 4, 87.19
+Print s
+Print StrPeekFloat(s, 0)
+Print StrPeekFloat(s, 4)
+
+WaitKey : End</pre><br><br><br>As you can see, s$ changed, even though it was never set.<br><br>While this violates the Blitz Basic notion that strings should be "value types" like hardware numbers, it's really, <i>really</i> useful. You can effectively use strings as garbage-collected banks with this code.<br><br>The other bank functions - CreateBank, CopyBank etc. are not provided because they're kinda trivial. (To create a new string of a dynamic length for poking values into, i.e. to CreateBank, use the 'String' function.) </td></tr><tr ><td class="cell"><pre class="code">; Fast string data access (Blitz3D/+)
+;=====================================
+
+; Requires FastPointer DLL (free): http://www.fastlibs.com/index.php
+
+
+; Offsets of char data, data length, and buffer size within a Blitz string
+Const FSTRING_CHAR_OFFSET = 4, FSTRING_LEN_OFFSET = 8, FSTRING_MAX_OFFSET = 12
+
+
+Type FSTRING_Wrapper_	;Singleton wrapper type, used to get pointer only
+	Field s$
+End Type
+
+Global FSTRING_private_WSlot_.FSTRING_Wrapper_, FSTRING_private_SPtr_	;Singleton instance
+
+
+; Retrieve the byte at the given offset from a string buffer
+Function StrPeekByte(s$, offset)
+	Return Asc(Mid(s, offset + 1, 1))	;Trivial, but here for completeness
+End Function
+
+; Retrieve the short int at the given offset from a string buffer
+Function StrPeekShort(s$, offset)
+	If FSTRING_private_WSlot_ = Null
+		FSTRING_private_WSlot_ = New FSTRING_Wrapper_
+		FSTRING_private_SPtr_ = TypePointer(FSTRING_private_WSlot_)
+	EndIf
+	FSTRING_private_WSlot_\s = s
+	Local strPtr = MemoryFastPeekInt(FSTRING_private_SPtr_)
+	If offset &lt; 0 Or offset &gt; (MemoryFastPeekInt(strPtr + FSTRING_LEN_OFFSET) - 2)
+		RuntimeError "StrPeekShort: offset out of range"
+	EndIf
+	Return MemoryFastPeekShort(MemoryFastPeekInt(strPtr + FSTRING_CHAR_OFFSET) + offset)
+End Function
+
+; Retrieve the integer at the given offset from a string buffer
+Function StrPeekInt(s$, offset)
+	If FSTRING_private_WSlot_ = Null
+		FSTRING_private_WSlot_ = New FSTRING_Wrapper_
+		FSTRING_private_SPtr_ = TypePointer(FSTRING_private_WSlot_)
+	EndIf
+	FSTRING_private_WSlot_\s = s
+	Local strPtr = MemoryFastPeekInt(FSTRING_private_SPtr_)
+	If offset &lt; 0 Or offset &gt; (MemoryFastPeekInt(strPtr + FSTRING_LEN_OFFSET) - 4)
+		RuntimeError "StrPeekInt: offset out of range"
+	EndIf
+	Return MemoryFastPeekInt(MemoryFastPeekInt(strPtr + FSTRING_CHAR_OFFSET) + offset)
+End Function
+
+; Retrieve the float at the given offset from a string buffer
+Function StrPeekFloat#(s$, offset)
+	If FSTRING_private_WSlot_ = Null
+		FSTRING_private_WSlot_ = New FSTRING_Wrapper_
+		FSTRING_private_SPtr_ = TypePointer(FSTRING_private_WSlot_)
+	EndIf
+	FSTRING_private_WSlot_\s = s
+	Local strPtr = MemoryFastPeekInt(FSTRING_private_SPtr_)
+	If offset &lt; 0 Or offset &gt; (MemoryFastPeekInt(strPtr + FSTRING_LEN_OFFSET) - 4)
+		RuntimeError "StrPeekFloat: offset out of range"
+	EndIf
+	Return MemoryFastPeekFloat(MemoryFastPeekInt(strPtr + FSTRING_CHAR_OFFSET) + offset)
+End Function
+
+; Destructively set the byte at the given offset within a string buffer
+Function StrPokeByte(s$, offset, val)
+	If FSTRING_private_WSlot_ = Null
+		FSTRING_private_WSlot_ = New FSTRING_Wrapper_
+		FSTRING_private_SPtr_ = TypePointer(FSTRING_private_WSlot_)
+	EndIf
+	FSTRING_private_WSlot_\s = s
+	Local strPtr = MemoryFastPeekInt(FSTRING_private_SPtr_)
+	If offset &lt; 0 Or offset &gt; (MemoryFastPeekInt(strPtr + FSTRING_LEN_OFFSET) - 1)
+		RuntimeError "StrPokeByte: offset out of range"
+	EndIf
+	Return MemoryFastPokeByte(MemoryFastPeekInt(strPtr + FSTRING_CHAR_OFFSET) + offset, val)
+End Function
+
+; Destructively set the short int at the given offset within a string buffer
+Function StrPokeShort(s$, offset, val)
+	If FSTRING_private_WSlot_ = Null
+		FSTRING_private_WSlot_ = New FSTRING_Wrapper_
+		FSTRING_private_SPtr_ = TypePointer(FSTRING_private_WSlot_)
+	EndIf
+	FSTRING_private_WSlot_\s = s
+	Local strPtr = MemoryFastPeekInt(FSTRING_private_SPtr_)
+	If offset &lt; 0 Or offset &gt; (MemoryFastPeekInt(strPtr + FSTRING_LEN_OFFSET) - 2)
+		RuntimeError "StrPokeShort: offset out of range"
+	EndIf
+	Return MemoryFastPokeShort(MemoryFastPeekInt(strPtr + FSTRING_CHAR_OFFSET) + offset, val)
+End Function
+
+; Destructively set the integer at the given offset within a string buffer
+Function StrPokeInt(s$, offset, val)
+	If FSTRING_private_WSlot_ = Null
+		FSTRING_private_WSlot_ = New FSTRING_Wrapper_
+		FSTRING_private_SPtr_ = TypePointer(FSTRING_private_WSlot_)
+	EndIf
+	FSTRING_private_WSlot_\s = s
+	Local strPtr = MemoryFastPeekInt(FSTRING_private_SPtr_)
+	If offset &lt; 0 Or offset &gt; (MemoryFastPeekInt(strPtr + FSTRING_LEN_OFFSET) - 4)
+		RuntimeError "StrPokeInt: offset out of range"
+	EndIf
+	Return MemoryFastPokeInt(MemoryFastPeekInt(strPtr + FSTRING_CHAR_OFFSET) + offset, val)
+End Function
+
+; Destructively set the float at the given offset within a string buffer
+Function StrPokeFloat(s$, offset, val#)
+	If FSTRING_private_WSlot_ = Null
+		FSTRING_private_WSlot_ = New FSTRING_Wrapper_
+		FSTRING_private_SPtr_ = TypePointer(FSTRING_private_WSlot_)
+	EndIf
+	FSTRING_private_WSlot_\s = s
+	Local strPtr = MemoryFastPeekInt(FSTRING_private_SPtr_)
+	If offset &lt; 0 Or offset &gt; (MemoryFastPeekInt(strPtr + FSTRING_LEN_OFFSET) - 4)
+		RuntimeError "StrPokeFloat: offset out of range"
+	EndIf
+	Return MemoryFastPokeFloat(MemoryFastPeekInt(strPtr + FSTRING_CHAR_OFFSET) + offset, val)
+End Function
+
+
+;~IDEal Editor Parameters:
+;~F#17#1F#24#32#40#4E#5C#6A#78
+;~C#Blitz3D</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >virtlands</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> This is an excellent idea of yours of altering strings with <br>pointers and stuff  [FastPointer DLL...]<br><br>{ I previously downloaded the <b>FastPointer</b>, and purchased the <b>FastText</b> option. }<br><br>There are so many valuable things that can be stored in <br>strings,<br>such as pictures (BMP,PNG,etc), other programs, UTF8 strings, unicode strings, ....<br><br>If you'd like to read about UTF8, see this link:<br><a href="http://en.wikipedia.org/wiki/UTF-8" target="_blank">http://en.wikipedia.org/wiki/UTF-8</a><br><br>The <b>FastText</b> Extension allows the use of <b>UTF8</b>, and therefore it allows a way to represent all unicodes.<br><a href="http://fastlibs.com/" target="_blank">http://fastlibs.com/</a><br><br>You can store an entire program (or DLL) in a string and <br>then it can be 'extracted' back to a file.<br><br>In the case where unusual numbers must be stored in a string<br>(such as control characters),<br>then first use a form like s$ = String("-", 800), <br>and then I guess come back after the program is made, and use a hex editor to force the real data in. <br><br>Have you ever noticed that if you use too many "Data ..."<br>statements in your program, that it crashes?<br>Well I found out the hard way that it does;<br>Using strings to store data instead shows great promise.  <br><br>By the way, using  s$=<b>chr$(7)</b>+chr$(8)+chr$(9)+...+chr$(that) is the really clumsy way to store  data in a string, (therefore, use hex-editor).<br><br>And what if the string has a chr$(34)= (") in it?<br>Imagine the chaos that would cause, consider the scenario:<br><br>S$ = " a very very long string with something "fishy" in it".<br><br>NOW WHAT?<br>-------------------------------------<br>Some nice things about strings though:<br>(a) They are compact, and store data one byte at a time.<br>(b) You can use the INSTR(s,sub,n) function with strings.<br><br>I definitely plan to use the 'Yasha' code. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> And what if the string has a chr$(34)= (") in it? <br></div><br><br>There's no problem with a string containing Chr(34) - the double quote is just syntax for the B3D compiler and has no bearing on how strings work at runtime.<br><br>Or do you mean for generating Data statements automatically, so that everything also has to be valid B3D source? The other unprintable characters (or newline) will also cause problems - you could get around this by storing the data in the Data blocks in base-80 or something like that. Just add a conversion step before they're actually used. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >virtlands</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> That's clever, you said "<b>base-80</b>". <br><br>Now you've stirred up a whole hornet's nest of stuff.<br>Someone will have to dedicate an entire topic to that. ;)<br><br><b>Binary to Text Encoding</b><br><a href="http://en.wikipedia.org/wiki/Binary-to-text_encoding" target="_blank">http://en.wikipedia.org/wiki/Binary-to-text_encoding</a><br><br><b>Ascii85</b>:<br><a href="http://en.wikipedia.org/wiki/Ascii85" target="_blank">http://en.wikipedia.org/wiki/Ascii85</a><br><br><b>Base 64</b>:<br><a href="http://stackoverflow.com/questions/201479/what-is-the-use-of-base-64-encoding" target="_blank">http://stackoverflow.com/questions/201479/what-is-the-use-of-base-64-encoding</a><br><br><b>Base 96</b>:<br><a href="http://gendev.spritesmind.net/forum/viewtopic.php?p=17643" target="_blank">http://gendev.spritesmind.net/forum/viewtopic.php?p=17643</a><br><br><b>Base 80</b>: ???<br><a href="http://z13.invisionfree.com/DozensOnline/index.php?showtopic=757" target="_blank">http://z13.invisionfree.com/DozensOnline/index.php?showtopic=757</a> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> ...I was thinking of Ascii85, yes. Whoops. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,804 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Help with dealing with multiple objects collision.</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Help with dealing with multiple objects collision.</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=507" >Monkey Programming</a>/<a href="#bottom" >Help with dealing with multiple objects collision.</a><br><br>
+<a name="2023827"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jesse</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I have been working on this vector engine. it supposed to be a circle to wall and circle to circle  interaction including gravity and friction. I pretty much have it working as it should but I run into a problem. When running the code with multiple balls interacting with each other, most of the time it works fine but every now and then a ball will pass through another ball with out colliding and I can't figure out why. It might have to do with the floating point error but I have done a bunch of test and none seem to fix it. <br><br>The code uses recursion as a way to find the recurring collisions and resolving response per frame.<br><br>Also friction works good but the gravity is not properly applied and does not work for now. I will add proper gravity once this problem is resolved. <br><br>I tried to document it as much as possible to make it "theoretically" easier to understand and hope it helps:<br><br>I am posting this code in hope that somebody here can actually help me solve this problem.  Here is the code if somebody wants to give it a crack. <br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Strict
+Import Mojo
+
+Const RTA:Float = PI/180.0
+Const INVALID_DISTANCE:Float = 100000000
+
+
+Class PVector
+	Field x:Float
+	Field y:Float
+End Class
+
+Class VectorObject
+	Field V:PVector ' component
+	Field D:PVector ' normal
+	Field L:Float ' magnitude
+	
+	Field cp:PVector ' collision PVector
+	Field tp:PVector ' temporary collision PVector
+	
+	Field friction:Float
+	Field bounce:Float
+	
+	Field cdx:Float
+	Field cdy:Float
+	
+	Field name:String
+	Field node:list.Node&lt;VectorObject&gt;
+
+
+	Global SurfaceFriction:Float = 1.0
+	Global ApplicableSurfaceFriction:Float = 1.0
+	Global Gravityy:Float = 0
+	Global Gravityx:Float = 0
+	Global ApplicableGravityx:Float = 0
+	Global ApplicableGravityy:Float = 0
+
+	Method Init:Void(vx:Float,vy:Float)
+		'vector component
+		V.x = vx
+		V.y = vy
+		' create magnitude
+		L = Magnitude(vx,vy)
+		' normalize 
+		If L &gt; 0
+			D.x = V.x / L
+			D.y = V.y / L
+		Else
+			D.x = 0
+			D.y = 0
+		Endif
+		
+	End Method
+	
+	Method Magnitude:Float(vx:Float,vy:Float)
+		Return Sqrt(V.x*V.x+V.y*V.y)
+	End Method
+
+	'************************************************************************
+	'
+	'	Collision distance when moving ball is moving in the direction
+	'	of static/ non-moving circle.
+	'
+	'	x,y = static circle center
+	'	radius = static circle radius
+	' 	a ratio of the ball movement magnitude to the wall distance is returned
+	' 	if the ball is too far to collide INVALID_DISTANCE is returned else
+	'	a value between 0 and 1 is returned, 1 inclusive.
+	'
+	'************************************************************************
+	
+	
+	'*************************************************************************
+	'
+	'	set new ball movement vector from ball movement vector and
+	'	collision dx and dy normal.
+	'
+	'	dx,dy = left normal of vector from ball center to PVector of collision.  
+	'
+	'*************************************************************************
+	
+	Method Bounce2Fixed:Void(ball:Ball,dx:Float,dy:Float)
+		'projection of ball movement  into dx,dy normal vector
+		Local dp:Float = ball.V.x * dx + ball.V.y * dy
+		
+		' revers direction for bouncing purpose
+		Local vx1:Float = - dp * dx
+		Local vy1:Float = - dp * dy
+		
+		'projection of ball movement into dx,dy left normal vector
+		dp = ball.V.x*dy - ball.V.y* dx
+		Local vx2:Float =  dp * dy
+		Local vy2:Float = -dp * dx
+		
+		' add both vectors to get new movement vector
+		Local vx:Float = vx1+vx2
+		Local vy:Float = vy1+vy2
+		
+		' find new vector other components
+		ball.Init(vx,vy)
+		
+		' projection of ball used movement vector into dx,dy normal vector 
+		dp = ball.tvx*dx + ball.tvy*dy
+		
+		' reverse direction for bouncing purpose
+		vx1 = -dp * dx
+		vy1 = -dp * dy
+		
+		' projection of ball movement into dx,dy left normal vector
+		dp = ball.tvx*dy - ball.tvy*dx
+		vx2 = dp * dy
+		vy2 = -dp * dx
+		
+		' add both vector to get new movement vector.
+		ball.tvx = vx1+vx2 
+		ball.tvy = vy1+vy2
+
+	End Method
+
+	'************************************************************************
+	'
+	'	set amount of friction assigned to all moving object
+	'	the value should be between 0.0 to 1.0
+	'	1.0 being the least friction (none)
+	'	0.0 being the most
+	'
+	'************************************************************************
+	
+	Function SetGlobalFriction:Void(f:Float)
+		SurfaceFriction = f
+		ApplicableSurfaceFriction = f
+	End Function
+	
+	'************************************************************************
+	'
+	'	set the amount of gravity in the y direction
+	'	gx = gravity pull left right
+	'	gy = gravity pull up down
+	'
+	'************************************************************************
+
+	Function SetGlobalGravity:Void(gx:Float,gy:Float)
+		Gravityx = gx
+		Gravityy = gy
+		ApplicableGravityx = gx
+		ApplicableGravityy = gy
+	End Function
+	
+	Function SetTimeFriction:Void(timeFrame:Float)
+		ApplicableSurfaceFriction *= timeFrame
+	End Function
+	
+	Function ResetFriction:Void(timeFrame:Float)
+		ApplicableSurfaceFriction = SurfaceFriction
+	End Function
+	
+	Function SetTimeGravity:Void(timeFrame:Float)
+		ApplicableGravityx *= timeFrame
+		ApplicableGravityy *= timeFrame	
+	End Function
+	
+	Function ResetGravity:Void(timeFrame:Float)
+		ApplicableGravityx = Gravityx
+		ApplicableGravityy = Gravityy
+	End Function
+
+	'************************************************************************
+	'
+	' 	Collision distance from ball to ball or from ball to wall
+	' 	a ratio of the ball movement magnitude to the wall distance is returned
+	' 	if the ball is too far to collide INVALID_DISTANCE is returned else
+	'	 a value between 0 and 1 is returned, 0 and 1 inclusive.
+	'
+	'************************************************************************
+
+	Method Distance:Float(b:Ball) Abstract
+	
+	'************************************************************************
+	'
+	'		renders either of the objects
+	'
+	'************************************************************************
+	
+	Method Render:Void() Abstract
+	
+	'************************************************************************
+	'
+	'		properly redirects a ball after collision
+	'
+	'************************************************************************
+	
+	Method Bounce:Void(ball:Ball,px:Float,py:Float) Abstract
+	
+End Class
+
+
+'***********************************************************************
+'
+'	static/non moving straight wall(line)
+'
+'***********************************************************************
+
+Class LineWall Extends VectorObject
+	Field P:PVector 'ball position(using ball's center)
+	Method New()
+		P = New PVector
+		V = New PVector
+		D = New PVector
+		cp = New PVector
+		name = "Straight wall"
+	End Method
+
+	Method New(x1:Float,y1:Float,x2:Float,y2:Float,friction:Float = 1,bounce:Float=1)
+		P = New PVector
+		V = New PVector
+		D = New PVector
+		cp = New PVector
+		name = "Straight wall"
+		P.x = x1
+		P.y = y1
+		Init(x2-x1,y2-y1)
+		Self.friction = friction
+		Self.bounce = bounce
+	End Method
+	
+	'******************************************************************************
+	'
+	'	distance of ball to wall
+	'	the distance the closest PVector on the line is to the wall.
+	'
+	'******************************************************************************
+	
+	
+	Method Bounce:Void(ball:Ball,dx:Float,dy:Float)
+		Bounce2Fixed(ball,dx,dy)
+	End Method
+
+	Method Render:Void()
+		DrawLine P.x, P.y, P.x+V.x, P.y+V.y
+	End Method
+	
+End Class
+
+'*******************************************************
+'
+'	static roundwall(circle)
+'
+'*******************************************************
+
+Class CircleWall Extends VectorObject
+
+	Field P:PVector ' circle center
+	
+	Field radius:Float 'circle radius
+	
+	Method New()
+		P = New PVector
+		cp = New PVector
+		name = "round wall"
+	End Method
+	
+	Method New(x:Float,y:Float,radius:Float,friction:Float = 1,bounce:Float=1)
+		
+		P = New PVector
+		cp = New PVector
+		name = "round wall"
+		P.x = x
+		P.y = y
+		Self.radius = radius
+		Self.friction = friction
+		Self.bounce = bounce
+	
+	End Method
+
+	'************************************************************************
+	'
+	'	distance of ball to wall(circle)
+	'	returned values
+	' 	valid distance distance &gt; 0 to 1.
+	'
+	'************************************************************************
+	
+	Method Distance:Float(ball:Ball)
+		Return CollisionDistanceB2RW(ball,P.x,P.y,radius)
+	End Method
+	
+	'************************************************************************
+	'
+	'	change movement vector after collision with wal(circle)
+	'	
+	'************************************************************************
+	 
+	Method Bounce:Void(ball:Ball,dx:Float,dy:Float)
+		Bounce2Fixed(ball,dx,dy)
+	End Method
+
+	Method Render:Void()
+		RenderCircle(P.x,P.y,radius)
+	End Method
+
+End Class
+
+Class Ball Extends VectorObject
+	Field P:PVector
+	Field tv:PVector
+	Field radius:Float
+	
+	Field tvx:Float
+	Field tvy:Float
+
+	Field mass:Float
+
+
+	Method New()
+		P = New PVector
+		V = New PVector
+		D = New PVector
+		tv = New PVector
+		cp = New PVector
+		name = "Ball"
+	End Method
+	
+	Method New (x:Float,y:Float,radius:Float,vx:Float,vy:Float,frictn:Float=1.0,bounse:Float=1.0,mass:Float=1)
+		P = New PVector
+		V = New PVector
+		D = New PVector
+		tv = New PVector
+		cp = New PVector
+		name = "Ball"
+		P.x = x
+		P.y = y
+		Self.radius = radius
+		Init(vx,vy)
+		Self.friction = frictn
+		Self.bounce = bounse
+		Self.mass = mass
+	End Method
+	
+	Method MovingToBall:Bool (ball:Ball)  
+    Return ((ball.P.x - P.x) * (V.x - ball.V.x) + (ball.P.y - P.y) * (V.y - ball.V.y) &gt; 0) 
+ 	End Method
+	
+	'***********************************************************************
+	'
+	'		get distance  from self ball to ball with in the movement vector of 
+	'		fastest moving ball. The faster moving ball must be passed as the 
+	'		parameter. 
+	'		the distance is returned as time speed ration(a value between (0 and 1)
+	'		the PVector of collision is returned in tp
+	'		the collison normal is returned in cdx, cdy.
+	'
+	'***********************************************************************
+	Method Distance:Float(ball:Ball)
+
+		'vector from ball1 to ball2
+		Local vx:Float = ball.P.x - P.x
+		Local vy:Float = ball.P.y - P.y
+    
+		
+		'balls vector movement difference
+		Local vx1:Float = (V.x - ball.V.x)
+		Local vy1:Float = (V.y - ball.V.y)
+		
+		' total ball radius 
+		Local totalRadius:Float=radius+ball.radius
+		
+		
+		'distance between movemnt vectors.
+		Local l1:Float = Sqrt(vx1*vx1+vy1*vy1)
+		
+		'and normasl
+		Local dx1:Float = vx1/l1
+		Local dy1:Float = vy1/l1
+		
+		'project it into ball movement vector.
+		Local dp:Float=vx*dx1 + vy*dy1
+		Local vx2:Float = dp*dx1
+		Local vy2:Float = dp*dy1
+		
+		'distance To center of "ball" in direction of movement vectors normal
+		Local lengt:Float=Sqrt(Pow((ball.P.x - (P.x + vx2)),2) + Pow((ball.P.y - (P.y + vy2)),2))
+		
+		'collision range
+		Local diff:Float=totalRadius-lengt
+		
+		tp = Null ' 
+		If(diff&gt;-0.001)'collision
+			'amount To move back moving ball
+			Local moveBack:Float=Sqrt(totalRadius*totalRadius-lengt*lengt)
+			
+			'vector from ball1 starting PVector to potential PVector of collision happens
+			Local vx4:Float = vx2-moveBack*dx1
+			Local vy4:Float = vy2-moveBack*dy1
+			Local l4:Float = Sqrt(vx4*vx4+vy4*vy4)			
+			
+			If(l4&lt;=l1 And (vx4*V.x+vy4*V.y)&gt;=0)
+				Local dist:Float = l4/l1
+				
+				' position of ball at time of collision
+				Local x1:Float = ball.P.x+ball.V.x*dist
+				Local y1:Float = ball.P.y+ball.V.y*dist
+				
+				' position of self ball at time of collision
+				Local x2:Float = P.x+V.x*dist
+				Local y2:Float = P.y+V.y*dist
+				
+				'vector between balls postion at time of collision
+				Local vx:Float = x2 - x1
+				Local vy:Float = y2 - y1
+				
+				'find collision normal
+				l1 = Sqrt(vx*vx+vy*vy)
+				If l1
+					cdx = vx/l1
+					cdy = vy/l1
+				Else
+					cdx = 0
+					cdy = 0
+				Endif
+				
+				'collision PVector
+				cp.x = x1+(cdx*ball.radius)
+				cp.y = y1+(cdy*ball.radius)
+
+				tp = cp
+				Return dist				
+			Endif
+		Endif
+		Return INVALID_DISTANCE
+	End Method
+
+	'***************************************************
+	'		extract time frame from movement vector
+	'		integrate gravity
+	'		integrate world friction
+	'***************************************************
+	
+	Method updateIn:Void(timeFrame:Float=1.0)
+		'intgrate time frame
+		V.x *= timeFrame
+		V.y *= timeFrame
+		
+		'add gravity
+		V.x += ApplicableGravityx
+		V.y += ApplicableGravityy
+		
+		'add friction
+		V.x *= ApplicableSurfaceFriction
+		V.y *= ApplicableSurfaceFriction
+		
+		'resolve vector other components
+		Init(V.x,V.y)
+	End Method
+	
+	'****************************************************
+	'		integrate time back to ball
+	'		for the purpose of readjusting to new time frame.
+	'****************************************************
+	
+	Method updateOut:Void(timeFrame:Float=1.0)
+		'Re-assign Movement to ball from storage tvx,tvy
+		V.x = tvx
+		V.y = tvy
+		tvx =0
+		tvy =0
+		
+		'remove timeframe from movement vector.
+		V.x /= timeFrame
+		V.y /= timeFrame
+		
+		'stop ball if less than minimum ball movement
+		If Abs(V.x) &lt;= 0.0001 And Abs(V.y) &lt;= 0.0001
+			V.x = 0
+			V.y = 0
+		Endif
+		' resolve movement vector other components 
+		Init(V.x,V.y)
+	End Method
+	
+'*****************************************
+'	 advance ball by distance(time ratio)
+'****************************************
+	Method Advance:Void(distance:Float)
+		'create the vector to move the object
+		Local vx:Float = V.x*distance
+		Local vy:Float = V.y*distance
+		If vx = 0 And vy = 0 Return
+		
+		'removem current amount of movent from total movement
+		V.x -= vx
+		V.y -= vy
+		
+		'position ball in new position
+		P.x += vx
+		P.y += vy
+		
+		'store the amount of movement spent
+		tvx += vx
+		tvy += vy
+		
+		'subtract current movement length from distance total
+		L -= Sqrt(vx*vx+vy*vy)
+	End Method	
+
+	Method Bounce:Void(ball:Ball,dx:Float,dy:Float)
+		BounceB2B(ball,dx,dy)
+	End Method
+	
+	Method NotMoving:Int()
+		Return (V.x = 0 And V.y = 0)
+	End Method
+	
+	'find New movement vector bouncing from v		
+	End Method	
+
+	' render ball
+	Method Render:Void()
+		RenderCircle(P.x,P.y,radius)
+		DrawLine P.x,P.y,P.x+V.x,P.y+V.y
+	End Method
+	
+End Class
+'===================================================================================
+
+'***********************************************************************************
+'
+'		renders a circle at a distance relative to a ball current position
+'
+'***********************************************************************************
+
+Function RenderAtDistance:Void(ball:Ball,distance:Float)
+	RenderCircle(ball.P.x+ball.V.x*distance,ball.P.y+ball.V.y*distance,ball.radius)
+End Function
+
+''***********************************************************************************
+'
+'		renders an arc at position x,y and radius,
+'		starting angle, and ending angle.
+'
+'************************************************************************************
+
+Function RenderArc:Void(x:Float, y:Float, radius:Float, startAngle:Float, endAngle:Float)
+	
+	'If angles are equal nothing to draw
+	If startAngle = endAngle Then Return
+	
+	'make the arc clockwise
+	If startAngle &gt; endAngle
+		' swap angles if order is counter-clockwise
+		Local ta:Float = endAngle
+		endAngle = startAngle
+		startAngle = ta
+	Endif
+	
+	'number of degrees to render
+	Local angle:Float = endAngle - startAngle
+	
+	' no more than 360 degrees to render
+	If angle &gt; 360.0 angle = 360.0
+	
+	' set the step to advance one unit at a tme
+	Local stp:Float = 1.0/(RTA * radius)
+	
+	'set the accumulator to the starting angle
+	Local AccumAngle:Float = startAngle
+	
+	' repeat until the arc is completely drawn
+	While AccumAngle &lt; (startAngle+angle)
+		
+		'draw a pixel around the arc
+		DrawPoint x + Cos(AccumAngle) * radius, y + Sin(AccumAngle) * radius
+		
+		'advance to next angle
+		AccumAngle += stp
+	
+	Wend
+End Function 
+
+'***********************************************************************************
+'
+'		draws a circle at x,y and radius
+'
+'***********************************************************************************
+
+Function RenderCircle:Void(x:Float,y:Float,radius:Float)
+	Local angle:Float = 0.0
+	Local stp:Float = 1.0/(RTA * radius)
+	While angle &lt; 360.0
+		DrawPoint x + Cos(angle) * radius, y + Sin(angle) * radius
+		angle += stp
+	Wend
+End Function
+
+
+'==========================================================================================
+'================================= Vector Object Engine ===================================
+'==========================================================================================
+
+' Collision storage.
+Class CollisionTrend
+	Field ball:Ball
+	Field obj:VectorObject
+	Field cdx:Float
+	Field cdy:Float
+End Class
+
+'******************************************************************************************
+'
+'		elastic/non elastic ball/cirlcle collision engine
+'
+'******************************************************************************************
+
+Class ElasticEngine
+	'	List for storing world objects.
+	Field ballList:List&lt;Ball&gt;
+	Field wallList:List&lt;VectorObject&gt;
+	'	temporary storage of first ball at collision relative to time frame.
+	Field nearesBall:Ball
+	'	storage of single to multiple simultanious collisions if multiple collisions 
+	'	happened at a given time at a give time frame.
+	Field colls:CollisionTrend[20]
+	'	total number of simultaniuos collision at a given time in a time frame
+	Field colCount:Int
+	'	millisecond value at the start of the time frame
+	Field lastTime:Float
+	'	duration of millisecons during time frame
+	Field timeFrame:Float
+
+	Method New()
+		wallList = New List&lt;VectorObject&gt;
+		ballList = New List&lt;Ball&gt;
+		'frame walls to keep balls in game area
+		wallList.AddLast(New LineWall(xx1,yy1,xx2,yy1))
+		wallList.AddLast(New LineWall(xx1,yy1,xx1,yy2))
+		wallList.AddLast(New LineWall(xx2,yy1,xx2,yy2))
+		wallList.AddLast(New LineWall(xx1,yy2,xx2,yy2))
+		
+		'some test walls "\/"
+		wallList.AddLast(New LineWall(460,230,321,350))
+		wallList.AddLast(New LineWall(319,350,180,230))
+		'circle wall at the center of the screen
+		wallList.AddLast(New CircleWall(320,240,30))
+		' arcs on top sides of screen
+		wallList.AddLast(New ArcWall(120,120,60,90,270))
+		wallList.AddLast(New ArcWall(520,120,60,270,450))
+		' circles in side of arc
+		wallList.AddLast(New CircleWall(120,120,30))
+		wallList.AddLast(New CircleWall(520,120,30))
+		' sides of long oval
+		wallList.AddLast(New ArcWall(80,400,15,90,270))
+		wallList.AddLast(New ArcWall(560,400,15,-90,90))
+		' top and bottom of long oval
+		wallList.AddLast(New LineWall(81,385,559,385))
+		wallList.AddLast(New LineWall(81,415,559,415))
+		' arc at the bottom center of screen
+		wallList.AddLast(New ArcWall(320,415,60,0,180))
+		'some test balls/circles
+		AddBall(New Ball(20,30,10,15,0))
+		AddBall(New Ball(50,30,10,5,-5))
+		AddBall(New Ball(80,30,10,5,-5))
+		AddBall(New Ball(110,30,10,5,-5))
+		AddBall(New Ball(20,250,10,5,-5))
+		AddBall(New Ball(50,250,10,5,-5))
+		AddBall(New Ball(80,250,10,5,-5))
+		AddBall(New Ball(110,250,10,5,-5))
+		AddBall(New Ball(140,250,10,-5,.1))
+		AddBall(New Ball(170,250,10,-5,.1))
+		AddBall(New Ball(240,250,10,-5,.1))
+		AddBall(New Ball(280,250,10,-5,.1))
+		AddBall(New Ball(500,250,10,0,0))
+		AddBall(New Ball(360,110,10,5,5))
+		SetGravity(0,0.0)
+		SetFriction(1.0)
+		'create the collision Array trend 99.9% posibility
+		'that there won't be more than 3 simultaniuos collisions
+		'at a given time
+		For Local i:Int = 0 Until 20
+			colls[i] = New CollisionTrend
+		Next
+		lastTime = Millisecs()
+		
+	End Method
+	
+	Method AddBall:Void(ball:Ball)
+		ballList.AddLast(ball)
+	End Method
+	
+	Method SetFriction:Void(f:Float)
+		VectorObject.SetGlobalFriction(f)
+	End Method
+	
+	Method SetGravity:Void(vx:Float,vy:Float)
+		VectorObject.SetGlobalGravity(vx,vy)
+	End Method
+
+	Method update:Void()
+		Local thisTime:Float = Millisecs()
+		'find time passed from last update
+		timeFrame = (thisTime-lastTime)/30.0
+		'If time frame has Not advanced no need to
+		'process game.
+		If timeFrame = 0 Return
+		' don't exceed the value of 2 in time frame
+		If timeFrame &gt; 5.0 Then timeFrame = 5.0
+		'save the Current time
+		lastTime = thisTime
+		For Local ball:Ball = Eachin ballList
+			'update the vector parameters
+			ball.updateIn(timeFrame)
+		Next
+		'check the walls For collisions
+		Process()
+		'reset ballject To other side If gone out of stage
+		For Local ball:Ball = Eachin ballList
+			'make End point equal To starting point For Next cycle
+			ball.updateOut(timeFrame)
+		Next	
+	End Method
+	
+'*****************************************************************
+'			used to do recursive collision
+'*****************************************************************
+
+
+Const xx1:Float = 0
+Const yy1:Float = 0
+Const xx2:Float = 639
+Const yy2:Float = 479
+'==============================================================================================================
+'**************************************************************************************************************
+'
+'																		executable part
+'
+'**************************************************************************************************************
+'==============================================================================================================
+
+Class Game Extends App
+	Field engine:ElasticEngine
+	
+	Method OnCreate:Int()
+		engine =  New ElasticEngine
+		SetUpdateRate 30
+		Return True
+	End Method
+	
+	Method OnUpdate:Int()
+		engine.update()
+		Return True
+	End Method
+	
+	Method OnRender:Int()
+		Cls(125,125,125)
+		engine.Render()
+		Return True
+	End Method
+	
+End Class
+
+
+Function Main:Int()
+	New Game
+	Return True
+End Function
+</textarea><br><br>[EDIT] WORKED IT OUT. IT DID HAVE TO DO WITH THE FLOATING POINT INACCURACY.<br><br>Hopefully somebody here with enough vector math skills can help me solve this problem <br><br></td></tr></table><br>
+<a name="2023826"></a>
+
+<a name="2023225"></a>
+
+<a name="2023223"></a>
+
+<a name="2023235"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dima</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I have only glanced at the code - understanding it would take me quiet some time.  Usually collisions fail due to objects moving too fast or incorrect response - such as object getting stuck between two other objects, checking the first properly then bouncing off the second back into the first.<br><br>  These are just random thoughts as i don't have real feedback, but is this line working as intended?  I would imagine that self collision would just continue to the next ball in list and not exit the loop, unless i am mistaken in understanding the code in which case i apologize in advance.<br><br>' if collision with self get next object<br>If ball = ball2 Exit<br><br>Cheers,<br>Dima <br><br></td></tr></table><br>
+<a name="2023237"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >wiebow</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> My experience with line graphics is that you need to run the collision code a  lot more then you expect, esp. with fast moving objects. So if you are experiencing that sometimes it works and sometimes not, the prime suspect is usually too few collision checks per frame. Call the collision check 3 or 4 times in a loop and try to see if that fixes your problem. <br><br></td></tr></table><br>
+<a name="2023236"></a>
+
+<a name="2023251"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jesse</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Dima &amp; wiebow<br><br>thanks for trying it out!<br><br>The vector math/logic in the example does not allow for speed collision error. No matter how fast the ball is traveling it will still find the point of collision on a single pass.<br>I am thinking it's most likely an incorrect response that has to do with the floating point error at calculation.<br><br>the thing is that while checking collision, a pass through all of the balls is made to check the collision that happens first and it returns the time lapsed relative to the ball movement relative to the frame duration.   as it is cycling through all of the collisions it is storing only the collision that happens earliest. and ignoring all of the collisions that happen after.<br>once it finds the collision(s) that happen first it advances the ball movement only to the point the two balls make contact and reduces the movement vector by that amount and adjust the ball direction(bounce) based on the collision. if there is amount of movement left it will call the "Process Method" again. this will repeat itself until all of the movement is spent. So there is no collision left uncheck and there can not be more than a total of collisions that equal more than the amount of balls at a time. <br><br>the only time a collision is ignored is if the two balls distance is less than the total radius of both balls but in theory it should not happen because they never supposed to be at a distance less than the sum of both radius. Hanse my theory of the floating point error.<br><br>[edited]<br><br>@Dima for this:<br><div class="quote"> <br> if collision with self get next object<br>If ball = ball2 Exit<br> <br></div><br><br>There are two loops, the outer loop cycles trough the balls from the first to the last and the inner loop cycles through the loop from the last to the first.  that prevents the loop from doing repeated ball collisions. Repeated collisions will start to happen when the inner loop ball is the same as the outer loop ball and is why I have it exits the inner loop. <br><br></td></tr></table><br>
+<a name="2023250"></a>
+
+<a name="2023248"></a>
+
+<a name="2023249"></a>
+
+<a name="2023246"></a>
+
+<a name="2023247"></a>
+
+<a name="2023244"></a>
+
+<a name="2023243"></a>
+
+<a name="2023275"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >NoOdle</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> instead of exit, have you tried continue? Just wondered if exiting the inner loop could cause checks to be missed.<br><br>[edit] Also when I attempted dynamic collisions I noticed that I would resolve one collision and cause another in the solution. Might be playing a role in the errors you are noticing. I will have a look through your code tomorrow and give it some more thought when I am less drunk! <br><br></td></tr></table><br>
+<a name="2023274"></a>
+
+<a name="2023290"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jesse</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks NoOdle for taking a look at it.<br><br><div class="quote"> <br>nstead of exit, have you tried continue?<br> <br></div><br><br>if I replace the exit with continue, it will do redundant collisions plus it will go in to an endless recursion because of the way collision response is handled. Also the balls that have been collided with will be checked again and is what it's trying to avoid. <br><br>I thing I'll wait to hear your opinion when you are sober. ;) <br><br>thanks. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,66 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Windows, DLLs, C++ and pain...</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Windows, DLLs, C++ and pain...</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=124" >Brucey's Modules</a>/<a href="#bottom" >Windows, DLLs, C++ and pain...</a><br><br>
+<a name="1075645"></a>
+
+<a name="1075648"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> As it happens, Qt is the best cross-platform desktop GUI available (no, really... which is a shame considering all that other stuff of late), and I have a work-in-progress monster module to use it in BlitzMax.<br><br>But lately, whether it is a problem with the newer GCCs (possible) or with Qt 4.7.1 (less likely), I have started to see some issues on Windows with my not-so-overly-complex wrapper code.<br>Funnily enough, it all works fine on non-Windows, which is why I wonder about DLLs, C++ and MinGW...<br><br>I'm only posting here, because I don't really have anywhere else to write about it. It's not a Qt problem, it's not a C++ problem, it's not a BlitzMax problem... it's all of them together - which kind of limits any useful suggestions coming from forums of the above mentioned...<br><br><br>Here's a brief summary of how my code works (it does, really, and very well when it does!) We'll use an actual example because real cases are better than "what ifs" :<br><br>A class :<br><pre class=code>
+class QGraphicsBlurEffect
+{
+protected:
+    void draw(QPainter * painter);
+}
+</pre><br>It's bigger than that, of course, but this is the function we want to implement on the Max side.<br>We can override the draw() function to implement our own functionality. The draw() function is called by Qt when it wants to draw it.<br>To allow this in BlitzMax, we have to subclass QGraphicsBlurEffect :<br><pre class=code>
+class MaxQGraphicsBlurEffect : public QGraphicsBlurEffect
+{
+public:
+    void defaultDraw(QPainter * painter) {
+        QGraphicsBlurEffect::draw(painter);
+    }
+protected:
+    void draw(QPainter * painter) {
+        _qt_qgraphicsblureffect_QGraphicsBlurEffect__draw(maxHandle, painter);
+    }
+}
+</pre><br>... and have a matching BlitzMax Type :<br><pre class=code>
+Type QGraphicsBlurEffect
+
+	Method draw(painter:QPainter)
+		bmx_qt_qgraphicsblureffect_default_draw(qObjectPtr, painter.qObjectPtr)
+	End Method
+	
+	Function _draw(obj:QGraphicsBlurEffect, painter:Byte Ptr)
+		obj.draw(QPainter._create(painter))
+	End Function
+End Type
+</pre><br><br>You'll notice from our subclass, that the real draw() function calls the _draw() function in our BlitzMax type.<br>This in turn calls the method draw() on our BlitzMax QGraphicsBlurEffect object instance.<br>If you haven't overridden the draw() method yourself, the default functionality is to call BACK down to call defaultDraw(), which calls draw() on the superclass.<br><br>In essence, by default, on a draw() call, you are calling QGraphicsBlurEffect::draw() (which is the standard calling convention for calling a function of the same name on the superclass).<br><br>Here's the summary :<br><pre class=code>
+c++    MaxQGraphicsBlurEffect::draw()
+bmx          -&gt; Function _draw()
+bmx                -&gt; Method draw()
+c++                      -&gt; MaxQGraphicsBlurEffect::defaultDraw()
+c++                            -&gt; QGraphicsBlurEffect::draw()
+</pre><br><br>Well, it doesn't work on Windows now, for some reason. It crashes in the call to QGraphicsBlurEffect::draw() from defaultDraw()... :-(<br><br>However, if I change my code to this, it works as expected:<br><pre class=code>
+class MaxQGraphicsBlurEffect : public QGraphicsBlurEffect
+{
+public:
+    void defaultDraw(QPainter * painter) {
+        flag = 1;
+    }
+protected:
+    void draw(QPainter * painter) {
+        flag = 0
+        _qt_qgraphicsblureffect_QGraphicsBlurEffect__draw(maxHandle, painter);
+        if (flag) {
+            QGraphicsBlurEffect::draw(painter);
+        }
+    }
+}
+</pre><br>Notice that we call superclass draw() from the original function (before we have gone to BlitzMax and back). This is not ideal, because you may not always want draw() to be called AFTER all of your own code...<br><br>Given this information, I can only assume something is getting out of sync between the call from the C++ to BlitzMax back down to the C++. Since I am using pointers, whose values are the same everywhere (I've checked), it's not a bad pointer problem.<br>I've even experimented with using reinterpret_cast&lt;&gt; on my MaxQGraphicsBlurEffect pointer for the call to defaultDraw(), but that hasn't helped either...<br><br>So, I don't know what is up with that.<br>As I say, it works on Linux and OS X as I expect it to...<br><br>...answers on a postcard to...<br><br>:-p<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1075708"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> No postcards at hand, but thought I'd make a few uninformed suggestions:<br><br>Disable GC in BlitzMax?<br><br>Using matching MingW 44_1 as distributed by Nokia?<br><br>Considered ditching MingW entirely in favor of VC++? I use to have a bmk variant that didn't seem to mind using the superior tool chain, although I suspect some of your more esoteric modules may complain... <br><br></td></tr></table><br>
+<a name="1075822"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for the suggestions :-)<br><br>I might give that MinGW a try... although I always build the DLLs myself anyway - with a custom configuration - so I'm not sure if it would make too much difference... but you never can tell with these things.<br><br>The GC *shouldn't* be an issue... since I can guarantee that none of the involved objects are being cleansed during the callbacks.<br><br>It *was* working in a prior version of Qt (4.5 ish), and MinGW 3.x .... which is what makes it most disappointing.<br><br><br>As for VC++... yes, it has been considered... but the biggest problem here would be persuading people to migrate to it - unless it turned out to be a better over-all platform to work on, of course! <br><br></td></tr></table><br>
+<a name="1075827"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> but the biggest problem here would be persuading people to migrate to it - unless it turned out to be a better over-all platform to work on, of course! <br></div><br><br>I was thinking if MinGW continues to bungle it's distribution system and ignore it's legacy install base it may force the issue. <br><br>Maybe a win32 flavored LLVM will arrive in near future to rescue us.<br><br>I think for future of BlitzMax, a return to the mod server concept so users don't have to faff with toolchains, module rebuilds and hair pulling could be a consideration also. <br><br></td></tr></table><br>
+<a name="1076303"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >markcw</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Could it be a bug with Bmx? Or is it MinGW? Or is it even Qt? I am not much help really. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

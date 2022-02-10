@@ -1,0 +1,153 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Garbage collector for Blitz3D/+</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='FULLY automated memory management for use with BB custom type objects, language=bb, category=Miscellaneous'><meta name='author' content='Yasha'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=9>Miscellaneous</a>/Garbage collector for Blitz3D/+</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="3006.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Garbage collector for Blitz3D/+ by Yasha</td><td align="right">2012 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This code requires <a href="http://www.fastlibs.com/index.php" target="_blank">MikhailV's free FastPointer DLL</a>.<br><br><br><b>Garbage collection for B3D/+, or, "Unlocking what we already had"</b><br><br>Yes really. A "true" GC system for Blitz Classic! Fire and forget: you don't even need <a href="http://www.blitzbasic.com/codearcs/codearcs.php?code=2978" target="_blank">autorelease pools</a>!<br><br>The interesting part, and the reason why it is able to work seamlessly without any extra code on assignments, is that Blitz Classic <i>already has</i> an automatic reference counting system built right into it (it's required for the custom type system to be as simple as it is). All this little library does is use FastPointer to hack our way through to view the actual refcount as maintained by the Blitz runtime, and take appropriate action - i.e. call a destructor function pointer - when it runs out.<br><br><br>Now, although the business of refcounting is handled entirely automatically (by Blitz itself, no less!), there are some forms and limitations that must be observed. Let's start with an example:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Include "GC.bb"
+
+Type Foo
+	Field a, b#, c$
+End Type
+
+Function NewFoo.Foo(a_, b_#, c_$)
+	Local f.Foo = New Foo
+	f\a = a_ : f\b = b_ : f\c = c_
+	
+	Local freePtr = FunctionPointer() : Goto skip : FreeFoo f
+	.skip
+	
+	GC_Track(TypePointer(f), freePtr)
+	DebugLog "Created new Foo at 0x" + Hex(TypePointer(f))
+	Return f
+End Function
+
+Function FreeFoo(this.Foo)
+	DebugLog "Ran FreeFoo on 0x" + Hex(TypePointer(this))
+	;...
+	Delete this
+End Function
+
+
+Graphics 800, 400, 32, 6
+GC_Init
+GC_SetAggressiveness 1	;For the sake of the example, every allocation will trigger a collection
+
+Local i : For i = 1 To 10
+	Local f.Foo = NewFoo(1, 2.0, "three")
+Next
+
+RuntimeStats
+
+
+WaitKey
+End
+</textarea><br><br>Run this code and you'll see the old values of f.Foo getting deleted as they get overwritten. Neat. (Example prints all output to the DebugLog.)<br><br><br>Now, there are two requirements, both demonstrated in the code above:<br><br>-- An object must still be manually registered as to be tracked by the GC system. You can see this in the constructor function: it's the call to GC_Track. This function accepts the TypePointer of the object (<i>only</i> use the FastPointer function TypePointer here), and the function pointer of its destructor. The function pointer must be valid.<br><br>-- There must be a destructor function, which will be called when the object is collected. This is passed to GC_Track as specified above, then forgotten about because the GC will decide when to call it.<br><br><br>...and there are two big limitations:<br><br>-- The global list for each type counts as a reference to an object in the Blitz runtime. This means the internal refcount will never reach zero (when using Blitz normally, calling Delete unhooks the object from the global list; it can reach zero after this). As a result, for the purposes of this GC engine, we consider the refcount depleted when it hits <b>one</b>. This means you cannot rely on being able to access objects through the global list, and should ideally structure your code not to use it for GC'd types.<br><br>-- The operator Handle takes an object and returns an integer. This integer is <i>not tracked</i> by the runtime (and even a conservative collector like Boehm would have a tough time trying). Therefore, if you try to store objects by Handle and don't keep any "real" typed pointers around to them, the objects will be collected in the meantime! To deal with this, use the GC_LockObject and GC_UnlockObject functions (which accept the TypePointer, like GC_Track): these will increment and decrement a secondary reference count within the GC system. As long as the secondary count is above zero, the object will not be collected.<br><br>Using GC_LockObject is basically just bringing back manual memory management though, so better to avoid it where possible.<br><br>Any slot that uses a "real" typed pointer is fine, however: local variables, globals, fields of other objects, and arrays; all of these are totally acceptable and will work properly with the system.<br><br>Finally, remember that refcounting GC systems are vulnerable to the "circular reference bug" found in BlitzMax: make sure two objects don't form a "loop" that keeps the reference count alive without actually being reachable from the program code (as with the lists issue, in normal usage Blitz can rely on the Delete operator to break cycles).<br><br><br>Two other functions of interest are GC_Init, which must be called before using the GC system to set up the internals; and GC_SetAggressiveness, which sets the number of objects that are Tracked before a collection kicks in (if this number is higher, fewer collections happen, which is better for performance at the expense of memory use). Aggressiveness is set to 1 in the example so a collection happens at every opportunity (aggressiveness of 0 results in no collections). There are also GC_Suspend and GC_Resume, which let you pause the GC during times when you don't want it causing delays; and GC_CollectNow, which forces a collection immediately (if you find yourself calling this, you're probably doing something wrong as it misses the point of having a GC entirely).<br><br><br>By the way, if you're wondering why there are two objects surviving at the end of the example, it's because the old occupant of f.Foo doesn't get its refcount decremented until after the new object returns, which for the last one is after the last possible collection. A collection happening later would clean up this waiting object: it's not going to be a problem for the most part as if there are no further collections, it's because you weren't going to use that space.<br><br><br>The restriction of having to manually manage the interaction with Object and Handle may seem like a nuisance to anyone using heavily-polymorphic code, but you can actually get around it <i>relatively</i> easily by having all your poly-objects <a href="http://www.blitzbasic.com/Community/posts.php?topic=99258#1164466" target="_blank">use pseudo-inheritance to descend from one root type</a>; use this type instead of Int as the unit of storage in lists and the like, and have the root type's destructor clean up the rest of the object when it's collected. Takes a bit of work, but it should be doable. Keep it up for long enough and you end up with BlitzMax (protip: if you really care about any of this stuff... use BlitzMax). </td></tr><tr ><td class="cell"><pre class="code">; Garbage collection for Blitz3D/+
+;==================================
+
+; Requires FastPointer DLL (free): http://www.fastlibs.com/index.php
+
+Const GC_REFCOUNT_OFFSET = -4, GC_OPTR_OFFSET = -20, GC_CELLSIZE = 12, GC_PTR_OFS = 0, GC_LC_OFS = 4, GC_DTOR_OFS = 8
+Const GC_SHRINK_THRESH = 25, GC_LISTSIZE = 128 * GC_CELLSIZE, GC_DEFAULT_AGGRO = 25
+Global GC_private_Aggro_, GC_private_ACount_, GC_private_ObjList_, GC_private_ListTop_, GC_private_Active_
+
+
+; Initialize the garbage collector system
+Function GC_Init()
+	If GC_private_ObjList_ Then RuntimeError "GC already initialized!"
+	GC_private_ObjList_ = CreateBank(GC_LISTSIZE * GC_CELLSIZE)
+	GC_private_ListTop_ = 0
+	GC_private_Aggro_ = GC_DEFAULT_AGGRO
+	GC_private_Active_ = True
+End Function
+
+; Set an object to be tracked by the collector. This may trigger a GC run
+Function GC_Track(ptr, dtor)
+	If Not GC_private_ObjList_ Then RuntimeError "GC not initialized!"
+	If Not dtor Then RuntimeError "Destructor function must not be null!"
+	
+	PokeInt GC_private_ObjList_, GC_private_ListTop_ + GC_PTR_OFS, ptr
+	PokeInt GC_private_ObjList_, GC_private_ListTop_ + GC_DTOR_OFS, dtor
+	PokeInt GC_private_ObjList_, GC_private_ListTop_ + GC_LC_OFS, 0
+	
+	GC_private_ListTop_ = GC_private_ListTop_ + GC_CELLSIZE		;Extend the list if necessary
+	If GC_private_ListTop_ &gt;= BankSize(GC_private_ObjList_) Then ResizeBank	GC_private_ObjList_, GC_private_ListTop_ * 2
+	
+	GC_private_ACount_ = GC_private_ACount_ + 1
+	If GC_private_Active_
+		If GC_private_ACount_ &gt;= GC_private_Aggro_ And GC_private_Aggro_ &gt; 0 Then GC_CollectNow
+	EndIf
+End Function
+
+; Set the number of objects allowed to be created between GC runs
+Function GC_SetAggressiveness(aggro)
+	If Not GC_private_ObjList_ Then RuntimeError "GC not initialized!"
+	GC_private_Aggro_ = aggro
+End Function
+
+; Force a GC run: called automatically for the most part
+Function GC_CollectNow()
+	If GC_private_Active_
+		
+		Local o : For o = GC_private_ListTop_ - GC_CELLSIZE To 0 Step -GC_CELLSIZE	;Start with most recent
+			If PeekInt(GC_private_ObjList_, o + GC_LC_OFS) &lt; 1
+				Local rc = MemoryFastPeekInt(PeekInt(GC_private_ObjList_, o + GC_PTR_OFS) + GC_REFCOUNT_OFFSET)
+				If rc &lt; 2
+					If rc = 1	;Only the type list: collect
+						Local dtor = PeekInt(GC_private_ObjList_, o + GC_DTOR_OFS)
+						CallFunctionVarInt dtor, PeekInt(GC_private_ObjList_, o + GC_PTR_OFS) + GC_OPTR_OFFSET
+					EndIf		;Could also have been deleted earlier, in which case just remove
+					GC_private_ListTop_ = GC_private_ListTop_ - GC_CELLSIZE
+					If GC_private_ListTop_ &gt;= 0
+						CopyBank GC_private_ObjList_, GC_private_ListTop_, GC_private_ObjList_, o, GC_CELLSIZE
+					EndIf
+				EndIf
+			EndIf
+		Next
+		
+		Local sz = BankSize(GC_private_ObjList_)	;Shrink the list if it's largely empty
+		If sz &gt; GC_LISTSIZE * GC_CELLSIZE
+			If (GC_private_ListTop_ * 100) / sz &lt; GC_SHRINK_THRESH Then ResizeBank GC_private_ObjList_, sz / 2
+		EndIf
+		
+		GC_private_ACount_ = 0
+	EndIf
+End Function
+
+; Pause garbage collection until GC_Resume is called
+Function GC_Suspend()
+	If Not GC_private_ObjList_ Then RuntimeError "GC not initialized!"
+	GC_private_Active_ = False
+End Function
+
+; Resume garbage collection
+Function GC_Resume()
+	If Not GC_private_ObjList_ Then RuntimeError "GC not initialized!"
+	GC_private_Active_ = True
+	If GC_private_ACount_ &gt;= GC_private_Aggro_ And GC_private_Aggro_ &gt; 0 Then GC_CollectNow
+End Function
+
+; Increment the lock count of an object, protecting it from GC
+Function GC_LockObject(ptr)
+	Local o = GC_GetOffset_(ptr) : If o &gt;= 0
+		PokeInt GC_private_ObjList_, o + GC_LC_OFS, PeekInt(GC_private_ObjList_, o + GC_LC_OFS) + 1
+	Else
+		RuntimeError "Invalid object pointer for GC to lock: 0x" + Hex(ptr)
+	EndIf
+End Function
+
+; Decrement the lock count of an object, potentially relinquishing it for GC
+Function GC_UnlockObject(ptr)
+	Local o = GC_GetOffset_(ptr) : If o &gt;= 0
+		PokeInt GC_private_ObjList_, o + GC_LC_OFS, PeekInt(GC_private_ObjList_, o + GC_LC_OFS) - 1
+	Else
+		RuntimeError "Invalid object pointer for GC to unlock: 0x" + Hex(ptr)
+	EndIf
+End Function
+
+; (Internal) Get the position in the object list of the given pointer
+Function GC_GetOffset_(ptr)
+	Local o : For o = GC_private_ListTop_ - GC_CELLSIZE To 0 Step -GC_CELLSIZE
+		If PeekInt(GC_private_ObjList_, o) = ptr Then Return o
+	Next
+	Return -1
+End Function
+
+
+;~IDEal Editor Parameters:
+;~C#Blitz3D</pre></td></tr></table><br><a name="comments">Comments</a><br><br>None.<br><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,102 @@
+<!DOCTYPE html><html lang="en" ><head ><title >[BlitzMax 1.50] Incosistency between source and code</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >[BlitzMax 1.50] Incosistency between source and code</h1><a href="forums.php" >Community Forums</a>/<a href="topics.php?forum=127" >Bug Reports</a>/<a href="#bottom" >[BlitzMax 1.50] Incosistency between source and code</a><br><br>
+<a name="1338610"></a>
+
+<a name="1338613"></a>
+
+<a name="1338617"></a>
+
+<a name="1338635"></a>
+
+<a name="1338830"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted April)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Blitzmax 1.50<br><br>Theres an inconsistency between the source code written and data returned with arrays of types cast from an array of objects.<br><br>The code below shows the issue at the last few lines that use the .debug method. The con.getdata() is return an array of objects that are of typeb. In the code you can see that I'm casting to an array of typea. When you run the code it does indeed call into the .debug method of typeb. I would have thought the array cast should return Null? On top of which the actual type of each element in the returned array is of typeb, but as you can see I'm using a loop of typea to access each element :/<br><br><pre class=code>
+
+Strict
+
+Type typea
+	Field a_a:Int
+	Field a_b:Int
+	Field a_c:Int
+	
+	Method debug()
+		Print "typea"
+	EndMethod
+EndType
+
+Type typeb
+	Field b_a:Int
+	Field b_b:Int
+	Field b_c:Int
+	
+	Method debug()
+		Print "typeb"
+	EndMethod
+EndType
+
+Type container
+	Field data:typeb[]
+	
+	Method New()
+		For Local i:Int = 0 Until 10
+			data :+ [New typeb]
+		Next
+	EndMethod
+	
+	Method getdata:Object[]()
+		Return data
+	EndMethod
+EndType
+
+
+
+Local con:container = New container
+Local data:typea[] = typea[](con.getdata())
+
+For Local t:typea = EachIn data
+	Print t.a_a
+	t.debug()
+Next
+</pre> <br><br></td></tr></table><br>
+<a name="1342548"></a>
+
+<a name="1342551"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted June)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> The function <b>bbArrayCastFromObject</b> in <i>brl.mod/blitz.mod/blitz_array.c</i> is the one dealing with array casting.<br>And it seems to treat ALL Objects as interchangable.<br><br>Note that when it comes to <b>For Each</b> the type of the array doesnt matter, since it casts each element to the type specified either way.<br><br>I dunno if its a bug or not though, but i can see why it does what it does, since all it has to work with are stringified type names.<br>Meaning it has no way to check if two types are compatible other than equality, or searching the entire type table for both type names and then doing a type check.<br>Which i would image could be rather slow.<br><br>But, if you still want that behavior, Replace it with this :)  Im just not sure if the upcast is the correct way to do it...<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+BBArray *bbArrayCastFromObject( BBObject *o,const char *type ){
+	BBArray *arr=(BBArray*)o;
+	if( arr==&amp;bbEmptyArray ) return arr;
+	if( arr-&gt;clas!=&amp;bbArrayClass ) return (BBArray*)BBNULLOBJECT;
+//	if( arr-&gt;type[0]==':' &amp;&amp; type[0]==':' ) return arr;
+	if( arr-&gt;type[0]==':' &amp;&amp; type[0]==':' ) {
+		if( !strcmp( type + 1, "Object")) return arr;
+		if( !strcmp( arr-&gt;type + 1,type + 1) ) return arr;
+		// search for both types
+		int numclasses;
+		BBClass** classes = bbObjectRegisteredTypes(&amp;numclasses);
+		BBClass* from;
+		BBClass* to;
+		int found = 0;
+		for( int i=0; i&lt;numclasses; i++) {
+			const char* name = classes[i]-&gt;debug_scope-&gt;name;
+			if( !strcmp( name, arr-&gt;type + 1)) {
+				from = classes[i];
+				if( ++found &gt;= 2) break;
+			} else if( !strcmp( name, type + 1)) {
+				to = classes[i];
+				if( ++found &gt;= 2) break;
+			}
+		}
+		// check if types are compatible, does the same as bbObjectDowncast, allmost
+		BBClass* p = from;
+		while( p &amp;&amp; p != to ) p = p-&gt;super;
+		if(!p) {
+			// check for Upcast?, dunno if this is correct to do.
+			p = to;
+			while( p &amp;&amp; p != from ) p = p-&gt;super;
+		}
+		return p ? arr : (BBArray*)BBNULLOBJECT;
+	}
+	if( strcmp( arr-&gt;type,type ) ) return (BBArray*)BBNULLOBJECT;
+	return arr;
+}
+</textarea> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

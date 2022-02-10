@@ -1,0 +1,125 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Memory leak with PlayMusic?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Memory leak with PlayMusic?</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=507" >Monkey Programming</a>/<a href="#bottom" >Memory leak with PlayMusic?</a><br><br>
+<a name="2071255"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I was making a new game, everything seemed fine - no problems running on Android / iOS / GLFW, until I tried running my game on WinPhone 8 - where start crashing at random places (tried Monkey from v73 to v76).<br><br>Then I went looking on GLFW/debugging to see what was wrong with it, and I see on task manager my game memory increasing with no end.<br><br>Thinking I did something wrong, I finally found the culprit: PlayMusic.<br><br>Looking at mojo.glfw.cpp I see this:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+int gxtkAudio::PlayMusic( String path,int flags ){
+	StopMusic();
+	
+	gxtkSample *music=LoadSample( path );
+	if( !music ) return -1;
+	
+	PlaySample( music,32,flags );
+	return 0;
+}
+
+int gxtkAudio::StopMusic(){
+	StopChannel( 32 );
+	return 0;
+}
+</textarea><br>So apparently, "music" is never released, but allocated every PlayMusic?<br><br>Here is a sample code to reproduce the problem:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import mojo
+
+#OPENGL_DEPTH_BUFFER_ENABLED=False
+#MOJO_AUTO_SUSPEND_ENABLED=True
+#MOJO_IMAGE_FILTERING_ENABLED=True
+
+#If TARGET="glfw"
+	#GLFW_USE_MINGW=True
+	#GLFW_WINDOW_TITLE="Test"
+	#GLFW_WINDOW_WIDTH=800
+	#GLFW_WINDOW_HEIGHT=600
+	#GLFW_WINDOW_FULLSCREEN=False
+#End
+
+Function Main()
+	New Game()
+End Function
+
+Class Game Extends App
+	Method OnCreate()     
+		SetUpdateRate 60
+	End Method
+	
+	Method OnRender()
+		Cls
+	End Method
+	
+	Method OnUpdate()
+		If KeyHit(KEY_ESCAPE) Then Error("")
+		If KeyHit(KEY_SPACE) Then PlayMusic("title.ogg")
+	End Method
+End Class
+</textarea><br><br>Running the code above, just by hitting the Space key several times, I went from 35mb to 800mb - and the GC never kicked in to reclaim any of those (program is running for over 10 minutes now, not a single Mb reclaimed).<br><br>Don't know if this is happening on ther platforms - I do not even know if this is the same problem affecting the WP8; but for sure on GLFW this is a big issue.<br><br>Edit: <b>An HOUR later</b> the memory was reclaimed. Is that how it's supposed to be?! <br><br></td></tr></table><br>
+<a name="2071254"></a>
+
+<a name="2071250"></a>
+
+<a name="2071249"></a>
+
+<a name="2071259"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> could be a bug.<br><br>I wonder, does PlayMusic() Add to the channel's buffer, so each time it plays it adds more onto the buffer. perhaps when it's done playing it releases the memory. looking at the source, it seems to keep loading new samples.<br><br>a better approach would be that if same tune is on the buffer, no new buffer is loaded.<br><br>also note that winnrt will not behave the same as glfw. they are different. <br><br></td></tr></table><br>
+<a name="2071266"></a>
+
+<a name="2071267"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yeah... I trying to figure out what is happening on my game with winrt/windows phone 8 (Monkey v76) - the emulator only shows this:<br><br><pre class=code>
+The thread 0xffc has exited with code 259 (0x103).
+</pre><br><br>The thread value changes, but the exit code is always the same.<br><br>The game crashes, but even the code generated in debug mode, and running on emulator on debug mode I get no message of what happened - the emulator just returns to the main "tiles" screen (Same happens on device too)<br><br>Edit: Downloaded Monkey 76d, now I get this when the game crashes:<br><pre class=code>
+The program '[2616] TaskHost.exe' has exited with code -2005270523 (0x887a0005).
+</pre><br><br>OMG! Gotta laugh - <a href="http://answers.microsoft.com/en-us/windows/forum/windows_7-pictures/how-to-fix-error-0x887a0005/8efbea6b-618f-4530-8235-915f6e47330a" target="_blank">searching google tells me</a> that this error means "the hardware is dying" - but I'm getting this on the SIMULATOR! <br><br></td></tr></table><br>
+<a name="2071263"></a>
+
+<a name="2071264"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> ERROR_NO_MORE_ITEMS<br>259 (0x103)<br>No more data is available. <br></div><br><a href="http://msdn.microsoft.com/en-us/library/windows/desktop/ms681382(v=vs.85).aspx" target="_blank">http://msdn.microsoft.com/en-us/library/windows/desktop/ms681382(v=vs.85).aspx</a><br><br>looks like a buffer underrun? does it work if you disable all music? <br><br></td></tr></table><br>
+<a name="2071271"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>looks like a buffer underrun? does it work if you disable all music? <br> <br></div><br><br>I commented out PlayMusic/StopMusic/Resume/etc on monkeygame.cpp, but I'm still seeing the "thread xyz exited with code 259" :/<br><br>I'm testing right now to see if the game still crashes... yup, still crashing :( <br><br></td></tr></table><br>
+<a name="2071268"></a>
+
+<a name="2071270"></a>
+
+<a name="2071272"></a>
+
+<a name="2071273"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> sometimes to find a bug like that, you have to load up the VSC++ project file and turn on "link debug info" (it's off by default), then compile (and deploy if you can) from VS. it  may give you a better dump info. <br><br></td></tr></table><br>
+<a name="2071274"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> I am debugging on VS2012... where do I enable this "link debug info"? <br><br></td></tr></table><br>
+<a name="2071278"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Project-&gt;Properties-&gt;Linker-&gt;Debugging-&gt;Generate Debug Info <br><br></td></tr></table><br>
+<a name="2071280"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> It is already set to 'YES/Debug' :( <br><br></td></tr></table><br>
+<a name="2071284"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ouch - something pretty wrong on Monkey/WP8 I guess:<br><br><br>0x887A0005 - DXGI_ERROR_DEVICE_REMOVED<br><br>The video card has been physically removed from the system, or a driver upgrade for the video card has occurred. The application should destroy and recreate the device. For help debugging the problem, call ID3D10Device::GetDeviceRemovedReason.<br><br>source: <a href="http://msdn.microsoft.com/en-us/library/windows/desktop/bb509553%28v=vs.85%29.aspx" target="_blank">http://msdn.microsoft.com/en-us/library/windows/desktop/bb509553%28v=vs.85%29.aspx</a><br><br>...Or maybe it is running out of memory?<br><a href="http://stackoverflow.com/questions/15906010/no-systemoutofmemoryexception" target="_blank">http://stackoverflow.com/questions/15906010/no-systemoutofmemoryexception</a><br><br>I'm lost now. <br><br></td></tr></table><br>
+<a name="2071283"></a>
+
+<a name="2071286"></a>
+
+<a name="2071287"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, something is definitively wrong - even on my game's title screen (5 images being drawn, 1 music being played and waiting for user input) I keep getting that "thread exited with code 259" thing over and over.<br><br>(even commenting out the music part, still happens...) <br><br></td></tr></table><br>
+<a name="2071301"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> I really don't get it. My game is running perfectly fine on iOS, Android, Flash, GLFW and WinRT. Only when running on WP8 it crashes after a while, always after I finish level 6...<br><br>...and it seems to be a memory problem (video?) because if I start the game from level 6, I can go perfectly fine to level 7.<br><br>I don't even know anymore if that "thread code 259" is the culprit - I left the game running overnight (it's a quiz game, so it was on a static screen), it didn't crash - but it went all night printing that error in the console window... <br><br></td></tr></table><br>
+<a name="2072892"></a>
+
+<a name="2072893"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> There is definitively a problem somewhere... I surrounded all my code with try {} catch (), and still on windows phone 8 it is crashing over and over in the same place - and *only* on WP8.<br><br>Too bad Visual Studio does not tell me where it's crashing, just throws a exception error, and that's it.<br><br>Last one I've got is this: The program '[3860] TaskHost.exe' has exited with code -529697949 (0xe06d7363) 'Microsoft C++ Exception'. <br><br></td></tr></table><br>
+<a name="2072887"></a>
+
+<a name="2072889"></a>
+
+<a name="2072944"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice find on the glfw front - the app is taking so long to reclaim song memory because it's taking so long to trigger a GC. Will fix soon.<br><br>However, it doesn't relate to winrt which uses a high level media player and doesn't allocate anything.<br><br>I tried profiling in msvc but got 'no call tree data' or something when trying to view results. Anyone have any idea what's up here? <br><br></td></tr></table><br>
+<a name="2072995"></a>
+
+<a name="2072996"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> Maybe this post can help? I don't know much about profiling in MSVC, but at least the last post someone said to be having the same problem, and could run it without running as admin...<br><br><a href="http://social.msdn.microsoft.com/Forums/en-US/c609d76c-be22-4ffb-858c-73ccab591a78/vs11-2012-profiler-not-producing-any-call-tree-data-win-8-64?forum=vstsprofiler" target="_blank">http://social.msdn.microsoft.com/Forums/en-US/c609d76c-be22-4ffb-858c-73ccab591a78/vs11-2012-profiler-not-producing-any-call-tree-data-win-8-64?forum=vstsprofiler</a><br><br>Here I can't even start anything - the "analyse" option on VS2012 tells me that there is no project available for profiling :( <br><br></td></tr></table><br>
+<a name="2073017"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> &gt; Here I can't even start anything - the "analyse" option on VS2012 tells me that there is no project available for profiling :(<br><br>You need to select 'analyze windows phone 8 app', further down the debug menu...<br><br>This bit works for me, the app runs, log is processed etc, only I end up with 'no call tree data'. <br><br></td></tr></table><br>
+<a name="2073039"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> I tried with my game... it actually ran, but didn't show anything, anything at all in log or whatever - not even when the game crashed, and neither this 'no call tree data'.<br><br>I'm stumped. I tried to comment out music and sounds, the the game still crashes at one specific point. If I go straight to the beginning of that stage (skipping the ones before) I can pass without any crashes.<br><br>Sometimes the phone just stops responding to touch altogether (even on simulator) for no apparent reason. <br><br>Maybe this has something to do with Image.Discard()? I'm using that a lot, since I'm loading/unloading things from stage to stage... (btw, I tried removing the image.discard, only setting images to null - and got no improvements)<br><br>Would it help if I sent you the code? (It's a quiz game, all in brazilian portuguese, but I could change it so any answer selected would be right heh). <br><br></td></tr></table><br>
+<a name="2074605"></a>
+
+<a name="2074606"></a>
+
+<a name="2074607"></a>
+
+<a name="2074608"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> Update: Latest Monkey (77b) doesn't crash anymore - but something even more strange is happening both on emulator and in the real device now: it stops responding for any touch events in the display after a while. The windows/back/search buttons still works, but even if I exit the app and go back to the main screen, the touch display wont work - I have to force restart (pulling the battery out!) my phone for it to go back to work again.<br><br>A new error also popped up: "'TaskHost.exe' (CLR C:\windows\system32\coreclr.dll: Silverlight AppDomain): Loaded 'C:\windows\system32\System.Runtime.Serialization.ni.dll'. Skipped loading symbols. Module is optimized and the debugger option 'Just My Code' is enabled." - just once before it stop responding. Don't know if it's related or not. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

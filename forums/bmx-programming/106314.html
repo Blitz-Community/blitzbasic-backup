@@ -1,0 +1,2736 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Real Time Synthesis - W.I.P</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Real Time Synthesis - W.I.P</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Real Time Synthesis - W.I.P</a><br><br>
+<a name="1307208"></a>
+
+<a name="1307210"></a>
+
+<a name="1307211"></a>
+
+<a name="1307212"></a>
+
+<a name="1307213"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi all, as I was experimenting around with physical modeling ideas, I realized I could do a traditional synthesis for shits'n'giggles, too. <br><br>This is just a messy start, but who knows how far I will get and how soon, so I figure I best share it now already.<br><br>This is using openAL out of the original blitzmax, making it troublesome to translate it to a BlitzMax NG version, but if somebody does that successfully and make sound work at x64, please, please, post it here, too!<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Framework BRL.GLMax2D
+Import pub.glew
+Import pub.OpenAL
+Import brl.standardio
+
+SetGraphicsDriver GLMax2DDriver()
+AppTitle="Simple Synth - openAL real time synthesis"
+
+Graphics(800,240,0,60) 
+
+glEnable(GL_LINE_SMOOTH)
+
+'============================ AUDIO setup ====================================
+Global audiotrue:Byte = 0
+
+If OpenALInstalled()
+	audiotrue=1
+Else
+	GLDrawText"Audio OFF: OpenAL audio is not installed. &lt;hit any key to continue!&gt;",0,120-17
+	Flip 0
+	WaitKey()
+	End
+End If
+
+'============================ The Real Deal ==================================
+Const BUFFER_SIZE:Int=1440
+Const SAMPLING_FRQ:Int=48000
+
+Global source:Int		'the INT vs. pointer story really is a common thread with openAL in bmax...
+Global buffers:Int[2]	'I suppose it should store pointers here, too. Int may cause trouble at x64 compiles?!
+Global frequency:Int
+Global format:Int
+Global buf:Byte Ptr
+
+Global ALDevice:Int =alcOpenDevice(Null) 					'should actually be a pointer instead of an int (openAL src flaw)
+Global ALContext:Int =alcCreateContext(ALDevice, Null)      'should also actually be a pointer instead of an int (openAL src flaw)
+alcMakeContextCurrent(ALContext)
+
+alGenBuffers(2,buffers)	'generates 2 buffers which we later toggle like back buffers in graphics (flip like)
+alGenSources(1, Varptr source)
+
+alListenerfv(AL_POSITION,[0.0,0.0,0.0])
+alListenerfv(AL_VELOCITY,[0.0,0.0,0.0])
+alListenerfv(AL_ORIENTATION,[0.0,0.0,-1.0])
+alListenerf(AL_GAIN,4.0)
+
+Global buffer_A:Short[BUFFER_SIZE]
+
+format = AL_FORMAT_MONO16
+buf = Byte Ptr buffer_A
+For Local i:Int = 0 Until BUFFER_SIZE
+		buffer_A[i] = 0
+Next
+alBufferData(buffers[0], format, buf,BUFFER_SIZE*2,SAMPLING_FRQ)
+alBufferData(buffers[1], format, buf,BUFFER_SIZE*2,SAMPLING_FRQ)
+
+alSourceQueueBuffers(source, 1, Varptr buffers[0])
+alSourceQueueBuffers(source, 1, Varptr buffers[1])
+alSourcePlay(source)
+
+
+'============================---------------==================================
+AddHook FlipHook,process
+Function process:Object(id:Int,data:Object,context:Object )
+		Local buffer:Int
+		Local val:Int
+
+		Local vib_change:Float = vibrato - set_vibrato
+		Local flt_cutoff_change:Float = flt_cutoff - set_flt_cutoff
+		
+		If(vib_change&lt;&gt;0) Then vib_change:/BUFFER_SIZE
+		If(flt_cutoff_change&lt;&gt;0) Then flt_cutoff_change:/BUFFER_SIZE
+		alGetSourcei(source, AL_BUFFERS_PROCESSED, Varptr val)
+			While(val)
+				alSourceUnqueueBuffers(source,1, Varptr buffer)
+				For Local i:Int = 0 Until BUFFER_SIZE
+					set_vibrato:+vib_change
+					buffer_A[i]=0
+					set_flt_cutoff:+ flt_cutoff_change
+					inv_flt_cutoff = (1.0-flt_cutoff)
+					For Local t:tone = EachIn tonelist
+						t.vib_amt=set_vibrato
+						buffer_A[i]:+t.solve()*$7ff
+					Next
+				Next
+				alBufferData(buffer, format, buf, BUFFER_SIZE*2, SAMPLING_FRQ)
+				alSourceQueueBuffers(source,1, Varptr buffer)
+				val:-1
+			Wend
+		If val&lt;=0
+			alGetSourcei(source, AL_SOURCE_STATE, Varptr val)
+			If val&lt;&gt; AL_PLAYING
+				alSourcePlay(source)
+			End If
+		End If	
+End Function
+
+Global disp_octave:Int = 3
+Global octave:Float = 1.0
+Global set_flt_cutoff:Float = 0.75
+Global flt_cutoff:Float = 0.75
+Global inv_flt_cutoff:Float = 0.25
+Global flt_resonance:Float = 0.0
+Global set_vibrato:Float = 0.0
+Global vibrato:Float = 0.0
+
+Global px:Double = 0
+Global py:Double = 0 
+
+Global note:Double 
+Global keytable:Byte[19]
+Global keytone:tone[19]
+	
+Global tonelist:TList = CreateList()
+Type tone
+	Field index:Int
+	Field decay:Int 
+	Field decay_div:Float 
+	Field note_off:Byte 
+	Field output:Float 
+	Field volume:Float 
+	Field note:Double 
+	Field vib_amt:Float 
+	Field flt_vel:Double
+	Field flt_signal:Double 
+	Field flt2_signal:Double 
+	Field sample_index:Double 
+	Field tick:Int
+	
+	Field osc_step:Double
+	Field osc_phase:Double
+	Field osc_s01:Double
+	Field osc_s02:Double
+	Field osc_s03:Double
+	Field osc_s04:Double
+	Field osc_s11:Double
+	Field osc_s12:Double
+	Field osc_s13:Double
+	Field osc_s14:Double
+
+	Method rls()
+		note_off = True
+	End Method
+	
+	Method solve:Float()
+	
+		Local phase:Float = note
+		If(vib_amt) 
+			phase:*2^(Sin(Double(tick*0.05))*Min(vib_amt,(0.0001*tick)))
+		EndIf
+		
+		'--------------- saw wave (AA concept)
+		osc_step = phase
+		osc_phase:+osc_step
+		If osc_phase&gt;1.0 Then osc_phase:-2.0
+		osc_s01 = osc_phase*(7.0/360.0 + osc_phase*osc_phase*(-1/36.0 + osc_phase*osc_phase*(1/120.0)))
+		osc_s02 = osc_s11-osc_s01
+		osc_s03 = osc_s12-osc_s02
+		osc_s04 = osc_s13-osc_s03
+		sample_index = osc_s14 - osc_s04
+		If(sample_index) sample_index:/(osc_step^4) 
+		osc_s11 = osc_s01
+		osc_s12 = osc_s02
+		osc_s13 = osc_s03
+		osc_s14 = osc_s04
+		'-----------
+		
+		Local ramp:Double = 250.0/octave
+		Local iramp:Double = 1.0/ramp
+		If(tick&lt;ramp) sample_index:*(iramp*tick)^2
+	
+		
+		output=volume*(Float(decay)*decay_div)^3
+		If(note_off)	decay:-1
+		
+		If (decay&lt;1)
+			tonelist.Remove(Self)
+			Return 0
+		EndIf
+
+		'---------- simple two pole filter
+		Local cf:Float = Min(1.0,(inv_flt_cutoff+(0.15-(output/0.75)*0.15))^0.1 )
+		Local q:Float = flt_resonance
+		
+		flt_vel:+ sample_index - flt2_signal*q
+		flt_vel:*(0.471+0.429* q)
+		flt_signal	=	flt_vel		-(flt_vel	-flt_signal	)*cf
+		flt2_signal	=	flt_signal	-(flt_signal-flt2_signal)*cf
+		
+		Local wave:Float = flt2_signal 
+		'-----------
+
+		tick:+1
+		Return wave *output
+	End Method
+	
+	Function Create:tone(_note:Double=1.0, _reps:Int = 2, _decay:Float = 1.0)
+		Local t:tone = New tone
+		t.note = _note
+		t.decay = _decay*SAMPLING_FRQ 
+		t.decay_div = 1.0/t.decay
+		t.volume = 0.666
+		t.sample_index = 0.0
+		t.flt_vel = 0.0
+		t.flt_signal = 0.0
+		t.flt2_signal = 0.0
+
+		t.vib_amt = 0
+
+		t.note_off = False
+		t.tick = 0
+		t.osc_phase=0
+		t.osc_s01=0
+		t.osc_s02=0
+		t.osc_s03=0
+		t.osc_s04=0
+		t.osc_s11=0
+		t.osc_s12=0
+		t.osc_s13=0
+		t.osc_s14=0
+		Return t
+	EndFunction 
+EndType 
+
+Global diallist:TList = CreateList()
+Type dial
+	Field name:String 
+	Field default_value:Float 
+	Field value:Float
+	Field in_value:Float Ptr 
+	Field lock:Byte 
+	Field x:Float
+	Field y:Float 
+	Field radius:Float
+
+	Method draw()
+		SetAlpha(0.75)
+		If name.Length
+			SetColor(190,190,190)
+			GLDrawText(name,x-4*name.Length-2,y-radius-20)
+		End If
+		SetColor(210,170,90)
+		SetAlpha(0.05)
+		For Local m:Int = 0 Until 36
+			glBegin(GL_TRIANGLE_FAN)
+				glVertex2d(x,y)
+					For Local s:Double = 0 To 360 Step 36
+						glVertex2d(x+Sin(s+m)*radius, y+Cos(s+m)*radius)
+					Next 
+			glEnd 
+		Next 
+		SetColor(220,190,120)
+		Local inner_radius:Float = radius*0.7
+		For Local m:Int = 0 Until 36
+			glBegin(GL_TRIANGLE_FAN)
+				glVertex2d(x,y)
+					For Local s:Double = 0 To 360 Step 36
+						glVertex2d(x+Sin(s+m)*inner_radius, y+Cos(s+m)*inner_radius)
+					Next 
+			glEnd 
+		Next 
+		SetAlpha(1.0)
+		Local sx:Float = Sin(value*360.0)
+		Local sy:Float = Cos(value*360.0)
+	
+		glLineWidth(6)
+		glBegin(GL_LINES)
+			glVertex2d(x-sx*0.7*radius,y+sy*0.7*radius)
+			glVertex2d(x-sx*1.05*radius,y+sy*1.05*radius)
+		glEnd 
+		
+		SetColor(0,0,0)
+		DrawRect(x-radius,y+1.2*radius,radius*2,18)
+		SetColor(190,190,190)
+		GLDrawText(Int(100*value),x-0.9*radius,y+1.3*radius)
+	End Method
+	
+	Method update()
+		Local mx:Float = MouseX()-x
+		Local my:Float = MouseY()-y
+		If( mx*mx+my*my &lt; radius*radius And MouseDown(1)) lock=True
+		If Not MouseDown(1) Then lock=False 
+		
+		If(lock)
+			value:+(mouse_y_vel)*0.0001
+			value = Max(0.0,Min(1.0,value)) 
+			in_value[0] = value
+		EndIf 
+	End Method
+	
+	Function Create:dial(name:String,in_value:Float Ptr, _radius:Float = 25.0, _x:Float, _y:Float,_default_value:Double = 0.0)
+		Local d:dial = New dial
+		d.name = name 
+		d.in_value = in_value 
+		d.x = _x
+		d.y = _y
+		d.radius = _radius
+		d.default_value =_default_value 
+		d.value = in_value[0]
+		ListAddLast(diallist,d)
+		Return d 
+	End Function
+EndType 
+
+Global gui:dial = dial.Create("cutoff",Varptr flt_cutoff, 25,410,180)
+gui = dial.Create("reso",Varptr flt_resonance, 25,475,180)
+gui = dial.Create("vibrato",Varptr vibrato, 25,560,180)
+
+Function note_release(n:Int)       
+	If(keytone[n])
+		keytone[n].rls();
+		keytable[n]=False; 
+	EndIf 
+End Function
+
+Function hit()
+	If(Not keytable[Int(note)])
+		keytable[Int(note)]=True
+		Local note_step:Double = 0.92603118985523273331964874851613*(2.0^(note/12.0)*octave)/180 'crazy number tunes to 440Hz base at 48KHz
+		mastertone = tone.Create(note_step,2,1.0) 
+		mastertone.vib_amt = 0.0
+		keytone[Int(note)]=mastertone
+		ListAddLast(tonelist,mastertone)
+		If displaytone Then displaytone = Null 
+		displaytone = tone.Create((octave)/180,2,1.0)
+	'	displaytone.vib_on = False 
+	EndIf 
+End Function
+
+Global time:Int = 0
+Global mouse_x_str:Float =MouseX()
+Global mouse_y_str:Float =MouseY()
+Global mouse_x_vel:Float =0
+Global mouse_y_vel:Float =0
+
+
+Global mastertone:tone
+Global displaytone:tone
+SetBlend ALPHABLEND
+Repeat
+	SetColor 0,0,0
+	SetAlpha 0.2
+	DrawRect 0,0,800,240
+	SetAlpha 1.0
+	SetColor 40,46,55
+	DrawRect 360,0,800,240
+
+	SetAlpha 0.5
+	SetColor 30,66,122
+	DrawLine(0,120,360,120)
+
+	For Local d:dial = EachIn diallist
+		d.update()
+		d.draw() 
+	Next
+	If(time&gt;60)
+		mouse_x_vel = MouseX()-mouse_x_str
+		mouse_y_vel = mouse_y_str-MouseY()
+		mouse_x_str = MouseX()
+		mouse_y_str = MouseY() 
+		time = 0
+	EndIf 
+	time:+1
+	glLineWidth(1)
+	If displaytone
+		Local padd:Double =  Min(8,octave)
+		Local loopcount:Int = Int(360.0/padd)
+		SetColor 240,240,250
+		px=0;
+		For Local i:Int = 0 Until loopcount
+			If px&lt;360 
+			Local piy:Float = displaytone.solve() * 100.0
+			Local col:Byte = 0.5*$ff
+			Local ya:Int = py
+			Local yb:Int = piy
+			DrawLine(px,120+ya,px+padd,120+yb)
+			py =  piy
+			px:+padd
+			EndIf 
+		Next
+	End If
+		SetAlpha 1.0
+		note = 0
+		If KeyDown(KEY_A)			note = 1 ;hit() Else note_release(1 )
+		If KeyDown(KEY_W)			note = 2 ;hit() Else note_release(2 )
+		If KeyDown(KEY_S)			note = 3 ;hit() Else note_release(3 )
+		If KeyDown(KEY_E)			note = 4 ;hit() Else note_release(4 )
+		If KeyDown(KEY_D)			note = 5 ;hit() Else note_release(5 )
+		If KeyDown(KEY_F)			note = 6 ;hit() Else note_release(6 )
+		If KeyDown(KEY_T)			note = 7 ;hit() Else note_release(7 )
+		If KeyDown(KEY_G)			note = 8 ;hit() Else note_release(8 )
+		If KeyDown(KEY_Y)			note = 9 ;hit() Else note_release(9 )
+		If KeyDown(KEY_H)			note = 10;hit() Else note_release(10)
+		If KeyDown(KEY_U)			note = 11;hit() Else note_release(11)
+		If KeyDown(KEY_J)			note = 12;hit() Else note_release(12)
+		If KeyDown(KEY_K)			note = 13;hit() Else note_release(13)
+		If KeyDown(KEY_O)			note = 14;hit() Else note_release(14)
+		If KeyDown(KEY_L)			note = 15;hit() Else note_release(15)
+		If KeyDown(KEY_P)			note = 16;hit() Else note_release(16)
+		If KeyDown(KEY_SEMICOLON)	note = 17;hit() Else note_release(17)
+		If KeyDown(KEY_QUOTES)		note = 18;hit() Else note_release(18)
+		If KeyHit(KEY_PAGEDOWN) 	octave:*0.5;disp_octave:-1
+		If KeyHit(KEY_PAGEUP)		octave:*2.0;disp_octave:+1
+		If(note = 0) And displaytone
+				displaytone.rls();
+		EndIf 
+	SetColor 70,80,90
+		GLDrawText("(pageup/down)octave:"+disp_octave+" voices:"+tonelist.Count(),540,10)
+	Flip 0
+Until KeyHit(KEY_ESCAPE) Or AppTerminate()
+	alcDestroyContext(ALContext)
+	alcCloseDevice(ALDevice)
+	ALContext=0
+	ALDevice=0
+End            
+
+      
+</textarea><br><br>Small explanation (I might later break it down in a careful tutorial, too?!)<br><br>After all initializations, there's a process for the audio buffer filling, which should later on be in its own thread. But I currently haven't made this thing thread safe &lt;caugh&gt;, so...it's just a fliphooked process.<br><br>The "tone" type has a not so simple saw wave generator, followed by a 2 pole filter of my own design (LOL, so primitive, I apologize).<br><br>Then there's a simple dial type for the interface and the rest you can look over fairly easily, I think. It's all very rushed and messy, but it works. 8}<br><br>PIANO KEYS (US Keyboard):<br><pre class=code>
+ W E   T Y U   O P
+A S D F G H J K L : "
+</pre><br>PAGE UP/DOWN to change octaves! <br><br></td></tr></table><br>
+<a name="1307218"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Didn't need to change much for NG. Just those two pointers, and a couple of casts.<br>Tested on OS X and it plays nicely. (apart from the al device/context shutdown issue that is an OS X system problem, and not specifically related to BlitzMax).<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Framework BRL.GLMax2D
+Import pub.glew
+Import pub.OpenAL
+Import brl.standardio
+
+SetGraphicsDriver GLMax2DDriver()
+AppTitle="Simple Synth - openAL real time synthesis"
+
+Graphics(800,240,0,60) 
+
+glEnable(GL_LINE_SMOOTH)
+
+'============================ AUDIO setup ====================================
+Global audiotrue:Byte = 0
+
+If OpenALInstalled()
+	audiotrue=1
+Else
+	GLDrawText"Audio OFF: OpenAL audio is not installed. &lt;hit any key to continue!&gt;",0,120-17
+	Flip 0
+	WaitKey()
+	End
+End If
+
+'============================ The Real Deal ==================================
+Const BUFFER_SIZE:Int=1440
+Const SAMPLING_FRQ:Int=48000
+
+Global source:Int		'the INT vs. pointer story really is a common thread with openAL in bmax...
+Global buffers:Int[2]	'I suppose it should store pointers here, too. Int may cause trouble at x64 compiles?!
+Global frequency:Int
+Global format:Int
+Global buf:Byte Ptr
+
+?bmxng
+Global ALDevice:Byte Ptr
+Global ALContext:Byte Ptr
+?Not bmxng
+Global ALDevice:Int
+Global ALContext:Int
+?
+ALDevice = alcOpenDevice(Null) 					'should actually be a pointer instead of an int (openAL src flaw)
+ALContext = alcCreateContext(ALDevice, Null)      'should also actually be a pointer instead of an int (openAL src flaw)
+alcMakeContextCurrent(ALContext)
+
+alGenBuffers(2,buffers)	'generates 2 buffers which we later toggle like back buffers in graphics (flip like)
+alGenSources(1, Varptr source)
+
+alListenerfv(AL_POSITION,[0.0,0.0,0.0])
+alListenerfv(AL_VELOCITY,[0.0,0.0,0.0])
+alListenerfv(AL_ORIENTATION,[0.0,0.0,-1.0])
+alListenerf(AL_GAIN,4.0)
+
+Global buffer_A:Short[BUFFER_SIZE]
+
+format = AL_FORMAT_MONO16
+buf = Byte Ptr buffer_A
+For Local i:Int = 0 Until BUFFER_SIZE
+		buffer_A[i] = 0
+Next
+alBufferData(buffers[0], format, buf,BUFFER_SIZE*2,SAMPLING_FRQ)
+alBufferData(buffers[1], format, buf,BUFFER_SIZE*2,SAMPLING_FRQ)
+
+alSourceQueueBuffers(source, 1, Varptr buffers[0])
+alSourceQueueBuffers(source, 1, Varptr buffers[1])
+alSourcePlay(source)
+
+
+'============================---------------==================================
+AddHook FlipHook,process
+Function process:Object(id:Int,data:Object,context:Object )
+		Local buffer:Int
+		Local val:Int
+
+		Local vib_change:Float = vibrato - set_vibrato
+		Local flt_cutoff_change:Float = flt_cutoff - set_flt_cutoff
+		
+		If(vib_change&lt;&gt;0) Then vib_change:/BUFFER_SIZE
+		If(flt_cutoff_change&lt;&gt;0) Then flt_cutoff_change:/BUFFER_SIZE
+		alGetSourcei(source, AL_BUFFERS_PROCESSED, Varptr val)
+			While(val)
+				alSourceUnqueueBuffers(source,1, Varptr buffer)
+				For Local i:Int = 0 Until BUFFER_SIZE
+					set_vibrato:+vib_change
+					buffer_A[i]=0
+					set_flt_cutoff:+ flt_cutoff_change
+					inv_flt_cutoff = (1.0-flt_cutoff)
+					For Local t:tone = EachIn tonelist
+						t.vib_amt=set_vibrato
+						buffer_A[i]:+t.solve()*$7ff
+					Next
+				Next
+				alBufferData(buffer, format, buf, BUFFER_SIZE*2, SAMPLING_FRQ)
+				alSourceQueueBuffers(source,1, Varptr buffer)
+				val:-1
+			Wend
+		If val&lt;=0
+			alGetSourcei(source, AL_SOURCE_STATE, Varptr val)
+			If val&lt;&gt; AL_PLAYING
+				alSourcePlay(source)
+			End If
+		End If	
+End Function
+
+Global disp_octave:Int = 3
+Global octave:Float = 1.0
+Global set_flt_cutoff:Float = 0.75
+Global flt_cutoff:Float = 0.75
+Global inv_flt_cutoff:Float = 0.25
+Global flt_resonance:Float = 0.0
+Global set_vibrato:Float = 0.0
+Global vibrato:Float = 0.0
+
+Global px:Double = 0
+Global py:Double = 0 
+
+Global note:Double 
+Global keytable:Byte[19]
+Global keytone:tone[19]
+	
+Global tonelist:TList = CreateList()
+Type tone
+	Field index:Int
+	Field decay:Int 
+	Field decay_div:Float 
+	Field note_off:Byte 
+	Field output:Float 
+	Field volume:Float 
+	Field note:Double 
+	Field vib_amt:Float 
+	Field flt_vel:Double
+	Field flt_signal:Double 
+	Field flt2_signal:Double 
+	Field sample_index:Double 
+	Field tick:Int
+	
+	Field osc_step:Double
+	Field osc_phase:Double
+	Field osc_s01:Double
+	Field osc_s02:Double
+	Field osc_s03:Double
+	Field osc_s04:Double
+	Field osc_s11:Double
+	Field osc_s12:Double
+	Field osc_s13:Double
+	Field osc_s14:Double
+
+	Method rls()
+		note_off = True
+	End Method
+	
+	Method solve:Float()
+	
+		Local phase:Float = note
+		If(vib_amt) 
+			phase:*2^(Sin(Double(tick*0.05))*Min(vib_amt,(0.0001*tick)))
+		EndIf
+		
+		'--------------- saw wave (AA concept)
+		osc_step = phase
+		osc_phase:+osc_step
+		If osc_phase&gt;1.0 Then osc_phase:-2.0
+		osc_s01 = osc_phase*(7.0/360.0 + osc_phase*osc_phase*(-1/36.0 + osc_phase*osc_phase*(1/120.0)))
+		osc_s02 = osc_s11-osc_s01
+		osc_s03 = osc_s12-osc_s02
+		osc_s04 = osc_s13-osc_s03
+		sample_index = osc_s14 - osc_s04
+		If(sample_index) sample_index:/(osc_step^4) 
+		osc_s11 = osc_s01
+		osc_s12 = osc_s02
+		osc_s13 = osc_s03
+		osc_s14 = osc_s04
+		'-----------
+		
+		Local ramp:Double = 250.0/octave
+		Local iramp:Double = 1.0/ramp
+		If(tick&lt;ramp) sample_index:*(iramp*tick)^2
+	
+		
+		output=volume*(Float(decay)*decay_div)^3
+		If(note_off)	decay:-1
+		
+		If (decay&lt;1)
+			tonelist.Remove(Self)
+			Return 0
+		EndIf
+
+		'---------- simple two pole filter
+		Local cf:Float = Min(1.0,(inv_flt_cutoff+(0.15-(output/0.75)*0.15))^0.1 )
+		Local q:Float = flt_resonance
+		
+		flt_vel:+ sample_index - flt2_signal*q
+		flt_vel:*(0.471+0.429* q)
+		flt_signal	=	flt_vel		-(flt_vel	-flt_signal	)*cf
+		flt2_signal	=	flt_signal	-(flt_signal-flt2_signal)*cf
+		
+		Local wave:Float = flt2_signal 
+		'-----------
+
+		tick:+1
+		Return wave *output
+	End Method
+	
+	Function Create:tone(_note:Double=1.0, _reps:Int = 2, _decay:Float = 1.0)
+		Local t:tone = New tone
+		t.note = _note
+		t.decay = _decay*SAMPLING_FRQ 
+		t.decay_div = 1.0/t.decay
+		t.volume = 0.666
+		t.sample_index = 0.0
+		t.flt_vel = 0.0
+		t.flt_signal = 0.0
+		t.flt2_signal = 0.0
+
+		t.vib_amt = 0
+
+		t.note_off = False
+		t.tick = 0
+		t.osc_phase=0
+		t.osc_s01=0
+		t.osc_s02=0
+		t.osc_s03=0
+		t.osc_s04=0
+		t.osc_s11=0
+		t.osc_s12=0
+		t.osc_s13=0
+		t.osc_s14=0
+		Return t
+	EndFunction 
+EndType 
+
+Global diallist:TList = CreateList()
+Type dial
+	Field name:String 
+	Field default_value:Float 
+	Field value:Float
+	Field in_value:Float Ptr 
+	Field lock:Byte 
+	Field x:Float
+	Field y:Float 
+	Field radius:Float
+
+	Method draw()
+		SetAlpha(0.75)
+		If name.Length
+			SetColor(190,190,190)
+			GLDrawText(name,Int(x-4*name.Length-2),Int(y-radius-20))
+		End If
+		SetColor(210,170,90)
+		SetAlpha(0.05)
+		For Local m:Int = 0 Until 36
+			glBegin(GL_TRIANGLE_FAN)
+				glVertex2d(x,y)
+					For Local s:Double = 0 To 360 Step 36
+						glVertex2d(x+Sin(s+m)*radius, y+Cos(s+m)*radius)
+					Next 
+			glEnd 
+		Next 
+		SetColor(220,190,120)
+		Local inner_radius:Float = radius*0.7
+		For Local m:Int = 0 Until 36
+			glBegin(GL_TRIANGLE_FAN)
+				glVertex2d(x,y)
+					For Local s:Double = 0 To 360 Step 36
+						glVertex2d(x+Sin(s+m)*inner_radius, y+Cos(s+m)*inner_radius)
+					Next 
+			glEnd 
+		Next 
+		SetAlpha(1.0)
+		Local sx:Float = Sin(value*360.0)
+		Local sy:Float = Cos(value*360.0)
+	
+		glLineWidth(6)
+		glBegin(GL_LINES)
+			glVertex2d(x-sx*0.7*radius,y+sy*0.7*radius)
+			glVertex2d(x-sx*1.05*radius,y+sy*1.05*radius)
+		glEnd 
+		
+		SetColor(0,0,0)
+		DrawRect(x-radius,y+1.2*radius,radius*2,18)
+		SetColor(190,190,190)
+		GLDrawText(Int(100*value),Int(x-0.9*radius),Int(y+1.3*radius))
+	End Method
+	
+	Method update()
+		Local mx:Float = MouseX()-x
+		Local my:Float = MouseY()-y
+		If( mx*mx+my*my &lt; radius*radius And MouseDown(1)) lock=True
+		If Not MouseDown(1) Then lock=False 
+		
+		If(lock)
+			value:+(mouse_y_vel)*0.0001
+			value = Max(0.0,Min(1.0,value)) 
+			in_value[0] = value
+		EndIf 
+	End Method
+	
+	Function Create:dial(name:String,in_value:Float Ptr, _radius:Float = 25.0, _x:Float, _y:Float,_default_value:Double = 0.0)
+		Local d:dial = New dial
+		d.name = name 
+		d.in_value = in_value 
+		d.x = _x
+		d.y = _y
+		d.radius = _radius
+		d.default_value =_default_value 
+		d.value = in_value[0]
+		ListAddLast(diallist,d)
+		Return d 
+	End Function
+EndType 
+
+Global gui:dial = dial.Create("cutoff",Varptr flt_cutoff, 25,410,180)
+gui = dial.Create("reso",Varptr flt_resonance, 25,475,180)
+gui = dial.Create("vibrato",Varptr vibrato, 25,560,180)
+
+Function note_release(n:Int)       
+	If(keytone[n])
+		keytone[n].rls();
+		keytable[n]=False; 
+	EndIf 
+End Function
+
+Function hit()
+	If(Not keytable[Int(note)])
+		keytable[Int(note)]=True
+		Local note_step:Double = 0.92603118985523273331964874851613*(2.0^(note/12.0)*octave)/180 'crazy number tunes to 440Hz base at 48KHz
+		mastertone = tone.Create(note_step,2,1.0) 
+		mastertone.vib_amt = 0.0
+		keytone[Int(note)]=mastertone
+		ListAddLast(tonelist,mastertone)
+		If displaytone Then displaytone = Null 
+		displaytone = tone.Create((octave)/180,2,1.0)
+	'	displaytone.vib_on = False 
+	EndIf 
+End Function
+
+Global time:Int = 0
+Global mouse_x_str:Float =MouseX()
+Global mouse_y_str:Float =MouseY()
+Global mouse_x_vel:Float =0
+Global mouse_y_vel:Float =0
+
+
+Global mastertone:tone
+Global displaytone:tone
+SetBlend ALPHABLEND
+Repeat
+	SetColor 0,0,0
+	SetAlpha 0.2
+	DrawRect 0,0,800,240
+	SetAlpha 1.0
+	SetColor 40,46,55
+	DrawRect 360,0,800,240
+
+	SetAlpha 0.5
+	SetColor 30,66,122
+	DrawLine(0,120,360,120)
+
+	For Local d:dial = EachIn diallist
+		d.update()
+		d.draw() 
+	Next
+	If(time&gt;60)
+		mouse_x_vel = MouseX()-mouse_x_str
+		mouse_y_vel = mouse_y_str-MouseY()
+		mouse_x_str = MouseX()
+		mouse_y_str = MouseY() 
+		time = 0
+	EndIf 
+	time:+1
+	glLineWidth(1)
+	If displaytone
+		Local padd:Double =  Min(8,octave)
+		Local loopcount:Int = Int(360.0/padd)
+		SetColor 240,240,250
+		px=0;
+		For Local i:Int = 0 Until loopcount
+			If px&lt;360 
+			Local piy:Float = displaytone.solve() * 100.0
+			Local col:Byte = 0.5*$ff
+			Local ya:Int = py
+			Local yb:Int = piy
+			DrawLine(Float(px),Float(120+ya),Float(px+padd),Float(120+yb))
+			py =  piy
+			px:+padd
+			EndIf 
+		Next
+	End If
+		SetAlpha 1.0
+		note = 0
+		If KeyDown(KEY_A)			note = 1 ;hit() Else note_release(1 )
+		If KeyDown(KEY_W)			note = 2 ;hit() Else note_release(2 )
+		If KeyDown(KEY_S)			note = 3 ;hit() Else note_release(3 )
+		If KeyDown(KEY_E)			note = 4 ;hit() Else note_release(4 )
+		If KeyDown(KEY_D)			note = 5 ;hit() Else note_release(5 )
+		If KeyDown(KEY_F)			note = 6 ;hit() Else note_release(6 )
+		If KeyDown(KEY_T)			note = 7 ;hit() Else note_release(7 )
+		If KeyDown(KEY_G)			note = 8 ;hit() Else note_release(8 )
+		If KeyDown(KEY_Y)			note = 9 ;hit() Else note_release(9 )
+		If KeyDown(KEY_H)			note = 10;hit() Else note_release(10)
+		If KeyDown(KEY_U)			note = 11;hit() Else note_release(11)
+		If KeyDown(KEY_J)			note = 12;hit() Else note_release(12)
+		If KeyDown(KEY_K)			note = 13;hit() Else note_release(13)
+		If KeyDown(KEY_O)			note = 14;hit() Else note_release(14)
+		If KeyDown(KEY_L)			note = 15;hit() Else note_release(15)
+		If KeyDown(KEY_P)			note = 16;hit() Else note_release(16)
+		If KeyDown(KEY_SEMICOLON)	note = 17;hit() Else note_release(17)
+		If KeyDown(KEY_QUOTES)		note = 18;hit() Else note_release(18)
+		If KeyHit(KEY_PAGEDOWN) 	octave:*0.5;disp_octave:-1
+		If KeyHit(KEY_PAGEUP)		octave:*2.0;disp_octave:+1
+		If(note = 0) And displaytone
+				displaytone.rls();
+		EndIf 
+	SetColor 70,80,90
+		GLDrawText("(pageup/down)octave:"+disp_octave+" voices:"+tonelist.Count(),540,10)
+	Flip 0
+Until KeyHit(KEY_ESCAPE) Or AppTerminate()
+	alcDestroyContext(ALContext)
+	alcCloseDevice(ALDevice)
+	ALContext=0
+	ALDevice=0
+End
+</textarea> <br><br></td></tr></table><br>
+<a name="1307225"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks, Brucey, but I still don't get any sound out of it anymore in either x32 or x64?<br><br>I really should maybe start NG from scratch again, or so... it's so odd?!<br><br>But, honestly, awesome, thanks for checking into it already so quickly! 8D <br><br></td></tr></table><br>
+<a name="1307229"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GW</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Very Cool Taron! Thanks for sharing.  Blitzmax needs more Dsp examples.<br>As far as NG goes, Why not use freeaudio?<br><br>This compiles and runs in NG without any problems for me.<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+'Guitar: Use Mouse1,Mouse2 and Space
+'-----------------------------------
+SuperStrict
+Import pub.freeaudio
+Const FRAG:Int = 1800 '* 2 
+fa_Init(0)	
+
+Local buffer:Short[FRAG * 8]
+Local writepos:Int
+
+Local sound:Byte Ptr
+Local channel:Int
+
+sound = fa_CreateSound(FRAG * 8, 16, 1, 44100, buffer, $80000000)
+Print "Sound:"+sound
+
+channel=fa_PlaySound( sound, FA_CHANNELSTATUS_STREAMING ,0)
+Print "PlaySound:"+channel
+
+Local streaming:Int
+Local lfo#
+Local osc1:Float
+
+'------------------------------------
+Const Width:Float = 750
+Const Height:Float = 500
+
+Graphics Width, Height
+
+Global Gstring:tGstring = New tGstring
+Global gString2:tGstring = New tGstring
+Gstring.oct = True
+
+'------------------------------------
+Global frets:Float[24]
+frets[ 1 ] = 42.094	
+frets[ 2 ] = 81.826	
+frets[ 3 ] = 119.328
+frets[ 4 ] = 154.725
+frets[ 5 ] = 188.135
+frets[ 6 ] = 219.670
+frets[ 7 ] = 249.435
+frets[ 8 ] = 277.530
+frets[9] = 304.047
+frets[ 10] = 329.077
+frets[ 11] = 352.701
+frets[ 12] = 375.000
+frets[ 13] = 396.047
+frets[ 14] = 415.913
+frets[ 15] = 434.664
+frets[ 16] = 452.362
+frets[ 17] = 469.067
+frets[ 18] = 484.835
+frets[ 19] = 499.718
+frets[ 20] = 513.765
+frets[ 21] = 527.024
+frets[ 22] = 539.538
+frets[ 23] = 551.351
+frets[ 24] = 562.500
+
+While True
+	Cls
+	Local ss:Float, ss2:Float
+	Local oss:Float
+'	Print "Status:"+fa_ChannelStatus( channel )	
+	Local readpos:Int = fa_ChannelPosition(channel)
+	Local write:Int = readpos + FRAG * 4 - writepos
+	Local frags:Int = write / FRAG
+	While frags&gt;0	
+		'Print "Write to "+writepos
+		Local pos:Int = writepos Mod (FRAG * 8)
+		For Local f:Int = 0 Until FRAG
+			Local t:Int = writepos + f
+			oss = ss
+			ss = Gstring.GetNext()
+			ss2 = gString2.GetNext()
+			buffer[pos + f] = ((ss + ss2) / 2) * $7fff 
+		Next
+		writepos:+FRAG
+		frags:-1
+	Wend
+	
+	If Not streaming And writepos&gt;=FRAG*4
+		fa_SetChannelPaused( channel, False )
+		streaming=True
+	EndIf
+
+	DrawText Fps(), 10, 10
+	Gstring.Draw()
+
+	Flip 0
+	
+	If KeyHit(KEY_ESCAPE) Then End
+	If KeyDown(KEY_SPACE) Then
+		Gstring.NoteOn = True
+		gString2.NoteOn = True
+	Else Gstring.noteon = False
+		gString2.noteon = False
+		Gstring.noteon = False
+	EndIf
+
+Wend
+
+
+Type tGstring
+	Const NUM:Int = 256 '* 2 
+	Field x:Float[NUM] ;
+	Field Xcopy:Float[NUM] ;
+	Field v:Float[NUM] ;
+	Field f:Float[NUM] ;
+	Field k:Float = 0.5;
+	Field c:Float = 0.0003 '0.0003 
+	Field oct:Int = False
+	Field NoteOn:Int = False
+	Field monitorPoint:Int = NUM / 18;
+	
+	Method New()
+	End Method
+	
+	Method StringUpdate()
+		Local f1:Float
+		Local b:Float
+	    Local a:Int
+	    Local c:Int
+		
+		Local v1:Float
+		Local f2:Float
+		Local Fa:Float
+		Local Fc:Float
+		
+		Local x1:Float
+		Local Xm:Float
+		Local f3:Float
+		'Local Fa:Float
+		'Local Fc:Float
+		
+		For Local i:Int = 1 Until NUM
+		    f1 = (x[i] - x[i - 1]) * k + (v[i] - v[i - 1]) * c
+		    f[i - 1]:+f1
+		    f[i]:-f1
+		Next
+	  
+		For Local i:Int = 0 Until NUM
+			v[i]:+f[i]
+			f[i] = 0
+			x[i]:+v[i]
+			x[i] = clamp(x[i], -1, 1)
+		Next
+	  
+	  x[0] = 0;
+	  v[0] = 0;
+	  x[num-1] = 0;
+	  v[num-1] = 0;
+	'//  v[num-2] = 0;
+		b = clamp(1.0 * (GetFretPos(Self.oct) + 0.5) / Width * (NUM - 1), 0, NUM - 1)
+		a = Floor(b)
+		c = Ceil(b)
+		
+	'	v[a]:*0.99' 2
+		
+		If Not NoteOn Then v[Rand(0, NUM - 1)] = 0
+		
+	    If(MouseDown(2)) Then
+			 v1 = v[a] + (v[c] - v[a]) * (b - a)
+			 f2 = v1 * -0.95;
+			 Fa = (c - b) * f2;
+			 Fc = (b - a) * f2;
+			f[a]:+Fa;
+			f[c]:+Fc;
+		EndIf
+		
+	    If(MouseDown(1)) Then
+			 x1 = x[a] + (x[c] - x[a]) * (b - a) ;
+			 Xm = Float(MouseY()) / (Height / 2) - 1
+			 f3 = (Xm - x1) * 1.0;
+			 Fa = (c - b) * f3;
+			 Fc = (b - a) * f3;
+			f[a]:+Fa;
+			f[c]:+Fc;
+	    End If
+	End Method
+	
+	Method GetNext:Float()
+		StringUpdate()
+		Return x[monitorPoint]
+	End Method
+	
+	Method Draw()
+		Local xcopy:Float[] = x
+		For Local i:Int = 1 Until NUM
+			 DrawLine(Float(i - 1) / (NUM - 1) * Width, (0.5 + Xcopy[i - 1] * 0.5) * Height, Float(i) / (NUM - 1) * Width, (0.5 + Xcopy[i] * 0.5) * Height) ;
+		Next
+	End Method
+	
+End Type
+
+Function clamp:Float(x:Float, a:Float, b:Float)
+        If x &lt; a Then Return a
+        If x &gt; b Then Return b
+        Return x
+End Function
+
+Function Fps:Int()
+    Global FPStime%, frameCounter%, frameTimer%, totalFrames%
+    frameCounter:+ 1
+    totalFrames:+ 1
+    If frameTimer &lt; MilliSecs()
+	FPStime = frameCounter
+	frameTimer = 1000 + MilliSecs()
+	frameCounter = 0  
+    EndIf
+    Return FPStime
+End Function
+
+Function GetFretPos:Float(oct:Int)
+	If KeyHit(KEY_D) Then DebugStop
+	Local mx:Float = width - MouseX()
+	'Return mx
+	If mx &lt; frets[1] Then Return Width
+	For Local i:Int = 1 Until 24
+		If (mx &gt; frets[i - 1] And mx &lt;= frets[i]) Then
+			If oct
+				If i + 7 &lt; 25 Then Return Width - frets[i + 7]
+			End If
+			Return Width - frets[i]
+		EndIf
+	Next
+	Return Width - frets[24]
+End Function
+
+</textarea> <br><br></td></tr></table><br>
+<a name="1307230"></a>
+
+<a name="1307231"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well, for once you should write:<br>'------------------------------------<br>Global frets:Float[25]<br><br>You went beyond the array limit, you know! ;o)<br>UH, that sounds GREAT! WICKED! 8D<br>First at to figure out the [SPACE] thing!<br><br>I will most certainly investigate into a freeaudio option. THANK YOU!<br><br>However, I delete all of NG and copied everything fresh into place, built all modules and so on, but even at x32, openAL still won't make a noise for me.<br>Again, in the original bmax it's no problem at all. 8{<br>What might I be doing wrong? Any remote clues?<br>I'm so confused... <br><br></td></tr></table><br>
+<a name="1307238"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GW</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> You went beyond the array limit, you know! <br></div><br>Oops!<br><br><div class="quote"> First at to figure out the [SPACE] thing! <br></div> <br>That's there for me trying to figure out palm-muting.<br><br>I'm not sure why OAL wont work for you. did you check all the return codes? <br><br>Brucey's example doesn't play any audio for me either btw. <br><br></td></tr></table><br>
+<a name="1307240"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oddly comforting to hear (not to hear...lol). I swear, though, the very, very first time I compiled my physical modeling experiment "Woody" in NG at x32, it worked just fine, sound and all. Then I switched to x64 and since then openAL would never spit out a sound anymore. &lt;shrugs&gt; <br><br></td></tr></table><br>
+<a name="1307243"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hallo. There was an issue with NG when passing a Null argument to a parameter defined as $z or $w.<br>The fix has been committed to the github repository.<br><br>The example above now plays openal audio on Windows. <br><br></td></tr></table><br>
+<a name="1307293"></a>
+
+<a name="1307296"></a>
+
+<a name="1307300"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> I need to look around to find out how to deal with that. I'm so sorry, I feel like an idiot, but setup_install.script and all that leave me dumbfounded. 8{<br>I'm kinda hoping to get some tips without asking, because I'm sure I find out all there is to know by just looking properly and I'd be ashamed to ask first... <br><br>Oh, ok, so now I signed up for Github and am in the process of installing Github Desktop...  I SHALL figure out all this goodness! xD<br><br>Meantime, thanks Brucey. All this stuff has to be so natural to you, it's weird if a seasoned coder like me turns out to be a total noob about what you do. I'm in awe of what you do!<br><br><br>Hmmm...I feel foolish. I still can't handle git, but I downloaded this: <a href="https://github.com/bmx-ng/bmx-ng" target="_blank">https://github.com/bmx-ng/bmx-ng</a><br>And simply replaced the files in my BlitzMax NG folder accordingly. Rebuilt all modules. But I must be like rather ape like with it, since that didn't make a difference thus far. At least it didn't break! (amazing) <br><br></td></tr></table><br>
+<a name="1307301"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> For now, you can replace Null in the call to alcOpenDevice() with, for example "DirectSound", and that should work. <br><br></td></tr></table><br>
+<a name="1307306"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> &lt;sigh&gt; ...you make me hate myself, Brucey. Just so you know, I am trying, even if I end up like this again...Identifier 'DirectSound' not found.<br><br>I will keep importing potential candidates that might give meaning to DirectSound. What a chase that is every time. Like some odd kung-fu training where you just have to stand in the rain for a week just to discover whether you really want it yourself, hahahaha.... xD<br><br>I'm sorry, man. I will keep my head up! <br><br></td></tr></table><br>
+<a name="1307308"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> bmx-ng/bmx-ng is a place for releases of complete packages.<br><br>If your intent is to update specific parts - or if you cannot await new complete releases:<br>- bmx-ng/brl.mod for most current NG-compatible brl.mod<br>- bmx-ng/pub.mod for most current NG-compatible pub.mod<br>- bmx-ng/bcc for most current NG-compiler BCC<br>- bmx-ng/bmk for most current NG-variant of BMK (should work with vanilla too)<br><br>Remember: if you update BCC, recompile all modules<br>Remember2: if you deploy BMK to your BlitzMax-bin-dir, do not forget the .bmk files (see readme of BMK - or the github "starting page" of that bmk-repo - so at least core.bmk and make.bmk)<br><br><br>@ git client and signup<br>If you do not intend to collaborate/change things, you should not need to have an githubaccount (if you have OSS parts, feel free to use it now to store them in your own github repos).<br>Just use the "clone or download"-button to download the most current revision (without all the hidden .git-folders and the complete revision history).<br><br>Therefor you also do not need to play with "git" and "git pull".<br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1307311"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ron, you rock! Thanks for this fantastic set of info! 8D<br><br>I'm ready for almost anything to make this work, because x64 compiles will change my life significantly over here! Not only because of hopefully getting MIDI to work, but having a 64bit compile of Verve would open up new worlds and I may not have to switch to C++ with the whole thing.<br><br>SO: THANK YOU! I'll dive in right away! <br><br></td></tr></table><br>
+<a name="1307314"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Identifier 'DirectSound' not found. <br></div><br>alcOpenDevice() takes a String as an argument, so you want to use it thus :<br><pre class=code>
+alcOpenDevice("DirectSound")
+</pre><br>Other examples of audio devices on Windows include "MMSYSTEM" and "DirectSound3D".<br>You may also be able to use soundcard-specific names. <br><br></td></tr></table><br>
+<a name="1307316"></a>
+
+<a name="1307317"></a>
+
+<a name="1307319"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> I feel nothing but happiness right now, Brucey and Ron!<br>After having compiled BCC and BMK(properly replacing the exes in the /bin) and having rebuilt all modules (for every c or cpp it opens a cmd prompt now, which is a bit annoying), the synth compiles perfectly in x32 AND x64 with sound and all!<br><br>Here's an update with stereo delay and a few improvements:<br>BlitzMax NG version!!! For all those who try to compile this in the ordinary BlitzMax version (PAH! Sorry...lol)<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Framework BRL.GLMax2D
+Import pub.glew
+Import pub.OpenAL
+Import brl.standardio
+
+SetGraphicsDriver GLMax2DDriver()
+AppTitle="Simple Synth - openAL real time synthesis"
+
+Graphics(800,240,0,60) 
+
+glEnable(GL_LINE_SMOOTH)
+
+'============================ AUDIO setup ====================================
+Global audiotrue:Byte = 0
+
+If OpenALInstalled()
+	audiotrue=1
+Else
+	GLDrawText"Audio OFF: OpenAL audio is not installed. &lt;hit any key to continue!&gt;",0,120-17
+	Flip 0
+	WaitKey()
+	End
+End If
+
+'============================ The Real Deal ==================================
+Const BUFFER_SIZE:Int=1440*2
+Const SAMPLING_FRQ:Int=48000
+
+Global source:Int		'the INT vs. pointer story really is a common thread with openAL in bmax...
+Global buffers:Int[2]	'I suppose it should store pointers here, too. Int may cause trouble at x64 compiles?!
+Global frequency:Int
+Global format:Int
+Global buf:Byte Ptr
+
+?bmxng
+Global ALDevice:Byte Ptr
+Global ALContext:Byte Ptr
+?Not bmxng
+Global ALDevice:Int
+Global ALContext:Int
+?
+ALDevice = alcOpenDevice(Null) 					'should actually be a pointer instead of an int (openAL src flaw)
+ALContext = alcCreateContext(ALDevice, Null)      'should also actually be a pointer instead of an int (openAL src flaw)
+alcMakeContextCurrent(ALContext)
+
+alGenBuffers(2,buffers)	'generates 2 buffers which we later toggle like back buffers in graphics (flip like)
+alGenSources(1, Varptr source)
+
+alListenerfv(AL_POSITION,[0.0,0.0,0.0])
+alListenerfv(AL_VELOCITY,[0.0,0.0,0.0])
+alListenerfv(AL_ORIENTATION,[0.0,0.0,-1.0])
+alListenerf(AL_GAIN,4.0)
+
+Global buffer_A:Short[BUFFER_SIZE]
+
+format = AL_FORMAT_STEREO16
+buf = Byte Ptr buffer_A
+For Local i:Int = 0 Until BUFFER_SIZE
+		buffer_A[i] = 0
+Next
+alBufferData(buffers[0], format, buf,BUFFER_SIZE*2,SAMPLING_FRQ)
+alBufferData(buffers[1], format, buf,BUFFER_SIZE*2,SAMPLING_FRQ)
+
+alSourceQueueBuffers(source, 1, Varptr buffers[0])
+alSourceQueueBuffers(source, 1, Varptr buffers[1])
+alSourcePlay(source)
+
+Global tick:Int = 0
+Global delay_i:Int = 0
+Global delay_buffer:Float[SAMPLING_FRQ]
+'============================---------------==================================
+AddHook FlipHook,process
+Function process:Object(id:Int,data:Object,context:Object )
+		Local buffer:Int
+		Local val:Int
+		Local vib_change:Float = vibrato - set_vibrato
+		Local flt_cutoff_change:Float = flt_cutoff - set_flt_cutoff
+		
+		If(vib_change&lt;&gt;0) Then vib_change:/BUFFER_SIZE
+		If(flt_cutoff_change&lt;&gt;0) Then flt_cutoff_change:/BUFFER_SIZE
+		alGetSourcei(source, AL_BUFFERS_PROCESSED, Varptr val)
+			While(val)
+				alSourceUnqueueBuffers(source,1, Varptr buffer)
+				For Local i:Int = 0 Until BUFFER_SIZE Step 2
+					Local accumulation:Double =0
+					
+					set_vibrato:+vib_change
+					buffer_A[i]=0
+					set_flt_cutoff:+ flt_cutoff_change
+					inv_flt_cutoff = (1.0-set_flt_cutoff)
+					For Local t:tone = EachIn tonelist
+						t.vib_amt=set_vibrato
+						accumulation:+t.solve()
+					Next
+					'======================== FX section ......................
+					Local delay_i1:Int = tick Mod (0.5*SAMPLING_FRQ-1)
+					Local delay_i2:Int = (tick+(0.25*SAMPLING_FRQ)) Mod (0.5*SAMPLING_FRQ-1)
+					delay_buffer[delay_i1]:*0.3
+					buffer_A[i]= delay_buffer[delay_i1]*$7ff
+					buffer_A[i+1]= delay_buffer[delay_i2]*$4ff
+
+					delay_buffer[delay_i1]:+accumulation*0.75
+					buffer_A[i]:+accumulation*$7ff
+					buffer_A[i+1]:+accumulation*$7ff
+					
+					tick:+1	
+				Next
+				alBufferData(buffer, format, buf, BUFFER_SIZE*2, SAMPLING_FRQ)
+				alSourceQueueBuffers(source,1, Varptr buffer)
+				
+				val:-1
+			Wend
+		If val&lt;=0
+			alGetSourcei(source, AL_SOURCE_STATE, Varptr val)
+			If val&lt;&gt; AL_PLAYING
+				alSourcePlay(source)
+			End If
+		End If	
+End Function
+
+Global disp_octave:Int = 3
+Global octave:Float = 1.0
+Global set_flt_cutoff:Float = 0.75
+Global flt_cutoff:Float = 0.75
+Global inv_flt_cutoff:Float = 0.25
+Global flt_resonance:Float = 0.0
+Global set_vibrato:Float = 0.0
+Global vibrato:Float = 0.0
+
+Global px:Float = 0
+Global py:Float = 0 
+
+Global note:Double 
+Global keytable:Byte[21]
+Global keytone:tone[21]
+	
+Global tonelist:TList = CreateList()
+Type tone
+	Field index:Int
+	Field decay:Int 
+	Field decay_div:Float 
+	Field note_off:Byte 
+	Field output:Float 
+	Field volume:Float 
+	Field note:Double 
+	Field vib_amt:Float 
+	Field flt_vel:Double
+	Field flt_signal:Double 
+	Field flt2_signal:Double 
+	Field sample_index:Double 
+	Field tick:Int
+	
+	Field osc_step:Double
+	Field osc_phase:Double
+	Field osc_s01:Double
+	Field osc_s02:Double
+	Field osc_s03:Double
+	Field osc_s04:Double
+	Field osc_s11:Double
+	Field osc_s12:Double
+	Field osc_s13:Double
+	Field osc_s14:Double
+
+	Method rls()
+		note_off = True
+	End Method
+	
+	Method solve:Float()
+	
+		Local phase:Float = note
+		If(vib_amt) 
+			phase:*2^(Sin(Double(tick*0.05))*Min(vib_amt,(0.0001*tick)))
+		EndIf
+		
+		'--------------- saw wave (AA concept)
+		osc_step = phase
+		osc_phase:+osc_step
+		If osc_phase&gt;1.0 Then osc_phase:-2.0
+		osc_s01 = osc_phase*(7.0/360.0 + osc_phase*osc_phase*(-1/36.0 + osc_phase*osc_phase*(1/120.0)))
+		osc_s02 = osc_s11-osc_s01
+		osc_s03 = osc_s12-osc_s02
+		osc_s04 = osc_s13-osc_s03
+		sample_index = osc_s14 - osc_s04
+		If(sample_index) sample_index:/(osc_step^4) 
+		osc_s11 = osc_s01
+		osc_s12 = osc_s02
+		osc_s13 = osc_s03
+		osc_s14 = osc_s04
+		'-----------
+		
+		Local ramp:Double = 250.0/octave
+		Local iramp:Double = 1.0/ramp
+		If(tick&lt;ramp) sample_index:*(iramp*tick)^2
+	
+		
+		output=volume*(Float(decay)*decay_div)^3
+		If(note_off)	decay:-1
+		
+		If (decay&lt;1)
+			tonelist.Remove(Self)
+			Return 0
+		EndIf
+
+		'---------- simple two pole filter
+		Local cf:Float = Min(1.0,(inv_flt_cutoff+(0.15-(output/0.75)*0.15))^0.1 )
+		Local q:Float = flt_resonance
+		
+		flt_vel:+ sample_index - flt2_signal*q
+		flt_vel:*(0.471+0.429* q)
+		flt_signal	=	flt_vel		-(flt_vel	-flt_signal	)*cf
+		flt2_signal	=	flt_signal	-(flt_signal-flt2_signal)*cf
+		
+		Local wave:Float = flt2_signal 
+		'-----------
+
+		tick:+1
+		Return wave *output
+	End Method
+	
+	Function Create:tone(_note:Double=1.0, _reps:Int = 2, _decay:Float = 1.0)
+		Local t:tone = New tone
+		t.note = _note
+		t.decay = _decay*SAMPLING_FRQ 
+		t.decay_div = 1.0/t.decay
+		t.volume = 0.666
+		t.sample_index = 0.0
+		t.flt_vel = 0.0
+		t.flt_signal = 0.0
+		t.flt2_signal = 0.0
+
+		t.vib_amt = 0
+
+		t.note_off = False
+		t.tick = 0
+		t.osc_phase=0
+		t.osc_s01=0
+		t.osc_s02=0
+		t.osc_s03=0
+		t.osc_s04=0
+		t.osc_s11=0
+		t.osc_s12=0
+		t.osc_s13=0
+		t.osc_s14=0
+		Return t
+	EndFunction 
+EndType 
+
+Global diallist:TList = CreateList()
+Type dial
+	Field name:String 
+	Field default_value:Float 
+	Field value:Float
+	Field in_value:Float Ptr 
+	Field lock:Byte 
+	Field x:Float
+	Field y:Float 
+	Field radius:Float
+
+	Method draw()
+		SetAlpha(0.75)
+		If name.Length
+			SetColor(190,190,190)
+			GLDrawText(name,Int(x-4*name.Length-2),Int(y-radius-20))
+		End If
+		SetColor(210,170,90)
+		SetAlpha(0.05)
+		For Local m:Int = 0 Until 36
+			glBegin(GL_TRIANGLE_FAN)
+				glVertex2d(x,y)
+					For Local s:Double = 0 To 360 Step 36
+						glVertex2d(x+Sin(s+m)*radius, y+Cos(s+m)*radius)
+					Next 
+			glEnd 
+		Next 
+		SetColor(220,190,120)
+		Local inner_radius:Float = radius*0.7
+		For Local m:Int = 0 Until 36
+			glBegin(GL_TRIANGLE_FAN)
+				glVertex2d(x,y)
+					For Local s:Double = 0 To 360 Step 36
+						glVertex2d(x+Sin(s+m)*inner_radius, y+Cos(s+m)*inner_radius)
+					Next 
+			glEnd 
+		Next 
+		SetAlpha(1.0)
+		Local sx:Float = Sin(value*360.0)
+		Local sy:Float = Cos(value*360.0)
+	
+		glLineWidth(6)
+		glBegin(GL_LINES)
+			glVertex2d(x-sx*0.7*radius,y+sy*0.7*radius)
+			glVertex2d(x-sx*1.05*radius,y+sy*1.05*radius)
+		glEnd 
+		
+		SetColor(0,0,0)
+		DrawRect(x-radius,y+1.2*radius,radius*2,18)
+		SetColor(190,190,190)
+		GLDrawText(Int(100*value),Int(x-0.9*radius),Int(y+1.3*radius))
+	End Method
+	
+	Method update()
+		Local mx:Float = MouseX()-x
+		Local my:Float = MouseY()-y
+		If( mx*mx+my*my &lt; radius*radius And MouseDown(1)) lock=True
+		If Not MouseDown(1) Then lock=False 
+		
+		If(lock)
+			value:+(mouse_y_vel)*0.0001
+			value = Max(0.0,Min(1.0,value)) 
+			in_value[0] = value
+		EndIf 
+	End Method
+	
+	Function Create:dial(name:String,in_value:Float Ptr, _radius:Float = 25.0, _x:Float, _y:Float,_default_value:Double = 0.0)
+		Local d:dial = New dial
+		d.name = name 
+		d.in_value = in_value 
+		d.x = _x
+		d.y = _y
+		d.radius = _radius
+		d.default_value =_default_value 
+		d.value = in_value[0]
+		ListAddLast(diallist,d)
+		Return d 
+	End Function
+EndType 
+
+Global gui:dial = dial.Create("cutoff",Varptr flt_cutoff, 25,410,180)
+gui = dial.Create("reso",Varptr flt_resonance, 25,475,180)
+gui = dial.Create("vibrato",Varptr vibrato, 25,560,180)
+
+Function note_release(n:Int)       
+	If(keytone[n])
+		keytone[n].rls();
+		keytable[n]=False; 
+	EndIf 
+End Function
+
+Function hit()
+	If(Not keytable[Int(note)])
+		keytable[Int(note)]=True
+		Local note_step:Double = 0.92603118985523273331964874851613*(2.0^(note/12.0)*octave)/180 'crazy number tunes to 440Hz base at 48KHz
+		mastertone = tone.Create(note_step,2,1.0) 
+		mastertone.vib_amt = 0.0
+		keytone[Int(note)]=mastertone
+		ListAddLast(tonelist,mastertone)
+		If displaytone Then displaytone = Null 
+		displaytone = tone.Create((octave)/180,2,1.0)
+	'	displaytone.vib_on = False 
+	EndIf 
+End Function
+
+Global time:Int = 0
+Global mouse_x_str:Float =MouseX()
+Global mouse_y_str:Float =MouseY()
+Global mouse_x_vel:Float =0
+Global mouse_y_vel:Float =0
+
+
+Global mastertone:tone
+Global displaytone:tone
+SetBlend ALPHABLEND
+Repeat
+	SetColor 0,0,0
+	SetAlpha 0.2
+	DrawRect 0,0,800,240
+	SetAlpha 1.0
+	SetColor 40,46,55
+	DrawRect 360,0,800,240
+
+	SetAlpha 0.5
+	SetColor 30,66,122
+	DrawLine(0,120,360,120)
+
+	For Local d:dial = EachIn diallist
+		d.update()
+		d.draw() 
+	Next
+	If(time&gt;60)
+		mouse_x_vel = MouseX()-mouse_x_str
+		mouse_y_vel = mouse_y_str-MouseY()
+		mouse_x_str = MouseX()
+		mouse_y_str = MouseY() 
+		time = 0
+	EndIf 
+	time:+1
+	glLineWidth(1)
+	If displaytone
+		Local padd:Float =  Min(8,octave)
+		Local loopcount:Int = Int(360.0/padd)
+		SetColor 240,240,250
+		px=0;
+		For Local i:Int = 0 Until loopcount
+			If px&lt;360 
+			Local piy:Float = displaytone.solve() * 100.0
+			Local col:Byte = 0.5*$ff
+			Local ya:Int = py
+			Local yb:Int = piy
+			DrawLine(px,120+ya,px+padd,120+yb)
+			py =  piy
+			px:+padd
+			EndIf 
+		Next
+	End If
+		SetAlpha 1.0
+		note = 0
+		If KeyDown(KEY_A)			note = 1 ;hit() Else note_release(1 )
+		If KeyDown(KEY_W)			note = 2 ;hit() Else note_release(2 )
+		If KeyDown(KEY_S)			note = 3 ;hit() Else note_release(3 )
+		If KeyDown(KEY_E)			note = 4 ;hit() Else note_release(4 )
+		If KeyDown(KEY_D)			note = 5 ;hit() Else note_release(5 )
+		If KeyDown(KEY_F)			note = 6 ;hit() Else note_release(6 )
+		If KeyDown(KEY_T)			note = 7 ;hit() Else note_release(7 )
+		If KeyDown(KEY_G)			note = 8 ;hit() Else note_release(8 )
+		If KeyDown(KEY_Y)			note = 9 ;hit() Else note_release(9 )
+		If KeyDown(KEY_H)			note = 10;hit() Else note_release(10)
+		If KeyDown(KEY_U)			note = 11;hit() Else note_release(11)
+		If KeyDown(KEY_J)			note = 12;hit() Else note_release(12)
+		If KeyDown(KEY_K)			note = 13;hit() Else note_release(13)
+		If KeyDown(KEY_O)			note = 14;hit() Else note_release(14)
+		If KeyDown(KEY_L)			note = 15;hit() Else note_release(15)
+		If KeyDown(KEY_P)			note = 16;hit() Else note_release(16)
+		If KeyDown(KEY_SEMICOLON)	note = 17;hit() Else note_release(17)
+		If KeyDown(KEY_QUOTES)		note = 18;hit() Else note_release(18)
+		If KeyDown(KEY_RETURN)		note = 20;hit() Else note_release(20)
+		
+		If KeyHit(KEY_PAGEDOWN) 	octave:*0.5;disp_octave:-1
+		If KeyHit(KEY_PAGEUP)		octave:*2.0;disp_octave:+1
+		If(note = 0) And displaytone
+				displaytone.rls();
+		EndIf 
+	SetColor 70,80,90
+		GLDrawText("(pageup/down)octave:"+disp_octave+" voices:"+tonelist.Count(),540,10)
+	Flip 0
+Until KeyHit(KEY_ESCAPE) Or AppTerminate()
+	alcDestroyContext(ALContext)
+	alcCloseDevice(ALDevice)
+	ALContext=0
+	ALDevice=0
+End
+
+
+</textarea> <br><br></td></tr></table><br>
+<a name="1307320"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> May I ask one of you to help me with the Midi input solution (x64)?<br>I'm sure I'm going about this utterly wrong. Just to clarify:<br><br>- I downloaded the bah.mod/rtmidi.mod<br>- it appears to have been building just fine in NG <br>- I tried to compile the /examples/midi_in.bmx<br>- ...it won't create an exe and, of course, fails to link to it then. But doesn't tell me what's wrong?! (neither in release nor debug!) <br><br></td></tr></table><br>
+<a name="1307376"></a>
+
+<a name="1307381"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> If you think it is an error in BCC, check the used commands by using "-v" with bmk (bmk makeapp -r -v myfile.bmx).<br><br>This then outputs the command used to execute BCC.<br><br>Now with this params known, open up bcc.bmx and within MaxIDE add these params to "program - command line".<br><br>When now doing a debug build+run of bcc.bmx, it will execute it with these params and it will try to compile that file.<br>If BCC now struggles (aka "crashes") you have good chances to have maxide catch this error and show to you where it happened.<br><br><br>Edit: Just tried with up-to-date bcc and *.mod on linux - and there it compiled without flaws.<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1307392"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> omg...<br><br>Ron, I apologize! As I'm getting comfy with github, I've been looking around and found out that my bah midi was at version 1.02, while there's a 1.04 already. I downloaded it, built the module...  and it flipping works!<br><br>I'm a tiny little bit scared right now that my head just might explode for excitement! Maha...oh man.<br><br>Now, I'm not sure how many of you out there might get a chance to have the same fun with what I'm going to do that I will most likely have, because I'll hook up midi to the synth, oh yes! I kind of can't believe that BlitzMax would ever allow for something like this, hehehe... this is crazy!<br><br>Again, I apologize for being a bit dreadful about getting to hear, but the information you two have given to me by now is worth so much, way beyond the current matter, which is hereby RESOLVED!<br><br>I'm so terribly excited. ^^<br>...give me a few hours (probably) and I'll have a proper little synth ready for a midi keyboard! 8D <br><br></td></tr></table><br>
+<a name="1307404"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> Glad I (amongst others) was able to help. Do not ask Brucey how often I stand at his door (not literally) asking for things I could resolve on my own. Think he already has some kind of "template system" when replying to my mails (I often forget some basics and wonder why things then don't work).<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1307407"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RustyKristi</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yep, I got the same issues before. I didn't know my working file is outdated and when I finally did a clone most of them are fixed instantly! :))<br><br>Big kudos to these guys for their extreme patience. <br><br></td></tr></table><br>
+<a name="1307425"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh yes! I haven't spent much time here for years and you guys remind me how great a place this can be! 8D<br><br>I've got a preliminary version running already, making a threaded built with midi and audio in one process and gfx and gui in the other. It's running sweet! <br>A few more things to beautify and then I'll add a new version. I'm baffled as to how fantastic this works. It's virtually unlimited voices and not one hick-up thus far! It really makes me wonder what weird stuff Steinberg was doing with the vst solution?! &lt;shrugs&gt; ...I'm afraid, sooner or later I might find out. But for now: WOHOO! <br><br></td></tr></table><br>
+<a name="1307429"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GW</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#22">[#22]</a></td></tr></table></td></tr><tr ><td class="posttext"> I wrote a chiptune tracker synth in Bmax a while back (inspired by Musagi) and I've found Bmax to can handle the job very well, even single threaded. <a href="/post.php?topic=105189&amp;post=1279937" target="_blank">Screens.</a><br> Using NG should in most cases give an even bigger performance boost.  In vanilla Bmax, threading is just not an option, but NG does threading very well without any performance hit. <br>Note that you can also use Midi input from the OS using 'SendMidiOut'. <br><br></td></tr></table><br>
+<a name="1307455"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#23">[#23]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well, this is not a chiptune synth, making it a little hungrier, but thus far I haven't run into any choppy moments either. The buffers are fairly large, though. For stereo I had to go twice the size to prevent it from chopping up on my machine. Later on I will make those things customizable on the gui, too.<br>I'm still getting a silly crash with my thread solution, though, because it ain't safe the way I do it. But it's totally avoidable. Quite interesting to play with that, though.<br>Anyway, it's already a fantastic sandbox for dsp coding, I think!<br>And it's somehow amazing that I can play it with my midi keyboard, haha, feels so surreal. <br><br>A few more things I gotta do before posting the update. Not sure, if I get to those today, though. Had a few distractions... <br><br>Dang, I'd love to see your chiptune tracker om action, though! I'm sure it's fun! 8}<br><br>I'm playing around with the idea of adding a pattern feature, too, allowing to record midi. Just for fun, though... <br><br></td></tr></table><br>
+<a name="1307461"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Xerra</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#24">[#24]</a></td></tr></table></td></tr><tr ><td class="posttext"> Love Taron's enthusiasm. We need more of that here. <br><br></td></tr></table><br>
+<a name="1307526"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamStrange</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#25">[#25]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> but thus far I haven't run into any choppy moments either.  <br></div><br>mmmm. have you tried repeatedly pressing multiple keys. once the voice usage goes past 5-8 you get stutters, dropout etc in the sound <br><br></td></tr></table><br>
+<a name="1307529"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#26">[#26]</a></td></tr></table></td></tr><tr ><td class="posttext"> That depends on your machine, Adam! If it stutters early like that, you must increase the BUFFER size! (I have yet to get to stutters and played well of 30 voices! And I only got a 2.6Ghz Xeon (6core). Slow by current standards and well outdated. <br><br>Xerra, thanks, even after 30 years of programming, the magical powers of it only continue to increase it seems. Once you feel this for your own purposes, there's no way not to be thrilled, I believe. 8} <br><br></td></tr></table><br>
+<a name="1307538"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#27">[#27]</a></td></tr></table></td></tr><tr ><td class="posttext"> Still damn near impossible to program with the maxIDE, here's a still thread unsafe version with MIDI. Haven't had a crash for a whole doodle session, so, hehe...<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Framework BRL.GLMax2D
+Import pub.glew
+Import pub.OpenAL
+Import brl.standardio
+Import BaH.RtMidi
+Import BRL.LinkedList
+Import brl.threads
+
+Const MAX_MESSAGES:Int = 30
+Global messages:TList = New TList
+
+Global midiIn:TRtMidiIn = New TRtMidiIn.Create()
+
+' Check available ports.
+
+If midiIn.getPortCount() = 0 Then
+	Print "No Input Ports"
+	End
+End If
+
+For Local i:Int = 0 Until midiIn.getPortCount()
+	Print "  Input port #" + i + " : " + midiIn.getPortName(i)
+Next
+
+Print "Opening " + midiIn.getPortName()
+
+midiIn.openPort(0)
+
+' Don't ignore sysex, timing, or active sensing messages.
+midiIn.ignoreTypes(False, False, False)
+
+
+SetGraphicsDriver GLMax2DDriver()
+AppTitle="Simple Synth - openAL real time synthesis"
+
+Graphics(800,240,0,60) 
+
+glEnable(GL_LINE_SMOOTH)
+
+'============================ AUDIO setup ====================================
+Global audiotrue:Byte = 0
+
+If OpenALInstalled()
+	audiotrue=1
+Else
+	GLDrawText"Audio OFF: OpenAL audio is not installed. &lt;hit any key to continue!&gt;",0,120-17
+	Flip 0
+	WaitKey()
+	End
+End If
+
+'============================ The Real Deal ==================================
+Const BUFFER_SIZE:Int=1440*2
+Const SAMPLING_FRQ:Int=48000
+
+Global source:Int		'the INT vs. pointer story really is a common thread with openAL in bmax...
+Global buffers:Int[2]	'I suppose it should store pointers here, too. Int may cause trouble at x64 compiles?!
+Global frequency:Int
+Global format:Int
+Global buf:Byte Ptr
+
+?bmxng
+Global ALDevice:Byte Ptr
+Global ALContext:Byte Ptr
+?Not bmxng
+Global ALDevice:Int
+Global ALContext:Int
+?
+ALDevice = alcOpenDevice(Null) 					'should actually be a pointer instead of an int (openAL src flaw)
+ALContext = alcCreateContext(ALDevice, Null)      'should also actually be a pointer instead of an int (openAL src flaw)
+alcMakeContextCurrent(ALContext)
+
+alGenBuffers(2,buffers)	'generates 2 buffers which we later toggle like back buffers in graphics (flip like)
+alGenSources(1, Varptr source)
+
+alListenerfv(AL_POSITION,[0.0,0.0,0.0])
+alListenerfv(AL_VELOCITY,[0.0,0.0,0.0])
+alListenerfv(AL_ORIENTATION,[0.0,0.0,-1.0])
+alListenerf(AL_GAIN,4.0)
+
+Global buffer_A:Short[BUFFER_SIZE]
+
+format = AL_FORMAT_STEREO16
+buf = Byte Ptr buffer_A
+For Local i:Int = 0 Until BUFFER_SIZE
+		buffer_A[i] = 0
+Next
+alBufferData(buffers[0], format, buf,BUFFER_SIZE*2,SAMPLING_FRQ)
+alBufferData(buffers[1], format, buf,BUFFER_SIZE*2,SAMPLING_FRQ)
+
+alSourceQueueBuffers(source, 1, Varptr buffers[0])
+alSourceQueueBuffers(source, 1, Varptr buffers[1])
+alSourcePlay(source)
+
+Global tick:Int = 0
+Global delay_i:Int = 0
+Global delay_buffer:Float[SAMPLING_FRQ]
+'============================---------------==================================
+
+Function audio_process()':Object(id:Int,data:Object,context:Object )
+		Local buffer:Int
+		Local val:Int
+		Local vib_change:Float = vibrato - set_vibrato
+		Local flt_cutoff_change:Float = flt_cutoff - set_flt_cutoff
+		
+		If(vib_change&lt;&gt;0) Then vib_change:/BUFFER_SIZE
+		If(flt_cutoff_change&lt;&gt;0) Then flt_cutoff_change:/BUFFER_SIZE
+		alGetSourcei(source, AL_BUFFERS_PROCESSED, Varptr val)
+			While(val)
+				alSourceUnqueueBuffers(source,1, Varptr buffer)
+				For Local i:Int = 0 Until BUFFER_SIZE Step 2
+					Local accumulation:Double =0
+					
+					set_vibrato:+vib_change
+					buffer_A[i]=0
+					set_flt_cutoff:+ flt_cutoff_change
+					inv_flt_cutoff = (1.0-set_flt_cutoff)
+					For Local t:tone = EachIn tonelist
+						t.vib_amt=set_vibrato
+						accumulation:+t.solve()
+					Next
+					'======================== FX section ......................
+					Local delay_i1:Int = tick 'Mod (0.5*SAMPLING_FRQ)
+					Local delay_i2:Int = (tick+(0.25*SAMPLING_FRQ)) Mod (0.5*SAMPLING_FRQ)
+					delay_buffer[delay_i1]:*0.4
+					buffer_A[i]= delay_buffer[delay_i1]*$6ff
+					buffer_A[i+1]= delay_buffer[delay_i2]*$4ff
+
+					delay_buffer[delay_i1]:+accumulation*0.5
+					buffer_A[i]:+accumulation*$7ff
+					buffer_A[i+1]:+accumulation*$7ff
+					
+					tick:+1	
+					If(tick&gt;(0.5*SAMPLING_FRQ))	tick=0
+				Next
+				alBufferData(buffer, format, buf, BUFFER_SIZE*2, SAMPLING_FRQ)
+				alSourceQueueBuffers(source,1, Varptr buffer)
+				
+				val:-1
+			Wend
+		If val&lt;=0
+			alGetSourcei(source, AL_SOURCE_STATE, Varptr val)
+			If val&lt;&gt; AL_PLAYING
+				alSourcePlay(source)
+			End If
+		End If	
+End Function
+
+
+
+Global disp_octave:Int = -1
+Global octave:Float = 0.0625
+Global set_flt_cutoff:Float = 0.75
+Global flt_cutoff:Float = 0.75
+Global inv_flt_cutoff:Float = 0.25
+Global flt_resonance:Float = 0.0
+Global set_vibrato:Float = 0.0
+Global vibrato:Float = 0.0
+
+Global px:Float = 0
+Global py:Float = 0 
+
+Global note:Double 
+Global keytable:Byte[128]
+Global keytone:tone[128]
+
+'-------------------- MIDI PROCESS
+
+Global update:Byte = False 
+Global timestamp:Double
+Global note_on:Byte
+Global disp_note_off:Byte
+Global velocity:Byte 
+
+
+Global process_running:Byte = True
+Global midi_process:TThread = CreateThread(midiprocess,Null) 
+
+Function midiprocess:Object(data:Object = Null)
+	While process_running
+		note_on = False
+		Local note_off:Byte = False 
+		
+		Local ms:String
+		Local message:Byte[] = midiIn.getMessage(timestamp)
+		Local nBytes:Int = message.length
+		For Local i:Int = 0 Until nBytes
+			Select i
+				Case 0 
+					If message[i] = 144 Then note_on = True;disp_note_off=False Else note_off = True
+				Case 1
+					note = message[i]				
+				Case 2
+				    velocity = message[i]
+			EndSelect 
+			ms:+message[i]
+		Next			
+		If nBytes
+			If(note_on) hit() Else If(note_off) Then note_release(note);disp_note_off=True  
+		EndIf 	
+		audio_process()
+	Wend	
+EndFunction 
+
+Function AddMessage(message:String)
+	Local count:Int = messages.Count()
+	If count &gt;= MAX_MESSAGES Then
+		messages.RemoveFirst()
+	End If
+	
+	messages.AddLast(message)
+End Function
+'=====================================================	
+
+Global tonelist:TList = CreateList()
+Type tone
+	Field index:Int
+	Field decay:Int 
+	Field decay_div:Float 
+	Field note_off:Byte 
+	Field output:Float 
+	Field volume:Float 
+	Field note:Double 
+	Field vib_amt:Float 
+	Field flt_vel:Double
+	Field flt_signal:Double 
+	Field flt2_signal:Double 
+	Field sample_index:Double 
+	Field tick:Int
+	
+	Field osc_step:Double
+	Field osc_phase:Double
+	Field osc_s01:Double
+	Field osc_s02:Double
+	Field osc_s03:Double
+	Field osc_s04:Double
+	Field osc_s11:Double
+	Field osc_s12:Double
+	Field osc_s13:Double
+	Field osc_s14:Double
+
+	Method rls()
+		note_off = True
+	End Method
+	
+	Method solve:Float()
+	
+		Local phase:Float = note
+		If(vib_amt) 
+			phase:*2^(Sin(Double(tick*0.05))*Min(vib_amt,(0.0001*tick)))
+		EndIf
+		
+		'--------------- saw wave (AA concept)
+		osc_step = phase
+		osc_phase:+osc_step
+		If osc_phase&gt;1.0 Then osc_phase:-2.0
+		osc_s01 = osc_phase*(7.0/360.0 + osc_phase*osc_phase*(-1/36.0 + osc_phase*osc_phase*(1/120.0)))
+		osc_s02 = osc_s11-osc_s01
+		osc_s03 = osc_s12-osc_s02
+		osc_s04 = osc_s13-osc_s03
+		sample_index = osc_s14 - osc_s04
+		If(sample_index) sample_index:/(osc_step^4) 
+		osc_s11 = osc_s01
+		osc_s12 = osc_s02
+		osc_s13 = osc_s03
+		osc_s14 = osc_s04
+		'-----------
+		
+		Local ramp:Double = 250.0/octave
+		Local iramp:Double = 1.0/ramp
+		If(tick&lt;ramp) sample_index:*(iramp*tick)^2
+	
+		
+		output=volume*(Float(decay)*decay_div)^3
+		If(note_off)	decay:-1
+		
+		If (decay&lt;1)
+			tonelist.Remove(Self)
+			Return 0
+		EndIf
+
+		'---------- simple two pole filter
+		Local cf:Float = Max(0.0,Min(1.0,(inv_flt_cutoff+(0.15-(output/0.75)*0.15))^0.1 )) '-note*10.0 later for tracking
+		Local q:Float = flt_resonance
+		
+		flt_vel:+ sample_index - flt2_signal*q
+		flt_vel:*(0.471+0.429* q)
+		flt_signal	=	flt_vel		-(flt_vel	-flt_signal	)*cf
+		flt2_signal	=	flt_signal	-(flt_signal-flt2_signal)*cf
+		
+		Local wave:Float = flt2_signal 
+		'-----------
+
+		tick:+1
+		Return wave *output
+	End Method
+	
+	Function Create:tone(_note:Double=1.0, _reps:Int = 2, _decay:Float = 1.0, _volume:Float = 0.666)
+		Local t:tone = New tone
+		t.note = _note
+		t.decay = _decay*SAMPLING_FRQ 
+		t.decay_div = 1.0/t.decay
+		t.volume = _volume
+		t.sample_index = 0.0
+		t.flt_vel = 0.0
+		t.flt_signal = 0.0
+		t.flt2_signal = 0.0
+
+		t.vib_amt = 0
+
+		t.note_off = False
+		t.tick = 0
+		t.osc_phase=0
+		t.osc_s01=0
+		t.osc_s02=0
+		t.osc_s03=0
+		t.osc_s04=0
+		t.osc_s11=0
+		t.osc_s12=0
+		t.osc_s13=0
+		t.osc_s14=0
+		Return t
+	EndFunction 
+EndType 
+
+Global diallist:TList = CreateList()
+Type dial
+	Field name:String 
+	Field default_value:Float 
+	Field value:Float
+	Field in_value:Float Ptr 
+	Field lock:Byte 
+	Field x:Float
+	Field y:Float 
+	Field radius:Float
+
+	Method draw()
+		SetAlpha(0.75)
+		If name.Length
+			SetColor(190,190,190)
+			GLDrawText(name,Int(x-4*name.Length-2),Int(y-radius-20))
+		End If
+		SetColor(210,170,90)
+		SetAlpha(0.05)
+		For Local m:Int = 0 Until 36
+			glBegin(GL_TRIANGLE_FAN)
+				glVertex2d(x,y)
+					For Local s:Double = 0 To 360 Step 36
+						glVertex2d(x+Sin(s+m)*radius, y+Cos(s+m)*radius)
+					Next 
+			glEnd 
+		Next 
+		SetColor(220,190,120)
+		Local inner_radius:Float = radius*0.7
+		For Local m:Int = 0 Until 36
+			glBegin(GL_TRIANGLE_FAN)
+				glVertex2d(x,y)
+					For Local s:Double = 0 To 360 Step 36
+						glVertex2d(x+Sin(s+m)*inner_radius, y+Cos(s+m)*inner_radius)
+					Next 
+			glEnd 
+		Next 
+		SetAlpha(1.0)
+		Local sx:Float = Sin(value*360.0)
+		Local sy:Float = Cos(value*360.0)
+	
+		glLineWidth(6)
+		glBegin(GL_LINES)
+			glVertex2d(x-sx*0.7*radius,y+sy*0.7*radius)
+			glVertex2d(x-sx*1.05*radius,y+sy*1.05*radius)
+		glEnd 
+		
+		SetColor(0,0,0)
+		DrawRect(x-radius,y+1.2*radius,radius*2,18)
+		SetColor(190,190,190)
+		GLDrawText(Int(100*value),Int(x-0.9*radius),Int(y+1.3*radius))
+	End Method
+	
+	Method update()
+		Local mx:Float = MouseX()-x
+		Local my:Float = MouseY()-y
+		If( mx*mx+my*my &lt; radius*radius And MouseDown(1)) lock=True
+		If Not MouseDown(1) Then lock=False 
+		
+		If(lock)
+			value:+(mouse_y_vel)*0.01
+			value = Max(0.0,Min(1.0,value)) 
+			in_value[0] = value
+		EndIf 
+	End Method
+	
+	Function Create:dial(name:String,in_value:Float Ptr, _radius:Float = 25.0, _x:Float, _y:Float,_default_value:Double = 0.0)
+		Local d:dial = New dial
+		d.name = name 
+		d.in_value = in_value 
+		d.x = _x
+		d.y = _y
+		d.radius = _radius
+		d.default_value =_default_value 
+		d.value = in_value[0]
+		ListAddLast(diallist,d)
+		Return d 
+	End Function
+EndType 
+
+Global gui:dial = dial.Create("cutoff",Varptr flt_cutoff, 25,410,180)
+gui = dial.Create("reso",Varptr flt_resonance, 25,475,180)
+gui = dial.Create("vibrato",Varptr vibrato, 25,560,180)
+
+Function note_release(n:Int)       
+	If(keytone[n])
+		keytone[n].rls();
+		keytable[n]=False; 
+	EndIf 
+End Function
+
+Function hit()
+	If(Not keytable[Int(note)])
+		keytable[Int(note)]=True
+		Local note_step:Double = 0.92603118985523273331964874851613*(2.0^(note/12.0)*octave)/180 'crazy number tunes to 440Hz base at 48KHz
+		mastertone = tone.Create(note_step,2,1.0,0.4+(Float(velocity)/$7f)*0.5) 
+		mastertone.vib_amt = 0.0
+		keytone[Int(note)]=mastertone
+		ListAddLast(tonelist,mastertone)
+		If(update)
+			displaytone = tone.Create(note_step,2,1.0)
+		EndIf 
+	EndIf 
+End Function
+
+Global time:Int = 0
+Global mouse_x_str:Float =MouseX()
+Global mouse_y_str:Float =MouseY()
+Global mouse_x_vel:Float =0
+Global mouse_y_vel:Float =0
+
+
+Global mastertone:tone
+Global displaytone:tone
+SetBlend ALPHABLEND
+Repeat
+	SetColor 0,0,0
+	SetAlpha 0.4
+	DrawRect 0,0,800,240
+	SetAlpha 1.0
+	SetColor 40,46,55
+	DrawRect 360,0,800,240
+
+	SetAlpha 0.5
+	SetColor 30,66,122
+	DrawLine(0,120,360,120)
+
+	For Local d:dial = EachIn diallist
+		d.update()
+		d.draw() 
+	Next
+
+	mouse_x_vel = MouseX()-mouse_x_str
+	mouse_y_vel = mouse_y_str-MouseY()
+	mouse_x_str = MouseX()
+	mouse_y_str = MouseY() 
+
+	glLineWidth(1)
+	update = False 
+	If displaytone
+		Local smpcount:Float =  4.0/displaytone.note
+		Local padd:Float =  Max(1.0,360.0/smpcount)
+		Local loopcount:Int = Int(360)
+		SetColor 240,240,250
+		px=0;
+		For Local i:Int = 0 Until smpcount
+			displaytone.solve()
+		Next
+		For Local i:Int = 0 Until loopcount
+			If px&lt;360 
+			Local piy:Float = displaytone.solve() * 100.0
+			Local col:Byte = 0.5*$ff
+			Local ya:Int = py
+			Local yb:Int = piy
+			DrawLine(px,120+ya,px+padd,120+yb)
+			py =  piy
+			px:+padd
+			EndIf 
+		Next
+		If(disp_note_off) 
+				displaytone.rls();
+		EndIf 
+		displaytone.osc_phase = 0
+
+	End If
+	update = True 
+		SetAlpha 1.0
+		'note = 0
+		
+
+		If KeyDown(KEY_A)			note = 1 ;hit() Else note_release(1 )
+		If KeyDown(KEY_W)			note = 2 ;hit() Else note_release(2 )
+		If KeyDown(KEY_S)			note = 3 ;hit() Else note_release(3 )
+		If KeyDown(KEY_E)			note = 4 ;hit() Else note_release(4 )
+		If KeyDown(KEY_D)			note = 5 ;hit() Else note_release(5 )
+		If KeyDown(KEY_F)			note = 6 ;hit() Else note_release(6 )
+		If KeyDown(KEY_T)			note = 7 ;hit() Else note_release(7 )
+		If KeyDown(KEY_G)			note = 8 ;hit() Else note_release(8 )
+		If KeyDown(KEY_Y)			note = 9 ;hit() Else note_release(9 )
+		If KeyDown(KEY_H)			note = 10;hit() Else note_release(10)
+		If KeyDown(KEY_U)			note = 11;hit() Else note_release(11)
+		If KeyDown(KEY_J)			note = 12;hit() Else note_release(12)
+		If KeyDown(KEY_K)			note = 13;hit() Else note_release(13)
+		If KeyDown(KEY_O)			note = 14;hit() Else note_release(14)
+		If KeyDown(KEY_L)			note = 15;hit() Else note_release(15)
+		If KeyDown(KEY_P)			note = 16;hit() Else note_release(16)
+		If KeyDown(KEY_SEMICOLON)	note = 17;hit() Else note_release(17)
+		If KeyDown(KEY_QUOTES)		note = 18;hit() Else note_release(18)
+		If KeyDown(KEY_RETURN)		note = 20;hit() Else note_release(20)
+		
+		If KeyHit(KEY_PAGEDOWN) 	octave:*0.5;disp_octave:-1
+		If KeyHit(KEY_PAGEUP)		octave:*2.0;disp_octave:+1
+
+
+	SetColor 70,80,90
+		GLDrawText("(pageup/down)octave:"+disp_octave+" voices:"+tonelist.Count(),540,10)
+	Flip 1
+Until KeyHit(KEY_ESCAPE) Or AppTerminate()
+	alcDestroyContext(ALContext)
+	alcCloseDevice(ALDevice)
+	ALContext=0
+	ALDevice=0
+	process_running = False
+
+	midiIn.Free()
+End
+
+</textarea><br><br>I still have to consider a totally different approach to how I get my oscilloscope data. I'm sure it's just a ridiculous brainfart of mine. Feel free to put me to shame with an intelligent solution! 8} <br><br></td></tr></table><br>
+<a name="1307569"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamStrange</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#28">[#28]</a></td></tr></table></td></tr><tr ><td class="posttext"> i'm on a 2011 2.7 i7 here.<br><br>Just running the midi version. not looking at the code as just run - note off not implemented yet? <br><br></td></tr></table><br>
+<a name="1307578"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamStrange</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#29">[#29]</a></td></tr></table></td></tr><tr ><td class="posttext"> mmmm, just been looking at the code.<br><br>in the midi process function you really should only be dealing with the hi nibble of the message byte (the top four bits). the lo nibble (bottom four bytes is the midi channel)<br>so<br>if message[i] = 144<br><br>should be something like<br>truemessage = message[i] shr 4<br>if truemessage = 9 &lt;-- 9 or 1001 is note on<br><br>Also. the note off issue is something widely known in that: some keyboards ONLY send noteon (1001) and not followed by note off (1000). a second noteon (1001) is used as the noteoff <br><br></td></tr></table><br>
+<a name="1307598"></a>
+
+<a name="1307605"></a>
+
+<a name="1307606"></a>
+
+<a name="1307609"></a>
+
+<a name="1307610"></a>
+
+<a name="1307613"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#30">[#30]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ah, it's just been a super quick throw-in and with my keyboard it works perfectly!<br>I made some super impatient observations and implemented them, thus not going by any "book" for that matter...<br><br>But, yeah, awesome, feel free to jump in at any time, but please, share your improvements, if you don't mind! That is what I love about here! 8)<br>I'm thrilled already, that it works to begin with! But, again, I don't have a note off issue in the midi/audio section. There's a note off issue with the display, but it has got nothing to do with midi, it's my idiot approach to avoid thread clashing. &lt;blush&gt;<br><br>In a more elegant version it should probably clean up like so:<br><pre class=code>
+		For Local i:Int = 0 Until nBytes
+			local status:byte = message[i]
+			Select i
+				Case 0 
+					status:&amp;$f0
+					If (status&gt;=$90 and status&lt;$a0) 
+					 	note_on = True;
+					 	disp_note_off=False 
+					Else if (status&gt;=$80 and status&lt;$90)
+						note_off = True
+					EndIf 
+					'...followed by controller messages 
+				Case 1
+					note = status&amp;$7f		
+				Case 2
+				    velocity = status&amp;$7f
+			EndSelect 
+			ms:+message[i]
+		Next			
+
+</pre><br><br>But I actually like your solution even more! That's very pretty! And a MUCH wiser approach to deal with the channels, too, very elegant!<br><br>Later on I'll see how much of this I may implement:<br><a href="https://www.midi.org/specifications/item/table-1-summary-of-midi-message" target="_blank">https://www.midi.org/specifications/item/table-1-summary-of-midi-message</a><br><br>It's quite nice. :o) <br><br></td></tr></table><br>
+<a name="1307624"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#31">[#31]</a></td></tr></table></td></tr><tr ><td class="posttext"> How about this:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Framework BRL.GLMax2D
+Import pub.glew
+Import pub.OpenAL
+Import brl.standardio
+Import BaH.RtMidi
+Import BRL.LinkedList
+Import brl.threads
+
+Const MAX_MESSAGES:Int = 30
+Global messages:TList = New TList
+
+Global midiIn:TRtMidiIn = New TRtMidiIn.Create()
+
+' Check available ports.
+
+If midiIn.getPortCount() = 0 Then
+	Print "No Input Ports"
+	End
+End If
+
+For Local i:Int = 0 Until midiIn.getPortCount()
+	Print "  Input port #" + i + " : " + midiIn.getPortName(i)
+Next
+
+Print "Opening " + midiIn.getPortName()
+
+midiIn.openPort(0)
+
+' Don't ignore sysex, timing, or active sensing messages.
+midiIn.ignoreTypes(False, False, False)
+
+
+SetGraphicsDriver GLMax2DDriver()
+AppTitle="Simple Synth - openAL real time synthesis"
+
+Graphics(800,240,0,60) 
+
+glEnable(GL_LINE_SMOOTH)
+
+'============================ AUDIO setup ====================================
+Global audiotrue:Byte = 0
+
+If OpenALInstalled()
+	audiotrue=1
+Else
+	GLDrawText"Audio OFF: OpenAL audio is not installed. &lt;hit any key to continue!&gt;",0,120-17
+	Flip 0
+	WaitKey()
+	End
+End If
+
+'============================ The Real Deal ==================================
+Const BUFFER_SIZE:Int=1440*2
+Const SAMPLING_FRQ:Int=48000
+
+Global source:Int		'the INT vs. pointer story really is a common thread with openAL in bmax...
+Global buffers:Int[2]	'I suppose it should store pointers here, too. Int may cause trouble at x64 compiles?!
+Global frequency:Int
+Global format:Int
+Global buf:Byte Ptr
+
+?bmxng
+Global ALDevice:Byte Ptr
+Global ALContext:Byte Ptr
+?Not bmxng
+Global ALDevice:Int
+Global ALContext:Int
+?
+ALDevice = alcOpenDevice(Null) 					'should actually be a pointer instead of an int (openAL src flaw)
+ALContext = alcCreateContext(ALDevice, Null)      'should also actually be a pointer instead of an int (openAL src flaw)
+alcMakeContextCurrent(ALContext)
+
+alGenBuffers(2,buffers)	'generates 2 buffers which we later toggle like back buffers in graphics (flip like)
+alGenSources(1, Varptr source)
+
+alListenerfv(AL_POSITION,[0.0,0.0,0.0])
+alListenerfv(AL_VELOCITY,[0.0,0.0,0.0])
+alListenerfv(AL_ORIENTATION,[0.0,0.0,-1.0])
+alListenerf(AL_GAIN,4.0)
+
+Global buffer_A:Short[BUFFER_SIZE]
+
+format = AL_FORMAT_STEREO16
+buf = Byte Ptr buffer_A
+For Local i:Int = 0 Until BUFFER_SIZE
+		buffer_A[i] = 0
+Next
+alBufferData(buffers[0], format, buf,BUFFER_SIZE*2,SAMPLING_FRQ)
+alBufferData(buffers[1], format, buf,BUFFER_SIZE*2,SAMPLING_FRQ)
+
+alSourceQueueBuffers(source, 1, Varptr buffers[0])
+alSourceQueueBuffers(source, 1, Varptr buffers[1])
+alSourcePlay(source)
+
+Global tick:Int = 0
+Global delay_i:Int = 0
+Global delay_buffer:Float[SAMPLING_FRQ]
+'============================---------------==================================
+
+Function audio_process()':Object(id:Int,data:Object,context:Object )
+		Local buffer:Int
+		Local val:Int
+		Local vib_change:Float = vibrato - set_vibrato
+		Local flt_cutoff_change:Float = flt_cutoff - set_flt_cutoff
+		
+		If(vib_change&lt;&gt;0) Then vib_change:/BUFFER_SIZE
+		If(flt_cutoff_change&lt;&gt;0) Then flt_cutoff_change:/BUFFER_SIZE
+		alGetSourcei(source, AL_BUFFERS_PROCESSED, Varptr val)
+			While(val)
+				alSourceUnqueueBuffers(source,1, Varptr buffer)
+				For Local i:Int = 0 Until BUFFER_SIZE Step 2
+					Local accumulation:Double =0
+					
+					set_vibrato:+vib_change
+					buffer_A[i]=0
+					set_flt_cutoff:+ flt_cutoff_change
+					inv_flt_cutoff = (1.0-set_flt_cutoff)
+					For Local t:tone = EachIn tonelist
+						t.vib_amt=set_vibrato
+						accumulation:+t.solve()
+					Next
+					'======================== FX section ......................
+					Local delay_i1:Int = tick 'Mod (0.5*SAMPLING_FRQ)
+					Local delay_i2:Int = (tick+(0.25*SAMPLING_FRQ)) Mod (0.5*SAMPLING_FRQ)
+					delay_buffer[delay_i1]:*0.4
+					buffer_A[i]= delay_buffer[delay_i1]*$6ff
+					buffer_A[i+1]= delay_buffer[delay_i2]*$4ff
+
+					delay_buffer[delay_i1]:+accumulation*0.5
+					buffer_A[i]:+accumulation*$7ff
+					buffer_A[i+1]:+accumulation*$7ff
+					
+					tick:+1	
+					If(tick&gt;(0.5*SAMPLING_FRQ))	tick=0
+				Next
+				alBufferData(buffer, format, buf, BUFFER_SIZE*2, SAMPLING_FRQ)
+				alSourceQueueBuffers(source,1, Varptr buffer)
+				
+				val:-1
+			Wend
+		If val&lt;=0
+			alGetSourcei(source, AL_SOURCE_STATE, Varptr val)
+			If val&lt;&gt; AL_PLAYING
+				alSourcePlay(source)
+			End If
+		End If	
+End Function
+
+
+
+Global disp_octave:Int = -1
+Global octave:Float = 0.0625
+Global set_flt_cutoff:Float = 0.75
+Global flt_cutoff:Float = 0.75
+Global inv_flt_cutoff:Float = 0.25
+Global flt_resonance:Float = 0.0
+Global set_vibrato:Float = 0.0
+Global vibrato:Float = 0.0
+
+Global px:Float = 0
+Global py:Float = 0 
+
+Global note:Double 
+Global keytable:Byte[128]
+Global keytone:tone[128]
+
+'-------------------- MIDI PROCESS
+
+Global update:Byte = False 
+Global timestamp:Double
+Global note_on:Byte
+Global disp_note_off:Byte
+Global velocity:Byte 
+
+
+Global process_running:Byte = True
+Global midi_process:TThread = CreateThread(midiprocess,Null) 
+
+Function midiprocess:Object(data:Object = Null)
+	While process_running
+		note_on = False
+		Local note_off:Byte = False 
+		Local control:Byte = 0 
+		Local controller:Byte = 0
+		Local ms:String
+		Local message:Byte[] = midiIn.getMessage(timestamp)
+		Local nBytes:Int = message.length
+		For Local i:Int = 0 Until nBytes
+			Local status:Byte = message[i]
+			Select i
+				Case 0 
+					Local channel:Byte = status&amp;$f
+					status:Shr 4
+					If(status=%1001) Then note_on = True; disp_note_off=False; control= 0 
+					If(status=%1000) Then note_off = True
+					If(status=%1011) Then control = 1
+					'...followed by controller messages 
+				Case 1
+					If(control = 0) note = status&amp;$7f	
+					If(control = 1)	controller = status&amp;$7f
+				Case 2
+				    If(control = 0) velocity = status&amp;$7f
+				    Select controller
+				    	Case 1 'mod wheel
+				    		vibrato = (Float(status&amp;$7f)/$7f * 0.4)^2 'temporary max
+				    EndSelect 
+			EndSelect 
+			ms:+message[i]
+		Next			
+		If nBytes
+			If(note_on) hit() Else If(note_off) Then note_release(note);disp_note_off=True  
+		EndIf 	
+		audio_process()
+	Wend	
+EndFunction 
+
+Function AddMessage(message:String)
+	Local count:Int = messages.Count()
+	If count &gt;= MAX_MESSAGES Then
+		messages.RemoveFirst()
+	End If
+	
+	messages.AddLast(message)
+End Function
+'=====================================================	
+
+Global tonelist:TList = CreateList()
+Type tone
+	Field index:Int
+	Field decay:Int 
+	Field decay_div:Float 
+	Field note_off:Byte 
+	Field output:Float 
+	Field volume:Float 
+	Field note:Double 
+	Field vib_amt:Float 
+	Field flt_vel:Double
+	Field flt_signal:Double 
+	Field flt2_signal:Double 
+	Field sample_index:Double 
+	Field tick:Int
+	
+	Field osc_step:Double
+	Field osc_phase:Double
+	Field osc_s01:Double
+	Field osc_s02:Double
+	Field osc_s03:Double
+	Field osc_s04:Double
+	Field osc_s11:Double
+	Field osc_s12:Double
+	Field osc_s13:Double
+	Field osc_s14:Double
+
+	Method rls()
+		note_off = True
+	End Method
+	
+	Method solve:Float()
+	
+		Local phase:Float = note
+		If(vib_amt) 
+			phase:*2^(Sin(Double(tick*0.05))*Min(vib_amt,(0.0001*tick)))
+		EndIf
+		
+		'--------------- saw wave (AA concept)
+		osc_step = phase
+		osc_phase:+osc_step
+		If osc_phase&gt;1.0 Then osc_phase:-2.0
+		osc_s01 = osc_phase*(7.0/360.0 + osc_phase*osc_phase*(-1/36.0 + osc_phase*osc_phase*(1/120.0)))
+		osc_s02 = osc_s11-osc_s01
+		osc_s03 = osc_s12-osc_s02
+		osc_s04 = osc_s13-osc_s03
+		sample_index = osc_s14 - osc_s04
+		If(sample_index) sample_index:/(osc_step^4) 
+		osc_s11 = osc_s01
+		osc_s12 = osc_s02
+		osc_s13 = osc_s03
+		osc_s14 = osc_s04
+		'-----------
+		
+		Local ramp:Double = 250.0/octave
+		Local iramp:Double = 1.0/ramp
+		If(tick&lt;ramp) sample_index:*(iramp*tick)^2
+	
+		
+		output=volume*(Float(decay)*decay_div)^3
+		If(note_off)	decay:-1
+		
+		If (decay&lt;1)
+			tonelist.Remove(Self)
+			Return 0
+		EndIf
+
+		'---------- simple two pole filter
+		Local cf:Float = Max(0.0,Min(1.0,(inv_flt_cutoff+(0.15-(output/0.75)*0.15))^0.1 )) '-note*10.0 later for tracking
+		Local q:Float = flt_resonance
+		
+		flt_vel:+ sample_index - flt2_signal*q
+		flt_vel:*(0.471+0.429* q)
+		flt_signal	=	flt_vel		-(flt_vel	-flt_signal	)*cf
+		flt2_signal	=	flt_signal	-(flt_signal-flt2_signal)*cf
+		
+		Local wave:Float = flt2_signal 
+		'-----------
+
+		tick:+1
+		Return wave *output
+	End Method
+	
+	Function Create:tone(_note:Double=1.0, _reps:Int = 2, _decay:Float = 1.0, _volume:Float = 0.666)
+		Local t:tone = New tone
+		t.note = _note
+		t.decay = _decay*SAMPLING_FRQ 
+		t.decay_div = 1.0/t.decay
+		t.volume = _volume
+		t.sample_index = 0.0
+		t.flt_vel = 0.0
+		t.flt_signal = 0.0
+		t.flt2_signal = 0.0
+
+		t.vib_amt = 0
+
+		t.note_off = False
+		t.tick = 0
+		t.osc_phase=0
+		t.osc_s01=0
+		t.osc_s02=0
+		t.osc_s03=0
+		t.osc_s04=0
+		t.osc_s11=0
+		t.osc_s12=0
+		t.osc_s13=0
+		t.osc_s14=0
+		Return t
+	EndFunction 
+EndType 
+
+Global diallist:TList = CreateList()
+Type dial
+	Field name:String 
+	Field default_value:Float 
+	Field value:Float
+	Field in_value:Float Ptr 
+	Field lock:Byte 
+	Field x:Float
+	Field y:Float 
+	Field radius:Float
+
+	Method draw()
+		SetAlpha(0.75)
+		If name.Length
+			SetColor(190,190,190)
+			GLDrawText(name,Int(x-4*name.Length-2),Int(y-radius-20))
+		End If
+		SetColor(210,170,90)
+		SetAlpha(0.05)
+		For Local m:Int = 0 Until 36
+			glBegin(GL_TRIANGLE_FAN)
+				glVertex2d(x,y)
+					For Local s:Double = 0 To 360 Step 36
+						glVertex2d(x+Sin(s+m)*radius, y+Cos(s+m)*radius)
+					Next 
+			glEnd 
+		Next 
+		SetColor(220,190,120)
+		Local inner_radius:Float = radius*0.7
+		For Local m:Int = 0 Until 36
+			glBegin(GL_TRIANGLE_FAN)
+				glVertex2d(x,y)
+					For Local s:Double = 0 To 360 Step 36
+						glVertex2d(x+Sin(s+m)*inner_radius, y+Cos(s+m)*inner_radius)
+					Next 
+			glEnd 
+		Next 
+		SetAlpha(1.0)
+		Local sx:Float = Sin(value*360.0)
+		Local sy:Float = Cos(value*360.0)
+	
+		glLineWidth(6)
+		glBegin(GL_LINES)
+			glVertex2d(x-sx*0.7*radius,y+sy*0.7*radius)
+			glVertex2d(x-sx*1.05*radius,y+sy*1.05*radius)
+		glEnd 
+		
+		SetColor(0,0,0)
+		DrawRect(x-radius,y+1.2*radius,radius*2,18)
+		SetColor(190,190,190)
+		GLDrawText(Int(100*value),Int(x-0.9*radius),Int(y+1.3*radius))
+	End Method
+	
+	Method update()
+		Local mx:Float = MouseX()-x
+		Local my:Float = MouseY()-y
+		If( mx*mx+my*my &lt; radius*radius And MouseDown(1)) lock=True
+		If Not MouseDown(1) Then lock=False 
+		
+		If(lock)
+			value:+(mouse_y_vel)*0.005
+			value = Max(0.0,Min(1.0,value)) 
+			in_value[0] = value
+		EndIf 
+	End Method
+	
+	Function Create:dial(name:String,in_value:Float Ptr, _radius:Float = 25.0, _x:Float, _y:Float,_default_value:Double = 0.0)
+		Local d:dial = New dial
+		d.name = name 
+		d.in_value = in_value 
+		d.x = _x
+		d.y = _y
+		d.radius = _radius
+		d.default_value =_default_value 
+		d.value = in_value[0]
+		ListAddLast(diallist,d)
+		Return d 
+	End Function
+EndType 
+
+Global gui:dial = dial.Create("cutoff",Varptr flt_cutoff, 25,410,180)
+gui = dial.Create("reso",Varptr flt_resonance, 25,475,180)
+gui = dial.Create("vibrato",Varptr vibrato, 25,560,180)
+
+Function note_release(n:Int)       
+	If(keytone[n])
+		keytone[n].rls();
+		keytable[n]=False; 
+	EndIf 
+End Function
+
+Function hit()
+	If(Not keytable[Int(note)])
+		keytable[Int(note)]=True
+		Local note_step:Double = 0.92603118985523273331964874851613*(2.0^(note/12.0)*octave)/180 'crazy number tunes to 440Hz base at 48KHz
+		mastertone = tone.Create(note_step,2,1.0,0.4+(Float(velocity)/$7f)*0.5) 
+		mastertone.vib_amt = 0.0
+		keytone[Int(note)]=mastertone
+		ListAddLast(tonelist,mastertone)
+		If(update)
+			displaytone = tone.Create(note_step,2,1.0)
+		EndIf 
+	EndIf 
+End Function
+
+Global time:Int = 0
+Global mouse_x_str:Float =MouseX()
+Global mouse_y_str:Float =MouseY()
+Global mouse_x_vel:Float =0
+Global mouse_y_vel:Float =0
+
+
+Global mastertone:tone
+Global displaytone:tone
+SetBlend ALPHABLEND
+Repeat
+	SetColor 0,0,0
+	SetAlpha 0.4
+	DrawRect 0,0,800,240
+	SetAlpha 1.0
+	SetColor 40,46,55
+	DrawRect 360,0,800,240
+
+	SetAlpha 0.5
+	SetColor 30,66,122
+	DrawLine(0,120,360,120)
+
+	For Local d:dial = EachIn diallist
+		d.update()
+		d.draw() 
+	Next
+
+	mouse_x_vel = MouseX()-mouse_x_str
+	mouse_y_vel = mouse_y_str-MouseY()
+	mouse_x_str = MouseX()
+	mouse_y_str = MouseY() 
+
+	glLineWidth(1)
+	update = False 
+	If displaytone
+		Local smpcount:Float =  4.0/displaytone.note
+		Local padd:Float =  Max(1.0,360.0/smpcount)
+		Local loopcount:Int = Int(360)
+		SetColor 240,240,250
+		px=0;
+		For Local i:Int = 0 Until smpcount
+			displaytone.solve()
+		Next
+		For Local i:Int = 0 Until loopcount
+			If px&lt;360 
+			Local piy:Float = displaytone.solve() * 100.0
+			Local col:Byte = 0.5*$ff
+			Local ya:Int = py
+			Local yb:Int = piy
+			DrawLine(px,120+ya,px+padd,120+yb)
+			py =  piy
+			px:+padd
+			EndIf 
+		Next
+		If(disp_note_off) 
+				displaytone.rls();
+		EndIf 
+		displaytone.osc_phase = 0
+
+	End If
+	update = True 
+		SetAlpha 1.0
+		'note = 0
+		
+
+		If KeyDown(KEY_A)			note = 1 ;hit() Else note_release(1 )
+		If KeyDown(KEY_W)			note = 2 ;hit() Else note_release(2 )
+		If KeyDown(KEY_S)			note = 3 ;hit() Else note_release(3 )
+		If KeyDown(KEY_E)			note = 4 ;hit() Else note_release(4 )
+		If KeyDown(KEY_D)			note = 5 ;hit() Else note_release(5 )
+		If KeyDown(KEY_F)			note = 6 ;hit() Else note_release(6 )
+		If KeyDown(KEY_T)			note = 7 ;hit() Else note_release(7 )
+		If KeyDown(KEY_G)			note = 8 ;hit() Else note_release(8 )
+		If KeyDown(KEY_Y)			note = 9 ;hit() Else note_release(9 )
+		If KeyDown(KEY_H)			note = 10;hit() Else note_release(10)
+		If KeyDown(KEY_U)			note = 11;hit() Else note_release(11)
+		If KeyDown(KEY_J)			note = 12;hit() Else note_release(12)
+		If KeyDown(KEY_K)			note = 13;hit() Else note_release(13)
+		If KeyDown(KEY_O)			note = 14;hit() Else note_release(14)
+		If KeyDown(KEY_L)			note = 15;hit() Else note_release(15)
+		If KeyDown(KEY_P)			note = 16;hit() Else note_release(16)
+		If KeyDown(KEY_SEMICOLON)	note = 17;hit() Else note_release(17)
+		If KeyDown(KEY_QUOTES)		note = 18;hit() Else note_release(18)
+		If KeyDown(KEY_RETURN)		note = 20;hit() Else note_release(20)
+		
+		If KeyHit(KEY_PAGEDOWN) 	octave:*0.5;disp_octave:-1
+		If KeyHit(KEY_PAGEUP)		octave:*2.0;disp_octave:+1
+
+
+	SetColor 70,80,90
+		GLDrawText("(pageup/down)octave:"+disp_octave+" voices:"+tonelist.Count(),540,10)
+	Flip 1
+Until KeyHit(KEY_ESCAPE) Or AppTerminate()
+	alcDestroyContext(ALContext)
+	alcCloseDevice(ALDevice)
+	ALContext=0
+	ALDevice=0
+	process_running = False
+
+	midiIn.Free()
+End
+
+
+</textarea><br><br>I made the midi processing a bit cleaner and added a mod wheel for vibrato. It's just temporarily fixed to a max, of course, but it plays really nicely! :o) <br><br></td></tr></table><br>
+<a name="1307782"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#32">[#32]</a></td></tr></table></td></tr><tr ><td class="posttext"> Little question for Brucey and/or Derron:<br>What IDE are you using to code for NG?<br><br>I've just started to setup sublime text 3, which is a gorgeous editor, but I still have to learn how to write build commands and so on. Also, there's a way to get some code intelligence like finding definitions and so on, but all this still escapes me. SO, yeah, I really wonder? Because I cannot imagine you're using the maxIDE?! <br><br></td></tr></table><br>
+<a name="1307787"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#33">[#33]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm using an NG-configured MaxIDE (i.e. lots of extra build options).<br><br>I generally have two open at the same time - a legacy MaxIDE for bcc editing and debug, and the one (mentioned above) for NG itself. <br><br></td></tr></table><br>
+<a name="1307806"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#34">[#34]</a></td></tr></table></td></tr><tr ><td class="posttext"> I use "geany" with my compiler-addon (to have some icons and a dropdown for options) for normal coding.<br>MaxIDE when it comes to debugging.<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1307856"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GW</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#35">[#35]</a></td></tr></table></td></tr><tr ><td class="posttext"> I use the NG ide for small programs and I use BLide for larger projects.<br><br>btw, the NG ide really needs a custom Icon and name. It hard to make out the difference between NG and vanilla ide when both are open. <br><br></td></tr></table><br>
+<a name="1307862"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#36">[#36]</a></td></tr></table></td></tr><tr ><td class="posttext"> Feel free to suggest a logo, I created an <a href="https://github.com/bmx-ng/bmx-ng/issues/1" target="_blank">issue for it on github</a> a year ago. <br>Then just recompile Brucey's MaxIDE variant and use that logo you decided for.<br><br>@ Blide<br>Windows only.<br><br>@ Editor<br>Maybe the one really interested in this subject should create a new thread to avoid thread-derailing.<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1307898"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GW</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#37">[#37]</a></td></tr></table></td></tr><tr ><td class="posttext"> <img src="http://www.kerneltrick.com/download/ngico/maxideNG.png"><br>I made new icon then. Ugly, but does the job. <br><br></td></tr></table><br>
+<a name="1307910"></a>
+
+<a name="1307911"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#38">[#38]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks, Ron! I was anticipating a mild derailment, of course, haha, but it's really worthy of it's own thread!<br> <br>BLide is the closest to a respectable IDE for BlitzMax, still not up to par compared to visual studio, of course. But Sublime is really a beautiful editor, I just wished it was possible to hook up the code intel and all the build options for NG properly (the latter is possible, but I don't know how, yet!).<br><br>The maxIDE and NG version, they are travesties when it comes to text editing, it's so horrible. I get fits when trying to work with those. No column selection, double click selections interrupted by underscore (and I like naming variables blah_something). No "go to declaration or definition" no autocomplete... ah well. <br><br>Anyway, thanks for all the replies and I'm actually astounded! Ron I understand most, which is my current situation, though, I haven't hooked up BLide to compile NG, yet- not to mention no x64 compiling-, but I'm also mildly scared not to be able to reset it back to normal, hahaha...silly me. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,2232 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Frame Tweening/Delta timing in physics wrappers</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Frame Tweening/Delta timing in physics wrappers</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=94" >Blitz3D Userlibs</a>/<a href="#bottom" >Frame Tweening/Delta timing in physics wrappers</a><br><br>
+<a name="618148"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Shifty Geezer</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I thought I'd run this as a seperate topic as the officail JV-ODE is filling up, plus this is something worth keeping seperate I think. Following from Wayne's timer based updates of the breakable ragdoll demo, I've been thinking about keeping smooth animations. That demo updated at the same rate but had jitters as things weren't sync'd nicely to the screen refresh.<br><br>Standard Blitz has options for delta timing or tweening, but ODE and other engines AFAIK don't. To get smooth frame rates using JV-ODE and other wrappers we need some alternative.<br><br>A bit of experimenting has me precalculate a QuickStep (physics step) amount based on the monitor refresh, calculate from an average of multiple VWait durations. This particular code in easy-to-read format is<br><pre class=code>
+; Multiple refresh sampling to get monitor framerate
+For n=0 To 10
+	VWait
+	T=MilliSecs()
+	VWait
+	T=MilliSecs()-T
+	Total_Time=Total_Time+T
+	num_samples=num_samples+1
+Next
+
+; Calculate Refresh Rate, determine step size
+Refresh_rate#=Float(Total_Time)/num_samples
+Sixty_hertz#=16.6666667
+Step_Size#=0.07
+Step_Size=step_size*(Refresh_rate/Sixty_hertz)</pre><br>In the case of ODE call dQuickStep(world,Step_Size) . Alternative physics engines can do the same. The inital step size (0.07) is that for a 60 Hz standard.<br><br>A full demo applied to Wayne's Ragdoll-Abuse engine is...<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+; ###################################################################################################
+; #									   JV-ODE - BreakMe Ragdoll Demo										#
+; #									Code by Jim Williams (VIP3R)									#
+; ###################################################################################################
+
+AppTitle "JV-ODE - BreakMe Ragdoll Demo"
+
+Include "JV-ODE.bb"
+
+Graphics3D 800,600,0,2
+
+; Multiple refresh sampling to get monitor framerate
+For n=0 To 10
+	VWait
+	T=MilliSecs()
+	VWait
+	T=MilliSecs()-T
+	Total_Time=Total_Time+T
+	num_samples=num_samples+1
+Next
+
+; Calculate Refresh Rate, determine step size
+Refresh_rate#=Float(Total_Time)/num_samples	; Mean average VWait time
+Sixty_hertz#=16.6666667
+Step_Size#=0.07
+Step_Size=step_size*(Refresh_rate/Sixty_hertz)
+
+Global RagDollMax=1
+
+Dim Head(RagDollMax)
+Dim BodyU(RagDollMax)
+Dim BodyL(RagDollMax)
+Dim LArmU(RagDollMax)
+Dim LArmL(RagDollMax)
+Dim RArmU(RagDollMax)
+Dim RArmL(RagDollMax)
+Dim LLegU(RagDollMax)
+Dim LLegL(RagDollMax)
+Dim RLegU(RagDollMax)
+Dim RLegL(RagDollMax)
+Dim LFoot(RagDollMax)
+Dim RFoot(RagDollMax)
+
+Dim RDJoint(RagDollMax,12)
+
+Type ODEGeom
+	Field body
+	Field geom
+	Field mesh
+	Field mass
+End Type
+
+; ###################################################################################################
+
+; ### Setup ODE
+
+
+Global World=dWorldCreate()
+Global Space=dHashSpaceCreate(0)
+Global ContactGroup=dJointGroupCreate(0)
+
+Global BigG#=-0.98
+
+dWorldSetAutoDisableFlag(World,1)
+dWorldSetGravity(World,0,BigG#,0)
+dContactSetMode(dContactSlip1+dContactBounce)
+dContactSetBounce(0.3)
+dContactSetMu(48)
+dWorldSetQuickStepNumIterations (World,20)	; default 20
+
+; ### Create light
+
+Global Light=CreateLight()
+
+RotateEntity Light,45,-90,0
+LightColor Light,255,255,255
+AmbientLight 130,130,130
+
+; ### Create camera
+
+Global Camera=CreateCamera()
+CameraZoom Camera,1.0
+CameraClsColor Camera,64,128,255
+CameraRange Camera,1,1000
+PositionEntity Camera,20,20,-10
+RotateEntity Camera,5,45,0
+
+
+; ### Create plane
+
+dCreatePlane(Space,0,1,0,0)
+
+Plane=CreatePlane()
+
+EntityAlpha Plane,0.8
+
+PlaneTexture=CreateTexture(128,128,9)
+
+ClsColor 0,150,80
+Cls
+
+Color 200,200,200
+
+Rect 0,0,64,64,1
+Rect 64,64,64,64,1
+
+CopyRect 0,0,128,128,0,0,BackBuffer(),TextureBuffer(PlaneTexture)
+ScaleTexture PlaneTexture,20,20
+EntityTexture Plane,PlaneTexture,0,0
+
+Color 255,255,255
+
+Mirror=CreateMirror()
+
+; ###################################################################################################
+
+CreateRagDoll(count)
+
+block.ODEGeom=New ODEGeom
+	x_pos#=-8
+	y_pos#=15
+	z_pos#=12
+	width#=2
+	length#=2
+	depth#=2
+	x_rot#=0
+	y_rot#=0
+	z_rot#=0
+	weight#=100.0
+	
+	block\body=dBodyCreate(World)
+	block\mass=dMassCreate()
+	dMassSetBoxTotal(block\mass,weight, width, length, depth)
+	dBodySetMass(block\body,block\mass)
+	dBodySetPosition(block\body, x_pos, y_pos, z_pos)
+	dBodySetRotation(block\body, x_rot, y_rot, z_rot)
+	
+	block\geom=dCreateBox(Space,width, length, depth)
+	dGeomSetBody(block\geom,block\body)
+	dGeomContactSetBounce(block\geom,0.5)
+	set_object_friction(block,0.5,weight)
+	dGeomContactSetMode(block\geom,dContactSlip1+dContactBounce)
+
+	block\mesh=CreateCube()
+	ScaleEntity block\mesh,width/2,length/2,depth/2
+	
+	seesaw.ODEGeom=New ODEGeom
+	seesaw\mass=dMassCreate()
+	x_pos#=-8
+	y_pos#=5
+	z_pos#=8
+	width#=3
+	length#=0.5
+	depth#=15
+	x_rot#=-20
+	y_rot#=0
+	z_rot#=0
+	weight#=2.0
+	
+	seesaw\body=dBodyCreate(World)
+	dMassSetBoxTotal(seesaw\mass,weight, width, length, depth)
+	dBodySetMass(seesaw\body,seesaw\mass)
+	dBodySetPosition(seesaw\body, x_pos, y_pos, z_pos)
+	
+	seesaw\geom=dCreateBox(Space,width, length, depth)
+	dGeomSetBody(seesaw\geom,seesaw\body)
+	dGeomContactSetBounce(seesaw\geom,0.5)
+	set_object_friction(seesaw,0.5,weight)
+	dGeomContactSetMode(seesaw\geom,dContactSlip1+dContactBounce)
+
+	seesaw\mesh=CreateCube()
+	; Blitz box lengths 2x longer than ODE box length
+	ScaleEntity seesaw\mesh,width/2,length/2,depth/2
+	dBodyDisable(seesaw\body)
+
+	seesaw_joint=dJointCreateHinge(World,0)
+	dJointAttach(seesaw_joint, seesaw\body, 0)
+	dJointSetHingeAxis(seesaw_joint,1,0,0)
+	dJointSetHingeAnchor(seesaw_joint,-8,4,8)
+	dJointSetHingeParam(seesaw_joint,dParamLoStop,-dinfinity)
+	dJointSetHingeParam(seesaw_joint,dParamHiStop,dinfinity)
+	dBodySetRotation(seesaw\body, x_rot, y_rot, z_rot)
+	
+
+;===============================================================
+; Render Loop
+
+While Not KeyHit(1)
+
+	; Calculate Time 
+	T=MilliSecs() 
+	
+	;-----------------------------------------------------------
+	; Mouse Look code
+	
+	; Poll Mouse Movement every 33ms ( 30/sec )
+;	If T &gt; Time2 + 33 Then
+;		Time2=T
+		mxs#=mxs#+(MouseXSpeed()-mxs#)/3
+		mys#=mys#+(MouseYSpeed()-mys#)/3
+	
+		If MouseDown(2) Then 
+			MoveMouse GraphicsWidth()/2,GraphicsHeight()/2
+			p1#=p1#-mys#
+			y1#=y1#-mxs#
+			RotateEntity camera,-p1#,y1#,0
+		EndIf
+;	EndIf	
+	
+	;----------------------------------------------------------
+	; WSAD - Movement
+
+	; W- Forward
+	If KeyDown(17) Or KeyDown(200) Then
+		MoveEntity camera,0,0,1
+	EndIf
+	; S- Reverse
+	If KeyDown(31) Or KeyDown(208) Then
+		MoveEntity camera,0,0,-1
+	EndIf
+	
+	; A- Left
+	If KeyDown(30) Or KeyDown(203) Then
+		MoveEntity camera,-1,0,0
+	EndIf
+	; D- Right
+	If KeyDown(32) Or KeyDown(205) Then
+		MoveEntity camera,1,0,0
+	EndIf
+	
+	
+		UpdateGeoms()
+		For x=1 To 3 ; Increase to speed up simulation
+			dSpaceCollide(Space,World,ContactGroup)
+				dWorldQuickStep(World,Step_Size)
+				updatefriction()
+			dJointGroupEmpty(ContactGroup)
+		Next
+	RenderWorld
+;	EndIf	
+	
+	
+	;-----------------------------------------------
+	; Break joints for each body
+	
+	rd=0 			; Ragdoll id
+	Jlimit#=250	; Joint Limit, hand tuned, larger limit resists breakage.
+	JointLimits(Head(rd),Jlimit#) 
+	JointLimits(BodyU(rd),Jlimit#)
+	JointLimits(BodyL(rd),Jlimit#)
+	JointLimits(LArmU(rd),Jlimit#)
+	JointLimits(LArmL(rd),Jlimit#)
+	JointLimits(RArmU(rd),Jlimit#)
+	JointLimits(RArmL(rd),Jlimit#)
+	JointLimits(LLegU(rd),Jlimit#)
+	JointLimits(LLegL(rd),Jlimit#)
+	JointLimits(RLegU(rd),Jlimit#)
+	JointLimits(RLegL(rd),Jlimit#)
+	JointLimits(LFoot(rd),Jlimit#)
+	JointLimits(RFoot(rd),Jlimit#)
+		
+	y=15
+	Text 0,y,"Total_Time:"+Total_Time : y=y+15
+	Text 0,y,"Num_Samples:"+num_samples : y=y+15
+	Text 0,y,"Refresh rate:"+Refresh_Rate : y=y+15
+	Text 0,y,"Step_Size:"+Step_Size : y=y+15
+	VWait
+	Flip False
+;	PhysicsTime#=MilliSecs()-T
+;	If Physicstime&lt;14
+;		Delay 14-physicstime
+;	EndIf
+
+	; Adjust Gravity - mouse wheel
+	BigG#=BigG#+(MouseZSpeed()/100.0)
+	dWorldSetGravity(World,0,BigG#,0)
+	
+	;--------------------------------------------------------
+	;#Region Space - Resets See Saw, Jumper, block and drops it.
+	If KeyHit(57)
+	
+		; Position See Saw
+		x_pos#=-8
+		y_pos#=5
+		z_pos#=8
+		x_rot#=-20
+		y_rot#=0
+		z_rot#=0
+		dBodySetPosition(seesaw\body, x_pos, y_pos, z_pos)
+		dBodySetRotation(seesaw\body, x_rot, y_rot, z_rot)
+		dBodySetLinearVel(seesaw\body,0,0,0)
+		dBodySetAngularVel(seesaw\body,0,0,0)
+	 	dBodyDisable(seesaw\body)
+		
+		
+		xp=-8
+		yp=9
+		zp=2
+		; ### Position Head
+	
+		dBodySetRotation(Head(rd),0,0,0)
+		dBodySetPosition(Head(rd),xp,yp,zp)
+		dBodySetAutoDisableFlag(Head(rd),1)
+		dBodySetLinearVel(Head(rd),0,0,0)
+		dBodySetAngularVel(Head(rd),0,0,0)
+		dBodySetForce(Head(rd),0,0,0)
+		dBodySetTorque(Head(rd),0,0,0)
+		dBodyDisable(Head(rd))
+		
+		; ### Position Body (Upper)
+		
+		dBodySetRotation(BodyU(rd),0,0,0)
+		dBodySetPosition(BodyU(rd),xp,yp-1.25,zp)
+		dBodySetAutoDisableFlag(BodyU(rd),1)
+		dBodySetLinearVel(BodyU(rd),0,0,0)
+		dBodySetAngularVel(BodyU(rd),0,0,0)
+		dBodySetForce(BodyU(rd),0,0,0)
+		dBodySetTorque(BodyU(rd),0,0,0)
+		dBodyDisable(BodyU(rd))
+		
+		; ### Position Body (Lower)
+		
+		dBodySetRotation(BodyL(rd),0,0,0)
+		dBodySetPosition(BodyL(rd),xp,yp-2.5,zp)
+		dBodySetAutoDisableFlag(BodyL(rd),1)
+		dBodySetLinearVel(BodyL(rd),0,0,0)
+		dBodySetAngularVel(BodyL(rd),0,0,0)
+		dBodySetForce(BodyL(rd),0,0,0)
+		dBodySetTorque(BodyL(rd),0,0,0)
+		dBodyDisable(BodyL(rd))
+		
+		; ### Position Left Arm (Upper)
+		
+		dBodySetRotation(LArmU(rd),90,0,0)
+		dBodySetPosition(LArmU(rd),xp+1,yp-1.25,zp)
+		dBodySetAutoDisableFlag(LArmU(rd),1)
+		dBodySetLinearVel(LArmU(rd),0,0,0)
+		dBodySetAngularVel(LArmU(rd),0,0,0)
+		dBodySetForce(LArmU(rd),0,0,0)
+		dBodySetTorque(LArmU(rd),0,0,0)
+		dBodyDisable(LArmU(rd))
+		
+		; ### Position Left Arm (Lower)
+		
+		dBodySetRotation(LArmL(rd),90,0,0)
+		dBodySetPosition(LArmL(rd),xp+1,yp-2.5,zp)
+		dBodySetAutoDisableFlag(LArmL(rd),1)
+		dBodySetLinearVel(LArmL(rd),0,0,0)
+		dBodySetAngularVel(LArmL(rd),0,0,0)
+		dBodySetForce(LArmL(rd),0,0,0)
+		dBodySetTorque(LArmL(rd),0,0,0)
+		dBodyDisable(LArmL(rd))
+		
+		; ### Position Right Arm (Upper)
+		
+		dBodySetRotation(RArmU(rd),90,0,0)
+		dBodySetPosition(RArmU(rd),xp-1,yp-1.25,zp)
+		dBodySetAutoDisableFlag(RArmU(rd),1)
+		dBodySetLinearVel(RArmU(rd),0,0,0)
+		dBodySetAngularVel(RArmU(rd),0,0,0)
+		dBodySetForce(RArmU(rd),0,0,0)
+		dBodySetTorque(RArmU(rd),0,0,0)
+		dBodyDisable(RArmU(rd))
+		
+		; ### Position Right Arm (Lower)
+		
+		dBodySetRotation(RArmL(rd),90,0,0)
+		dBodySetPosition(RArmL(rd),xp-1,yp-2.5,zp)
+		dBodySetAutoDisableFlag(RArmL(rd),1)
+		dBodySetLinearVel(RArmL(rd),0,0,0)
+		dBodySetAngularVel(RArmL(rd),0,0,0)
+		dBodySetForce(RArmL(rd),0,0,0)
+		dBodySetTorque(RArmL(rd),0,0,0)
+		dBodyDisable(RArmL(rd))
+		
+		; ### Position Left Leg (Upper)
+		
+		dBodySetRotation(LLegU(rd),90,0,0)
+		dBodySetPosition(LLegU(rd),xp+0.5,yp-3.6,zp)
+		dBodySetAutoDisableFlag(LLegU(rd),1)
+		dBodySetLinearVel(LLegU(rd),0,0,0)
+		dBodySetAngularVel(LLegU(rd),0,0,0)
+		dBodySetForce(LLegU(rd),0,0,0)
+		dBodySetTorque(LLegU(rd),0,0,0)
+		dBodyDisable(LLegU(rd))
+		
+		; ### Position Left Leg (Lower)
+		
+		dBodySetRotation(LLegL(rd),90,0,0)
+		dBodySetPosition(LLegL(rd),xp+0.5,yp-4.9,zp)
+		dBodySetAutoDisableFlag(LLegL(rd),1)
+		dBodySetLinearVel(LLegL(rd),0,0,0)
+		dBodySetAngularVel(LLegL(rd),0,0,0)
+		dBodySetForce(LLegL(rd),0,0,0)
+		dBodySetTorque(LLegL(rd),0,0,0)
+		dBodyDisable(LLegL(rd))
+		
+		; ### Position Right Leg (Upper)
+		
+		dBodySetRotation(RLegU(rd),90,0,0)
+		dBodySetPosition(RLegU(rd),xp-0.5,yp-3.6,zp)
+		dBodySetAutoDisableFlag(RLegU(rd),1)
+		dBodySetLinearVel(RLegU(rd),0,0,0)
+		dBodySetAngularVel(RLegU(rd),0,0,0)
+		dBodySetForce(RLegU(rd),0,0,0)
+		dBodySetTorque(RLegU(rd),0,0,0)
+		dBodyDisable(RLegU(rd))
+		
+		; ### Position Right Leg (Lower)
+		
+		dBodySetRotation(RLegL(rd),90,0,0)
+		dBodySetPosition(RLegL(rd),xp-0.5,yp-4.9,zp)
+		dBodySetAutoDisableFlag(RLegL(rd),1)
+		dBodySetLinearVel(RLegL(rd),0,0,0)
+		dBodySetAngularVel(RLegL(rd),0,0,0)
+		dBodySetForce(RLegL(rd),0,0,0)
+		dBodySetTorque(RLegL(rd),0,0,0)
+		dBodyDisable(RLegL(rd))
+		
+		; ### Position Left Foot
+		
+		dBodySetRotation(LFoot(rd),0,0,0)
+		dBodySetPosition(LFoot(rd),xp+0.5,yp-5.7,zp-0.25)
+		dBodySetAutoDisableFlag(LFoot(rd),1)
+		dBodySetLinearVel(LFoot(rd),0,0,0)
+		dBodySetAngularVel(LFoot(rd),0,0,0)
+		dBodySetForce(LFoot(rd),0,0,0)
+		dBodySetTorque(LFoot(rd),0,0,0)
+		dBodyDisable(LFoot(rd))
+		
+		; ### Position Right Foot
+		
+		dBodySetRotation(RFoot(rd),0,0,0)
+		dBodySetPosition(RFoot(rd),xp-0.5,yp-5.7,zp-0.25)
+		dBodySetAutoDisableFlag(RFoot(rd),1)
+		dBodySetLinearVel(RFoot(rd),0,0,0)
+		dBodySetAngularVel(RFoot(rd),0,0,0)
+		dBodySetForce(RFoot(rd),0,0,0)
+		dBodySetTorque(RFoot(rd),0,0,0)
+		dBodyDisable(RFoot(rd))
+	
+		x_pos#=-8
+		y_pos#=15
+		z_pos#=12
+		x_rot#=0
+		y_rot#=0
+		z_rot#=0
+		dBodySetPosition(block\body, x_pos, y_pos, z_pos)
+		dBodySetRotation(block\body, x_rot, y_rot, z_rot)
+		dBodySetLinearVel(block\body,0,0,0)
+		dBodySetAngularVel(block\body,0,0,0)
+	 	dBodyEnable(block\body)
+	
+		; Reconnect joints (in case we broke them)
+		dJointAttach(RDJoint(rd,1),Head(rd),BodyU(rd))
+		dJointAttach(RDJoint(rd,2),BodyU(rd),BodyL(rd))
+		dJointAttach(RDJoint(rd,3),LArmU(rd),BodyU(rd))
+		dJointAttach(RDJoint(rd,4),LArmL(rd),LArmU(rd))
+		dJointAttach(RDJoint(rd,5),RArmU(rd),BodyU(rd))
+		dJointAttach(RDJoint(rd,6),RArmL(rd),RArmU(rd))
+		dJointAttach(RDJoint(rd,7),LLegU(rd),BodyL(rd))
+		dJointAttach(RDJoint(rd,8),LLegL(rd),LLegU(rd))
+		dJointAttach(RDJoint(rd,9),RLegU(rd),BodyL(rd))
+		dJointAttach(RDJoint(rd,10),RLegL(rd),RLegU(rd))
+		dJointAttach(RDJoint(rd,11),LFoot(rd),LLegL(rd))
+		dJointAttach(RDJoint(rd,12),RFoot(rd),RLegL(rd))
+
+		
+	End If
+	;#End Region
+Wend
+
+dJointGroupDestroy(ContactGroup)
+dSpaceDestroy(Space)
+dWorldDestroy(World)
+dCloseODE()
+
+End
+
+; ###################################################################################################
+
+Function CreateRagDoll(rd)
+
+xp=-8
+yp=9
+zp=2
+
+; ### RagDoll Dimensions
+
+headrad#=0.4
+bodytx#=1.5
+bodyty#=1.5
+bodytz#=0.5
+bodybx#=1.5
+bodyby#=0.75
+bodybz#=0.5
+larmrad#=0.15
+larmlen#=0.9
+rarmrad#=0.15
+rarmlen#=0.9
+llegrad#=0.25
+lleglen#=0.8
+rlegrad#=0.25
+rleglen#=0.8
+feetx#=0.5
+feety#=0.25
+feetz#=1.0
+weight#=1.0
+
+; ### Create Head
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+Head(rd)=ode\body
+dBodySetRotation(ode\body,0,0,0)
+dBodySetPosition(ode\body,xp,yp,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateSphere(Space,headrad)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateSphere()
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,headrad,headrad,headrad
+EntityColor ode\mesh,255,255,255
+dBodyDisable(ode\body)
+
+
+; ### Create Body (Upper)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+BodyU(rd)=ode\body
+dBodySetRotation(ode\body,0,0,0)
+dBodySetPosition(ode\body,xp,yp-1.25,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateBox(Space,bodytx,bodyty,bodytz)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCube()
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,bodytx*0.5,bodyty*0.5,bodytz*0.5
+EntityColor ode\mesh,0,200,200
+dBodyDisable(ode\body)
+
+; ### Create Body (Lower)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+BodyL(rd)=ode\body
+dBodySetRotation(ode\body,0,0,0)
+dBodySetPosition(ode\body,xp,yp-2.5,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateBox(Space,bodybx,bodyby,bodybz)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCube()
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,bodybx*0.5,bodyby*0.5,bodybz*0.5
+EntityColor ode\mesh,0,100,100
+dBodyDisable(ode\body)
+
+; ### Create Left Arm (Upper)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+LArmU(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp+1,yp-1.25,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,larmrad,larmlen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,larmrad,(larmlen*0.5)+larmrad,larmrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,255,0,0
+dBodyDisable(ode\body)
+
+; ### Create Left Arm (Lower)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+LArmL(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp+1,yp-2.5,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,larmrad,larmlen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,larmrad,(larmlen*0.5)+larmrad,larmrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,125,0,0
+dBodyDisable(ode\body)
+
+; ### Create Right Arm (Upper)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+RArmU(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp-1,yp-1.25,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,rarmrad,rarmlen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,rarmrad,(rarmlen*0.5)+rarmrad,rarmrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,0,255,0
+dBodyDisable(ode\body)
+
+; ### Create Right Arm (Lower)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+RArmL(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp-1,yp-2.5,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,rarmrad,rarmlen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,rarmrad,(rarmlen*0.5)+rarmrad,rarmrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,0,125,0
+dBodyDisable(ode\body)
+
+; ### Create Left Leg (Upper)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+LLegU(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp+0.5,yp-3.6,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,llegrad,lleglen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,llegrad,(lleglen*0.5)+llegrad,llegrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,255,0,0
+dBodyDisable(ode\body)
+
+; ### Create Left Leg (Lower)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+LLegL(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp+0.5,yp-4.9,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,llegrad,lleglen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,llegrad,(lleglen*0.5)+llegrad,llegrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,125,0,0
+dBodyDisable(ode\body)
+
+; ### Create Right Leg (Upper)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+RLegU(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp-0.5,yp-3.6,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,rlegrad,rleglen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,rlegrad,(rleglen*0.5)+rlegrad,rlegrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,0,255,0
+dBodyDisable(ode\body)
+
+; ### Create Right Leg (Lower)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+RLegL(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp-0.5,yp-4.9,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,rlegrad,rleglen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,rlegrad,(rleglen*0.5)+rlegrad,rlegrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,0,125,0
+dBodyDisable(ode\body)
+
+; ### Create Left Foot
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+LFoot(rd)=ode\body
+dBodySetRotation(ode\body,0,0,0)
+dBodySetPosition(ode\body,xp+0.5,yp-5.7,zp-0.25)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateBox(Space,feetx,feety,feetz)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCube()
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,feetx*0.5,feety*0.5,feetz*0.5
+EntityColor ode\mesh,200,0,100
+dBodyDisable(ode\body)
+
+; ### Create Right Foot
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+RFoot(rd)=ode\body
+dBodySetRotation(ode\body,0,0,0)
+dBodySetPosition(ode\body,xp-0.5,yp-5.7,zp-0.25)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateBox(Space,feetx,feety,feetz)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCube()
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,feetx*0.5,feety*0.5,feetz*0.5
+EntityColor ode\mesh,100,200,0
+dBodyDisable(ode\body)
+
+; ### Static Joint To Head
+
+;RDJoint(rd,0)=dJointCreateBall(World,0)
+;dJointAttach(RDJoint(rd,0),0,Head(rd))
+;dJointSetBallAnchor(RDJoint(rd,0),xp,yp,zp)
+
+; ### Head To Body (Upper)
+
+RDJoint(rd,1)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,1),Head(rd),BodyU(rd))
+dJointSetHingeAxis(RDJoint(rd,1),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,1),xp,yp-0.25,zp)
+dJointSetHingeParam(RDJoint(rd,1),dParamLoStop,-0.5)
+dJointSetHingeParam(RDJoint(rd,1),dParamHiStop,0.5)
+
+; ### Body (Upper) To Body (Lower)
+
+RDJoint(rd,2)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,2),BodyU(rd),BodyL(rd))
+dJointSetHingeAxis(RDJoint(rd,2),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,2),xp,yp-2,zp)
+dJointSetHingeParam(RDJoint(rd,2),dParamLoStop,-0.25)
+dJointSetHingeParam(RDJoint(rd,2),dParamHiStop,0.25)
+
+; ### Left Arm (Upper) To Body (Upper)
+
+RDJoint(rd,3)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,3),LArmU(rd),BodyU(rd))
+dJointSetHingeAxis(RDJoint(rd,3),1,-1,0)
+dJointSetHingeAnchor(RDJoint(rd,3),xp+1,yp-0.75,zp)
+dJointSetHingeParam(RDJoint(rd,3),dParamLoStop,-2.0)
+dJointSetHingeParam(RDJoint(rd,3),dParamHiStop,2.0)
+
+; ### Left Arm (Lower) To Left Arm (Upper)
+
+RDJoint(rd,4)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,4),LArmL(rd),LArmU(rd))
+dJointSetHingeAxis(RDJoint(rd,4),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,4),xp+1,yp-2,zp)
+dJointSetHingeParam(RDJoint(rd,4),dParamLoStop,0.0)
+dJointSetHingeParam(RDJoint(rd,4),dParamHiStop,2.0)
+
+; ### Right Arm (Upper) To Body (Upper)
+
+RDJoint(rd,5)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,5),RArmU(rd),BodyU(rd))
+dJointSetHingeAxis(RDJoint(rd,5),1,1,0)
+dJointSetHingeAnchor(RDJoint(rd,5),xp-1,yp-0.75,zp)
+dJointSetHingeParam(RDJoint(rd,5),dParamLoStop,-2.0)
+dJointSetHingeParam(RDJoint(rd,5),dParamHiStop,2.0)
+
+; ### Right Arm (Lower) To Right Arm (Upper)
+
+RDJoint(rd,6)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,6),RArmL(rd),RArmU(rd))
+dJointSetHingeAxis(RDJoint(rd,6),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,6),xp-1,yp-2,zp)
+dJointSetHingeParam(RDJoint(rd,6),dParamLoStop,0.0)
+dJointSetHingeParam(RDJoint(rd,6),dParamHiStop,2.0)
+
+; ### Left Leg (Upper) To Body (Lower)
+
+RDJoint(rd,7)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,7),LLegU(rd),BodyL(rd))
+dJointSetHingeAxis(RDJoint(rd,7),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,7),xp+1,yp-2.75,zp)
+dJointSetHingeParam(RDJoint(rd,7),dParamLoStop,-1.0)
+dJointSetHingeParam(RDJoint(rd,7),dParamHiStop,1.0)
+
+; ### Left Leg (Lower) To Left Leg (Upper)
+
+RDJoint(rd,8)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,8),LLegL(rd),LLegU(rd))
+dJointSetHingeAxis(RDJoint(rd,8),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,8),xp+1,yp-4.25,zp)
+dJointSetHingeParam(RDJoint(rd,8),dParamLoStop,-2.0)
+dJointSetHingeParam(RDJoint(rd,8),dParamHiStop,0.0)
+
+; ### Right Leg (Upper) To Body (Lower)
+
+RDJoint(rd,9)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,9),RLegU(rd),BodyL(rd))
+dJointSetHingeAxis(RDJoint(rd,9),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,9),xp-1,yp-2.75,zp)
+dJointSetHingeParam(RDJoint(rd,9),dParamLoStop,-1.0)
+dJointSetHingeParam(RDJoint(rd,9),dParamHiStop,1.0)
+
+; ### Right Leg (Lower) To Right Leg (Upper)
+
+RDJoint(rd,10)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,10),RLegL(rd),RLegU(rd))
+dJointSetHingeAxis(RDJoint(rd,10),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,10),xp-1,yp-4.25,zp)
+dJointSetHingeParam(RDJoint(rd,10),dParamLoStop,-2.0)
+dJointSetHingeParam(RDJoint(rd,10),dParamHiStop,0.0)
+
+; ### Left Foot To Left Leg (Lower)
+
+RDJoint(rd,11)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,11),LFoot(rd),LLegL(rd))
+dJointSetHingeAxis(RDJoint(rd,11),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,11),xp+1,yp-5.5,zp)
+dJointSetHingeParam(RDJoint(rd,11),dParamLoStop,-0.25)
+dJointSetHingeParam(RDJoint(rd,11),dParamHiStop,0.25)
+
+; ### Right Foot To Right Leg (Lower)
+
+RDJoint(rd,12)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,12),RFoot(rd),RLegL(rd))
+dJointSetHingeAxis(RDJoint(rd,12),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,12),xp-1,yp-5.5,zp)
+dJointSetHingeParam(RDJoint(rd,12),dParamLoStop,-0.25)
+dJointSetHingeParam(RDJoint(rd,12),dParamHiStop,0.25)
+
+End Function
+Function UpdateGeoms()
+
+For ode.ODEGeom=Each ODEGeom
+;	If dBodyIsEnabled(ode\body)
+		RotateEntity ode\mesh,dGeomGetPitch#(ode\geom),dGeomGetYaw#(ode\geom),dGeomGetRoll#(ode\geom)
+		PositionEntity ode\mesh,dGeomGetPositionX#(ode\geom),dGeomGetPositionY#(ode\geom),dGeomGetPositionZ#(ode\geom)
+;		End If
+Next
+
+End Function
+
+; ###################################################################################################
+Function set_object_friction(obj.ODEGeom,friction#,weight)
+	friction=friction/100
+	friction=friction
+	friction=friction*4
+	friction=4-friction
+	e#=Log10(weight*10)
+	e=e-friction
+	e=1*(10^e)
+	dGeomContactSetMu(obj\geom,e)
+End Function
+
+; ###################################################################################################
+Function LinearDamp(body,damp#)
+  dBodyAddForce body,dBodyGetLinearVelX(body)*-damp,dBodyGetLinearVelY(body)*-damp,dBodyGetLinearVelZ(body)*-damp
+End Function
+; ###################################################################################################
+
+Function AngularDamp(body,damp#)
+  dBodyAddTorque body,dBodyGetAngularVelX(body)*-damp,dBodyGetAngularVelY(body)*-damp,dBodyGetAngularVelZ(body)*-damp
+End Function
+; ###################################################################################################
+Function JointLimits(body,limit#)
+
+For ode.ODEGeom=Each ODEGeom
+	If dGeomIsEnabled(ode\geom)
+		If body=ode\body  ; specific body parts only
+			numjoints=dBodyGetNumJoints(ode\body)
+			If numjoints&gt;0 
+				For joints=0 To numjoints-1
+					joint=dBodyGetJoint(ode\body,joints)
+						If joint&lt;&gt;0 ; valid joints only
+							If dJointGetType(joint)&lt;&gt;dJointTypeContact
+									; Get Force vector
+									dBodyGetForce(joint)
+								  	fx#=dVectorX()
+								  	fy#=dVectorY()
+								    fz#=dVectorZ()
+								  	; Calculate magnitude
+									ForceF#=Sqr(fx*fx+fy*fy+fz*fz)
+
+								
+									; Get Torque vector
+									dBodyGetTorque(joint)
+								  	fx#=dVectorX()
+								  	fy#=dVectorY()
+								    fz#=dVectorZ()
+									; Calculate magnitude
+									ForceT#=Sqr(fx*fx+fy*fy+fz*fz)
+
+								
+								; Check to see if joint limit exceeded
+								If Abs(ForceF#)&gt;limit Or Abs(ForceT#)&gt;limit Then
+									dJointAttach(joint,0,0)
+									
+									; Reduce body part energy due to break
+									If ForceA&gt;.01
+										LinearDamp(ode\body,.04)
+									End If 
+									
+									If ForceB&gt;.01
+										AngularDamp(ode\body,.04)
+									End If
+									
+								End If
+								
+			
+							End If
+
+					End If
+				Next
+			End If
+		End If
+	End If
+Next
+
+End Function
+
+; ###################################################################################################
+
+Function UpdateFriction()
+
+For ode.ODEGeom=Each ODEGeom
+	; add friction force if body enabled  
+	If dBodyIsEnabled(ode\body) And ode\body&lt;&gt;Car
+		numjoints=dBodyGetNumJoints(ode\body)
+		If numjoints&gt;0 
+		;DebugLog "joints=" + Str(joints)
+			For joints=0 To numjoints-1
+				joint1=dBodyGetJoint(ode\body,joints)
+				If dJointGetType(joint1)=dJointTypeContact
+					
+					; Get linear velocity vector
+			  		ax#=dBodyGetLinearVelX#(ode\body)
+			  		ay#=dBodyGetLinearVelY#(ode\body)
+				    az#=dBodyGetLinearVelZ#(ode\body)
+				
+					; Get Angular velocity vector
+			  		bx#=dBodyGetAngularVelX#(ode\body)
+			  		by#=dBodyGetAngularVelY#(ode\body)
+					bz#=dBodyGetAngularVelZ#(ode\body)
+					
+			  		; Calculate magnitudes
+					ForceA#=Sqr(ax*ax+ay*ay+az*az)
+					ForceB#=Sqr(bx*bx+by*by+bz*bz)
+					
+					If ForceA&gt;.01
+						LinearDamp(ode\body,.04)
+					End If
+					
+					If ForceB&gt;.01
+						AngularDamp(ode\body,.04)
+					End If
+					
+						
+				End If
+			Next
+		End If
+	End If
+Next
+
+End Function
+</textarea><br>This works very well on my system where I can test at 60 Hz and 72 Hz.<br><br>I'm not sure that this is a total solution for integrating physics engines and Blitz3D though. It can't accomodate dropped frames on slower computers as delta timing can, and only really works when the physics can be calculated within a frame period.<br><br>Can people comment on where they see potential problems keeping a smooth fraerate with physics engines and what their solutions can be? I think people expect PC games to be jittery but I hate that and want to find ways to avoid it! <br><br></td></tr></table><br>
+<a name="618360"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Wayne</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi Shifty,<br>I'll check out what you did and see what can be learned. <br><br>I took the code from my last example and removed the fps lock to let it run wide open, also allowed the mouse to do the same. Tell me if you think it's smooth.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+; ###################################################################################################
+; #									   JV-ODE - BreakMe Ragdoll Demo 2										#
+; #									Code by Jim Williams (VIP3R)									#
+; ###################################################################################################
+
+AppTitle "JV-ODE - BreakMe Ragdoll Demo 2"
+
+Include "JV-ODE.bb"
+
+Graphics3D 800,600,0,2
+
+
+Global RagDollMax=1
+
+Dim Head(RagDollMax)
+Dim BodyU(RagDollMax)
+Dim BodyL(RagDollMax)
+Dim LArmU(RagDollMax)
+Dim LArmL(RagDollMax)
+Dim RArmU(RagDollMax)
+Dim RArmL(RagDollMax)
+Dim LLegU(RagDollMax)
+Dim LLegL(RagDollMax)
+Dim RLegU(RagDollMax)
+Dim RLegL(RagDollMax)
+Dim LFoot(RagDollMax)
+Dim RFoot(RagDollMax)
+
+Dim RDJoint(RagDollMax,12)
+
+Type ODEGeom
+	Field body
+	Field geom
+	Field mesh
+	Field mass
+End Type
+
+; ###################################################################################################
+
+; ### Setup ODE
+
+
+Global World=dWorldCreate()
+Global Space=dHashSpaceCreate(0)
+Global ContactGroup=dJointGroupCreate(0)
+
+Global BigG#=-0.98
+
+dWorldSetAutoDisableFlag(World,1)
+dWorldSetGravity(World,0,BigG#,0)
+dContactSetMode(dContactSlip1+dContactBounce)
+dContactSetBounce(0.3)
+dContactSetMu(48)
+dWorldSetQuickStepNumIterations (World,20)	; default 20
+
+; ### Create light
+
+Global Light=CreateLight()
+
+RotateEntity Light,45,-90,0
+LightColor Light,255,255,255
+AmbientLight 130,130,130
+
+; ### Create camera
+
+Global Camera=CreateCamera()
+CameraZoom Camera,1.0
+CameraClsColor Camera,0,0,0
+CameraRange Camera,1,1000
+PositionEntity Camera,20,20,-10
+RotateEntity Camera,5,45,0
+
+
+; ### Create plane
+
+dCreatePlane(Space,0,1,0,0)
+
+Plane=CreatePlane()
+
+EntityAlpha Plane,0.8
+
+PlaneTexture=CreateTexture(128,128,9)
+
+ClsColor 0,150,80
+Cls
+
+Color 200,200,200
+
+Rect 0,0,64,64,1
+Rect 64,64,64,64,1
+
+CopyRect 0,0,128,128,0,0,BackBuffer(),TextureBuffer(PlaneTexture)
+ScaleTexture PlaneTexture,20,20
+EntityTexture Plane,PlaneTexture,0,0
+
+Color 255,255,255
+
+Mirror=CreateMirror()
+
+; ###################################################################################################
+
+CreateRagDoll(count)
+
+block.ODEGeom=New ODEGeom
+	x_pos#=-8
+	y_pos#=15
+	z_pos#=12
+	width#=2
+	length#=2
+	depth#=2
+	x_rot#=0
+	y_rot#=0
+	z_rot#=0
+	weight#=100.0
+	
+	block\body=dBodyCreate(World)
+	block\mass=dMassCreate()
+	dMassSetBoxTotal(block\mass,weight, width, length, depth)
+	dBodySetMass(block\body,block\mass)
+	dBodySetPosition(block\body, x_pos, y_pos, z_pos)
+	dBodySetRotation(block\body, x_rot, y_rot, z_rot)
+	
+	block\geom=dCreateBox(Space,width, length, depth)
+	dGeomSetBody(block\geom,block\body)
+	dGeomContactSetBounce(block\geom,0.5)
+	set_object_friction(block,0.5,weight)
+	dGeomContactSetMode(block\geom,dContactSlip1+dContactBounce)
+
+	block\mesh=CreateCube()
+	ScaleEntity block\mesh,width/2,length/2,depth/2
+	
+	seesaw.ODEGeom=New ODEGeom
+	seesaw\mass=dMassCreate()
+	x_pos#=-8
+	y_pos#=5
+	z_pos#=8
+	width#=3
+	length#=0.5
+	depth#=15
+	x_rot#=-20
+	y_rot#=0
+	z_rot#=0
+	weight#=2.0
+	
+	seesaw\body=dBodyCreate(World)
+	dMassSetBoxTotal(seesaw\mass,weight, width, length, depth)
+	dBodySetMass(seesaw\body,seesaw\mass)
+	dBodySetPosition(seesaw\body, x_pos, y_pos, z_pos)
+	
+	seesaw\geom=dCreateBox(Space,width, length, depth)
+	dGeomSetBody(seesaw\geom,seesaw\body)
+	dGeomContactSetBounce(seesaw\geom,0.5)
+	set_object_friction(seesaw,0.5,weight)
+	dGeomContactSetMode(seesaw\geom,dContactSlip1+dContactBounce)
+
+	seesaw\mesh=CreateCube()
+	; Blitz box lengths 2x longer than ODE box length
+	ScaleEntity seesaw\mesh,width/2,length/2,depth/2
+	dBodyDisable(seesaw\body)
+
+	seesaw_joint=dJointCreateHinge(World,0)
+	dJointAttach(seesaw_joint, seesaw\body, 0)
+	dJointSetHingeAxis(seesaw_joint,1,0,0)
+	dJointSetHingeAnchor(seesaw_joint,-8,4,8)
+	dJointSetHingeParam(seesaw_joint,dParamLoStop,-dinfinity)
+	dJointSetHingeParam(seesaw_joint,dParamHiStop,dinfinity)
+	dBodySetRotation(seesaw\body, x_rot, y_rot, z_rot)
+	
+
+;===============================================================
+; Render Loop
+
+While Not KeyHit(1)
+
+	; Calculate Time 
+	If T=0 Then T=MilliSecs()
+	T=MilliSecs() 
+	
+	;-----------------------------------------------------------
+	; Mouse Look code
+	
+	; Mouse Movement runs in sync with render world
+
+		mxs#=mxs#+(MouseXSpeed()-mxs#)/3
+		mys#=mys#+(MouseYSpeed()-mys#)/3
+	
+		If MouseDown(2) Then 
+			MoveMouse GraphicsWidth()/2,GraphicsHeight()/2
+			p1#=p1#-mys#
+			y1#=y1#-mxs#
+			RotateEntity camera,-p1#,y1#,0
+		End If
+	;----------------------------------------------------------
+	; WSAD - Movement
+
+	; W- Forward
+	If KeyDown(17) Or KeyDown(200) Then
+		MoveEntity camera,0,0,1
+	EndIf
+	; S- Reverse
+	If KeyDown(31) Or KeyDown(208) Then
+		MoveEntity camera,0,0,-1
+	EndIf
+	
+	; A- Left
+	If KeyDown(30) Or KeyDown(203) Then
+		MoveEntity camera,-1,0,0
+	EndIf
+	; D- Right
+	If KeyDown(32) Or KeyDown(205) Then
+		MoveEntity camera,1,0,0
+	EndIf
+	
+	
+	;-----------------------------------------------
+	; Physics
+	;
+	; Run Physics every 10ms ( 100 Times/sec )
+	If T &gt; Time3 + 10 Then
+		Time3=T	
+		
+		PTime=MilliSecs()
+	
+		UpdateGeoms()
+	
+		For x=1 To 3 ; Increase to speed up simulation
+			dSpaceCollide(Space,World,ContactGroup)
+				dWorldQuickStep(World,0.05)
+				updatefriction()
+			dJointGroupEmpty(ContactGroup)
+		Next
+	
+		PhysicsTime#=MilliSecs()-PTime
+		
+	End If
+    ;-----------------------------------------------
+	; render world every loop
+
+	RenderWorld
+
+	
+	
+	;-----------------------------------------------
+	; Break joints for each body
+	
+	rd=0 			; Ragdoll id
+	Jlimit#=250	; Joint Limit, hand tuned, larger limit resists breakage.
+	JointLimits(Head(rd),Jlimit#) 
+	JointLimits(BodyU(rd),Jlimit#)
+	JointLimits(BodyL(rd),Jlimit#)
+	JointLimits(LArmU(rd),Jlimit#)
+	JointLimits(LArmL(rd),Jlimit#)
+	JointLimits(RArmU(rd),Jlimit#)
+	JointLimits(RArmL(rd),Jlimit#)
+	JointLimits(LLegU(rd),Jlimit#)
+	JointLimits(LLegL(rd),Jlimit#)
+	JointLimits(RLegU(rd),Jlimit#)
+	JointLimits(RLegL(rd),Jlimit#)
+	JointLimits(LFoot(rd),Jlimit#)
+	JointLimits(RFoot(rd),Jlimit#)
+	
+	Text 0,0,"Gravity="+Str(BigG#)
+	Text 0,15,"Adjust Gravity - Mouse wheel"
+	Text 0,30,"Reset - Space"
+	Text 0,45,"Physics Time:"+PhysicsTime
+		
+	Flip
+
+	; Adjust Gravity - mouse wheel
+	BigG#=BigG#+(MouseZSpeed()/100.0)
+	dWorldSetGravity(World,0,BigG#,0)
+	
+	;--------------------------------------------------------
+	; Space - Resets See Saw, Jumper, block and drops it.
+	If KeyHit(57)
+	
+		; Position See Saw
+		x_pos#=-8
+		y_pos#=5
+		z_pos#=8
+		x_rot#=-20
+		y_rot#=0
+		z_rot#=0
+		dBodySetPosition(seesaw\body, x_pos, y_pos, z_pos)
+		dBodySetRotation(seesaw\body, x_rot, y_rot, z_rot)
+		dBodySetLinearVel(seesaw\body,0,0,0)
+		dBodySetAngularVel(seesaw\body,0,0,0)
+	 	dBodyDisable(seesaw\body)
+		
+		
+		xp=-8
+		yp=9
+		zp=2
+		; ### Position Head
+	
+		dBodySetRotation(Head(rd),0,0,0)
+		dBodySetPosition(Head(rd),xp,yp,zp)
+		dBodySetAutoDisableFlag(Head(rd),1)
+		dBodySetLinearVel(Head(rd),0,0,0)
+		dBodySetAngularVel(Head(rd),0,0,0)
+		dBodySetForce(Head(rd),0,0,0)
+		dBodySetTorque(Head(rd),0,0,0)
+		dBodyDisable(Head(rd))
+		
+		; ### Position Body (Upper)
+		
+		dBodySetRotation(BodyU(rd),0,0,0)
+		dBodySetPosition(BodyU(rd),xp,yp-1.25,zp)
+		dBodySetAutoDisableFlag(BodyU(rd),1)
+		dBodySetLinearVel(BodyU(rd),0,0,0)
+		dBodySetAngularVel(BodyU(rd),0,0,0)
+		dBodySetForce(BodyU(rd),0,0,0)
+		dBodySetTorque(BodyU(rd),0,0,0)
+		dBodyDisable(BodyU(rd))
+		
+		; ### Position Body (Lower)
+		
+		dBodySetRotation(BodyL(rd),0,0,0)
+		dBodySetPosition(BodyL(rd),xp,yp-2.5,zp)
+		dBodySetAutoDisableFlag(BodyL(rd),1)
+		dBodySetLinearVel(BodyL(rd),0,0,0)
+		dBodySetAngularVel(BodyL(rd),0,0,0)
+		dBodySetForce(BodyL(rd),0,0,0)
+		dBodySetTorque(BodyL(rd),0,0,0)
+		dBodyDisable(BodyL(rd))
+		
+		; ### Position Left Arm (Upper)
+		
+		dBodySetRotation(LArmU(rd),90,0,0)
+		dBodySetPosition(LArmU(rd),xp+1,yp-1.25,zp)
+		dBodySetAutoDisableFlag(LArmU(rd),1)
+		dBodySetLinearVel(LArmU(rd),0,0,0)
+		dBodySetAngularVel(LArmU(rd),0,0,0)
+		dBodySetForce(LArmU(rd),0,0,0)
+		dBodySetTorque(LArmU(rd),0,0,0)
+		dBodyDisable(LArmU(rd))
+		
+		; ### Position Left Arm (Lower)
+		
+		dBodySetRotation(LArmL(rd),90,0,0)
+		dBodySetPosition(LArmL(rd),xp+1,yp-2.5,zp)
+		dBodySetAutoDisableFlag(LArmL(rd),1)
+		dBodySetLinearVel(LArmL(rd),0,0,0)
+		dBodySetAngularVel(LArmL(rd),0,0,0)
+		dBodySetForce(LArmL(rd),0,0,0)
+		dBodySetTorque(LArmL(rd),0,0,0)
+		dBodyDisable(LArmL(rd))
+		
+		; ### Position Right Arm (Upper)
+		
+		dBodySetRotation(RArmU(rd),90,0,0)
+		dBodySetPosition(RArmU(rd),xp-1,yp-1.25,zp)
+		dBodySetAutoDisableFlag(RArmU(rd),1)
+		dBodySetLinearVel(RArmU(rd),0,0,0)
+		dBodySetAngularVel(RArmU(rd),0,0,0)
+		dBodySetForce(RArmU(rd),0,0,0)
+		dBodySetTorque(RArmU(rd),0,0,0)
+		dBodyDisable(RArmU(rd))
+		
+		; ### Position Right Arm (Lower)
+		
+		dBodySetRotation(RArmL(rd),90,0,0)
+		dBodySetPosition(RArmL(rd),xp-1,yp-2.5,zp)
+		dBodySetAutoDisableFlag(RArmL(rd),1)
+		dBodySetLinearVel(RArmL(rd),0,0,0)
+		dBodySetAngularVel(RArmL(rd),0,0,0)
+		dBodySetForce(RArmL(rd),0,0,0)
+		dBodySetTorque(RArmL(rd),0,0,0)
+		dBodyDisable(RArmL(rd))
+		
+		; ### Position Left Leg (Upper)
+		
+		dBodySetRotation(LLegU(rd),90,0,0)
+		dBodySetPosition(LLegU(rd),xp+0.5,yp-3.6,zp)
+		dBodySetAutoDisableFlag(LLegU(rd),1)
+		dBodySetLinearVel(LLegU(rd),0,0,0)
+		dBodySetAngularVel(LLegU(rd),0,0,0)
+		dBodySetForce(LLegU(rd),0,0,0)
+		dBodySetTorque(LLegU(rd),0,0,0)
+		dBodyDisable(LLegU(rd))
+		
+		; ### Position Left Leg (Lower)
+		
+		dBodySetRotation(LLegL(rd),90,0,0)
+		dBodySetPosition(LLegL(rd),xp+0.5,yp-4.9,zp)
+		dBodySetAutoDisableFlag(LLegL(rd),1)
+		dBodySetLinearVel(LLegL(rd),0,0,0)
+		dBodySetAngularVel(LLegL(rd),0,0,0)
+		dBodySetForce(LLegL(rd),0,0,0)
+		dBodySetTorque(LLegL(rd),0,0,0)
+		dBodyDisable(LLegL(rd))
+		
+		; ### Position Right Leg (Upper)
+		
+		dBodySetRotation(RLegU(rd),90,0,0)
+		dBodySetPosition(RLegU(rd),xp-0.5,yp-3.6,zp)
+		dBodySetAutoDisableFlag(RLegU(rd),1)
+		dBodySetLinearVel(RLegU(rd),0,0,0)
+		dBodySetAngularVel(RLegU(rd),0,0,0)
+		dBodySetForce(RLegU(rd),0,0,0)
+		dBodySetTorque(RLegU(rd),0,0,0)
+		dBodyDisable(RLegU(rd))
+		
+		; ### Position Right Leg (Lower)
+		
+		dBodySetRotation(RLegL(rd),90,0,0)
+		dBodySetPosition(RLegL(rd),xp-0.5,yp-4.9,zp)
+		dBodySetAutoDisableFlag(RLegL(rd),1)
+		dBodySetLinearVel(RLegL(rd),0,0,0)
+		dBodySetAngularVel(RLegL(rd),0,0,0)
+		dBodySetForce(RLegL(rd),0,0,0)
+		dBodySetTorque(RLegL(rd),0,0,0)
+		dBodyDisable(RLegL(rd))
+		
+		; ### Position Left Foot
+		
+		dBodySetRotation(LFoot(rd),0,0,0)
+		dBodySetPosition(LFoot(rd),xp+0.5,yp-5.7,zp-0.25)
+		dBodySetAutoDisableFlag(LFoot(rd),1)
+		dBodySetLinearVel(LFoot(rd),0,0,0)
+		dBodySetAngularVel(LFoot(rd),0,0,0)
+		dBodySetForce(LFoot(rd),0,0,0)
+		dBodySetTorque(LFoot(rd),0,0,0)
+		dBodyDisable(LFoot(rd))
+		
+		; ### Position Right Foot
+		
+		dBodySetRotation(RFoot(rd),0,0,0)
+		dBodySetPosition(RFoot(rd),xp-0.5,yp-5.7,zp-0.25)
+		dBodySetAutoDisableFlag(RFoot(rd),1)
+		dBodySetLinearVel(RFoot(rd),0,0,0)
+		dBodySetAngularVel(RFoot(rd),0,0,0)
+		dBodySetForce(RFoot(rd),0,0,0)
+		dBodySetTorque(RFoot(rd),0,0,0)
+		dBodyDisable(RFoot(rd))
+	
+		x_pos#=-8
+		y_pos#=15
+		z_pos#=12
+		x_rot#=0
+		y_rot#=0
+		z_rot#=0
+		dBodySetPosition(block\body, x_pos, y_pos, z_pos)
+		dBodySetRotation(block\body, x_rot, y_rot, z_rot)
+		dBodySetLinearVel(block\body,0,0,0)
+		dBodySetAngularVel(block\body,0,0,0)
+	 	dBodyEnable(block\body)
+	
+		; Reconnect joints (in case we broke them)
+		dJointAttach(RDJoint(rd,1),Head(rd),BodyU(rd))
+		dJointAttach(RDJoint(rd,2),BodyU(rd),BodyL(rd))
+		dJointAttach(RDJoint(rd,3),LArmU(rd),BodyU(rd))
+		dJointAttach(RDJoint(rd,4),LArmL(rd),LArmU(rd))
+		dJointAttach(RDJoint(rd,5),RArmU(rd),BodyU(rd))
+		dJointAttach(RDJoint(rd,6),RArmL(rd),RArmU(rd))
+		dJointAttach(RDJoint(rd,7),LLegU(rd),BodyL(rd))
+		dJointAttach(RDJoint(rd,8),LLegL(rd),LLegU(rd))
+		dJointAttach(RDJoint(rd,9),RLegU(rd),BodyL(rd))
+		dJointAttach(RDJoint(rd,10),RLegL(rd),RLegU(rd))
+		dJointAttach(RDJoint(rd,11),LFoot(rd),LLegL(rd))
+		dJointAttach(RDJoint(rd,12),RFoot(rd),RLegL(rd))
+
+		
+	End If
+Wend
+
+dJointGroupDestroy(ContactGroup)
+dSpaceDestroy(Space)
+dWorldDestroy(World)
+dCloseODE()
+
+End
+
+; ###################################################################################################
+
+Function CreateRagDoll(rd)
+
+xp=-8
+yp=9
+zp=2
+
+; ### RagDoll Dimensions
+
+headrad#=0.4
+bodytx#=1.5
+bodyty#=1.5
+bodytz#=0.5
+bodybx#=1.5
+bodyby#=0.75
+bodybz#=0.5
+larmrad#=0.15
+larmlen#=0.9
+rarmrad#=0.15
+rarmlen#=0.9
+llegrad#=0.25
+lleglen#=0.8
+rlegrad#=0.25
+rleglen#=0.8
+feetx#=0.5
+feety#=0.25
+feetz#=1.0
+weight#=1.0
+
+; ### Create Head
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+Head(rd)=ode\body
+dBodySetRotation(ode\body,0,0,0)
+dBodySetPosition(ode\body,xp,yp,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateSphere(Space,headrad)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateSphere()
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,headrad,headrad,headrad
+EntityColor ode\mesh,255,255,255
+dBodyDisable(ode\body)
+
+
+; ### Create Body (Upper)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+BodyU(rd)=ode\body
+dBodySetRotation(ode\body,0,0,0)
+dBodySetPosition(ode\body,xp,yp-1.25,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateBox(Space,bodytx,bodyty,bodytz)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCube()
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,bodytx*0.5,bodyty*0.5,bodytz*0.5
+EntityColor ode\mesh,0,200,200
+dBodyDisable(ode\body)
+
+; ### Create Body (Lower)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+BodyL(rd)=ode\body
+dBodySetRotation(ode\body,0,0,0)
+dBodySetPosition(ode\body,xp,yp-2.5,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateBox(Space,bodybx,bodyby,bodybz)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCube()
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,bodybx*0.5,bodyby*0.5,bodybz*0.5
+EntityColor ode\mesh,0,100,100
+dBodyDisable(ode\body)
+
+; ### Create Left Arm (Upper)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+LArmU(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp+1,yp-1.25,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,larmrad,larmlen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,larmrad,(larmlen*0.5)+larmrad,larmrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,255,0,0
+dBodyDisable(ode\body)
+
+; ### Create Left Arm (Lower)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+LArmL(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp+1,yp-2.5,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,larmrad,larmlen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,larmrad,(larmlen*0.5)+larmrad,larmrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,125,0,0
+dBodyDisable(ode\body)
+
+; ### Create Right Arm (Upper)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+RArmU(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp-1,yp-1.25,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,rarmrad,rarmlen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,rarmrad,(rarmlen*0.5)+rarmrad,rarmrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,0,255,0
+dBodyDisable(ode\body)
+
+; ### Create Right Arm (Lower)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+RArmL(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp-1,yp-2.5,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,rarmrad,rarmlen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,rarmrad,(rarmlen*0.5)+rarmrad,rarmrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,0,125,0
+dBodyDisable(ode\body)
+
+; ### Create Left Leg (Upper)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+LLegU(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp+0.5,yp-3.6,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,llegrad,lleglen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,llegrad,(lleglen*0.5)+llegrad,llegrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,255,0,0
+dBodyDisable(ode\body)
+
+; ### Create Left Leg (Lower)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+LLegL(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp+0.5,yp-4.9,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,llegrad,lleglen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,llegrad,(lleglen*0.5)+llegrad,llegrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,125,0,0
+dBodyDisable(ode\body)
+
+; ### Create Right Leg (Upper)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+RLegU(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp-0.5,yp-3.6,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,rlegrad,rleglen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,rlegrad,(rleglen*0.5)+rlegrad,rlegrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,0,255,0
+dBodyDisable(ode\body)
+
+; ### Create Right Leg (Lower)
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+RLegL(rd)=ode\body
+dBodySetRotation(ode\body,90,0,0)
+dBodySetPosition(ode\body,xp-0.5,yp-4.9,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateCCylinder(Space,rlegrad,rleglen)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCylinder(8)
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,rlegrad,(rleglen*0.5)+rlegrad,rlegrad
+RotateMesh ode\mesh,90,0,0
+EntityColor ode\mesh,0,125,0
+dBodyDisable(ode\body)
+
+; ### Create Left Foot
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+LFoot(rd)=ode\body
+dBodySetRotation(ode\body,0,0,0)
+dBodySetPosition(ode\body,xp+0.5,yp-5.7,zp-0.25)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateBox(Space,feetx,feety,feetz)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCube()
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,feetx*0.5,feety*0.5,feetz*0.5
+EntityColor ode\mesh,200,0,100
+dBodyDisable(ode\body)
+
+; ### Create Right Foot
+
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+RFoot(rd)=ode\body
+dBodySetRotation(ode\body,0,0,0)
+dBodySetPosition(ode\body,xp-0.5,yp-5.7,zp-0.25)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\mass=dMassCreate()
+	dMassSetBoxTotal(ode\mass,weight, width, length, depth)
+	dBodySetMass(ode\body,ode\mass)
+ode\geom=dCreateBox(Space,feetx,feety,feetz)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCube()
+EntityPickMode ode\mesh,2
+ScaleMesh ode\mesh,feetx*0.5,feety*0.5,feetz*0.5
+EntityColor ode\mesh,100,200,0
+dBodyDisable(ode\body)
+
+; ### Static Joint To Head
+
+;RDJoint(rd,0)=dJointCreateBall(World,0)
+;dJointAttach(RDJoint(rd,0),0,Head(rd))
+;dJointSetBallAnchor(RDJoint(rd,0),xp,yp,zp)
+
+; ### Head To Body (Upper)
+
+RDJoint(rd,1)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,1),Head(rd),BodyU(rd))
+dJointSetHingeAxis(RDJoint(rd,1),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,1),xp,yp-0.25,zp)
+dJointSetHingeParam(RDJoint(rd,1),dParamLoStop,-0.5)
+dJointSetHingeParam(RDJoint(rd,1),dParamHiStop,0.5)
+
+; ### Body (Upper) To Body (Lower)
+
+RDJoint(rd,2)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,2),BodyU(rd),BodyL(rd))
+dJointSetHingeAxis(RDJoint(rd,2),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,2),xp,yp-2,zp)
+dJointSetHingeParam(RDJoint(rd,2),dParamLoStop,-0.25)
+dJointSetHingeParam(RDJoint(rd,2),dParamHiStop,0.25)
+
+; ### Left Arm (Upper) To Body (Upper)
+
+RDJoint(rd,3)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,3),LArmU(rd),BodyU(rd))
+dJointSetHingeAxis(RDJoint(rd,3),1,-1,0)
+dJointSetHingeAnchor(RDJoint(rd,3),xp+1,yp-0.75,zp)
+dJointSetHingeParam(RDJoint(rd,3),dParamLoStop,-2.0)
+dJointSetHingeParam(RDJoint(rd,3),dParamHiStop,2.0)
+
+; ### Left Arm (Lower) To Left Arm (Upper)
+
+RDJoint(rd,4)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,4),LArmL(rd),LArmU(rd))
+dJointSetHingeAxis(RDJoint(rd,4),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,4),xp+1,yp-2,zp)
+dJointSetHingeParam(RDJoint(rd,4),dParamLoStop,0.0)
+dJointSetHingeParam(RDJoint(rd,4),dParamHiStop,2.0)
+
+; ### Right Arm (Upper) To Body (Upper)
+
+RDJoint(rd,5)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,5),RArmU(rd),BodyU(rd))
+dJointSetHingeAxis(RDJoint(rd,5),1,1,0)
+dJointSetHingeAnchor(RDJoint(rd,5),xp-1,yp-0.75,zp)
+dJointSetHingeParam(RDJoint(rd,5),dParamLoStop,-2.0)
+dJointSetHingeParam(RDJoint(rd,5),dParamHiStop,2.0)
+
+; ### Right Arm (Lower) To Right Arm (Upper)
+
+RDJoint(rd,6)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,6),RArmL(rd),RArmU(rd))
+dJointSetHingeAxis(RDJoint(rd,6),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,6),xp-1,yp-2,zp)
+dJointSetHingeParam(RDJoint(rd,6),dParamLoStop,0.0)
+dJointSetHingeParam(RDJoint(rd,6),dParamHiStop,2.0)
+
+; ### Left Leg (Upper) To Body (Lower)
+
+RDJoint(rd,7)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,7),LLegU(rd),BodyL(rd))
+dJointSetHingeAxis(RDJoint(rd,7),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,7),xp+1,yp-2.75,zp)
+dJointSetHingeParam(RDJoint(rd,7),dParamLoStop,-1.0)
+dJointSetHingeParam(RDJoint(rd,7),dParamHiStop,1.0)
+
+; ### Left Leg (Lower) To Left Leg (Upper)
+
+RDJoint(rd,8)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,8),LLegL(rd),LLegU(rd))
+dJointSetHingeAxis(RDJoint(rd,8),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,8),xp+1,yp-4.25,zp)
+dJointSetHingeParam(RDJoint(rd,8),dParamLoStop,-2.0)
+dJointSetHingeParam(RDJoint(rd,8),dParamHiStop,0.0)
+
+; ### Right Leg (Upper) To Body (Lower)
+
+RDJoint(rd,9)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,9),RLegU(rd),BodyL(rd))
+dJointSetHingeAxis(RDJoint(rd,9),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,9),xp-1,yp-2.75,zp)
+dJointSetHingeParam(RDJoint(rd,9),dParamLoStop,-1.0)
+dJointSetHingeParam(RDJoint(rd,9),dParamHiStop,1.0)
+
+; ### Right Leg (Lower) To Right Leg (Upper)
+
+RDJoint(rd,10)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,10),RLegL(rd),RLegU(rd))
+dJointSetHingeAxis(RDJoint(rd,10),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,10),xp-1,yp-4.25,zp)
+dJointSetHingeParam(RDJoint(rd,10),dParamLoStop,-2.0)
+dJointSetHingeParam(RDJoint(rd,10),dParamHiStop,0.0)
+
+; ### Left Foot To Left Leg (Lower)
+
+RDJoint(rd,11)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,11),LFoot(rd),LLegL(rd))
+dJointSetHingeAxis(RDJoint(rd,11),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,11),xp+1,yp-5.5,zp)
+dJointSetHingeParam(RDJoint(rd,11),dParamLoStop,-0.25)
+dJointSetHingeParam(RDJoint(rd,11),dParamHiStop,0.25)
+
+; ### Right Foot To Right Leg (Lower)
+
+RDJoint(rd,12)=dJointCreateHinge(World,0)
+dJointAttach(RDJoint(rd,12),RFoot(rd),RLegL(rd))
+dJointSetHingeAxis(RDJoint(rd,12),1,0,0)
+dJointSetHingeAnchor(RDJoint(rd,12),xp-1,yp-5.5,zp)
+dJointSetHingeParam(RDJoint(rd,12),dParamLoStop,-0.25)
+dJointSetHingeParam(RDJoint(rd,12),dParamHiStop,0.25)
+
+End Function
+Function UpdateGeoms()
+
+For ode.ODEGeom=Each ODEGeom
+;	If dBodyIsEnabled(ode\body)
+		RotateEntity ode\mesh,dGeomGetPitch#(ode\geom),dGeomGetYaw#(ode\geom),dGeomGetRoll#(ode\geom)
+		PositionEntity ode\mesh,dGeomGetPositionX#(ode\geom),dGeomGetPositionY#(ode\geom),dGeomGetPositionZ#(ode\geom)
+;		End If
+Next
+
+End Function
+
+; ###################################################################################################
+Function set_object_friction(obj.ODEGeom,friction#,weight)
+	friction=friction/100
+	friction=friction
+	friction=friction*4
+	friction=4-friction
+	e#=Log10(weight*10)
+	e=e-friction
+	e=1*(10^e)
+	dGeomContactSetMu(obj\geom,e)
+End Function
+
+; ###################################################################################################
+Function LinearDamp(body,damp#)
+  dBodyAddForce body,dBodyGetLinearVelX(body)*-damp,dBodyGetLinearVelY(body)*-damp,dBodyGetLinearVelZ(body)*-damp
+End Function
+; ###################################################################################################
+
+Function AngularDamp(body,damp#)
+  dBodyAddTorque body,dBodyGetAngularVelX(body)*-damp,dBodyGetAngularVelY(body)*-damp,dBodyGetAngularVelZ(body)*-damp
+End Function
+; ###################################################################################################
+Function JointLimits(body,limit#)
+
+For ode.ODEGeom=Each ODEGeom
+	If dGeomIsEnabled(ode\geom)
+		If body=ode\body  ; specific body parts only
+			numjoints=dBodyGetNumJoints(ode\body)
+			If numjoints&gt;0 
+				For joints=0 To numjoints-1
+					joint=dBodyGetJoint(ode\body,joints)
+						If joint&lt;&gt;0 ; valid joints only
+							If dJointGetType(joint)&lt;&gt;dJointTypeContact
+									; Get Force vector
+									dBodyGetForce(joint)
+								  	fx#=dVectorX()
+								  	fy#=dVectorY()
+								    fz#=dVectorZ()
+								  	; Calculate magnitude
+									ForceF#=Sqr(fx*fx+fy*fy+fz*fz)
+
+								
+									; Get Torque vector
+									dBodyGetTorque(joint)
+								  	fx#=dVectorX()
+								  	fy#=dVectorY()
+								    fz#=dVectorZ()
+									; Calculate magnitude
+									ForceT#=Sqr(fx*fx+fy*fy+fz*fz)
+
+								
+								; Check to see if joint limit exceeded
+								If Abs(ForceF#)&gt;limit Or Abs(ForceT#)&gt;limit Then
+									dJointAttach(joint,0,0)
+									
+									; Reduce body part energy due to break
+									If ForceA&gt;.01
+										LinearDamp(ode\body,.04)
+									End If 
+									
+									If ForceB&gt;.01
+										AngularDamp(ode\body,.04)
+									End If
+									
+								End If
+								
+			
+							End If
+
+					End If
+				Next
+			End If
+		End If
+	End If
+Next
+
+End Function
+
+; ###################################################################################################
+
+Function UpdateFriction()
+
+For ode.ODEGeom=Each ODEGeom
+	; add friction force if body enabled  
+	If dBodyIsEnabled(ode\body) And ode\body&lt;&gt;Car
+		numjoints=dBodyGetNumJoints(ode\body)
+		If numjoints&gt;0 
+		;DebugLog "joints=" + Str(joints)
+			For joints=0 To numjoints-1
+				joint1=dBodyGetJoint(ode\body,joints)
+				If dJointGetType(joint1)=dJointTypeContact
+					
+					; Get linear velocity vector
+			  		ax#=dBodyGetLinearVelX#(ode\body)
+			  		ay#=dBodyGetLinearVelY#(ode\body)
+				    az#=dBodyGetLinearVelZ#(ode\body)
+				
+					; Get Angular velocity vector
+			  		bx#=dBodyGetAngularVelX#(ode\body)
+			  		by#=dBodyGetAngularVelY#(ode\body)
+					bz#=dBodyGetAngularVelZ#(ode\body)
+					
+			  		; Calculate magnitudes
+					ForceA#=Sqr(ax*ax+ay*ay+az*az)
+					ForceB#=Sqr(bx*bx+by*by+bz*bz)
+					
+					If ForceA&gt;.01
+						LinearDamp(ode\body,.04)
+					End If
+					
+					If ForceB&gt;.01
+						AngularDamp(ode\body,.04)
+					End If
+					
+						
+				End If
+			Next
+		End If
+	End If
+Next
+
+End Function
+</textarea> <br><br></td></tr></table><br>
+<a name="618543"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Wayne</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I demo'd your changes shifty and was surprised how well everything ran. I measured the physics time, render time, frame time and all ran well at 85hz refresh. <br><br>The demo ran very smooth and compares well to the last example I posted. The changes you made were clean and simple. The calculation of the step size was interesting.<br><br>Which method is better? I really don't know but your examples give me yet another tool to consider in the render loop.<br><br>I'm a huge follower of timers, and delta time and will give all this more thought as we proceed.<br><br>Thanks, and nice job! <br><br></td></tr></table><br>
+<a name="618701"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >VIP3R</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Both of the demos run smooth here at 85fps, there's a slight jitter every ~1sec. It's very subtle though, not really noticable with the ragdoll demo.<br><br>It might be better to use a demo where the whole render area is updated, like the car demo? May be easier to spot timing jitters then. Anyway, just a suggestion ;)<br><br>Shifty, here's some data for you from your demo:<br><br>Total Time:134<br>Num Samples:11<br>Refresh Rate:12.1818<br>Step Size:0.0511636 <br><br></td></tr></table><br>
+<a name="622462"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Shifty Geezer</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well, this is frustrating. In my editor I run the same scene at 60 and 72 Hz, and it runs at the same speed. There's a chain of interactions causing some dominoes to land on a sphere and stop it in it's tracks.<br><br>But in my main program, using the same library and same frame advancement function, the results for running at different framerates is different.<br><br>Very frustrating. :( <br><br></td></tr></table><br>
+<a name="622466"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >VIP3R</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm assuming you're referring to the Frame Tweening method above, it's extremely difficult to get pin point simulation accuracy when changing the step size each frame.<br><br>The only way to get a consistant simulation is by using a fixed step size, regardless of which timing method you use.<br><br>You could try locking the step size and use some method of activating/de-activating the whole quickstep process depending on how much frame time is available. <br><br></td></tr></table><br>
+<a name="622471"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Shifty Geezer</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> False alarm! Yes, I do lock the step size for the whole simulation. There's a pre-program check on monitor refresh to determine step size. <br><br>My actualy problem was that the vertical slider I was using to set the Sphere's Weight was setting a float mount that I wasn't displaying. So when the control showed a weight of 8, it's actual weight varied from 8.0 to 8.5. When I text outputted the real float value, and set it to 8.7, the value in the editor, everything was hunky dorey<br><br>:)   &lt;--- Big grin! <br><br></td></tr></table><br>
+<a name="622476"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >VIP3R</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hehe, nice one :)<br><br>Have you had a chance to look at the new joint feedback stuff yet? <br><br></td></tr></table><br>
+<a name="622494"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Shifty Geezer</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nope. And I'm not going to either! The current JV-ODE wrapper is working fine, I'm near the end of my current project, and though I don't think I'll make this Friday's deadline now, the end of next week should see the project done. I'm capping features and development and finalising the software.<br><br>After that, I've an idea on my next project which'll use ODE (everything'll use ODE! I can't get enough of dem fyziks!) but I doubt I'll have need for joints in it. So unless I get curious and give them a nose, joint interaction isn't on my radar. <br><br></td></tr></table><br>
+<a name="622512"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >VIP3R</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Look forward to checking it out :)<br><br>Can you give any details about it or are you waiting until the big launch day? <br><br></td></tr></table><br>
+<a name="622534"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Shifty Geezer</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm waiting until it's out there. It's not going to be very interesting for most here I imagine as it's a niche product, but I think I've managed to pull it off as well as possible. I'm pleased with what I've been able to do. I just hope all this effort pays off! <br><br></td></tr></table><br>
+<a name="629548"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ICECAP</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Can someone give me a hand in understanding this method of locking fps with ode.<br>I am new to ode and find that confusing enough.  But when I try and run the sample at the top, it just doesnt seem to tween at all...<br><br>Is there some configuring needed?  Or am i just not understanding how it works?<br><br>Thanks in advance,<br>Ian <br><br></td></tr></table><br>
+<a name="629573"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >VIP3R</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> You need to lock the physics timing to a constant frame rate (30-60 fps), regardless of the logic/graphics timing. The example above doesn't lock the physics timing.<br><br>There's some useful ODE timing info discussed in more detail here...<br><a href="/posts.php?topic=56209" target="_blank">JV-ODE Physics Thread 6</a><br><br>;) <br><br></td></tr></table><br>
+<a name="629762"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Shifty Geezer</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is the system I finally developed :<br><br>Fetch the time elapsed between frames.<br>Accumlate this time.<br>If the time is over 20 ms (50 Hz), perform physics and capture the scene. Reset the frame timer.<br>For each frame, calculate a tween value.<br>Render with Tween.<br><br>Here's the code :<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+CaptureWorld()
+start_time=MilliSecs() ; &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; Get frame start time
+	
+While Not KeyHit(1)
+	frame_time=MilliSecs()-start_time	;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; Get time for frame
+	start_time=MilliSecs() ;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; Reset frame start
+	update_time=update_time+frame_time	;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; Increase count for time between updates
+
+	If update_time/20&gt;0	;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; If updating 50 fps
+		update_time=update_time Mod 20 ;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; Return remainder
+		CaptureWorld() ;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; Record object positions
+		;&lt;DO OBJECT MOTION, PHYSICS, ETC.&gt;
+	EndIf
+	tween#=(update_time Mod 20)/20.0	;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; Get render tween amount
+	UpdateWorld
+	RenderWorld tween#
+	Flip
+Wend</textarea><br><br>Here's an example of doctoring the JV-ODE Box Demo :<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">; ###################################################################################################
+; #										JV-ODE - Cubes Demo											#
+; #									Code by Jim Williams (VIP3R)									#
+; ###################################################################################################
+
+AppTitle "JV-ODE - Cubes Demo"
+
+Include "JV-ODE.bb"
+
+Graphics3D 800,600,0,2
+
+Type ODEGeom
+	Field body
+	Field geom
+	Field mesh
+End Type
+
+; ###################################################################################################
+
+; ### Setup ODE
+
+Global World=dWorldCreate()
+Global Space=dHashSpaceCreate(0)
+Global ContactGroup=dJointGroupCreate(0)
+
+dWorldSetAutoDisableFlag(World,1)
+dWorldSetGravity(World,0,-0.98,0)
+dContactSetMode(dContactBounce)
+dContactSetBounce(0.1)
+dContactSetMu(48)
+
+; ### Create light
+
+Global Light=CreateLight()
+
+RotateEntity Light,45,-90,0
+LightColor Light,255,255,255
+AmbientLight 130,130,130
+
+; ### Create camera
+pivot=CreatePivot()
+Global Camera=CreateCamera(pivot)
+CameraClsColor Camera,0,0,0
+CameraRange Camera,1,1000
+PositionEntity Camera,0,20,-50
+RotateEntity Camera,30,0,0
+
+; ### Create plane
+dCreatePlane(Space,0,1,0,0)
+Plane=CreatePlane()
+EntityAlpha Plane,0.8
+PlaneTexture=CreateTexture(128,128,9)
+ClsColor 0,200,80
+Cls
+Color 255,255,255
+Rect 0,0,64,64,1
+Rect 64,64,64,64,1
+CopyRect 0,0,128,128,0,0,BackBuffer(),TextureBuffer(PlaneTexture)
+ScaleTexture PlaneTexture,20,20
+EntityTexture Plane,PlaneTexture,0,0
+Mirror=CreateMirror()
+
+; ###################################################################################################
+
+CaptureWorld()
+start_time=MilliSecs() ; &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; Get frame start time
+	
+While Not KeyHit(1)
+	frame_time=MilliSecs()-start_time	;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; Get time for frame
+	start_time=MilliSecs() ;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; Reset frame start
+	update_time=update_time+frame_time	;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; Increase count for time between updates
+
+	If update_time/20&gt;0	;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; If updating 50 fps
+		update_time=update_time Mod 20 ;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; Return remainder
+		CaptureWorld() ;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; Record object positions
+		UpdateGeoms()
+		dSpaceCollide(Space,World,ContactGroup)
+		dWorldQuickStep(World,0.15)
+		dJointGroupEmpty(ContactGroup)
+		TurnEntity pivot,0.0,0.2,0.0		
+	EndIf
+	tween#=(update_time Mod 20)/20.0	;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; Get render tween amount
+
+	If MilliSecs()-Timer&gt;300
+		AddObject()
+		UpdateGeoms()
+		box_count=box_count+1
+		Timer=MilliSecs()
+	End If
+
+
+	UpdateWorld
+	RenderWorld tween#
+	Text 5,5,"boxes : "+box_count
+	Flip False
+
+Wend
+
+dJointGroupDestroy(ContactGroup)
+dSpaceDestroy(Space)
+dWorldDestroy(World)
+dCloseODE()
+
+End
+
+; ###################################################################################################
+
+Function AddObject()
+
+xp=Rand(-10,10)
+zp=Rand(-10,10)
+xs=Rnd(3,6)
+ys=Rnd(3,6)
+zs=Rnd(3,6)
+ode.ODEGeom=New ODEGeom
+ode\body=dBodyCreate(World)
+dBodySetRotation(ode\body,0,0,0)
+dBodySetPosition(ode\body,xp,30,zp)
+dBodySetAutoDisableFlag(ode\body,1)
+ode\geom=dCreateBox(Space,xs,ys,zs)
+dGeomSetBody(ode\geom,ode\body)
+ode\mesh=CreateCube()
+ScaleMesh ode\mesh,xs/2.0,ys/2.0,zs/2.0
+EntityColor ode\mesh,Rand(255),Rand(255),Rand(255)
+EntityAlpha ode\mesh,1
+EntityShininess ode\mesh,0.7
+
+End Function
+
+; ###################################################################################################
+
+Function UpdateGeoms()
+
+For ode.ODEGeom=Each ODEGeom
+	If dBodyIsEnabled(ode\body)
+		RotateEntity ode\mesh,dGeomGetPitch#(ode\geom),dGeomGetYaw#(ode\geom),dGeomGetRoll#(ode\geom)
+		PositionEntity ode\mesh,dGeomGetPositionX#(ode\geom),dGeomGetPositionY#(ode\geom),dGeomGetPositionZ#(ode\geom)
+		End If
+Next
+
+End Function
+
+; ###################################################################################################</textarea><br>The 50 Hz is hard coded as the value 20 in the above. You could use a CONST and set that to something else. 50 Hz was used as it divides nicely into the limited 1000 ms resolution of the timer. 60 Hz doesn't, and I think it'll give rounding errors. Using a period less than 1/60th of a frame will have no effect if you lock to the vertical refresh. If you lose the vertical lock (Flip False) you could get a higher framerate than the screen update, but at a cost of introducing tearing.<br><br>This method has been tested to provide the same physics update rate at 60 Hz and 72 Hz, including custom forces (just apply all forces in the 'If update_time' section Update) where my previous time-based Step-size didn't. <br><br></td></tr></table><br>
+<a name="629808"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Danny</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> He shifty,<br><br>Not sure what the actuall refresh/running speed is on your system (although it should be the same as mine, right), but don't you think the boxes fall way too 'slooow' to be realistic? Especially since you've got the gravity set to a proper value of -0.98.....?!<br><br>Cheers,<br>Danny <br><br></td></tr></table><br>
+<a name="629822"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Shifty Geezer</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> That's the ODE Step size. This example is just a hack of the JV-ODE "Demo-Cubes.bb" file that is slow itself. In my proper program I use a step size of 0.1 and call the ODE functions (dSpaceCollide, dWorldQuickStep and dJointGroupEmpty) three times per update with gravity = -0.981<br><br>The tweening method accomodates all the changes you can make normally, but also keeps them constant across different machines, so you can set the speed to whatever you want. If you drop to 50 Hz you'll need to up step size a bit to match the speeds you were getting before. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

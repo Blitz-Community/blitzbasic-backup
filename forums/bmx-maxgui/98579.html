@@ -1,0 +1,761 @@
+<!DOCTYPE html><html lang="en" ><head ><title >MaxGUI event hook usage - need help!</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >MaxGUI event hook usage - need help!</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=117" >MaxGUI Module</a>/<a href="#bottom" >MaxGUI event hook usage - need help!</a><br><br>
+<a name="1152579"></a>
+
+<a name="1152580"></a>
+
+<a name="1152581"></a>
+
+<a name="1152582"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >codermax</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, so I had the same problem as many others, I couldn't get the sliders to fire the events I wanted. It turns out, I had to put the whole event loop inside the hook function. Otherwise, EVENT_GADGETACTION would NEVER be fired! That's the only one event I have trouble catching(apparently, hook functions HATE EVENT_GADGETACTION). I tried to set it up in a WaitEvent() handler, and the dang thing would only execute "window usage" stuff, and not the slider code I have.<br><br>Now here's the problem... Showing any hidden gadgets crashes the program! This ONLY happened when I "fixed" the whole EVENT_GADGETACTION mess. Before, everything worked fine and I could mess with windows no prob.<br><br>Do you guys know how many days it took for me to find the ONE POST that had the solution to the whole slider BS in it? A whole week! BRL's site search isn't very powerful, so I had to search EVERY DAY for specific phrases and stumble upon JUST the right post. And now that I found the solution that makes my problem area work, It makes me sad to know a bigger problem emerged from it. :(<br><br>Here's the code from the available files. Most of the code from say, the main loop or the draw files aren't worth looking at, it's mostly the event handling stuff that's of interest, but I wanted to make sure the entire source was available, because someone might find a problem I couldn't have!<br><br>If you want the code to "work" like before so you could see what broke, simply take the event code out of the hook function and put it inside a regular function like the "process_event" one already made or whatever.<br><br>smm_main.bmx:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Import MaxGui.Drivers
+
+Include "smm_draw.bmx"
+Include "smm_input.bmx"
+Include "smm_event.bmx"
+
+Rem
+Extern "win32" ' Crazy WinAPI stuff
+    Function GetSystemMetrics:Int(Axis:Int)
+	Function GetActiveWindow%()
+	Function IsZoomed%(hwnd%)
+End Extern
+End Rem
+
+Global desktopX:Int=GetSystemMetrics(0)
+Global desktopY:Int=GetSystemMetrics(1)
+Global game_run:Int=0
+Global staff_num:Int=1
+Global page_num:Int=0
+
+Global current_help:Int=0
+Global max_pages:Int=32
+Global m_button_delay:Int=0
+Global staff_count:Int[max_pages]
+Global staff_clef:Int[20,max_pages]
+Global staff_key:Int[12,20,max_pages]
+Global staff_time:Int[3,20,max_pages]
+Global staff_length:Int=0
+Global m_button:Int[99]
+Global m_button_help:String[2,99]
+Global m_buttonX:Int[99]
+Global m_buttonY:Int[99]
+Global m_button_sizeX:Int[99]
+Global m_button_sizeY:Int[99]
+Global scroll_posX:Int=0
+Global scroll_posY:Int=0
+Global scroll_lengthX:Int=0
+Global scroll_lengthY:Int=0
+Global scroll_speed:Int=1
+Global max_notes:Int=99
+Global note_place_row:Int[max_notes,max_pages]
+Global note_place_col:Int[max_notes,max_pages]
+
+Global header_notes:String[99,max_pages]
+Global footer_notes:String[99,max_pages]
+Global screen_ratioX:Float=0
+Global screen_ratioY:Float=0
+Global newMouseX:Int=0
+Global newMouseY:Int=0
+Global wanna_exit:Int=0
+Global zoom:Int=1
+
+Global AddStaffKey:TGadget[12]
+Global AddStaffKeyLabel:TGadget[12]
+Global EditStaffKey:TGadget[12]
+Global EditStaffKeyLabel:TGadget[12]
+
+staff_clef[0,0]=3
+staff_count[0]=1
+	
+'project file extension: .ZCF
+Global max_items:Int=0
+Global MyWindow:TGadget=CreateWindow("App", 200,200,740,480,Null,WINDOW_TITLEBAR | WINDOW_RESIZABLE |WINDOW_MENU | WINDOW_STATUS)
+SetMinWindowSize( MyWindow,640,480 )
+
+Global FileMenu:TGadget=CreateMenu("File",0,WindowMenu(MyWindow))
+CreateMenu "New",101,FileMenu
+CreateMenu "Load Composition...",102,FileMenu
+CreateMenu "Save Composition...",103,FileMenu
+CreateMenu "Clear This Page",104,FileMenu
+CreateMenu "Exit",105,FileMenu
+
+Global StaffMenu:TGadget=CreateMenu("Staves",0,WindowMenu(MyWindow))
+CreateMenu "Add Staff...",201,StaffMenu
+CreateMenu "Edit Staff...",202,StaffMenu
+
+Global SystemMenu:TGadget=CreateMenu("System",0,WindowMenu(MyWindow))
+CreateMenu "System Options....",501,SystemMenu
+
+Global MyPanel:TGadget=CreatePanel(20, 10, GadgetWidth(MyWindow)-120, GadgetHeight(MyWindow)-150,MyWindow, PANEL_ACTIVE|PANEL_BORDER)
+
+'Add Staff
+Global AddStaffWindow:TGadget=CreateWindow("Add A Staff To The Page",10,10,418,320,MyWindow, WINDOW_TITLEBAR|WINDOW_HIDDEN)
+Global Label0:TGadget=CreateLabel("Select type of clef",10,10,100,20, AddStaffWindow)
+Global Radio1:TGadget=CreateButton("Alto C Clef",10,35,90,20, AddStaffWindow,BUTTON_RADIO)
+Global Radio2:TGadget=CreateButton("Bass F Clef",10,65,90,20, AddStaffWindow,BUTTON_RADIO)
+Global Radio3:TGadget=CreateButton("Treble G Clef",10,95,90,20, AddStaffWindow,BUTTON_RADIO)
+Global Radio4:TGadget=CreateButton("Neutral Clef",10,125,90,20, AddStaffWindow,BUTTON_RADIO)
+SetButtonState(Radio3,True)
+
+Global AddStaffButton1:TGadget=CreateButton("Add",50,245,80,27, AddStaffWindow)
+Global AddStaffButton2:TGadget=CreateButton("Cancel",270,245,80,27, AddStaffWindow)
+
+Global Label1:TGadget=CreateLabel("Select Time Signature",230,10,150,18, AddStaffWindow)
+Global Label2:TGadget=CreateLabel("Beats Per Measure (ex:4/)",200,35,180,18, AddStaffWindow)
+Global Label3:TGadget=CreateLabel("What Counts As One Beat? (ex:/4)",200,95,180,18, AddStaffWindow)
+Global Label4:TGadget=CreateLabel("Select Key Signature(N=Natural #=Sharp b=Flat)",40,150,300,18, AddStaffWindow)
+
+max_items:Int=11
+Local max_items2:Int=0
+For Local p:Int=0 Until max_items Step+1
+max_items2=2
+AddStaffKeyLabel[p]=CreateLabel("A",20+(36*p),175,15,15, AddStaffWindow)
+
+AddStaffKey[p]=CreateComboBox(6+(36*p),190,35,20,AddStaffWindow)
+For Local i:Int=0 Until max_items Step+1
+If i=0
+AddGadgetItem  AddStaffKey[p],"N"
+EndIf
+If i=1
+AddGadgetItem  AddStaffKey[p],"#"
+EndIf
+If i=2
+AddGadgetItem  AddStaffKey[p],"b"
+EndIf
+Next
+SelectGadgetItem AddStaffKey[p],0
+Next
+
+Global AddStaffComboBox1:TGadget=CreateComboBox(200,63,140,100,AddStaffWindow)
+max_items:Int=17
+AddGadgetItem AddStaffComboBox1,"Beats Per Measure"
+
+For Local i:Int=1 Until max_items Step+1
+AddGadgetItem  AddStaffComboBox1,i
+Next
+SelectGadgetItem AddStaffComboBox1,0
+
+Global AddStaffComboBox2:TGadget=CreateComboBox(200,123,140,100,AddStaffWindow)
+max_items=4
+AddGadgetItem AddStaffComboBox2,"Beat Unit"
+For Local i:Int=1 Until max_items Step+1
+If i&lt;max_items-1
+AddGadgetItem AddStaffComboBox2,i*2
+EndIf
+If i=max_items-1
+AddGadgetItem AddStaffComboBox2,8
+EndIf
+Next
+SelectGadgetItem AddStaffComboBox2,0
+
+'Edit Staff
+Global EditStaffWindow:TGadget=CreateWindow("Edit A Staff On This Page",10,10,418,360,MyWindow, WINDOW_TITLEBAR|WINDOW_HIDDEN)
+
+Global EditStaffLabel0:TGadget=CreateLabel("Select existing staff on this page",80,3,230,20, EditStaffWindow)
+
+Global EditStaffComboBox3:TGadget=CreateComboBox(100,23,140,100,EditStaffWindow)
+max_items:Int=20
+For Local i:Int=0 Until max_items Step+1
+AddGadgetItem EditStaffComboBox3,i
+Next
+SelectGadgetItem EditStaffComboBox3,0
+
+Global EditStaffLabel1:TGadget=CreateLabel("Select type of staff",10,60,100,20, EditStaffWindow)
+Global EditStaffRadio1:TGadget=CreateButton("Alto C Clef",10,85,90,20, EditStaffWindow,BUTTON_RADIO)
+Global EditStaffRadio2:TGadget=CreateButton("Bass F Clef",10,115,90,20, EditStaffWindow,BUTTON_RADIO)
+Global EditStaffRadio3:TGadget=CreateButton("Treble G Clef",10,145,90,20, EditStaffWindow,BUTTON_RADIO)
+Global EditStaffRadio4:TGadget=CreateButton("Neutral Clef",10,175,90,20, EditStaffWindow,BUTTON_RADIO)
+SetButtonState(Radio3,True)
+
+Global EditStafffButton1:TGadget=CreateButton("Add",50,295,80,27, EditStaffWindow)
+Global EditStaffButton2:TGadget=CreateButton("Cancel",270,295,80,27, EditStaffWindow)
+
+Global EditStaffLabel2:TGadget=CreateLabel("Select Time Signature",230,60,150,18, EditStaffWindow)
+Global EditStaffLabel3:TGadget=CreateLabel("Beats Per Measure (ex:4/)",200,85,180,18, EditStaffWindow)
+Global EditStaffLabel4:TGadget=CreateLabel("What Counts As One Beat? (ex:/4)",200,145,180,18, EditStaffWindow)
+Global EditStaffLabel5:TGadget=CreateLabel("Select Key Signature(N=Natural #=Sharp b=Flat)",40,200,300,18, EditStaffWindow)
+
+max_items:Int=11
+max_items2:Int=0
+For Local p:Int=0 Until max_items Step+1
+max_items2=2
+EditStaffKeyLabel[p]=CreateLabel("A",20+(36*p),225,15,15, EditStaffWindow)
+EditStaffKey[p]=CreateComboBox(6+(36*p),240,35,20,EditStaffWindow)
+For Local i:Int=0 Until max_items Step+1
+If i=0
+AddGadgetItem  EditStaffKey[p],"N"
+EndIf
+If i=1
+AddGadgetItem  EditStaffKey[p],"#"
+EndIf
+If i=2
+AddGadgetItem  EditStaffKey[p],"b"
+EndIf
+Next
+SelectGadgetItem EditStaffKey[p],0
+Next
+
+Global EditStaffComboBox1:TGadget=CreateComboBox(200,113,140,100,EditStaffWindow)
+max_items:Int=17
+AddGadgetItem EditStaffComboBox1,"Beats Per Measure"
+For Local i:Int=1 Until max_items Step+1
+AddGadgetItem  EditStaffComboBox1,i
+Next
+SelectGadgetItem EditStaffComboBox1,0
+
+Global EditStaffComboBox2:TGadget=CreateComboBox(200,173,140,100,EditStaffWindow)
+max_items=4
+AddGadgetItem EditStaffComboBox2,"Beat Unit"
+For Local i:Int=1 Until max_items Step+1
+If i&lt;max_items-1
+AddGadgetItem EditStaffComboBox2,i*2
+EndIf
+If i=max_items-1
+AddGadgetItem EditStaffComboBox2,8
+EndIf
+Next
+SelectGadgetItem EditStaffComboBox2,0
+
+UpdateWindowMenu MyWindow
+
+'HideGadget MyCanvas
+'HideGadget StaffMenu
+'display staff gadgets
+'add staff
+
+'DisableGadget MyWindow
+'staff type
+
+'SetVirtualResolution 720,560
+Rem
+Global hWnd% = GetActiveWindow() ' Save current Window handle
+' Init Buttons
+enableMinimize( hwnd% )
+enableMaximize( hwnd% )
+End Rem
+
+'event hook stuff
+Global MyCanvas:TGadget=CreateCanvas(0,0,640,480,MyPanel)
+Global CanvasX:Float=GadgetWidth(MyCanvas)
+Global CanvasY:Float=GadgetHeight(MyCanvas)
+SetGadgetColor MyCanvas, 255,255,255
+
+Global timer:TTimer=CreateTimer(60)
+'initialize window states.
+EnableGadget MyWindow
+ActivateGadget MyWindow
+
+Global ImgX:Int=0
+Global ImgY:Int=0
+Global VScroller:TGadget=CreateSlider(GadgetWidth(MyPanel)+30, 20, 20, GadgetHeight(MyPanel), MyWindow, SLIDER_VERTICAL|SLIDER_SCROLLBAR)
+Global HScroller:TGadget=CreateSlider(30,GadgetHeight(MyPanel)+20, GadgetWidth(MyPanel), 20, MyWindow, SLIDER_HORIZONTAL|SLIDER_SCROLLBAR)
+SetSliderRange VScroller, GadgetHeight(MyPanel), GadgetHeight(MyCanvas)
+SetSliderRange HScroller, GadgetWidth(MyPanel), GadgetWidth(MyCanvas)
+AddHook EmitEventHook, MyHook
+
+m_button_help[0,0]="Edit page's staff features like staff length, number of"
+m_button_help[1,0]="staves on page and the type of staff to add."
+
+m_button_help[0,1]="Select the type of notes you wish to choose from"
+m_button_help[1,1]="when you place notes"
+
+m_button_help[0,2]=""
+m_button_help[1,2]="Select the note from the category you chose"
+
+m_button_help[0,3]="Select the type of chords you wish to place..."
+m_button_help[1,3]="single note or dyad/triad chord."
+
+m_button_help[0,4]="Select the exact chords you wish to place"
+m_button_help[1,4]="using preset chords, or create a custom chord"
+
+m_button_help[0,5]="Select the scale and mode of your composition..."
+m_button_help[1,5]="this affects the preset notes and chords available"
+
+m_button_help[0,6]="Select a label to place as a header note..."
+m_button_help[1,6]="then place them on the composition page"
+
+m_button_help[0,7]="Select a label to place as a footer note..."
+m_button_help[1,7]="then place them on the composition page"
+
+m_button_help[0,8]="View your notes in the traditional display..."
+m_button_help[1,8]="Or view them as a series of blocks on a grid"
+
+m_button_help[0,9]=""
+m_button_help[1,9]="Zoom in on the page up to 5x"
+
+'SetWindowPos(hWnd, 0, desktopX/6, desktopY/8, GraphicsWidth(), GraphicsHeight(), 0)
+Rem
+Global font:TImageFont=LoadImageFont("C:/WINDOWS/Fonts/arial.ttf",17,SMOOTHFONT|BOLDFONT)
+SetImageFont font
+End Rem
+While game_run=0
+Rem
+screen_ratioX=(GraphicsWidth()/VirtualResolutionWidth())
+screen_ratioY=(GraphicsHeight()/VirtualResolutionHeight())
+newMouseX=MouseX()/screen_ratioX
+newMouseY=MouseY()/screen_ratioY
+End Rem
+
+scroll_lengthX=(zoom*350)
+scroll_lengthY=(zoom*175)
+
+'(z*25)*(staff_num)
+
+'draw_game()
+process_input()
+process_event()
+
+    If AppSuspended() Then
+	EndIf
+
+  GCCollect() ' Garbage Collection, just to be safe
+
+Wend
+</textarea><br><br>smm_draw.bmx:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Rem
+'music_image index:
+0=staff, 1=
+End Rem
+Global m_button_img:TImage[99]
+Global music_image:TImage[99]
+Rem
+Global main_pic_dir:String=AppDir$+"/smm pics/"
+
+SetMaskColor 255,0,255
+music_image[0]=LoadImage(main_pic_dir+"staff.bmp")
+music_image[1]=LoadImage(main_pic_dir+"treble_g_clef.bmp")
+music_image[2]=LoadImage(main_pic_dir+"bass_f_clef.bmp")
+music_image[3]=LoadImage(main_pic_dir+"alto_c_clef.bmp")
+m_button_img[0]=LoadImage(main_pic_dir+"button01.bmp")
+
+If music_image[0]=Null Then
+End
+EndIf
+
+End Rem
+
+Function draw_game:Int()
+Rem
+Cls
+		'draw white BG.
+SetColor 255,255,255
+DrawRect 0,0,720,425
+
+draw_staves()
+
+'draw hud panel over the screen.
+SetColor 0,0,0
+DrawRect 0,500,720,135
+SetColor 255,255,255
+
+setup_buttons()
+	
+'draw text
+
+DrawText screen_ratioX+","+screen_ratioY,15,450
+DrawText newMouseX+","+newMouseY,15,470
+If current_help&gt;-1
+DrawText m_button_help[0,current_help],15,422
+DrawText m_button_help[1,current_help],15,441
+EndIf
+'stop drawing text.
+
+'process all sprites and show the screen.
+Flip
+End Rem
+End Function
+
+Function draw_staves:Int()
+
+Local gx:Float=Float(GadgetWidth (MyPanel))
+Local gy:Float=Float(GadgetHeight (MyPanel))
+
+SetStatusText MyWindow, GadgetWidth(MyWindow)+","+GadgetHeight(MyWindow)+","+GadgetWidth(MyCanvas)+","+GadgetHeight(MyCanvas)+"	"+gx+","+gy
+SetGadgetLayout(MyPanel,EDGE_ALIGNED,EDGE_ALIGNED,EDGE_ALIGNED,EDGE_ALIGNED)
+SetGadgetShape(MyCanvas,ImgX,ImgY,GadgetWidth(MyPanel)+200,GadgetHeight(MyPanel)+(75*staff_count[page_num]))
+
+SetGadgetShape(VScroller,GadgetWidth(MyPanel)+30, 20, 20, GadgetHeight(MyPanel))
+SetGadgetShape(HScroller,30,GadgetHeight(MyPanel)+20, GadgetWidth(MyPanel), 20)
+
+'draw staff root - staff ledger, clef, key signature and time signature.
+SetViewport 0,0,GadgetWidth(MyWindow),GadgetHeight(MyWindow) 
+SetScale gx/CanvasX,gy/CanvasY
+SetClsColor 255,255,255
+Cls
+For Local b:Int=0 To 19 Step +1
+Rem
+'draw staff.
+DrawImage music_image[0],20-scroll_posX,60-scroll_posY
+'draw clef.
+If staff_clef[b ,page_num]=1
+DrawImage music_image[3],20-scroll_posX,60-scroll_posY
+EndIf
+If staff_clef[b ,page_num]=2
+DrawImage music_image[2],20-scroll_posX,60-scroll_posY
+EndIf
+If staff_clef[b ,page_num]=3
+DrawImage music_image[1],20-scroll_posX,60-scroll_posY
+EndIf
+End Rem
+
+Next 
+
+End Function
+
+Function setup_notes:Int()
+
+End Function
+
+Function setup_buttons:Int()
+
+Rem
+mouse button functions:
+0=STAVES,1=SYMBOL TYPE, 2=NOTE TYPE
+3=NOTES OR CHORDS,4=CHORD SELECT
+5=SCALE/MODE SELECT
+6=HEADER NOTES,7=FOOTER NOTES
+8=NOTE VIEW,9=ZOOM MODE
+10=SYSTEM OPTIONS
+End Rem
+
+current_help=-1
+For Local i:Int=0 To 9 Step +1
+m_button[i]=i
+m_button_sizeX[i]=36
+m_button_sizeY[i]=36
+
+m_buttonX[i]=15+((m_button_sizeX[i]+7)*i)
+m_buttonY[i]=518
+SetColor 255,255,255
+DrawRect m_buttonX[i],m_buttonY[i],m_button_sizeX[i],m_button_sizeY[i]
+DrawImage m_button_img[0],m_buttonX[i],m_buttonY[i]
+
+'mouse stuff.
+If Not MouseDown(1) And Not MouseDown(2) And Not MouseDown(3)
+m_button_delay=0
+EndIf
+If rects_overlap(newMouseX, newMouseY,1,1,m_buttonX[i],m_buttonY[i],m_button_sizeX[i],m_button_sizeY[i])=1
+current_help=i
+If MouseDown(1) And m_button_delay&lt;5
+m_button_delay=5
+If current_help=9
+activate_button_function(current_help)
+EndIf
+
+EndIf
+EndIf
+Next
+
+End Function
+
+Function rects_overlap:Int(x0:Float ,y0:Float, w0:Float, h0:Float,x2:Float,y2:Float,w2:Float,h2:Float)
+            If (x0 &gt; (x2 + w2) Or (x0 + w0) &lt; x2)
+            Return 0
+			EndIf
+            If (y0 &gt; (y2 + h2) Or (y0 + h0) &lt; y2)
+            Return 0
+			EndIf
+            Return 1
+End Function
+
+Function activate_button_function:Int(num:Int)
+
+Select num&gt;-1
+Case num=9
+zoom:+1
+SetViewport scroll_posX,scroll_posY,720-(50*zoom),560-(50*zoom)
+End Select
+
+End Function
+</textarea><br><br>smm_input.bmx:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Function process_input:Int()
+
+If KeyDown(KEY_UP)
+
+For Local i:Int=0 To scroll_speed-1 Step +1
+If scroll_posY&gt;0-(50*zoom)
+scroll_posY:-1
+EndIf
+Next
+
+EndIf
+
+If KeyDown(KEY_DOWN)
+
+For Local i:Int=0 To scroll_speed-1 Step +1
+If scroll_posY&lt;scroll_lengthY
+scroll_posY:+1
+EndIf
+Next
+EndIf
+
+If KeyDown(KEY_LEFT)
+
+For Local i:Int=0 To scroll_speed-1 Step +1
+If scroll_posX&gt;0-(50*zoom)
+scroll_posX:-1
+EndIf
+Next
+
+EndIf
+
+If KeyDown(KEY_RIGHT)
+
+For Local i:Int=0 To scroll_speed-1 Step +1
+If scroll_posX&lt;scroll_lengthX
+scroll_posX:+1
+EndIf
+Next
+EndIf
+
+If AppTerminate() Or KeyDown(KEY_ESCAPE)
+wanna_exit=1
+EndIf
+
+If wanna_exit=1
+Local result:Int=Confirm("Do you really wanna close this program?")
+	If result=0
+	wanna_exit=0
+	EndIf
+	If result=1
+game_run=-1
+	EndIf  
+EndIf
+
+If MouseDown(3)
+game_run=-1
+EndIf
+
+End Function
+</textarea><br><br>smm_event.bmx:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+'smm_event.bmx
+
+Rem
+Function process_event:Int()
+
+End Function
+End Rem
+
+	'eventHook
+	Function MyHook:Object(id:Int, data:Object, context:Object)
+		
+		Local event:TEvent = TEvent(data)
+		If Not event Return data
+		
+WaitEvent()
+ Select EventID()
+  Case EVENT_WINDOWCLOSE
+     Select EventSource()
+    Case MyWIndow
+    wanna_exit=1
+Case AddStaffWindow
+HideGadget AddStaffWindow
+EnableGadget MyWindow
+ActivateGadget MyWindow
+
+Case EditStaffWindow
+EnableGadget MyWindow
+ActivateGadget MyWindow
+HideGadget EditStaffWindow
+End Select
+  Case EVENT_TIMERTICK
+Select EventSource()
+Case timer
+  RedrawGadget(MyCanvas)
+draw_staves()
+End Select
+Case EVENT_GADGETACTION
+Select EventSource()
+     Case AddStaffButton1
+EnableGadget MyWindow
+ActivateGadget MyWindow
+HideGadget AddStaffWindow
+staff_count[page_num]:+1
+Case AddStaffButton2
+EnableGadget MyWindow
+ActivateGadget MyWindow
+HideGadget AddStaffWindow
+   Case HScroller
+          scroll_posX=EventData() 
+RedrawGadget MyCanvas
+        Case VScroller
+           scroll_posY=EventData()    
+RedrawGadget MyCanvas
+End Select
+  Case EVENT_MENUACTION
+   Select EventData()
+    Case 101
+Local result:Int=Confirm("You sure you wanna start with a clean slate?")
+    Case 102
+Local filter:String="Composition Files:zcf;All Files:*"
+Local filename:String=RequestFile( "Select composition project file to open",filter$,False,"")
+	    Case 103
+Local filter:String="Composition Files:zcf;All Files:*"
+Local filename:String=RequestFile( "Select composition project file to save",filter$,True,"")
+
+	Case 104
+	Local result:Int=Confirm("You wanna completely clear this page of everything?")
+
+ Case 105
+	wanna_exit=1
+
+    Case 201
+init_window(1)
+ShowGadget AddStaffWindow
+DisableGadget MyWindow
+
+    Case 202
+init_window(1)
+ShowGadget EditStaffWindow
+DisableGadget MyWindow
+
+End Select 
+
+Case EVENT_GADGETPAINT
+Select EventSource()
+'UpdateWindowMenu MyWindow
+Case MyCanvas
+    SetGraphics CanvasGraphics (MyCanvas)
+Cls
+draw_staves()
+	Flip
+	  RedrawGadget(MyCanvas)
+End Select
+
+End Select
+                
+                Return data
+        End Function
+
+Function init_window(num:Int)
+
+If num=1
+FreeGadget EditStaffComboBox3
+Global EditStaffComboBox3:TGadget=CreateComboBox(100,23,140,100,EditStaffWindow)
+max_items=staff_count[page_num]
+For Local i:Int=staff_count[page_num]-1 Until max_items Step+1
+AddGadgetItem EditStaffComboBox3,i
+Next
+SelectGadgetItem EditStaffComboBox3,0
+EndIf
+End Function
+</textarea><br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1152604"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hiya,<br><br>I've not got a lot of time to go through with a fine toothed comb but here are some tips:-<br><br>First thing is the main logic is wrong. You should have WaitEvent() outside of the hook function and in the upper most outer mainloop, so move it from the MyHook function to the first instruction after the While in the While/WEnd loop at the end of the main file.<br><br>This will then show up many many errors. Some are below...<br><br>- Don't use RedrawGadget in the EVENT_GADGETPAINT as it would cause a recursive loop. Use the EVENT_TIMERTICK event to do your drawing.<br>- Use Event.*field* inside the MyHook function, NOT the MaxGui EventData(),EventID() and associated functions.<br>-Use Flip 0 so as NOT to wait for the vertical blank. You're using a timer for frame timing.<br><br>As I said I've not got a lot of time to rectify all the errors as I have to go out now, but I've made a start going through the hook function ( I had to indent the code to make it readable for myself ) :-<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Function MyHook:Object(id:Int, data:Object, context:Object)
+	Local event:TEvent = TEvent(data)
+	If Not event Return data
+		
+	Select Event.id
+  		Case EVENT_WINDOWCLOSE
+			Select Event.Source
+				Case MyWIndow
+					wanna_exit=1
+		
+				Case AddStaffWindow
+					HideGadget AddStaffWindow
+					EnableGadget MyWindow
+					ActivateGadget MyWindow
+
+				Case EditStaffWindow
+					EnableGadget MyWindow
+					ActivateGadget MyWindow
+					HideGadget EditStaffWindow
+			
+			End Select
+  
+		Case EVENT_TIMERTICK
+			Select Event.Source
+				Case timer
+					SetGraphics CanvasGraphics (MyCanvas)
+					Cls
+					draw_staves()
+					Flip 0
+
+  					'RedrawGadget(MyCanvas)
+					'draw_staves()
+			End Select
+
+		Case EVENT_GADGETACTION
+			Select Event.Source
+    			Case AddStaffButton1
+					EnableGadget MyWindow
+					ActivateGadget MyWindow
+					HideGadget AddStaffWindow
+					staff_count[page_num]:+1
+			
+				Case AddStaffButton2
+					EnableGadget MyWindow
+					ActivateGadget MyWindow
+					HideGadget AddStaffWindow
+   
+				Case HScroller
+          			scroll_posX=Event.Data
+					RedrawGadget MyCanvas
+        	
+				Case VScroller
+           			scroll_posY=Event.Data
+					RedrawGadget MyCanvas
+
+			End Select
+  
+		Case EVENT_MENUACTION
+   			Select Event.Data
+    			Case 101
+				Local result:Int=Confirm("You sure you wanna start with a clean slate?")
+    
+			Case 102
+				Local filter:String="Composition Files:zcf;All Files:*"
+				Local filename:String=RequestFile( "Select composition project file to open",filter$,False,"")
+	    
+			Case 103
+				Local filter:String="Composition Files:zcf;All Files:*"
+				Local filename:String=RequestFile( "Select composition project file to save",filter$,True,"")
+
+			Case 104
+				Local result:Int=Confirm("You wanna completely clear this page of everything?")
+
+			Case 105
+				wanna_exit=1
+
+	    	Case 201
+				init_window(1)
+				ShowGadget AddStaffWindow
+				DisableGadget MyWindow
+
+    		Case 202
+				init_window(1)
+				ShowGadget EditStaffWindow
+				DisableGadget MyWindow
+
+		End Select 
+
+		Case EVENT_GADGETPAINT
+			'Select EventSource()
+				'UpdateWindowMenu MyWindow
+				'Case MyCanvas
+    			'	SetGraphics CanvasGraphics (MyCanvas)
+				'	Cls
+				'	draw_staves()
+				'	Flip 0
+			'		RedrawGadget(MyCanvas)
+				'End Select
+	End Select
+
+	Return data
+End Function
+</textarea> <br><br></td></tr></table><br>
+<a name="1152606"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TaskMaster</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Do a google search like this:<br><br>site:blitzmax.com "your search terms here"<br><br>Google search is much better and it will search this site very well. <br><br></td></tr></table><br>
+<a name="1152668"></a>
+
+<a name="1152677"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >codermax</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi col!<br><br>Thanks for pointing me in the right direction! I guess the code structure is the way it is because of MaxGUI. :p The Event variable extraction functions seemed to work just as well.<br>This code also contains many of my attempts to "fix" it. I will make the suggested changes and see what happens next, and I will keep you posted!<br><br>And thanks for the search tip TaskMaster(I love playing as you in Marvel 3! Your arrows are beast :D)<br><br>EDIT: I got it all to work! Thanks everyone! Hopefully this post will help others who are having trouble with this stuff. :)<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1152678"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Glad its working now.<br><br>Just for your notes and hopefully help any possible future hook event related issues...<br><br><div class="quote"> The Event variable extraction functions seemed to work just as well. <br></div><br><br>The hook function is called with an Event and its datas, so you should use those that are passed into the hook function. If you use EventID() inside a hook then you could and do get a different ID from the one that's involved in the hook, probably from the next event in the queue. As an example to see this in action :- in your MyHook function put a Print EventID() followed by Print Event.ID just before the first Select and you'd expect to see the same results printed twice, but alas.... you don't!<br><br>Hope it helps :P <br><br></td></tr></table><br>
+<a name="1152690"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TaskMaster</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> And thanks for the search tip TaskMaster(I love playing as you in Marvel 3! Your arrows are beast :D) <br></div><br><br>HA...  That is where I actually got the name.  Not that video game, but from a Marvel Comic years and years ago.  I think it was an Ant-Man comic, probably 30 years ago; TaskMaster was a cool villain. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

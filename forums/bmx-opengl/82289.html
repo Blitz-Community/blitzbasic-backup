@@ -1,0 +1,3149 @@
+<!DOCTYPE html><html lang="en" ><head ><title >a simple free opengl engine</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >a simple free opengl engine</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=103" >OpenGL Module</a>/<a href="#bottom" >a simple free opengl engine</a><br><br>
+<a name="927530"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nawi</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is a frozen project which was laying around in my hd, so I decided to publish the code.<br><br>Does the basic stuff like animations etc, has a simple particle system and shader support, loads .md2 files, shadows don't work but are partially coded in.<br><br>The lib itself:<br>ngl.bmx<br><pre class=code>
+SuperStrict
+
+
+Const ShadowDistance:Float = 10.0
+Include "nmatrix.bmx"
+
+Type NPoint
+	Field X:Float
+	Field Y:Float
+	Field Z:Float
+
+	Method Translate(NewX:Float,NewY:Float,NewZ:Float)
+		X = X+NewX
+		Y = Y+NewY
+		Z = Z+NewZ
+	End Method
+
+	Method Position(NewX:Float,NewY:Float,NewZ:Float)
+		X = NewX
+		Y = NewY
+		Z = NewZ
+	End Method
+
+ 	Method DotProduct:Float(P2:NPoint)
+		Return X*P2.X+Y*P2.Y+Z*P2.Z
+	End Method
+
+	Method Normalize()
+		Local f:Float = 1.0/Sqr(DotProduct(Self))
+		X = X * f
+		Y = Y * f
+		Z = Z * f
+	End Method
+
+	Method RenderShadows()
+		ListAddLast(NGraphics.Gfx.ShadowList,Self)
+	End Method
+End Type
+
+Type NGraphics
+	Field Width:Int
+	Field Height:Int
+	Field Depth:Int
+	Field Fullscreen:Int
+	Field FPS:Int,FPSCount:Int,FPSTimer:Int
+	Field Lighting:Int
+	Field Triangles:Int
+	Field TextureEnabled:Int,CurrentTexture:Int
+	Field WireframeEnabled:Int,AlphaEnabled:Int
+	Field CurrentProgramObject:Int
+	Field ShadowList:TList
+	Global Gfx:NGraphics
+
+	Method Render()
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)
+		Triangles=0
+		For Local NCam:NCamera = EachIn NCamera.NCameraList
+			gluPerspective(45.0, Float(Width)/Float(Height), NCam.Near, NCam.Far)
+			If NCam.Enabled Then
+				glLoadIdentity()
+				glClearColor(NCam.ClsColor[0],NCam.ClsColor[1],NCam.ClsColor[2], 0.0)
+
+				If NCam.Fog Then
+					glEnable(GL_FOG)
+					glFogi(GL_FOG_MODE, GL_LINEAR)
+					glFogfv(GL_FOG_COLOR, NCam.FogColor)
+					glFogf(GL_FOG_DENSITY, NCam.FogDensity)
+					glHint(GL_FOG_HINT, GL_NICEST)
+					glFogf(GL_FOG_START, NCam.FogStart)
+					glFogf(GL_FOG_END, NCam.FogEnd)
+				Else
+					glDisable(GL_FOG)
+				EndIf
+
+				'Vertex buffer objects
+				'glEnableClientState(GL_VERTEX_ARRAY)
+				'glEnableClientState(GL_TEXTURE_COORD_ARRAY)
+
+			'	'Position camera
+				glRotatef(NCam.Pitch,1.0,0,0)
+				glRotatef(NCam.Yaw,0,1.0,0)
+				glRotatef(NCam.Roll,0,0,1.0)
+				glTranslatef(NCam.X,NCam.Y,NCam.Z)
+	
+				'Lights
+				If Lighting Then
+					For Local NLi:NLight = EachIn NLight.NLightList
+						glLightfv(NLi.GL_LIGHT,GL_POSITION,[NLi.X,NLi.Y,NLi.Z,1.0])
+					Next
+				EndIf
+
+				'Z-Order
+				For Local NEnt:NEntity = EachIn NEntity.NEntityList
+					NEnt.CamDistance = Sqr((NCam.X-NEnt.X)*(NCam.X-NEnt.X)+(NCam.Y-NEnt.Y)*(NCam.Y-NEnt.Y)+(NCam.Z-NEnt.Z)*(NCam.Z-NEnt.Z))
+					If NEnt.RenderFirst Then NEnt.CamDistance = 0
+					'Display list
+					If NEnt.CreateDList Then 
+						NEnt.CreateDisplayList()
+						NEnt.CreateDList = 0
+					EndIf
+				Next
+				NEntity.NEntityList.Sort(True,NEntity.CompareDistance)
+
+
+				'Loop entities
+				Local CAlpha:Float
+				For Local NEnt:NEntity = EachIn NEntity.NEntityList
+					If NEnt.Parent = Null Then RenderEntity(NEnt,NCam)
+				Next
+
+				If CurrentProgramObject &lt;&gt; 0 Then
+					CurrentProgramObject = 0
+					glUseProgramObjectARB(0)
+					glDisable(GL_VERTEX_PROGRAM_ARB)
+					glDisable(GL_FRAGMENT_PROGRAM_ARB)
+				EndIf
+
+				'Texture
+				If TextureEnabled&lt;&gt;1 Then
+					TextureEnabled =  1
+					glEnable(GL_TEXTURE_2D)
+				EndIf
+				'Draw particles
+				If Not AlphaEnabled Then glEnable(GL_BLEND)
+				For Local NEmit:NParticleEmitter = EachIn NParticleEmitter.NParticleEmitterList
+					If CurrentTexture&lt;&gt;NEmit.Texture Then
+						CurrentTexture = NEmit.Texture
+						glBindTexture (GL_TEXTURE_2D, CurrentTexture)
+					EndIf
+					NEmit.Update(NCam)
+				Next
+				If Not AlphaEnabled Then glDisable(GL_BLEND)
+			'	CurrentTexture = 0
+				'TextureEnabled = 0
+				'glDisable(GL_TEXTURE_2D)
+
+				'Shadows
+				glDisable(GL_TEXTURE_2D)
+				glEnable(GL_BLEND)
+				For Local NP:NPoint = EachIn ShadowList
+					glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE)
+					glDepthMask(GL_FALSE)
+					glEnable(GL_CULL_FACE)
+					glEnable(GL_STENCIL_TEST)
+					glEnable(GL_POLYGON_OFFSET_FILL)
+					glPolygonOffset(0.0, 100.0)
+
+
+					glCullFace(GL_FRONT)
+					glStencilFunc(GL_ALWAYS, 0, $ff)
+					glStencilOp(GL_KEEP, GL_INCR, GL_KEEP)
+					RenderShadow(NP.X,NP.Y,NP.Z,NCam)
+
+					glCullFace(GL_BACK)
+					glStencilFunc(GL_ALWAYS, 0, $ff)
+					glStencilOp(GL_KEEP, GL_DECR, GL_KEEP)
+					RenderShadow(NP.X,NP.Y,NP.Z,NCam)
+
+
+					glDisable(GL_POLYGON_OFFSET_FILL)
+					glDisable(GL_CULL_FACE)
+					glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE)
+					glDepthMask(GL_TRUE)
+					
+					glStencilFunc(GL_NOTEQUAL, 0, $ff)
+					glStencilOp(GL_REPLACE, GL_REPLACE, GL_REPLACE)
+					DrawShadow()
+					glDisable(GL_STENCIL_TEST)
+					ListRemove(ShadowList,NP)
+			'		glColor4f(1.0,1.0,1.0,0.1)
+			'		glEnable(GL_CULL_FACE)
+			'		glCullFace(GL_FRONT)
+			'		RenderShadow(NP.X,NP.Y,NP.Z,NCam)
+			'		glCullFace(GL_BACK)
+				Next
+				glEnable(GL_TEXTURE_2D)
+				glEnable(GL_CULL_FACE)
+				If Not AlphaEnabled Then glDisable(GL_BLEND)
+			EndIf
+		Next
+
+		FPSCount=FPSCount+1
+		If MilliSecs() &gt; FPSTimer+999 Then
+			FPS=FPSCount
+			FPSTimer=MilliSecs()
+			FPSCount=0
+		EndIf
+	End Method
+
+	Method RenderShadow(X:Float,Y:Float,Z:Float,NCam:NCamera)
+		Local FX:Float[3],FY:Float[3],FZ:Float[3],BX:Float[3],BY:Float[3],BZ:Float[3],NP:NPoint = New NPoint
+		For Local NEnt:NEntity = EachIn NEntity.NEntityList
+			If NEnt.Shadows Then
+				For Local NTri:NTriangle = EachIn NEnt.NTriangleList[NEnt.Frame]
+					FX[0] = NTri.V1.X+NEnt.X; FY[0] = NTri.V1.Y+NEnt.Y; FZ[0] = NTri.V1.Z+NEnt.Z
+	 				FX[1] = NTri.V2.X+NEnt.X; FY[1] = NTri.V2.Y+NEnt.Y; FZ[1] = NTri.V2.Z+NEnt.Z
+					FX[2] = NTri.V3.X+NEnt.X; FY[2] = NTri.V3.Y+NEnt.Y; FZ[2] = NTri.V3.Z+NEnt.Z
+	
+					NP.X = FX[0]-X; NP.Y = FY[0]-Y; NP.Z = FZ[0]-Z
+					NP.Normalize()
+					NP.X = NP.X * NCam.Far*ShadowDistance; NP.Y = NP.Y * NCam.Far*ShadowDistance; NP.Z = NP.Z * NCam.Far*ShadowDistance
+					BX[0] = NP.X; BY[0] = NP.Y; BZ[0] = NP.Z
+	
+					NP.X = FX[1]-X; NP.Y = FY[1]-Y; NP.Z = FZ[1]-Z
+					NP.Normalize()
+					NP.X = NP.X * NCam.Far*ShadowDistance; NP.Y = NP.Y * NCam.Far*ShadowDistance; NP.Z = NP.Z * NCam.Far*ShadowDistance
+					BX[1] = NP.X; BY[1] = NP.Y; BZ[1] = NP.Z
+	
+					NP.X = FX[2]-X; NP.Y = FY[2]-Y; NP.Z = FZ[2]-Z
+					NP.Normalize()
+					NP.X = NP.X * NCam.Far*ShadowDistance; NP.Y = NP.Y * NCam.Far*ShadowDistance; NP.Z = NP.Z * NCam.Far*ShadowDistance
+					BX[2] = NP.X; BY[2] = NP.Y; BZ[2] = NP.Z
+	
+					Rem
+					glBegin(GL_TRIANGLES)
+						glVertex3f(FX[2],FY[2],FZ[2])
+						glVertex3f(FX[1],FY[1],FZ[1])
+						glVertex3f(FX[0],FY[0],FZ[0])
+
+						glVertex3f(BX[2],BY[2],BZ[2])
+						glVertex3f(BX[1],BY[1],BZ[1])
+						glVertex3f(BX[0],BY[0],BZ[0])
+					glEnd()
+					glBegin(GL_QUADS)
+						glVertex3f(BX[0],BY[0],BZ[0])
+						glVertex3f(BX[1],BY[1],BZ[1])
+						glVertex3f(FX[1],FY[1],FZ[1])
+						glVertex3f(FX[0],FY[0],FZ[0])
+
+						glVertex3f(BX[1],BY[1],BZ[1])
+						glVertex3f(BX[2],BY[2],BZ[2])
+						glVertex3f(FX[2],FY[2],FZ[2])
+						glVertex3f(FX[1],FY[1],FZ[1])
+
+						glVertex3f(BX[2],BY[2],BZ[2])
+						glVertex3f(BX[0],BY[0],BZ[0])
+						glVertex3f(FX[0],FY[0],FZ[0])
+						glVertex3f(FX[2],FY[2],FZ[2])
+					glEnd()
+					End Rem
+
+					
+					glBegin(GL_TRIANGLES)
+						glVertex3f(FX[0],FY[0],FZ[0])
+						glVertex3f(FX[1],FY[1],FZ[1])
+						glVertex3f(FX[2],FY[2],FZ[2])
+					glEnd()
+					glBegin(GL_TRIANGLES)
+						glVertex3f(BX[0],BY[0],BZ[0])
+						glVertex3f(BX[1],BY[1],BZ[1])
+						glVertex3f(BX[2],BY[2],BZ[2])
+					glEnd()
+					glBegin(GL_QUADS)
+						glVertex3f(FX[0],FY[0],FZ[0])
+						glVertex3f(FX[1],FY[1],FZ[1])
+						glVertex3f(BX[1],BY[1],BZ[1])
+						glVertex3f(BX[0],BY[0],BZ[0])
+					glEnd()
+					glBegin(GL_QUADS)
+						glVertex3f(FX[1],FY[1],FZ[1])
+						glVertex3f(FX[2],FY[2],FZ[2])
+						glVertex3f(BX[2],BY[2],BZ[2])
+						glVertex3f(BX[1],BY[1],BZ[1])
+					glEnd()
+					glBegin(GL_QUADS)		
+						glVertex3f(FX[2],FY[2],FZ[2])
+						glVertex3f(FX[0],FY[0],FZ[0])
+						glVertex3f(BX[0],BY[0],BZ[0])
+						glVertex3f(BX[2],BY[2],BZ[2])
+					glEnd()
+					
+				
+
+				Next
+
+			EndIf
+		Next
+	End Method
+
+	Method DrawShadow()
+			glPushMatrix()
+			glLoadIdentity()
+			glMatrixMode(GL_PROJECTION)
+			glPushMatrix()
+			glLoadIdentity()
+			glOrtho(0, 1, 1, 0, 0, 1)
+			glDisable(GL_DEPTH_TEST)
+			
+			glColor4f(0.0, 0.0, 0.0, 1.0)
+			glBegin(GL_QUADS)
+			glVertex2i(0, 0)
+			glVertex2i(0, 1)
+			glVertex2i(1, 1)
+			glVertex2i(1, 0)
+			glEnd()
+			
+			glEnable(GL_DEPTH_TEST)
+			glPopMatrix()
+			glMatrixMode(GL_MODELVIEW)
+			glPopMatrix()
+	End Method
+
+	Method DrawTri()
+			glPushMatrix()
+			glLoadIdentity()
+			glMatrixMode(GL_PROJECTION)
+			glPushMatrix()
+			glLoadIdentity()
+			glOrtho(0, 1, 1, 0, 0, 1)
+			glDisable(GL_DEPTH_TEST)
+			
+			glColor4f(0.0, 0.0, 0.0, 1.0)
+			glBegin(GL_QUADS)
+			glVertex2i(0, 0)
+			glVertex2i(0, 0.1)
+			glVertex2i(0.1, 0.1)
+			glVertex2i(0.1, 0)
+			glEnd()
+			
+			glEnable(GL_DEPTH_TEST)
+			glPopMatrix()
+			glMatrixMode(GL_MODELVIEW)
+			glPopMatrix()
+	End Method
+
+	Method RenderEntity(NEnt:NEntity,NCam:NCamera)
+		If NEnt.Alpha&gt;0.0 And NEnt.CamDistance&lt;NCam.Far Then
+			'Shader
+			If NEnt.Sha = Null Then
+				If CurrentProgramObject &lt;&gt; 0 Then
+					CurrentProgramObject = 0
+					glUseProgramObjectARB(0)
+					glDisable(GL_VERTEX_PROGRAM_ARB)
+					glDisable(GL_FRAGMENT_PROGRAM_ARB)
+				EndIf
+			Else
+				If CurrentProgramObject &lt;&gt; NEnt.Sha.ProgramObject Then
+					CurrentProgramObject = NEnt.Sha.ProgramObject
+					If Not NEnt.ShaderEnabled Then CurrentProgramObject = 0
+					glUseProgramObjectARB(CurrentProgramObject)
+					If CurrentProgramObject &lt;&gt; 0 Then
+						glEnable(GL_VERTEX_PROGRAM_ARB)
+						glEnable(GL_FRAGMENT_PROGRAM_ARB)
+					Else
+						glDisable(GL_VERTEX_PROGRAM_ARB)
+						glDisable(GL_FRAGMENT_PROGRAM_ARB)
+					EndIf
+				EndIf
+			EndIf
+
+			'Texture
+			If TextureEnabled&lt;&gt; NEnt.TextureEnabled Then
+				TextureEnabled =  NEnt.TextureEnabled
+				If TextureEnabled Then 
+					glEnable(GL_TEXTURE_2D)
+				Else
+					glDisable(GL_TEXTURE_2D)
+				EndIf
+			EndIf
+			If CurrentTexture&lt;&gt;NEnt.Texture And  NEnt.TextureEnabled Then
+				CurrentTexture = NEnt.Texture
+				glBindTexture (GL_TEXTURE_2D, CurrentTexture)
+			EndIf
+
+			If WireframeEnabled &lt;&gt; NEnt.WireFrame Then
+				WireframeEnabled = NEnt.WireFrame
+				If WireframeEnabled Then 
+					glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
+				Else
+					glPolygonMode(GL_FRONT, GL_FILL)
+				EndIf
+			EndIf
+
+			If AlphaEnabled &lt;&gt; NEnt.AlphaEnabled Then
+				AlphaEnabled = NEnt.AlphaEnabled
+				If AlphaEnabled Then
+					glEnable(GL_BLEND)
+				Else
+					glDisable(GL_BLEND)
+				EndIf
+			EndIf
+
+			If NEnt.Blend And (AlphaEnabled = 0) Then
+				AlphaEnabled = 1
+				glEnable(GL_BLEND)
+			EndIf
+
+			glPushMatrix()
+			glTranslatef(NEnt.X,NEnt.Y,NEnt.Z)
+			glRotatef(NEnt.Pitch,1.0,0,0)
+			glRotatef(NEnt.Yaw,0,1.0,0)
+			glRotatef(NEnt.Roll,0,0,1.0)
+
+			If NEnt.DisplayListCreated[NEnt.Frame] Then
+				'glEnableClientState(GL_VERTEX_ARRAY)
+				'glEnableClientState(GL_TEXTURE_COORD_ARRAY)
+
+				'glBindBufferARB( GL_ARRAY_BUFFER_ARB, NEnt.VertexVBO[NEnt.Frame] )
+				'glVertexPointer( 3, GL_FLOAT, 0, Null)
+				'	
+				'glBindBufferARB( GL_ARRAY_BUFFER_ARB, NEnt.UvVBO[NEnt.Frame] )
+				'glTexCoordPointer( 2, GL_FLOAT, 0, Null)
+				'glDrawArrays(GL_TRIANGLES,0, NEnt.VertexArrayLength[NEnt.Frame])
+
+				'glDisableClientState(GL_VERTEX_ARRAY)
+				'glDisableClientState(GL_TEXTURE_COORD_ARRAY)
+				glCallList(NEnt.DisplayList[NEnt.Frame])
+			Else
+				RuntimeError "Display list not created!"
+			EndIf
+			Triangles = Triangles+NEnt.Triangles/NEnt.Frames
+			For Local Chi:NEntity = EachIn NEnt.ChildList
+				RenderEntity(Chi,NCam)
+			Next
+			glPopMatrix()
+		EndIf
+	End Method
+
+	Method Swap(VWait:Int=1)
+		Flip VWait
+	End Method
+
+	Method Clear()
+		glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)
+	End Method
+
+	Method ClsColor(R:Int,G:Int,B:Int)
+		If R&gt;255 Then R=255
+		If G&gt;255 Then G=255
+		If B&gt;255 Then B=255
+		If R&lt;0 Then R=0
+		If G&lt;0 Then G=0
+		If B&lt;0 Then B=0
+		glClearColor(R/255.0,G/255.0,B/255.0,0.0)
+	End Method
+
+	Method New()
+		NGraphics.Gfx = Self
+		ShadowList = CreateList()
+	End Method
+
+	Function Start:NGraphics(NewWidth:Int=800,NewHeight:Int=600,NewDepth:Int=32,NewScreen:Int=0)
+		Local Gfx:NGraphics = New NGraphics
+		Gfx.Width = NewWidth
+		Gfx.Height = NewHeight
+		Gfx.Depth = NewDepth
+		Gfx.Fullscreen = NewScreen
+		
+		Local Flags:Int = GRAPHICS_BACKBUFFER|GRAPHICS_DEPTHBUFFER|GRAPHICS_STENCILBUFFER
+		If NewScreen = 0 Then Gfx.Depth = 0
+		GLGraphics(Gfx.Width,Gfx.Height,Gfx.Depth,0,Flags)
+		GlewInit()
+		glViewport(0,0,Gfx.Width,Gfx.Height)
+		glShadeModel(GL_SMOOTH)
+		glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST)
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+		glTexParameteri GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST
+		glTexParameteri GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST
+		glClearColor(0,0,0, 0.0)
+		glColor3f(1.0, 1.0, 1.0)
+		glClearDepth(1.0)
+		glEnable(GL_CULL_FACE)
+		'glEnable(GL_BLEND)
+		glEnable(GL_DEPTH_TEST) 
+		glDepthFunc(GL_LEQUAL) 
+		glMatrixMode(GL_PROJECTION)
+		glLoadIdentity()
+		gluPerspective(45.0, Float(Gfx.Width)/Float(Gfx.Height), 0.1, 1000.0)
+		glMatrixMode(GL_MODELVIEW)
+		glLoadIdentity()
+		'glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
+
+
+		Gfx.FPSTimer = MilliSecs()
+		Gfx.FPS = 1
+		
+		If NEntity.NEntityList = Null Then NEntity.NEntityList = CreateList()
+		If NParticleEmitter.NParticleEmitterList = Null Then NParticleEmitter.NParticleEmitterList = CreateList()
+
+		Return Gfx
+	End Function
+End Type
+
+Type NEntity Extends NPoint
+	Field Name:String
+	Field Pitch:Float
+	Field Yaw:Float
+	Field Roll:Float
+	Field Alpha:Float
+	Field NTriangleList:TList[512]
+	Field NVertexList:TList[512]
+	Field Frame:Int
+	Field Frames:Int
+	Field FrameTime:Int
+	Field FrameTimer:Int
+	Field ScaleX:Float,ScaleY:Float,ScaleZ:Float
+	Field TextureEnabled:Int
+	Field TextureWidth:Int,TextureHeight:Int
+	Field Texture:Int
+	Field WireFrame:Int
+	Field CamDistance:Float
+	Field Triangles:Int
+	Field DisplayList:Int[512],DisplayListCreated:Int[512]
+	Field AlphaEnabled:Int
+	Field CreateDList:Int
+	Field ColX:Float,ColY:Float,ColZ:Float
+	Field ColWidth:Float,ColHeight:Float,ColDepth:Float
+	Field Sha:NShader
+	Field ShaderEnabled:Int
+	Field Parent:NEntity
+	Field ChildList:TList
+	Field EntityType:Int
+	Field Blend:Int
+	Field RenderFirst:Int
+	Field Shadows:Int
+	'VBO
+	Field VertexVBO:Int[512],UvVBO:Int[512]
+	Field VertexArray:Float[512,0]
+	Field UvArray:Float[512,0]
+	Field VertexArrayLength:Int[512]
+
+	Global NEntityList:TList
+
+	'Partly done Vertex Buffer Objects.. My benchmark shows them to be slower than display lists when using models with
+	'few thousands triangles..
+	Method CreateDisplayList_()
+		Print "Creating display lists"
+		Local Vertices:Int = NTriangleList[Frame].Count()*9,VertexC:Int=0,UVC:Int=0
+		VertexArray = New Float[1,Vertices]
+		UvArray = New Float[1,Vertices]
+		For Local Fr:Int = 0 To Frames-1
+			DisplayListCreated[Fr] = 1 
+			VertexArrayLength[Fr] = Vertices/3
+			VertexC=0; UVC=0
+			Triangles=0
+			For Local NTri:NTriangle = EachIn NTriangleList[Fr]
+				Triangles:+1
+				VertexArray[Fr,VertexC] = NTri.V1.X
+				VertexArray[Fr,VertexC+1] = NTri.V1.Y
+				VertexArray[Fr,VertexC+2] = NTri.V1.Z
+				VertexArray[Fr,VertexC+3] = NTri.V2.X
+				VertexArray[Fr,VertexC+4] = NTri.V2.Y
+				VertexArray[Fr,VertexC+5] = NTri.V2.Z
+				VertexArray[Fr,VertexC+6] = NTri.V3.X
+				VertexArray[Fr,VertexC+7] = NTri.V3.Y
+				VertexArray[Fr,VertexC+8] = NTri.V3.Z
+				UvArray[Fr,UVC] = NTri.V1s
+				UvArray[Fr,UVC+1] = NTri.V1t
+				UvArray[Fr,UVC+2] = NTri.V2s
+				UvArray[Fr,UVC+3] = NTri.V2t
+				UvArray[Fr,UVC+4] = NTri.V3s
+				UvArray[Fr,UVC+5] = NTri.V3t
+				VertexC:+9
+				UVC:+6
+			Next
+		Next
+
+		Local TempVertex:Float[Vertices],TempUv:Float[Vertices]
+		For Local a:Int = 0 To Vertices-1
+			TempVertex[a] = VertexArray[Frame,a]
+			TempUv[a] = UvArray[Frame,a]
+		Next
+
+
+		glGenBuffersARB(1, Varptr(VertexVBO[Frame])) 'Get A Valid Name
+		glBindBufferARB( GL_ARRAY_BUFFER_ARB, VertexVBO[Frame] ) 'Bind The Buffer
+		glBufferDataARB( GL_ARRAY_BUFFER_ARB, SizeOf(TempVertex), TempVertex, GL_STATIC_DRAW_ARB )
+
+
+		glGenBuffersARB( 1, Varptr(UvVBO[Frame]) )
+		glBindBufferARB( GL_ARRAY_BUFFER_ARB, UvVBO[Frame] )
+		glBufferDataARB( GL_ARRAY_BUFFER_ARB, SizeOf(TempUv), TempUv, GL_STATIC_DRAW_ARB )
+	End Method
+
+	Method AttachShader(NewSha:NShader)
+		Sha = NewSha
+		ShaderEnabled = 1
+	End Method
+
+	Method CreateDisplayList()
+		AlphaEnabled = 0
+		Local CAlpha:Float,OptimizeColors:Int=0,Stepper:Int=0
+		For Local a:Int = 0 To Frames-1
+			If DisplayListCreated[a] = 1 Then glDeleteLists(DisplayList[a],1)
+			DisplayListCreated[a] = 1
+			DisplayList[a] = glGenLists(1)
+			glNewList(DisplayList[a], GL_COMPILE)
+			glBegin(GL_TRIANGLES)
+			For Local NTri:NTriangle = EachIn NTriangleList[a]
+				'If Stepper=0 Then glBegin(GL_TRIANGLES)
+				'Stepper:+1
+				If Alpha*(NTri.V1.Alpha+NTri.V2.Alpha+NTri.V3.Alpha) &lt; 3.0 Then AlphaEnabled = 1
+				If NTri.V1.R+NTri.V1.G+NTri.V1.B+NTri.V2.R+NTri.V2.G+NTri.V2.B+NTri.V3.R+NTri.V3.G+NTri.V3.B=9.0 Then OptimizeColors=1
+
+			'	glBegin(GL_TRIANGLES)
+				If TextureEnabled Then
+					glTexCoord2f (NTri.V1s,NTri.V1t)
+					If NTri.V1NX&lt;&gt;0.0 Or NTri.V1NY&lt;&gt;0.0 Or NTri.V1NZ&lt;&gt;0.0 glNormal3f(NTri.V1NX,NTri.V1NY,NTri.V1NZ)
+				EndIf
+				CAlpha = Alpha*NTri.V1.Alpha
+				If (CAlpha) &lt;&gt; 1.0 Then
+					glColor4f(NTri.V1.R,NTri.V1.G,NTri.V1.B,CAlpha)
+				Else
+					glColor3f(NTri.V1.R,NTri.V1.G,NTri.V1.B)
+				EndIf
+				glVertex3f(NTri.V1.X,NTri.V1.Y,NTri.V1.Z)
+
+				If TextureEnabled Then
+					glTexCoord2f (NTri.V2s,NTri.V2t)
+					If NTri.V2NX&lt;&gt;0.0 Or NTri.V2NY&lt;&gt;0.0 Or NTri.V2NZ&lt;&gt;0.0 glNormal3f(NTri.V2NX,NTri.V2NY,NTri.V2NZ)
+				EndIf
+				CAlpha = Alpha*NTri.V2.Alpha
+				If (CAlpha) &lt;&gt; 1.0 Then
+					glColor4f(NTri.V2.R,NTri.V2.G,NTri.V2.B,CAlpha)
+				ElseIf Not OptimizeColors
+					glColor3f(NTri.V2.R,NTri.V2.G,NTri.V2.B)
+				EndIf
+				glVertex3f(NTri.V2.X,NTri.V2.Y,NTri.V2.Z)
+
+				If TextureEnabled Then
+					glTexCoord2f (NTri.V3s,NTri.V3t)
+					If NTri.V3NX&lt;&gt;0.0 Or NTri.V3NY&lt;&gt;0.0 Or NTri.V3NZ&lt;&gt;0.0 glNormal3f(NTri.V3NX,NTri.V3NY,NTri.V3NZ)
+				EndIf
+				CAlpha = Alpha*NTri.V3.Alpha
+				If (CAlpha) &lt;&gt; 1.0 Then
+					glColor4f(NTri.V3.R,NTri.V3.G,NTri.V3.B,CAlpha)
+				ElseIf Not OptimizeColors
+					glColor3f(NTri.V3.R,NTri.V3.G,NTri.V3.B)
+				EndIf
+				glVertex3f(NTri.V3.X,NTri.V3.Y,NTri.V3.Z)
+
+				'If Stepper = 10 Then 
+					'glEnd()
+				'	Stepper=0
+		'		EndIf
+			Next
+			glEnd()
+			glEndList()
+		Next
+	End Method
+
+	Method Turn(NewPitch:Float,NewYaw:Float,NewRoll:Float)
+		Pitch = Pitch+NewPitch Mod 360.0
+		Yaw = Yaw+NewYaw Mod 360.0
+		Roll = Roll+NewRoll Mod 360.0
+		If Pitch&lt;0.0 Then Pitch=Pitch+360.0
+		If Yaw&lt;0.0 Then Yaw=Yaw+360.0
+		If Roll&lt;0.0 Then Roll=Roll+360.0
+		If Pitch&gt;360.0 Then Pitch=Pitch-360.0
+		If Yaw&gt;360.0 Then Yaw=Yaw-360.0
+		If Roll&gt;360.0 Then Roll=Roll-360.0
+	End Method
+
+	Method Rotate(NewPitch:Float,NewYaw:Float,NewRoll:Float)
+		Pitch = NewPitch Mod 360.0
+		Yaw = NewYaw Mod 360.0
+		Roll = NewRoll Mod 360.0
+		While Pitch&lt;0.0
+			Pitch=Pitch+360.0
+		Wend
+		While Yaw&lt;0.0
+			Yaw=Yaw+360.0
+		Wend
+		While Roll&lt;0.0
+			Roll=Roll+360.0
+		Wend
+		While Pitch&gt;360.0
+			Pitch = Pitch-360.0
+		Wend
+		While Yaw&gt;360.0
+			Yaw = Yaw-360.0
+		Wend
+		While Roll&gt;360.0
+			Roll = roll-360.0
+		Wend
+	End Method
+
+	Method Move(NewX:Float,NewY:Float,NewZ:Float)
+		Local MoveMat:TMatrix=New TMatrix
+		MoveMat.LoadIdentity()
+		MoveMat.RotateYaw(Yaw)
+		MoveMat.RotatePitch(Pitch)
+		MoveMat.RotateRoll(Roll)
+		MoveMat.Translate(NewX,NewY,-NewZ)
+		X = X+MoveMat.grid[3,0]
+		Y = Y+MoveMat.grid[3,1]
+		Z = Z+MoveMat.grid[3,2]
+	End Method
+
+	Method AddTriangle(V1:NVertex,V2:NVertex,V3:NVertex,V1s:Float=0,V1t:Float=0,V2s:Float=0,V2t:Float=0,V3s:Float=0,V3t:Float=0,V1n:Byte=0,V2n:Byte=0,V3n:Byte=0)
+		Local NewTri:NTriangle = New NTriangle
+		NewTri.V1 = V1
+		NewTri.V2 = V2
+		NewTri.V3 = V3
+		NewTri.V1s=V1s
+		NewTri.V1t=V1t
+		NewTri.V2s=V2s
+		NewTri.V2t=V2t
+		NewTri.V3s=V3s
+		NewTri.V3t=V3t
+		NewTri.V1NX = Anorms[V1n*3]
+		NewTri.V1NY = Anorms[V1n*3+1]
+		NewTri.V1NZ = Anorms[V1n*3+2]
+		NewTri.V2NX = Anorms[V2n*3]
+		NewTri.V2NY = Anorms[V2n*3+1]
+		NewTri.V2NZ = Anorms[V2n*3+2]
+		NewTri.V3NX = Anorms[V3n*3]
+		NewTri.V3NY = Anorms[V3n*3+1]
+		NewTri.V3NZ = Anorms[V3n*3+2]
+		ListAddLast(Self.NTriangleList[Self.Frame],NewTri)
+		ListAddLast(Self.NVertexList[Self.Frame],V1)
+		ListAddLast(Self.NVertexList[Self.Frame],V2)
+		ListAddLast(Self.NVertexList[Self.Frame],V3)
+		Triangles=Triangles+1
+	End Method
+
+	Method AddTri(V1X:Float,V1Y:Float,V1Z:Float,V2X:Float,V2Y:Float,V2Z:Float,V3X:Float,V3Y:Float,V3Z:Float,V1s:Float=0,V1t:Float=0,V2s:Float=0,V2t:Float=0,V3s:Float=0,V3t:Float=0,V1n:Byte=0,V2n:Byte=0,V3n:Byte=0)
+		Local NV1:NVertex = New NVertex
+		Local NV2:NVertex = New NVertex
+		Local NV3:NVertex = New NVertex
+		NV1.OrigX = V1X; NV1.OrigY = V1Y; NV1.OrigZ = V1Z
+		NV2.OrigX = V2X; NV2.OrigY = V2Y; NV2.OrigZ = V2Z
+		NV3.OrigX = V3X; NV3.OrigY = V3Y; NV3.OrigZ = V3Z
+		NV1.X = V1X
+		NV1.Y = V1Y
+		NV1.Z = V1Z
+		NV2.X = V2X
+		NV2.Y = V2Y
+		NV2.Z = V2Z
+		NV3.X = V3X
+		NV3.Y = V3Y
+		NV3.Z = V3Z
+		Self.AddTriangle(NV1,NV2,NV3,V1s,V1t,V2s,V2t,V3s,V3t,V1n,V2n,V3n)
+	End Method
+
+	Method LoadTexture(Filename:String)
+		If TextureEnabled = False Then
+			If FileType(Filename)=0 Then RuntimeError Filename+" not found!"
+			Local TXMap:TPixmap = LoadPixmap(Filename)
+			If Not TXMap Then RuntimeError "Could not load texture!"
+			Texture = GLTexFromPixmap(TXMap)
+			If Not Texture Then RuntimeError "Could not load texture to memory!"
+			TextureEnabled = True
+			TextureWidth = TXMap.Width
+			TextureHeight = TXMap.Height
+		EndIf
+		CreateDList = 1
+	End Method
+
+	Method FreeTexture()
+		If NEntity.TextureUseCount(Texture) = 1 Then glDeleteTextures(1,Varptr(Texture))
+	End Method
+
+	Method ScaleMesh(NewScaleX:Float,NewScaleY:Float,NewScaleZ:Float)
+		For Local Fr:Int = 0 To Frames-1
+			For Local NVer:NVertex = EachIn NVertexList[Fr]
+				NVer.X = NVer.X*NewScaleX
+				NVer.Y = NVer.Y*NewScaleY
+				NVer.Z = NVer.Z*NewScaleZ
+				NVer.OrigX = NVer.X
+				NVer.OrigY = NVer.Y
+				NVer.OrigZ = NVer.Z
+			Next
+		Next
+		CreateDList = 1
+	End Method
+
+	Method MoveMesh(NewX:Float,NewY:Float,NewZ:Float)
+		For Local Fr:Int = 0 To Frames-1
+			For Local NVer:NVertex = EachIn NVertexList[Fr]
+				NVer.X = NVer.X+NewX
+				NVer.Y = NVer.Y+NewY
+				NVer.Z = NVer.Z+NewZ
+			Next
+		Next
+		CreateDList = 1
+	End Method
+
+	Method FreeEntity()
+		For Local Fr:Int = 0 To Frames-1
+			If NEntity.ListUseCount(DisplayList[Fr]) = 1 Then glDeleteLists(DisplayList[Fr],1)
+		Next
+		FreeTexture()
+		ListRemove(NEntityList,Self)
+	End Method
+
+	Method AddMesh(NEnt:NEntity)
+		Print "Adding mesh"
+		For Local NTri:NTriangle = EachIn NEnt.NTriangleList[NEnt.Frame]
+			Local NewTri:NTriangle = New NTriangle
+			NewTri.V1s = NTri.V1s; NewTri.V1t = NTri.V1t
+			NewTri.V2s = NTri.V2s; NewTri.V2t = NTri.V2t 
+			NewTri.V3s = NTri.V3s; NewTri.V3t = NTri.V3t
+			NewTri.V1NX = NTri.V1NX; NewTri.V1NY = NTri.V1NY; NewTri.V1NZ = NTri.V1NZ
+			NewTri.V2NX = NTri.V2NX; NewTri.V2NY = NTri.V2NY; NewTri.V2NZ = NTri.V2NZ
+			NewTri.V3NX = NTri.V3NX; NewTri.V3NY = NTri.V3NY; NewTri.V3NZ = NTri.V3NZ
+			NewTri.V1 = New NVertex; NewTri.V2 = New NVertex; NewTri.V3 = New NVertex
+			NewTri.V1.X = NTri.V1.X
+			NewTri.V1.Y = NTri.V1.Y
+			NewTri.V1.Z = NTri.V1.Z
+			NewTri.V2.X = NTri.V2.X
+ 			NewTri.V2.Y = NTri.V2.Y
+			NewTri.V2.Z = NTri.V2.Z
+			NewTri.V3.X = NTri.V3.X; NewTri.V3.Y = NTri.V3.Y; NewTri.V3.Z = NTri.V3.Z
+			NewTri.V1.OrigX = NTri.V1.OrigX; NewTri.V1.OrigY = NTri.V1.OrigY; NewTri.V1.OrigZ = NTri.V1.OrigZ
+			NewTri.V2.OrigX = NTri.V2.OrigX; NewTri.V2.OrigY = NTri.V2.OrigY; NewTri.V2.OrigZ = NTri.V2.OrigZ
+			NewTri.V3.OrigX = NTri.V3.OrigX; NewTri.V3.OrigY = NTri.V3.OrigY; NewTri.V3.OrigZ = NTri.V3.OrigZ
+			NewTri.V1.Alpha = NTri.V1.Alpha; NewTri.V2.Alpha = NTri.V2.Alpha; NewTri.V3.Alpha = NTri.V3.Alpha
+			NewTri.V1.R = NTri.V1.R; NewTri.V1.G = NTri.V1.G; NewTri.V1.B = NTri.V1.B
+			NewTri.V2.R = NTri.V2.R; NewTri.V2.G = NTri.V2.G; NewTri.V2.B = NTri.V2.B
+			NewTri.V3.R = NTri.V3.R; NewTri.V3.G = NTri.V3.G; NewTri.V3.B = NTri.V3.B
+			ListAddLast(Self.NTriangleList[Self.Frame],NewTri)
+			ListAddLast(Self.NVertexList[Self.Frame],NewTri.V1)
+			ListAddLast(Self.NVertexList[Self.Frame],NewTri.V2)
+			ListAddLast(Self.NVertexList[Self.Frame],NewTri.V3)
+		Next
+		CreateDList = 1
+	End Method
+
+	Method FlipMesh()
+		Local HoldFloat:Float,HoldVertex:NVertex
+		For Local Fr:Int = 0 To Frames-1
+			For Local NTri:NTriangle = EachIn NTriangleList[Fr]
+				HoldVertex = NTri.V1
+				NTri.V1 = NTri.V3
+				NTri.V3 = HoldVertex
+
+				HoldFloat = NTri.V1s
+				NTri.V1s = NTri.V3s
+				NTri.v3s = HoldFloat
+
+				HoldFloat= NTri.V1t
+				NTri.V1t = NTri.V3t
+				NTri.V3t = HoldFloat
+
+				HoldFloat = NTri.V1NX
+				NTri.V1NX = NTri.V3NX
+				NTri.V3NX = HoldFloat
+
+				HoldFloat = NTri.V1NY
+				NTri.V1NY = NTri.V3NY
+				NTri.V3NY = HoldFloat
+
+				HoldFloat = NTri.V1NZ
+				NTri.V1NZ = NTri.V3NZ
+				NTri.V3NZ = HoldFloat
+		
+			Next
+		Next
+		CreateDList = 1
+	End Method
+
+
+	Method TurnMesh(NewPitch:Float,NewYaw:Float,NewRoll:Float)
+		For Local Fr:Int = 0 To Frames-1
+			For Local NVer:NVertex = EachIn NVertexList[Fr]
+				Local OldX:Float = NVer.X
+				Local OldY:Float = NVer.Y
+				Local OldZ:Float = NVer.Z
+				NVer.Y = (OldY*Cos(NewPitch)) - (OldZ*Sin(NewPitch))
+				NVer.Z = (OldZ*Cos(NewPitch)) + (OldY*Sin(NewPitch))
+				OldY = NVer.Y
+				OldZ = NVer.Z
+				NVer.Z = (OldZ*Cos(NewYaw)) - (OldX*Sin(NewYaw))
+				NVer.X = (OldX*Cos(NewYaw)) + (OldZ*Sin(NewYaw))
+				OldZ = NVer.Z
+				OldX = NVer.X
+				NVer.X = (OldX*Cos(NewRoll)) - (OldY*Sin(NewRoll))
+				NVer.Y = (OldY*Cos(NewRoll)) + (OldX*Sin(NewRoll))
+			Next
+		Next
+		CreateDList = 1
+	End Method
+
+	Method ScaleEntity(NewScaleX:Float,NewScaleY:Float,NewScaleZ:Float)
+		ScaleX = ScaleX * NewScaleX
+		ScaleY = ScaleY * NewScaleY
+		ScaleZ = ScaleZ * NewScaleZ
+		For Local Fr:Int = 0 To Frames-1
+			For Local NVer:NVertex = EachIn NVertexList[Fr]
+				NVer.X = NVer.OrigX*ScaleX
+				NVer.Y = NVer.OrigY*ScaleY
+				NVer.Z = NVer.OrigZ*ScaleZ
+			Next
+		Next
+		CreateDList = 1
+	End Method
+
+	Method Animate()
+		If MilliSecs()&gt;FrameTimer+FrameTime Then
+				FrameTimer = MilliSecs()
+				Frame=Frame+1
+				If Frame&gt;=Frames Then Frame=0
+		EndIf
+	End Method
+
+	Method Free()
+		ListRemove(NEntity.NEntityList,Self)
+	End Method
+
+	Method EntityParent(NewParent:NEntity)
+		If NewParent &lt;&gt; Null Then
+			Parent = NewParent
+			ListAddLast(Parent.ChildList,Self)
+		Else
+			If Parent &lt;&gt; Null Then
+				ListRemove(Parent.ChildList,Self)
+				Parent = Null
+			EndIf
+		EndIf
+	End Method
+
+	Method New()
+		For Local a:Int = 0 To 511
+			NTriangleList[a] = CreateList()
+			NVertexList[a] = CreateList()
+		Next
+		ChildList = CreateList()
+		ListAddLast(NEntity.NEntityList,Self)
+		Alpha = 1.0
+		Frames = 1
+		ScaleX = 1.0
+		ScaleY = 1.0
+		ScaleZ = 1.0
+		FrameTimer = MilliSecs()
+		FrameTime = 1
+	End Method
+
+	Method EntityColor(NewR:Int,NewG:Int,NewB:Int)
+		For Local Fr:Int = 0 To Frames-1
+			For Local NVer:NVertex = EachIn NVertexList[Fr]	
+				NVer.R = NewR/255.0
+				NVer.G = NewG/255.0
+				NVer.B = NewB/255.0
+			Next
+		Next
+		CreateDList = 1
+	End Method
+
+	Method EntityAlpha(NewAlpha:Float)
+		Alpha = NewAlpha
+		CreateDList = 1
+	End Method
+
+	Method Interpolate()
+		If Frames&gt;1 Then
+			For Local a:Int = 0 To Frames-1
+				Local TriCount:Int=0
+				For Local NTri:NTriangle = EachIn NTriangleList[a]
+					TriCount:+1
+					Local NTri2:NTriangle = New NTriangle
+					NTri2.V1s=NTri.V1s; NTri2.V1t=NTri.V1t
+					NTri2.V2s=NTri.V2s; NTri2.V2t=NTri.V2t
+					NTri2.V3s=NTri.V3s; NTri2.V3t=NTri.V3t
+					NTri2.V1NX = NTri.V1NX; NTri2.V1NY = NTri.V1NY; NTri2.V1NZ = NTri.V1NZ
+					NTri2.V2NX = NTri.V2NX; NTri2.V2NY = NTri.V2NY; NTri2.V2NZ = NTri.V2NZ
+					NTri2.V3NX = NTri.V3NX; NTri2.V3NY = NTri.V3NY; NTri2.V3NZ = NTri.V3NZ
+					NTri2.V1 = New NVertex; NTri2.V2 = New NVertex; NTri2.V3 = New NVertex
+					NTri2.V1.R = NTri.V1.R; NTri2.V1.G = NTri.V1.G; NTri2.V1.B = NTri.V1.B; NTri2.V1.Alpha = NTri.V1.Alpha
+					NTri2.V2.R = NTri.V2.R; NTri2.V2.G = NTri.V2.G; NTri2.V2.B = NTri.V2.B; NTri2.V2.Alpha = NTri.V2.Alpha 
+					NTri2.V3.R = NTri.V3.R; NTri2.V3.G = NTri.V3.G; NTri2.V3.B = NTri.V3.B; NTri2.V3.Alpha = NTri.V3.Alpha
+					NTri2.V1.X = (NTri.V1.X+GetTriangle(TriCount,NextFrame(a)).V1.X)*0.5
+					NTri2.V1.Y = (NTri.V1.Y+GetTriangle(TriCount,NextFrame(a)).V1.Y)*0.5
+					NTri2.V1.Z = (NTri.V1.Z+GetTriangle(TriCount,NextFrame(a)).V1.Z)*0.5
+					NTri2.V2.X = (NTri.V2.X+GetTriangle(TriCount,NextFrame(a)).V2.X)*0.5
+					NTri2.V2.Y = (NTri.V2.Y+GetTriangle(TriCount,NextFrame(a)).V2.Y)*0.5
+					NTri2.V2.Z = (NTri.V2.Z+GetTriangle(TriCount,NextFrame(a)).V2.Z)*0.5
+					NTri2.V3.X = (NTri.V3.X+GetTriangle(TriCount,NextFrame(a)).V3.X)*0.5
+					NTri2.V3.Y = (NTri.V3.Y+GetTriangle(TriCount,NextFrame(a)).V3.Y)*0.5
+					NTri2.V3.Z = (NTri.V3.Z+GetTriangle(TriCount,NextFrame(a)).V3.Z)*0.5
+					ListAddLast(NTriangleList[Frames+a],NTri2)
+				Next
+			Next
+			For Local a:Int = 1 To Frames*2-1
+				
+			Next
+			Frames:*2
+		EndIf
+	End Method
+
+	Method NextFrame:Int(Fr:Int)
+		If Fr+1 &gt;= Frames Then Return 0
+		Return Fr+1
+	End Method
+
+	Method Intersect:Int(NEnt:NEntity)
+		Local linept:NPoint = New NPoint,vect:NPoint = New NPoint,V1:NPoint = New NPoint,V2:NPoint = New NPoint,V3:NPoint = New NPoint
+		If NEnt = Self Then Return False
+		For Local NTri:NTriangle = EachIn NTriangleList[Frame]
+			For Local NTri2:NTriangle = EachIn NEnt.NTriangleList[NEnt.Frame]
+				V1.X = NTri2.V1.X+NEnt.X; V1.Y = NTri2.V1.Y+NEnt.Y; V1.Z = NTri2.V1.Z+NEnt.Z
+				V2.X = NTri2.V2.X+NEnt.X; V2.Y = NTri2.V2.Y+NEnt.Y; V2.Z = NTri2.V2.Z+NEnt.Z
+				V3.X = NTri2.V3.X+NEnt.X; V3.Y = NTri2.V3.Y+NEnt.Y; V3.Z = NTri2.V3.Z+NEnt.Z
+
+				linept.X = NTri.V1.X+X; linept.Y = NTri.V1.Y+Y; linept.Z = NTri.V1.Z+Z
+				vect.X = NTri.V2.X-NTri.V1.X
+ 				vect.Y = NTri.V2.Y-NTri.V1.Y
+ 				vect.Z = NTri.V2.Z-NTri.V1.Z
+				If LineIntersectsTriangle(V1,V2,V3,linept,vect) Then Return True
+
+				linept.X = NTri.V2.X+X; linept.Y = NTri.V2.Y+Y; linept.Z = NTri.V2.Z+Z
+				vect.X = NTri.V3.X-NTri.V2.X
+				vect.Y = NTri.V3.Y-NTri.V2.Y
+				vect.Z = NTri.V3.Z-NTri.V2.Z
+				If LineIntersectsTriangle(V1,V2,V3,linept,vect) Then Return True
+
+				linept.X = NTri.V3.X+X; linept.Y = NTri.V3.Y+Y; linept.Z = NTri.V3.Z+Z
+				vect.X = NTri.V1.X-NTri.V3.X
+				vect.Y = NTri.V1.Y-NTri.V3.Y
+				vect.Z = NTri.V1.Z-NTri.V3.Z
+				If LineIntersectsTriangle(V1,V2,V3,linept,vect) Then Return True
+			Next
+		Next
+		Return False
+	End Method
+
+	Method CopyEntity:NEntity()
+		CreateDisplayList(); CreateDList = 0
+		Local NEnt2:NEntity = New NEntity
+		NEnt2.Name = Self.Name
+		NEnt2.Alpha = Self.Alpha
+		NEnt2.Frame = Self.Frame
+		NEnt2.Frames = Self.Frames
+		NEnt2.FrameTime = Self.FrameTime
+		NEnt2.FrameTimer = Self.FrameTimer
+		NEnt2.ScaleX = Self.ScaleX
+		NEnt2.ScaleY = Self.ScaleY
+		NEnt2.ScaleZ = Self.ScaleZ
+		NEnt2.TextureEnabled = Self.TextureEnabled
+		NEnt2.TextureWidth = Self.TextureWidth
+		NEnt2.TextureHeight = Self.TextureHeight
+		NEnt2.Texture = Self.Texture
+		NEnt2.AlphaEnabled = Self.AlphaEnabled
+		NEnt2.VertexVBO = Self.VertexVBO
+		NEnt2.UvVBO = Self.UvVBO
+		NEnt2.VertexArray = Self.VertexArray
+		NEnt2.VertexArrayLength = Self.VertexArrayLength
+		NEnt2.UvArray = Self.UvArray
+		NEnt2.CreateDList = Self.CreateDList
+		NEnt2.Sha = Self.Sha
+		NEnt2.ShaderEnabled = Self.ShaderEnabled
+		NEnt2.EntityType = Self.EntityType
+		NEnt2.Blend = Self.Blend
+		NEnt2.RenderFirst = Self.RenderFirst
+		NEnt2.Shadows = Self.Shadows
+		For Local a:Int = 0 To Self.Frames-1
+				NEnt2.DisplayListCreated[a] = Self.DisplayListCreated[a]
+			NEnt2.DisplayList[a] = Self.DisplayList[a]
+			For Local NTri:NTriangle = EachIn Self.NTriangleList[a]
+				Local NTri2:NTriangle = New NTriangle
+				NEnt2.Triangles:+1
+				NTri2.V1s = NTri.V1s; NTri2.V1t = NTri.V1t
+				NTri2.V2s = NTri.V2s; NTri2.V2t = NTri.V2t
+				NTri2.V3s = NTri.V3s; NTri2.V3t = NTri.V3t	
+				NTri2.V1NX = NTri.V1NX; NTri2.V1NY = NTri.V1NY; NTri2.V1NZ = NTri.V1NZ
+				NTri2.V2NX = NTri.V2NX; NTri2.V2NY = NTri.V2NY; NTri2.V2NZ = NTri.V2NZ
+				NTri2.V3NX = NTri.V3NX; NTri2.V3NY = NTri.V3NY; NTri2.V3NZ = NTri.V3NZ
+				NTri2.V1 = New NVertex 
+				NTri2.V2 = New NVertex 
+				NTri2.V3 = New NVertex
+				NTri2.V1.OrigX = NTri.V1.OrigX; NTri2.V1.OrigY = NTri.V1.OrigY; NTri2.V1.OrigZ = NTri.V1.OrigZ
+				NTri2.V2.OrigX = NTri.V2.OrigX; NTri2.V2.OrigY = NTri.V2.OrigY; NTri2.V2.OrigZ = NTri.V2.OrigZ
+				NTri2.V3.OrigX = NTri.V3.OrigX; NTri2.V3.OrigY = NTri.V3.OrigY; NTri2.V3.OrigZ = NTri.V3.OrigZ
+				NTri2.V1.X = NTri.V1.X; NTri2.V1.Y = NTri.V1.Y; NTri2.V1.Z = NTri.V1.Z
+				NTri2.V2.X = NTri.V2.X; NTri2.V2.Y = NTri.V2.Y; NTri2.V2.Z = NTri.V2.Z
+				NTri2.V3.X = NTri.V3.X; NTri2.V3.Y = NTri.V3.Y; NTri2.V3.Z = NTri.V3.Z
+				NTri2.V1.R = NTri.V1.R; NTri2.V1.G = NTri.V1.G; NTri2.V1.B = NTri.V1.B
+				NTri2.V2.R = NTri.V2.R; NTri2.V2.G = NTri.V2.G; NTri2.V2.B = NTri.V2.B 
+				NTri2.V3.R = NTri.V3.R; NTri2.V3.G = NTri.V3.G; NTri2.V3.B = NTri.V3.B
+				NTri2.V1.Alpha = NTri.V1.Alpha
+				NTri2.V2.Alpha = NTri.V2.Alpha
+				NTri2.V3.Alpha = NTri.V3.Alpha
+				ListAddLast(NEnt2.NTriangleList[NEnt2.Frame],NTri2)
+				ListAddLast(NEnt2.NVertexList[NEnt2.Frame],NTri2.V1)
+				ListAddLast(NEnt2.NVertexList[NEnt2.Frame],NTri2.V2)
+				ListAddLast(NEnt2.NVertexList[NEnt2.Frame],NTri2.V3)
+			Next
+		Next
+		Return NEnt2
+	End End Method
+	
+	Method GetTriangle:NTriangle(TriCount:Int,Fr:Int)
+		Local TriCounter:Int=0
+		For Local NTri:NTriangle = EachIn NTriangleList[Fr]
+			TriCounter:+1
+			If TriCounter=TriCount Then Return NTri
+		Next
+	End Method
+
+	Function CreateCube:NEntity()
+		Local NEnt:NEntity = New NEntity
+		NEnt.AddTri(-1,1,1,-1,-1,1,1,1,1,0,0,0,1,1,0) 'FRONT TRI 1
+		NEnt.AddTri(-1,-1,1,1,-1,1,1,1,1,0,1,1,1,1,0) 'FRONT TRI2
+		NEnt.AddTri(1,1,1,1,-1,1,1,-1,-1,1,0,1,1,0,1) 'RIGHT TRI1
+		NEnt.AddTri(1,1,1,1,-1,-1,1,1,-1,1,0,0,1,0,0) 'RIGHT TRI2
+		NEnt.AddTri(1,1,-1,1,-1,-1,-1,-1,-1,0,0,0,1,1,1) 'BACK TRI1
+		NEnt.AddTri(1,1,-1,-1,-1,-1,-1,1,-1,0,0,1,1,1,0) 'BACK TRI2
+		NEnt.AddTri(-1,1,-1,-1,-1,-1,-1,-1,1,1,0,1,1,0,1) 'LEFT TRI1
+		NEnt.AddTri(-1,1,-1,-1,-1,1,-1,1,1,1,0,0,1,0,0) 'LEFT TRI2
+		NEnt.AddTri(-1,-1,1,-1,-1,-1,1,-1,-1,0,1,0,0,1,0 ) 'BOTTOM TRI1
+		NEnt.AddTri(-1,-1,1,1,-1,-1,1,-1,1,0,1,1,0,1,1) 'BOTTOM TRI2
+		NEnt.AddTri(1,1,-1,-1,1,-1,-1,1,1,1,1,0,1,0,0) 'TOP TRI1
+		NEnt.AddTri(1,1,1, 1,1,-1,-1,1,1,1,0,1,1,0,0 ) 'TOP TRI2
+		NEnt.CreateDList = 1
+		Return NEnt
+	End Function
+
+	Function CreateSprite:NEntity()
+		Local NEnt:NEntity = New NEntity
+		NEnt.AddTri(-1,1,1,-1,-1,1,1,1,1,0,0,0,1,1,0) 'FRONT TRI 1
+		NEnt.AddTri(-1,-1,1,1,-1,1,1,1,1,0,1,1,1,1,0) 'FRONT TRI2
+		NEnt.CreateDList = 1
+		Return NEnt
+	End Function
+
+	Function Heightmap:NEntity(Filename:String)
+		If FileType(Filename)=0 Then RuntimeError Filename+" not found!"
+		Local Pixmap:TPixmap = LoadPixmap(Filename)
+		If Not Pixmap Then RuntimeError "Could not load "+Filename
+		Local NEnt:NEntity = New NEntity,Pixel%,R:Int,G:Int,B:Int
+		Local HArray:Float[Pixmap.width,Pixmap.height]
+		For Local tX:Int = 0 To Pixmap.Width-1
+			For Local tY:Int = 0 To Pixmap.Height-1
+				Pixel = ReadPixel(Pixmap,tX,tY)
+				R = (Pixel% &amp; $00FF0000) Shr 16
+				G = (Pixel% &amp; $0000FF00) Shr 8
+				B = (Pixel% &amp; $000000FF)
+				HArray[tX,tY] = Float(R+G+B)/3.0
+			Next
+		Next
+		For Local tX:Int = 0 To Pixmap.Width-2
+			For Local tY:Int = 0 To Pixmap.Height-2
+				NEnt.AddTri(tX,HArray[tX,tY+1]*0.1,tY+1,tX+1,HArray[tX+1,tY+1]*0.1,tY+1,tX,HArray[tX,tY]*0.1,tY,1,1,1,0,0,1)
+				NEnt.AddTri(tX+1,HArray[tX+1,tY+1]*0.1,tY+1,tX+1,HArray[tX+1,tY]*0.1,tY,tX,HArray[tX,tY]*0.1,tY,1,0,0,0,0,1)
+			Next
+		Next
+		NEnt.CreateDList = 1
+		Return NEnt
+	End Function
+
+	Function LoadMesh:NEntity(Filename:String)
+		Print "Loading "+Filename
+		If FileType(Filename)=0 Then 
+			RuntimeError Filename+" not found!"
+			Return Null
+		EndIf
+		Local File:TStream = ReadFile(Filename)
+		Local Ident:Int = ReadInt(File)
+		If Ident &lt;&gt; 844121161 Then RuntimeError "MD2 identification number not found!"
+
+		Local NEnt:NEntity = New NEntity
+
+		Local Version:Int = ReadInt(File)
+		Print "Version: "+Version
+		Local SkinWidth:Int = ReadInt(File)
+		Local SkinHeight:Int = ReadInt(File)
+		NEnt.TextureWidth = SkinWidth
+		NEnt.TextureHeight = SkinHeight
+		Print NEnt.TextureWidth+"x"+Nent.TextureHeight
+
+		Local FrameSize:Int = ReadInt(File)
+
+		Local NumSkins:Int = ReadInt(File)
+		Print NumSkins+" skins"
+		Local NumVertices:Int = ReadInt(File)
+		Print NumVertices+" vertices"
+		Local NumSt:Int = ReadInt(File)
+		Local NumTris:Int = ReadInt(File)
+		Print NumTris+" triangles"
+		Local NumGlcmds:Int = ReadInt(File)
+		Local NumFrames:Int = ReadInt(File)
+		Print NumFrames+" frames"
+		NEnt.Frames = NumFrames
+		
+		Local OffsetSkins:Int = ReadInt(File)
+		Local OffsetSt:Int = ReadInt(File)
+		Local OffsetTris:Int = ReadInt(File)
+		Local OffsetFrames:Int = ReadInt(File)
+		Local OffsetGlcmds:Int = ReadInt(File)
+		Local OffsetEnd:Int = ReadInt(File)
+
+
+		'Read skins
+		Local SkinName:String[32]
+		SeekStream File,OffsetSkins
+		For Local a:Int=1 To NumSkins
+			Local StopRead:Int=False
+			For Local b:Int=1 To 64
+				Local c:Int = ReadByte(File)
+				If c=0 Then StopRead = True
+				If Not StopRead Then SkinName[a-1]=SkinName[a-1]+Chr$(c)
+			Next
+			Print "skinname: "+SkinName[a-1]
+			Print Len(SkinName[a-1])
+		Next
+
+		If NumSkins&gt;0 Then
+			Local TXMap:TPixmap = LoadPixmap(GetFolder(Filename)+SkinName[0])
+			Print GetFolder(Filename)+SkinName[0]
+			If Not TXMap Then RuntimeError "Could not load texture!"
+			NEnt.Texture = GLTexFromPixmap(TXMap)
+			If Not NEnt.Texture Then RuntimeError "Could not load texture to memory!"
+			NEnt.TextureEnabled = 1
+		EndIf
+		
+
+		'Read texture coordinates
+		Local s:Int[2048],t:Int[2048]
+		SeekStream File,OffsetSt
+		Print "NumSt"+ NumSt
+		For Local a:Int=1 To NumSt
+			s[a-1] = ReadShort(File)
+			t[a-1] = ReadShort(File)
+		Next
+
+		'Read vertices
+		Local v:Byte[512,2048,3]
+		Local normalIndex:Byte[512,2048]
+		Local scalex:Float[512],scaley:Float[512],scalez:Float[512]
+		Local translatex:Float[512],translatey:Float[512],translatez:Float[512]
+		Local frameName:String[512]
+		SeekStream File,OffsetFrames
+		For Local a:Int=1 To NumFrames
+			scalex[a-1] = ReadFloat(File)
+			scaley[a-1] = ReadFloat(File)
+			scalez[a-1] = ReadFloat(File)
+			translatex[a-1] = ReadFloat(File)
+			translatey[a-1] = ReadFloat(File)
+			translatez[a-1] = ReadFloat(File)
+			Local StopRead:Int=False
+			For Local b:Int=0 To 15
+				Local c:Int = ReadByte(File)
+				If c=0 Then StopRead=True
+				If Not StopRead Then frameName[a-1] = frameName[a-1]+Chr$(c)
+			Next
+			'Read vertices
+			For Local c:Int = 0 To NumVertices-1
+				v[a-1,c,0] = ReadByte(File)
+				v[a-1,c,1] = ReadByte(File)
+				v[a-1,c,2] = ReadByte(File)
+				normalIndex[a-1,c] = ReadByte(File)
+			Next
+		Next
+
+		'Read triangles
+		Local vertex:Short[4096,3]
+		Local st:Short[4096,3]
+		SeekStream File,OffsetTris
+		For Local a:Int=1 To NumTris
+			For Local b:Int=0 To 2
+				vertex[a-1,b] = ReadShort(File)
+			Next
+			For Local b:Int=0 To 2
+				st[a-1,b] = ReadShort(File)
+			Next
+			For Local b:Int=0 To NumFrames-1
+				NEnt.Frame = b
+				Local V3X:Float = (Float(v[b,vertex[a-1,0],0])*scalex[b])+translatex[b]
+				Local V3Y:Float = (Float(v[b,vertex[a-1,0],1])*scaley[b])+translatey[b]
+				Local V3Z:Float = (Float(v[b,vertex[a-1,0],2])*scalez[b])+translatez[b]
+				Local V2X:Float = (Float(v[b,vertex[a-1,1],0])*scalex[b])+translatex[b]
+				Local V2Y:Float = (Float(v[b,vertex[a-1,1],1])*scaley[b])+translatey[b]
+				Local V2Z:Float = (Float(v[b,vertex[a-1,1],2])*scalez[b])+translatez[b]
+				Local V1X:Float = (Float(v[b,vertex[a-1,2],0])*scalex[b])+translatex[b]
+				Local V1Y:Float = (Float(v[b,vertex[a-1,2],1])*scaley[b])+translatey[b]
+				Local V1Z:Float = (Float(v[b,vertex[a-1,2],2])*scalez[b])+translatez[b]
+				Local V1s:Float=Float(s[st[a-1,2]])/Float(SkinWidth)
+				Local V1t:Float=Float(t[st[a-1,2]])/Float(SkinHeight)
+				Local V2s:Float=Float(s[st[a-1,1]])/Float(SkinWidth)
+				Local V2t:Float=Float(t[st[a-1,1]])/Float(SkinHeight)
+				Local V3s:Float=Float(s[st[a-1,0]])/Float(SkinWidth)
+				Local V3t:Float=Float(t[st[a-1,0]])/Float(SkinHeight)
+				Local V1n:Int=normalIndex[b,vertex[a-1,2]]
+				Local V2n:Int=normalIndex[b,vertex[a-1,1]]
+				Local V3n:Int=normalIndex[b,vertex[a-1,0]]
+				NEnt.AddTri(V1X,V1Y,V1Z,V2X,V2Y,V2Z,V3X,V3Y,V3Z,V1s,V1t,V2s,V2t,V3s,V3t,V1n,V2n,V3n)
+			Next
+		Next
+		NEnt.Frame = 0
+		
+		CloseFile File
+	NEnt.CreateDList = 1
+	Return NEnt
+	End Function
+
+	Function ListUseCount:Int(DList:Int)
+		Local ListCounter:Int = 0
+		For Local NEnt:NEntity = EachIn NEntityList
+			For Local Fr:Int = 0 To NEnt.Frames-1
+				If NEnt.DisplayList[Fr] = DList Then ListCounter:+1
+			Next
+		Next
+		Return ListCounter
+	End Function
+
+	Function TextureUsecount:Int(Texture:Int)
+		Local TextCounter:Int = 0
+		For Local NEnt:NEntity = EachIn NEntityList
+			If NEnt.Texture = Texture Then TextCounter:+1
+		Next
+	End Function
+
+	Function CompareDistance:Int(o1:Object,o2:Object)
+		If NEntity(o1).CamDistance&gt;NEntity(o2).CamDistance Return 1
+		Return 0
+	End Function
+End Type
+
+Type NCamera Extends NPoint
+	Field Enabled:Int
+	Field Pitch:Float
+	Field Yaw:Float
+	Field Roll:Float
+	Field Near:Float,Far:Float
+	Field ClsColor:Float[4]
+	Field Fog:Int,FogStart:Float,FogEnd:Float,FogColor:Float[3],FogDensity:Float
+	Global NCameraList:TList
+
+	Method EnableFog(NewFogStart:Float,NewFogEnd:Float,NewFogR:Int=128,NewFogG:Int=128,NewFogB:Int=128,NewFogDensity:Float=0.35)
+		Fog = 1
+		FogStart = NewFogStart; FogEnd = NewFogEnd
+		FogColor[0] = NewFogR/255.0; FogColor[1] = NewFogG/255.0; FogColor[2] = NewFogB/255.0
+		FogDensity = NewFogDensity
+	End Method
+
+	Method DisableFog()
+		Fog = 0
+	End Method
+	
+	Method Turn(NewPitch:Float,NewYaw:Float,NewRoll:Float)
+		Pitch = Pitch+NewPitch Mod 360.0
+		Yaw = Yaw+NewYaw Mod 360.0
+		Roll = Roll+NewRoll Mod 360.0
+		If Pitch&lt;0.0 Then Pitch=Pitch+360.0
+		If Yaw&lt;0.0 Then Yaw=Yaw+360.0
+		If Roll&lt;0.0 Then Roll=Roll+360.0
+		If Pitch&gt;360.0 Then Pitch=Pitch-360.0
+		If Yaw&gt;360.0 Then Yaw=Yaw-360.0
+		If Roll&gt;360.0 Then Roll=Roll-360.0
+	End Method
+
+	Method SetClearColor(NewR:Int,NewG:Int,NewB:Int)
+		ClsColor[0] = NewR/255.0; ClsColor[1] = NewG/255.0; ClsColor[2] = NewB/255.0; 
+	End Method
+
+	Method Rotate(NewPitch:Float,NewYaw:Float,NewRoll:Float)
+		Pitch = NewPitch Mod 360.0
+		Yaw = NewYaw Mod 360.0
+		Roll = NewRoll Mod 360.0
+		While Pitch&lt;0.0
+			Pitch=Pitch+360.0
+		Wend
+		While Yaw&lt;0.0
+			Yaw=Yaw+360.0
+		Wend
+		While Roll&lt;0.0
+			Roll=Roll+360.0
+		Wend
+		While Pitch&gt;360.0
+			Pitch = Pitch-360.0
+		Wend
+		While Yaw&gt;360.0
+			Yaw = Yaw-360.0
+		Wend
+		While Roll&gt;360.0
+			Roll = roll-360.0
+		Wend
+	End Method
+	
+	Method Move(NewX:Float,NewY:Float,NewZ:Float)
+		Local MoveMat:TMatrix=New TMatrix
+		MoveMat.LoadIdentity()
+		MoveMat.RotateYaw(-Yaw)
+		MoveMat.RotatePitch(-Pitch)
+		MoveMat.RotateRoll(-Roll)
+		MoveMat.Translate(-NewX,-NewY,NewZ)
+		X = X+MoveMat.grid[3,0]
+		Y = Y+MoveMat.grid[3,1]
+		Z = Z+MoveMat.grid[3,2]
+	End Method
+
+	Method Translate(NewX:Float,NewY:Float,NewZ:Float)
+		X = X-NewX
+		Y = Y-NewY
+		Z = Z+NewZ
+	End Method
+
+	Method Position(NewX:Float,NewY:Float,NewZ:Float)
+		X = -NewX
+		Y = -NewY
+		Z = NewZ
+	End Method
+
+	Method New()
+		If NCamera.NCameraList = Null Then NCameraList = CreateList()
+		ListAddLast(NCamera.NCameraList,Self)
+		Enabled = True
+		Near = 0.1
+		Far = 1000.0
+		'Yaw = -180
+	End Method
+
+	Function CreateCamera:NCamera()
+		Local NCam:NCamera = New NCamera
+		Return NCam
+	End Function
+End Type
+
+Type NLight Extends NPoint
+	Field Pitch:Float
+	Field Yaw:Float
+	Field Roll:Float
+	Global NLightList:TList
+	Field AR:Int,AG:Int,AB:Int
+	Field DR:Int,DG:Int,DB:Int
+	Field GL_LIGHT:Int
+	Global Lights:Int
+
+	Method Ambient(NewAR:Int,NewAG:Int,NewAB:Int)
+		AR=NewAR
+		AG=NewAG
+		AB=NewAB
+		glLightfv(GL_LIGHT,GL_AMBIENT,[AR/255.0,AG/255.0,AB/255.0,1.0])
+	End Method
+
+	Method Diffuse(NewDR:Int,NewDG:Int,NewDB:Int)
+		DR=NewDR
+		DG=NewDG
+		DB=NewDB
+		glLightfv(GL_LIGHT,GL_DIFFUSE,[DR/255.0,DG/255.0,DB/255.0,1.0])
+	End Method
+
+	Method Turn(NewPitch:Float,NewYaw:Float,NewRoll:Float)
+		Pitch = Pitch+NewPitch Mod 360.0
+		Yaw = Yaw+NewYaw Mod 360.0
+		Roll = Roll+NewRoll Mod 360.0
+		If Pitch&lt;0.0 Then Pitch=Pitch+360.0
+		If Yaw&lt;0.0 Then Yaw=Yaw+360.0
+		If Roll&lt;0.0 Then Roll=Roll+360.0
+		If Pitch&gt;360.0 Then Pitch=Pitch-360.0
+		If Yaw&gt;360.0 Then Yaw=Yaw-360.0
+		If Roll&gt;360.0 Then Roll=Roll-360.0
+	End Method
+
+	Method Rotate(NewPitch:Float,NewYaw:Float,NewRoll:Float)
+		Pitch = NewPitch Mod 360.0
+		Yaw = NewYaw Mod 360.0
+		Roll = NewRoll Mod 360.0
+		While Pitch&lt;0.0
+			Pitch=Pitch+360.0
+		Wend
+		While Yaw&lt;0.0
+			Yaw=Yaw+360.0
+		Wend
+		While Roll&lt;0.0
+			Roll=Roll+360.0
+		Wend
+		While Pitch&gt;360.0
+			Pitch = Pitch-360.0
+		Wend
+		While Yaw&gt;360.0
+			Yaw = Yaw-360.0
+		Wend
+		While Roll&gt;360.0
+			Roll = roll-360.0
+		Wend
+	End Method
+
+	Method Move(NewX:Float,NewY:Float,NewZ:Float)
+		Local MoveMat:TMatrix=New TMatrix
+		MoveMat.LoadIdentity()
+		MoveMat.RotateYaw(Yaw)
+		MoveMat.RotatePitch(Pitch)
+		MoveMat.RotateRoll(Roll)
+		MoveMat.Translate(NewX,NewY,NewZ)
+		X = X+MoveMat.grid[3,0]
+		Y = Y+MoveMat.grid[3,1]
+		Z = Z+MoveMat.grid[3,2]
+	End Method
+
+	Method New()
+		NLight.Lights:+1
+		If NLight.Lights&gt;GL_MAX_LIGHTS Then RuntimeError "Too many lights created!"
+		If NLight.Lights=1 Then GL_LIGHT = GL_LIGHT0
+		If NLight.Lights=2 Then GL_LIGHT = GL_LIGHT1
+		If NLight.Lights=3 Then GL_LIGHT = GL_LIGHT2
+		If NLight.Lights=4 Then GL_LIGHT = GL_LIGHT3
+		If NLight.Lights=5 Then GL_LIGHT = GL_LIGHT4
+		If NLight.Lights=6 Then GL_LIGHT = GL_LIGHT5
+		If NLight.Lights=7 Then GL_LIGHT = GL_LIGHT6
+		If NLight.Lights=8 Then GL_LIGHT = GL_LIGHT7
+		If NLight.NLightList = Null Then NLightList = CreateList()
+		ListAddLast(NLight.NLightList,Self)
+		If Not NGraphics.Gfx.Lighting Then 
+			glEnable(GL_LIGHTING)
+			NGRaphics.Gfx.Lighting = 1
+		EndIf
+		glEnable(GL_LIGHT)
+	End Method
+
+	Function CreateLight:NLight()
+		Local NLi:NLight = New NLight
+		Return NLi
+	End Function
+End Type
+
+Type NVertex Extends NPoint
+	Field OrigX:Float,OrigY:Float,OrigZ:Float
+	'Field Tri:NTriangle
+	Field R:Float,G:Float,B:Float
+	Field Alpha:Float
+	Method New()
+		Alpha = 1.0
+		R = 1.0
+		G = 1.0
+		B = 1.0
+	End Method
+End Type
+
+Type NTriangle
+	Field V1s:Float,V1t:Float 
+	Field V2s:Float,V2t:Float
+	Field V3s:Float,V3t:Float
+	Field V1NX:Float,V1NY:Float,V1NZ:Float
+	Field V2NX:Float,V2NY:Float,V2NZ:Float
+	Field V3NX:Float,V3NY:Float,V3NZ:Float
+	Field V1:NVertex
+	Field V2:NVertex
+	Field V3:NVertex
+End Type
+
+Type NParticle Extends NPoint
+	Field XSpeed:Float,YSpeed:Float,ZSpeed:Float
+	Field R:Int,G:Int,B:Int
+	Field Alpha:Float,AlphaSpeed:Float
+	Field Starttime:Int
+	Field CamDistance:Float
+End Type
+
+Type NParticleEmitter Extends NPoint
+	Field Pitch:Float,Yaw:Float,Roll:Float
+	Field StartR:Int,StartG:Int,StartB:Int
+	Field RSpeed:Int,GSpeed:Int,BSpeed:Int
+	Field StartRRnd:Int,StartGRnd:Int,StartBRnd:Int
+	Field XAcceleration:Float,YAcceleration:Float,ZAcceleration:Float
+	Field StartXRnd:Float,StartYRnd:Float,StartZRnd:Float
+	Field StartXSpeedRnd:Float,StartYSpeedRnd:Float,StartZSpeedRnd:Float
+	Field StartXSpeed:Float,StartYSpeed:Float,StartZSpeed:Float
+	Field AlphaAcceleration:Float,StartAlphaRnd:Float,StartAlpha:Float,StartAlphaSpeed:Float
+	Field NParticleList:TList	
+	Field Rate:Int
+	Field ParticleTimer:Int,Particles:Int
+	Field Texture:Int,TextureWidth:Int,TextureHeight:Int
+	Field Lifetime:Int
+	Field Enabled:Int,RenderEnabled:Int
+	Global NParticleEmitterList:TList
+
+	Method Update(NCam:NCamera)
+		Local UpdateTime:Int = MilliSecs() - ParticleTimer
+		ParticleTimer = MilliSecs()
+		'Loop particles
+		For Local NPar:NParticle = EachIn NParticleList
+			NPar.XSpeed = NPar.XSpeed+XAcceleration
+			NPar.YSpeed = NPar.YSpeed+YAcceleration
+			NPar.ZSpeed = NPar.ZSpeed+ZAcceleration
+			NPar.X=NPar.X+NPar.XSpeed
+			NPar.Y=NPar.Y+NPar.YSpeed
+			NPar.Z=NPar.Z+NPar.ZSpeed
+			NPar.AlphaSpeed = NPar.AlphaSpeed+AlphaAcceleration
+			NPar.Alpha = NPar.Alpha+NPar.AlphaSpeed
+			If NPar.Alpha&gt;1.0 Then NPar.Alpha=1.0
+			NPar.R = NPar.R+RSpeed; NPar.G = NPar.G+GSpeed; NPar.B = NPar.B+BSpeed; 
+			If NPar.Alpha&lt;=0.0 Or (MilliSecs()-NPar.Starttime&gt;Lifetime) Then 
+				ListRemove(NParticleList,NPar)
+				Particles:-1
+			EndIf
+		Next
+		'Create particles
+		If Enabled
+			For Local a:Int=1 To Rate
+				Particles:+1
+				Local NPar:NParticle = New NParticle
+				ListAddLast(NParticleList,NPar)
+				NPar.X = X+Rnd(-StartXRnd,StartXRnd)
+				NPar.Y = Y+Rnd(-StartYRnd,StartYRnd)
+				NPar.Z = Z+Rnd(-StartZRnd,StartZRnd)
+				NPar.XSpeed = StartXSpeed+Rnd(-StartXSpeedRnd,StartXSpeedRnd)
+				NPar.YSpeed = StartYSpeed+Rnd(-StartYSpeedRnd,StartYSpeedRnd)
+				NPar.ZSpeed = StartZSpeed+Rnd(-StartZSpeedRnd,StartZSpeedRnd)
+				NPar.R = StartR + Rand(-StartRRnd,StartRRnd)
+				NPar.G = StartG + Rand(-StartGRnd,StartGRnd)
+				NPar.B = StartB + Rand(-StartBRnd,StartBRnd)
+				NPar.AlphaSpeed = StartAlphaSpeed
+				NPar.Alpha = StartAlpha+Rnd(-StartAlphaRnd,StartAlphaRnd)
+				NPar.Starttime=MilliSecs()
+			Next
+		EndIf
+		If RenderEnabled Then
+			SortParticles(NCam:NCamera)
+			'MergeSortList(NParticleList)
+			Render(NCam)
+		EndIf
+	End Method
+
+	Method Render(NCam:NCamera)
+		'glEnable(GL_TEXTURE_2D)
+		'glBlendFunc(GL_SRC_ALPHA, GL_ONE)
+		glDepthMask(GL_FALSE)
+	'	glBindTexture (GL_TEXTURE_2D, Texture)
+		'glTexParameteri GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST
+		'glTexParameteri GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST
+		NGraphics.Gfx.Triangles:+Particles*2
+
+		Local maxsize:Float,quad:Float[]=[1.0,0.0,0.01]
+		glPointParameterfvARB(GL_POINT_DISTANCE_ATTENUATION_ARB,quad)
+		glGetFloatv(GL_POINT_SIZE_MAX_ARB,Varptr(maxsize))
+		glPointSize(maxsize)
+		glPointParameterfARB(GL_POINT_FADE_THRESHOLD_SIZE_ARB,80.0)
+   	 	glPointParameterfARB(GL_POINT_SIZE_MIN_ARB,1.0)
+    		glPointParameterfARB(GL_POINT_SIZE_MAX_ARB,maxsize)
+		glTexEnvf(GL_POINT_SPRITE_ARB,GL_COORD_REPLACE_ARB,GL_TRUE)
+
+		glEnable( GL_POINT_SPRITE_ARB)
+		glBegin(GL_POINTS)
+		For Local NPar:NParticle = EachIn NParticleList
+			glColor4f(NPar.R/255.0,NPar.G/255.0,NPar.B/255.0,NPar.Alpha)
+			glVertex3f(NPar.X,NPar.Y,NPar.Z)
+		Next
+		glEnd()
+		glDisable(GL_POINT_SPRITE_ARB)
+
+		'glDisable(GL_TEXTURE_2D)
+		glDepthMask(GL_TRUE)
+		'glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+	End Method
+
+	Method Turn(NewPitch:Float,NewYaw:Float,NewRoll:Float)
+		Pitch = Pitch+NewPitch Mod 360.0
+		Yaw = Yaw+NewYaw Mod 360.0
+		Roll = Roll+NewRoll Mod 360.0
+		If Pitch&lt;0.0 Then Pitch=Pitch+360.0
+		If Yaw&lt;0.0 Then Yaw=Yaw+360.0
+		If Roll&lt;0.0 Then Roll=Roll+360.0
+		If Pitch&gt;360.0 Then Pitch=Pitch-360.0
+		If Yaw&gt;360.0 Then Yaw=Yaw-360.0
+		If Roll&gt;360.0 Then Roll=Roll-360.0
+	End Method
+
+	Method Rotate(NewPitch:Float,NewYaw:Float,NewRoll:Float)
+		Pitch = NewPitch Mod 360.0
+		Yaw = NewYaw Mod 360.0
+		Roll = NewRoll Mod 360.0
+		While Pitch&lt;0.0
+			Pitch=Pitch+360.0
+		Wend
+		While Yaw&lt;0.0
+			Yaw=Yaw+360.0
+		Wend
+		While Roll&lt;0.0
+			Roll=Roll+360.0
+		Wend
+		While Pitch&gt;360.0
+			Pitch = Pitch-360.0
+		Wend
+		While Yaw&gt;360.0
+			Yaw = Yaw-360.0
+		Wend
+		While Roll&gt;360.0
+			Roll = roll-360.0
+		Wend
+	End Method
+
+	Method Move(NewX:Float,NewY:Float,NewZ:Float)
+		Local MoveMat:TMatrix=New TMatrix
+		MoveMat.LoadIdentity()
+		MoveMat.RotateYaw(Yaw)
+		MoveMat.RotatePitch(Pitch)
+		MoveMat.RotateRoll(Roll)
+		MoveMat.Translate(NewX,NewY,-NewZ)
+		X = X+MoveMat.grid[3,0]
+		Y = Y+MoveMat.grid[3,1]
+		Z = Z+MoveMat.grid[3,2]
+	End Method
+
+	Method SortParticles(NCam:NCamera)
+		For Local NPar:NParticle = EachIn NParticleList
+			NPar.CamDistance = (NCam.X-NPar.X)*(NCam.X-NPar.X)+(NCam.Y-NPar.Y)*(NCam.Y-NPar.Y)+(NCam.Z-NPar.Z)*(NCam.Z-NPar.Z)
+		Next
+		MergeSortList(NParticleList)
+	'	NParticleList.Sort(True,NParticleEmitter.CompareDistance)
+	End Method
+
+	Function CompareDistance:Int(o1:Object,o2:Object)
+		If NParticle(o1).CamDistance&gt;NParticle(o2).CamDistance Return 1
+		Return 0
+	End Function
+
+	Function CreateEmitter:NParticleEmitter(Filename:String)
+		Local NEmit:NParticleEmitter = New NParticleEmitter
+		NEmit.NParticleList = CreateList()
+		ListAddLast(NParticleEmitter.NParticleEmitterList,NEmit)
+		If FileType(Filename)=0 Then RuntimeError Filename+" not found!"
+		Local TXMap:TPixmap = LoadPixmap(Filename)
+		If Not TXMap Then RuntimeError "Could not load texture!"
+		NEmit.Texture = GLTexFromPixmap(TXMap)
+		If Not NEmit.Texture Then RuntimeError "Could not load texture to memory!"
+		NEmit.TextureWidth = TXMap.Width
+		NEmit.TextureHeight = TXMap.Height
+		NEmit.Enabled = 1
+		NEmit.RenderEnabled = 1
+		NEmit.ParticleTimer = MilliSecs()
+		Return NEmit
+	End Function
+End Type
+
+Type NShader
+	Field Shader:String
+	Field VertexShader:Byte,FragmentShader:Byte
+	Field ProgramObject:Int
+	Function LoadShader:NShader(VertexFilename:String,FragmentFilename:String)
+		If FileType(VertexFilename)&lt;&gt;1 Then RuntimeError VertexFilename+" not found!"
+		If FileType(FragmentFilename)&lt;&gt;1 Then RuntimeError FragmentFilename+" not found!"
+		Local VertexFile:TStream = OpenStream(VertexFilename)
+		Local FragmentFile:TStream = OpenStream(FragmentFilename)
+		Local Sha:NShader = New NShader
+		Local VertexArray:Byte[FileSize(VertexFilename)+1]
+		Local FragmentArray:Byte[FileSize(FragmentFilename)+1]
+		Local i:Int=0,j:Int=0,VertexSize:Int,FragmentSize:Int
+		VertexSize = FileSize(VertexFilename)
+		FragmentSize = FileSize(FragmentFilename)
+		While Not Eof(VertexFile)
+			VertexArray[i] = ReadByte(VertexFile)
+			i=i+1
+			If i&gt;VertexSize Then i=VertexSize
+		Wend
+		While Not Eof(FragmentFile)
+			FragmentArray[j] = ReadByte(FragmentFile)
+			j=j+1
+			If j&gt;FragmentSize Then j=FragmentSize
+		Wend
+
+		VertexArray[i] = 0
+		FragmentArray[j] = 0
+		Local VertexPointer:Byte Ptr[1]
+		Local FragmentPointer:Byte Ptr[1]
+		VertexPointer[0] = Varptr(VertexArray[0])
+		FragmentPointer[0] = Varptr(FragmentArray[0])
+
+		Sha.VertexShader = glCreateShaderObjectARB(GL_VERTEX_SHADER_ARB)
+		Sha.FragmentShader = glCreateShaderObjectARB(GL_FRAGMENT_SHADER_ARB)
+
+		glShaderSourceARB(Sha.VertexShader, 1, VertexPointer, Null)
+		glShaderSourceARB(Sha.FragmentShader, 1, FragmentPointer, Null)
+		glCompileShaderARB(Sha.VertexShader)
+		glCompileShaderARB(Sha.FragmentShader)
+		Sha.ProgramObject = glCreateProgramObjectARB()
+		If Not Sha.ProgramObject Then RuntimeError "Could not create shader program object."
+		glAttachObjectARB(Sha.ProgramObject,Sha.VertexShader)
+		glAttachObjectARB(Sha.ProgramObject,Sha.FragmentShader)
+		glLinkProgramARB(Sha.ProgramObject)
+		Return Sha:NShader
+	End Function
+End Type
+
+Function SameDirection:Int(Pt1:NPoint,Pt2:NPoint,Pt3:NPoint,Norm:NPoint)
+	Local Testi:Float,Testj:Float,Testk:Float
+	Local DotProduct:Float
+
+	Testi = (((Pt2.y - Pt1.y)*(Pt3.z - Pt1.z)) - ((Pt3.y - Pt1.y)*(Pt2.z - Pt1.z)))
+   	Testj = (((Pt2.z - Pt1.z)*(Pt3.x - Pt1.x)) - ((Pt3.z - Pt1.z)*(Pt2.x - Pt1.x)))
+   	Testk = (((Pt2.x - Pt1.x)*(Pt3.y - Pt1.y)) - ((Pt3.x - Pt1.x)*(Pt2.y - Pt1.y)))
+
+	DotProduct = Testi*Norm.x + Testj*Norm.y + Testk*Norm.z
+	If DotProduct&lt;0.0 Then
+		Return False
+	Else
+		Return True
+	EndIf
+End Function
+
+Function LineIntersectsTriangle:Int(pt1:NPoint,pt2:NPoint,pt3:NPoint,linept:NPoint,vect:NPoint)
+	Local V1x:Float, V1y:Float, V1z:Float
+   	Local V2x:Float, V2y:Float, V2z:Float
+ 	Local norm:NPoint = New NPoint,pt_int:NPoint = New NPoint
+  	Local dotprod:Float,t:Float
+
+
+   	V1x = pt2.x - pt1.x
+   	V1y = pt2.y - pt1.y
+   	V1z = pt2.z - pt1.z
+
+   	V2x = pt3.x - pt2.x
+   	V2y = pt3.y - pt2.y
+   	V2z = pt3.z - pt2.z
+
+   	norm.x = V1y*V2z-V1z*V2y
+   	norm.y = V1z*V2x-V1x*V2z
+   	norm.z = V1x*V2y-V1y*V2x
+
+	dotprod = norm.x*vect.x + norm.y*vect.y + norm.z*vect.z
+
+	If dotprod&lt;0 Then
+		t = -(norm.x*(linept.x-pt1.x)+norm.y*(linept.y-pt1.y)+norm.z*(linept.z-pt1.z))/(norm.x*vect.x+norm.y*vect.y+norm.z*vect.z)
+		If t &lt; 0 Then Return False
+
+		pt_int.x = linept.x + vect.x*t
+      	pt_int.y = linept.y + vect.y*t
+      	pt_int.z = linept.z + vect.z*t
+		
+		If SameDirection(pt1, pt2, pt_int, norm)
+        		If SameDirection(pt2, pt3, pt_int, norm)
+            		If SameDirection(pt3, pt1, pt_int, norm)
+            			Return True
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+	Return False
+End Function
+
+Function GetFolder:String(Filename:String)
+		If Filename.Find("/")=-1 And Filename.Find("\")=-1 Then Return ""
+		If Filename.Find("/") &gt; 0 Then
+			Return Left(Filename,Filename.FindLast("/")+1)
+		Else
+			Return Left(Filename,Filename.FindLast("\")+1)
+		EndIf
+End Function
+
+Function MergeSortList( slist:TList)
+	Local p:TLink, q:TLink, e:TLink, tail:TLink, oldhead:TLink
+	Local insize:Int, nmerges:Int, psize:Int, qsize:Int, i:Int
+	Local list:TLink
+	
+	If slist = Null Then Return
+	If slist._head._succ &lt;&gt; slist._head Then list = slist._head._succ
+	If list = Null Then Return
+	
+	insize = 1
+
+	Repeat
+		p = list
+		oldhead = list
+		list = Null
+		tail = Null
+		
+		nmerges = 0
+		
+		While p &lt;&gt; Null
+			nmerges :+ 1
+			q = p
+			psize = 0
+			For i = 0 Until insize
+				psize :+ 1
+				If q._succ = oldhead Then
+					q = Null
+				Else
+					q = q._succ
+				EndIf
+				If q = Null Then Exit
+			Next
+			
+			qsize = insize
+			While (psize &gt; 0) Or ((qsize &gt; 0) And (q &lt;&gt; Null))
+				If psize = 0 Then
+					e = q
+					q = q._succ
+					qsize :- 1
+					If q = oldhead Then q = Null
+				ElseIf (qsize = 0) Or (q = Null) Then
+					e = p
+					p = p._succ
+					psize :- 1
+					If p = oldhead Then p = Null
+				ElseIf NParticle(p._value).CamDistance&lt;NParticle(q._value).CamDistance Then
+					e = p
+					p = p._succ
+					psize :- 1
+					If p = oldhead Then p = Null
+				Else
+					e = q
+					q = q._succ
+					qsize :- 1
+					If q = oldhead Then q = Null
+				EndIf
+								
+				If tail &lt;&gt; Null Then
+					tail._succ = e
+				Else
+					list = e
+				EndIf
+				e._pred = tail				
+				tail = e					
+			Wend
+			p = q
+		Wend
+		tail._succ = list
+		list._pred = tail
+		If nmerges &lt;= 1 Then Return
+		insize :* 2
+	Forever	
+EndFunction
+</pre><br><br>A simple test file that shows some of the commands:<br>ngltest.bmx<br><pre class=code>
+Strict
+Import "ngl.bmx"
+
+SeedRnd MilliSecs()
+
+Local Gfx:NGraphics = NGraphics.Start(800,600)
+Local Cam:NCamera = NCamera.CreateCamera()
+Cam.Move(30,10,-60)
+Cam.SetClearColor(163,192,255)
+'Cam.EnableFog(150,520,163,192,255)
+HideMouse
+
+
+Local Cube:NEntity = NEntity.CreateCube()
+Cube.ScaleMesh(0.1,0.1,0.1)
+Cube.Position(15,6,4)
+'Cube.LoadTexture("crate.jpg")
+'Cube.EntityAlpha 0.3
+
+'Local Cube2:NEntity = NEntity.CreateCube()
+'Cube2.Translate(0,0,-5)
+'Cube2.Shadows = 1
+'Cube2.EntityColor(255,0,0)
+
+
+Local Room:NEntity = NEntity.CreateCube()
+Room.ScaleMesh(40,25,40)
+Room.Move(0,20,0)
+Room.LoadTexture("wall.jpg")
+Room.FlipMesh()
+
+
+'Local Mesh:NEntity = NEntity.LoadMesh("md2/fish.md2")
+'Mesh.ScaleMesh(0.3,0.3,0.3)
+'Mesh.Shadows = 0
+
+'Local S:NEntity = NEntity.CreateSprite()
+'S.LoadTexture("crate.jpg")
+'S.Translate(0,0,15)
+'S.Shadows = 1
+
+'Local Mesh2:NEntity = NEntity.LoadMesh("md2/turret.md2")
+'Mesh2.ScaleMesh(0.1,0.1,0.1)
+'Mesh2.Move(6,3,0.4)
+'Mesh2.Shadows = 0
+
+'Mesh.FrameTime = 40
+''Mesh.EntityAlpha 0.3
+'Mesh.Move(15,-2,0)
+'Mesh.MoveMesh(3,0,0)
+'Mesh.Turn(-90,0,135)
+'Mesh.FrameTime = 40
+'Mesh.Interpolate()
+'Mesh.Move -10000,0,0
+'Local testshader:NShader = NShader.LoadShader("shader/water.vertex","shader/water.frag")
+'Cube2.EntityParent Mesh
+
+'Local tmesh:NEntity[100],counter
+'For Local a=0 To 9
+'	For Local b=0 To 9
+'		tmesh:NEntity[counter]= Mesh.CopyEntity()
+'		tmesh[counter] .Move(b*10,0,a)
+'		counter:+1
+'	Next
+'Next
+
+'tmesh.FreeEntity
+'Mesh.FreeEntity
+
+
+'Mesh.Move(20,0,-50)
+
+
+'Local Light:NLight = NLight.CreateLight()
+'Light.Translate(20,40,0)
+'Light.Ambient(255,255,255)
+'Light.Diffuse(255,255,255)
+
+'sprite.AttachShader(testshader)
+
+'Local Smoke:NParticleEmitter = NParticleEmitter.CreateEmitter("smoke4.png")
+'Smoke.StartR=205; Smoke.StartG=205; Smoke.StartB=105; Smoke.Translate(0,0,6)
+'Smoke.RSpeed = -1; Smoke.GSpeed = -1; Smoke.BSPeed = -1
+'Smoke.StartRRnd = 50; Smoke.StartGRnd = 50; Smoke.StartBRnd = 50
+'Smoke.StartXSpeedRnd = 0.06; Smoke.StartYSpeedRnd = 0.06; Smoke.StartZSpeedRnd = 0
+'Smoke.StartYSpeed = 0.1; Smoke.YAcceleration = -0.005; Smoke.StartZSpeed = 0.05
+'Smoke.StartXRnd = 0.2; Smoke.StartYRnd = 0.2; Smoke.StartZRnd = 0.2; 
+'Smoke.Rate =30; Smoke.Lifetime=1000; Smoke.StartAlpha = 0.9; Smoke.StartAlphaRnd = 0.2
+'Smoke.StartAlphaSpeed = -0.005
+
+
+'Local Map:NEntity = NEntity.Heightmap("hmap.bmp")
+'Map.LoadTexture("grass.png")
+
+'Local Tree:NEntity = NEntity.CreateSprite()
+'Tree.LoadTexture("tree.png")
+'Tree.Blend = 1
+'Tree.X = Map.X; Tree.Y = Map.Y; Tree.Z = Map.Z
+
+'Local NewTree:NEntity
+
+'Local Counter:Int = 0
+'For Local NTri:NTriangle = EachIn Map.NTriangleList[Map.Frame]
+'	If Counter=Rand(1,30) Or Counter&gt;30 And NTri.V1.Y&gt;12.1 Then
+	'	Tree.MoveMesh(NTri.V1.X,NTri.V1.Y+0.5,NTri.V1.Z)
+		'NewTree.AddMesh(Tree)
+''		Tree.MoveMesh(-NTri.V1.X,-NTri.V1.Y-0.5,-NTri.V1.Z)
+'		NewTree:NEntity = Tree.CopyEntity()
+'		NewTree.Position(NTri.V1.X+Rnd(0.5),NTri.V1.Y+0.5,NTri.V1.Z+Rnd(0.5))
+'		Counter=0
+'	EndIf
+'	Counter:+1
+'Next
+'Tree.FreeEntity()
+
+'Local Water:NEntity = NEntity.CreateSprite()
+'Water.Turn(-90,0,0)
+''Water.EntityColor(50,50,255)
+'Water.LoadTexture("water.jpg")
+'Water.ScaleMesh(1000,1000,1)
+'Water.Translate(0,10,0)
+'Water.RenderFirst = 1
+
+Repeat
+	'Camera control
+	If KeyDown(KEY_LEFT) Then Cam.Move(-0.3,0,0)
+	If KeyDown(KEY_RIGHT) Then Cam.Move(0.3,0,0)
+	If KeyDown(KEY_UP) Then Cam.Move(0,0,0.3)
+	If KeyDown(KEY_DOWN) Then Cam.Move(0,0,-0.3)
+	If KeyDown(KEY_A) Then Cam.Move(0,0.1,0)
+	If KeyDown(KEY_Z) Then Cam.Move(0,-0.1,0)
+	If KeyDown(KEY_W) Then Cam.Turn(0,2,0)
+	If KeyDown(KEY_Q) Then Cam.Turn(0,-2,0)
+
+	If KeyDown(KEY_Y) Then Cube.Move(-0.3,0,0)
+	If KeyDown(KEY_U) Then Cube.Move(0.3,0,0)
+
+	'If Cube.Intersect(Mesh) Then Print "collision"
+	'Mesh.Animate()
+'	Mesh.Turn(0.3,1,2)
+'	Mesh.Move(0,0.1,0)
+'	Cube2.Turn(2,2,2)
+	'Mesh.Turn(0,0,2)
+	'Mesh.Move(0,0.05,0)
+
+	'Cube.Turn(2,2,2)
+	'Cube2.Turn(0,0.5,0)
+	Cube.RenderShadows()
+	Gfx.Render
+
+
+	Gfx.Swap(1)
+	Print Gfx.FPS+" fps "+Gfx.Triangles+" tris"
+	'Print GCMemAlloced()
+	
+Until KeyHit(KEY_ESCAPE)
+</pre><br><br>You need extra file called nmatrix.bmx for the lib to work, copy it from the post below. <br><br></td></tr></table><br>
+<a name="927535"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >rs22</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looks brilliant!<br><br>When I try to run the example, I get the error, <b>Identifier 'TMatrix' not found</b>. <br><br></td></tr></table><br>
+<a name="927536"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >UnderwoodNullium</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice man!  That's pretty awesome!  It makes me happy...  o.O <br><br></td></tr></table><br>
+<a name="927537"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nawi</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>Looks brilliant!<br><br>When I try to run the example, I get the error, Identifier 'TMatrix' not found. <br> <br></div><br>Sorry about that, forgot about nmatrix.bmx file. I updated the post.<br><br>You need this file<br>nmatrix.bmx:<br><pre class=code>
+'License: You are free to use this code as you please
+Type TMatrix
+	Field grid#[4,4]
+
+	Method LoadIdentity()
+		grid[0,0]=1.0
+		grid[1,0]=0.0
+		grid[2,0]=0.0
+		grid[3,0]=0.0
+		grid[0,1]=0.0
+		grid[1,1]=1.0
+		grid[2,1]=0.0
+		grid[3,1]=0.0
+		grid[0,2]=0.0
+		grid[1,2]=0.0
+		grid[2,2]=1.0
+		grid[3,2]=0.0
+		grid[0,3]=0.0
+		grid[1,3]=0.0
+		grid[2,3]=0.0
+		grid[3,3]=1.0
+	End Method
+	
+	Method Multiply(mat:TMatrix)
+		Local m00# = grid#[0,0]*mat.grid#[0,0] + grid#[1,0]*mat.grid#[0,1] + grid#[2,0]*mat.grid#[0,2] + grid#[3,0]*mat.grid#[0,3]
+		Local m01# = grid#[0,1]*mat.grid#[0,0] + grid#[1,1]*mat.grid#[0,1] + grid#[2,1]*mat.grid#[0,2] + grid#[3,1]*mat.grid#[0,3]
+		Local m02# = grid#[0,2]*mat.grid#[0,0] + grid#[1,2]*mat.grid#[0,1] + grid#[2,2]*mat.grid#[0,2] + grid#[3,2]*mat.grid#[0,3]
+		Local m10# = grid#[0,0]*mat.grid#[1,0] + grid#[1,0]*mat.grid#[1,1] + grid#[2,0]*mat.grid#[1,2] + grid#[3,0]*mat.grid#[1,3]
+		Local m11# = grid#[0,1]*mat.grid#[1,0] + grid#[1,1]*mat.grid#[1,1] + grid#[2,1]*mat.grid#[1,2] + grid#[3,1]*mat.grid#[1,3]
+		Local m12# = grid#[0,2]*mat.grid#[1,0] + grid#[1,2]*mat.grid#[1,1] + grid#[2,2]*mat.grid#[1,2] + grid#[3,2]*mat.grid#[1,3]
+		Local m20# = grid#[0,0]*mat.grid#[2,0] + grid#[1,0]*mat.grid#[2,1] + grid#[2,0]*mat.grid#[2,2] + grid#[3,0]*mat.grid#[2,3]
+		Local m21# = grid#[0,1]*mat.grid#[2,0] + grid#[1,1]*mat.grid#[2,1] + grid#[2,1]*mat.grid#[2,2] + grid#[3,1]*mat.grid#[2,3]
+		Local m22# = grid#[0,2]*mat.grid#[2,0] + grid#[1,2]*mat.grid#[2,1] + grid#[2,2]*mat.grid#[2,2] + grid#[3,2]*mat.grid#[2,3]
+		Local m30# = grid#[0,0]*mat.grid#[3,0] + grid#[1,0]*mat.grid#[3,1] + grid#[2,0]*mat.grid#[3,2] + grid#[3,0]*mat.grid#[3,3]
+		Local m31# = grid#[0,1]*mat.grid#[3,0] + grid#[1,1]*mat.grid#[3,1] + grid#[2,1]*mat.grid#[3,2] + grid#[3,1]*mat.grid#[3,3]
+		Local m32# = grid#[0,2]*mat.grid#[3,0] + grid#[1,2]*mat.grid#[3,1] + grid#[2,2]*mat.grid#[3,2] + grid#[3,2]*mat.grid#[3,3]
+		grid[0,0]=m00
+		grid[0,1]=m01
+		grid[0,2]=m02
+		grid[1,0]=m10
+		grid[1,1]=m11
+		grid[1,2]=m12
+		grid[2,0]=m20
+		grid[2,1]=m21
+		grid[2,2]=m22
+		grid[3,0]=m30
+		grid[3,1]=m31
+		grid[3,2]=m32
+	End Method
+
+	Method Translate(x#,y#,z#)
+		grid[3,0] = grid#[0,0]*x# + grid#[1,0]*y# + grid#[2,0]*z# + grid#[3,0]
+		grid[3,1] = grid#[0,1]*x# + grid#[1,1]*y# + grid#[2,1]*z# + grid#[3,1]
+		grid[3,2] = grid#[0,2]*x# + grid#[1,2]*y# + grid#[2,2]*z# + grid#[3,2]
+	End Method
+
+	Method RotatePitch(ang#)
+		Local cos_ang#=Cos(ang#)
+		Local sin_ang#=Sin(ang#)
+		Local m10# = grid#[1,0]*cos_ang + grid#[2,0]*sin_ang
+		Local m11# = grid#[1,1]*cos_ang + grid#[2,1]*sin_ang
+		Local m12# = grid#[1,2]*cos_ang + grid#[2,2]*sin_ang
+		grid[2,0] = grid#[1,0]*-sin_ang + grid#[2,0]*cos_ang
+		grid[2,1] = grid#[1,1]*-sin_ang + grid#[2,1]*cos_ang
+		grid[2,2] = grid#[1,2]*-sin_ang + grid#[2,2]*cos_ang
+		grid[1,0]=m10
+		grid[1,1]=m11
+		grid[1,2]=m12
+	End Method
+
+	Method RotateYaw(ang#)
+		Local cos_ang#=Cos(ang#)
+		Local sin_ang#=Sin(ang#)
+		Local m00# = grid#[0,0]*cos_ang + grid#[2,0]*-sin_ang#
+		Local m01# = grid#[0,1]*cos_ang + grid#[2,1]*-sin_ang#
+		Local m02# = grid#[0,2]*cos_ang + grid#[2,2]*-sin_ang#
+		grid[2,0] = grid#[0,0]*sin_ang# + grid#[2,0]*cos_ang
+		grid[2,1] = grid#[0,1]*sin_ang# + grid#[2,1]*cos_ang
+		grid[2,2] = grid#[0,2]*sin_ang# + grid#[2,2]*cos_ang
+		grid[0,0]=m00#
+		grid[0,1]=m01#
+		grid[0,2]=m02#
+	End Method
+
+	Method RotateRoll(ang#)
+		Local cos_ang#=Cos(ang#)
+		Local sin_ang#=Sin(ang#)
+		Local m00# = grid#[0,0]*cos_ang# + grid#[1,0]*sin_ang#
+		Local m01# = grid#[0,1]*cos_ang# + grid#[1,1]*sin_ang#
+		Local m02# = grid#[0,2]*cos_ang# + grid#[1,2]*sin_ang#
+		grid[1,0] = grid#[0,0]*-sin_ang# + grid#[1,0]*cos_ang#
+		grid[1,1] = grid#[0,1]*-sin_ang# + grid#[1,1]*cos_ang#
+		grid[1,2] = grid#[0,2]*-sin_ang# + grid#[1,2]*cos_ang#
+		grid[0,0]=m00#
+		grid[0,1]=m01#
+		grid[0,2]=m02#
+	End Method
+End Type
+
+Global Anorms:Float[] = [ - 0.525731 , 0.000000 , 0.850651,..
+  -0.442863,  0.238856,  0.864188 ,..
+  - 0.295242 , 0.000000 , 0.955423 , ..
+  -0.309017,  0.500000,  0.809017,..
+  -0.162460,  0.262866,  0.951056,..
+  0.000000,  0.000000,  1.000000 ,..
+  0.000000,  0.850651,  0.525731 ,..
+ -0.147621,  0.716567,  0.681718 ,..
+  0.147621,  0.716567,  0.681718 ,..
+  0.000000,  0.525731,  0.850651 ,..
+  0.309017,  0.500000,  0.809017 ,..
+  0.525731,  0.000000,  0.850651 ,..
+  0.295242,  0.000000,  0.955423 ,..
+  0.442863,  0.238856,  0.864188 ,.. 
+  0.162460,  0.262866,  0.951056 ,.. 
+ -0.681718,  0.147621,  0.716567 ,.. 
+ -0.809017,  0.309017,  0.500000 ,.. 
+ -0.587785,  0.425325,  0.688191 ,.. 
+ -0.850651,  0.525731,  0.000000 ,.. 
+ -0.864188,  0.442863,  0.238856 ,.. 
+ -0.716567,  0.681718,  0.147621 ,.. 
+ -0.688191,  0.587785,  0.425325 ,.. 
+ -0.500000,  0.809017,  0.309017 ,.. 
+ -0.238856,  0.864188,  0.442863 ,.. 
+ -0.425325,  0.688191,  0.587785 ,.. 
+ -0.716567,  0.681718, -0.147621 ,.. 
+ -0.500000,  0.809017, -0.309017 ,.. 
+ -0.525731,  0.850651,  0.000000 ,.. 
+  0.000000,  0.850651, -0.525731 ,.. 
+ -0.238856,  0.864188, -0.442863 ,.. 
+  0.000000,  0.955423, -0.295242 ,.. 
+ -0.262866,  0.951056, -0.162460 ,.. 
+  0.000000,  1.000000,  0.000000 ,.. 
+  0.000000,  0.955423,  0.295242 ,.. 
+ -0.262866,  0.951056,  0.162460 ,.. 
+  0.238856,  0.864188,  0.442863 ,.. 
+  0.262866,  0.951056,  0.162460 ,.. 
+  0.500000,  0.809017,  0.309017 ,.. 
+  0.238856,  0.864188, -0.442863 ,.. 
+  0.262866,  0.951056, -0.162460 ,.. 
+  0.500000,  0.809017, -0.309017 ,.. 
+  0.850651,  0.525731,  0.000000 ,.. 
+  0.716567,  0.681718,  0.147621 ,.. 
+  0.716567,  0.681718, -0.147621 ,.. 
+  0.525731,  0.850651,  0.000000 ,.. 
+  0.425325,  0.688191,  0.587785 ,.. 
+  0.864188,  0.442863,  0.238856 ,.. 
+  0.688191,  0.587785,  0.425325 ,.. 
+  0.809017,  0.309017,  0.500000 ,.. 
+  0.681718,  0.147621,  0.716567 ,.. 
+  0.587785,  0.425325,  0.688191 ,.. 
+  0.955423,  0.295242,  0.000000 ,.. 
+  1.000000,  0.000000,  0.000000 ,.. 
+  0.951056,  0.162460,  0.262866 ,.. 
+  0.850651, -0.525731,  0.000000 ,.. 
+  0.955423, -0.295242,  0.000000 ,.. 
+  0.864188, -0.442863,  0.238856 ,.. 
+  0.951056, -0.162460,  0.262866 ,.. 
+  0.809017, -0.309017,  0.500000 ,.. 
+  0.681718, -0.147621,  0.716567 ,.. 
+  0.850651,  0.000000,  0.525731 ,.. 
+  0.864188,  0.442863, -0.238856 ,.. 
+  0.809017,  0.309017, -0.500000 ,.. 
+  0.951056,  0.162460, -0.262866 ,.. 
+  0.525731,  0.000000, -0.850651 ,.. 
+  0.681718,  0.147621, -0.716567 ,.. 
+  0.681718, -0.147621, -0.716567 ,.. 
+  0.850651,  0.000000, -0.525731 ,.. 
+  0.809017, -0.309017, -0.500000 ,.. 
+  0.864188, -0.442863, -0.238856 ,.. 
+  0.951056, -0.162460, -0.262866 ,.. 
+  0.147621,  0.716567, -0.681718 ,.. 
+  0.309017,  0.500000, -0.809017 ,.. 
+  0.425325,  0.688191, -0.587785 ,.. 
+  0.442863,  0.238856, -0.864188 ,.. 
+  0.587785,  0.425325, -0.688191 ,.. 
+  0.688191,  0.587785, -0.425325 ,.. 
+ -0.147621,  0.716567, -0.681718 ,.. 
+ -0.309017,  0.500000, -0.809017 ,.. 
+  0.000000,  0.525731, -0.850651 ,.. 
+ -0.525731,  0.000000, -0.850651 ,.. 
+ -0.442863,  0.238856, -0.864188 ,.. 
+ -0.295242,  0.000000, -0.955423 ,.. 
+ -0.162460,  0.262866, -0.951056 ,.. 
+  0.000000,  0.000000, -1.000000 ,.. 
+  0.295242,  0.000000, -0.955423 ,.. 
+  0.162460,  0.262866, -0.951056 ,.. 
+ -0.442863, -0.238856, -0.864188 ,.. 
+ -0.309017, -0.500000, -0.809017 ,.. 
+ -0.162460, -0.262866, -0.951056 ,.. 
+  0.000000, -0.850651, -0.525731 ,.. 
+ -0.147621, -0.716567, -0.681718 ,.. 
+  0.147621, -0.716567, -0.681718 ,.. 
+  0.000000, -0.525731, -0.850651 ,.. 
+  0.309017, -0.500000, -0.809017 ,.. 
+  0.442863, -0.238856, -0.864188 ,.. 
+  0.162460, -0.262866, -0.951056 ,.. 
+  0.238856, -0.864188, -0.442863 ,.. 
+  0.500000, -0.809017, -0.309017 ,.. 
+  0.425325, -0.688191, -0.587785 ,.. 
+  0.716567, -0.681718, -0.147621 ,.. 
+  0.688191, -0.587785, -0.425325 ,.. 
+  0.587785, -0.425325, -0.688191 ,.. 
+  0.000000, -0.955423, -0.295242 ,.. 
+  0.000000, -1.000000,  0.000000 ,.. 
+ 0.262866, -0.951056, -0.162460 ,.. 
+  0.000000, -0.850651,  0.525731 ,.. 
+  0.000000, -0.955423,  0.295242 ,.. 
+  0.238856, -0.864188,  0.442863 ,.. 
+  0.262866, -0.951056,  0.162460 ,.. 
+  0.500000, -0.809017,  0.309017 ,.. 
+  0.716567, -0.681718,  0.147621 ,.. 
+  0.525731, -0.850651,  0.000000 ,.. 
+ -0.238856, -0.864188, -0.442863 ,.. 
+ -0.500000, -0.809017, -0.309017 ,.. 
+ -0.262866, -0.951056, -0.162460 ,.. 
+ -0.850651, -0.525731,  0.000000 ,.. 
+ -0.716567, -0.681718, -0.147621 ,.. 
+ -0.716567, -0.681718,  0.147621 ,.. 
+ -0.525731, -0.850651,  0.000000 ,.. 
+ -0.500000, -0.809017,  0.309017 ,.. 
+ -0.238856, -0.864188,  0.442863 ,.. 
+ -0.262866, -0.951056,  0.162460 ,.. 
+ -0.864188, -0.442863,  0.238856 ,.. 
+ -0.809017, -0.309017,  0.500000 ,.. 
+ -0.688191, -0.587785,  0.425325 ,.. 
+ -0.681718, -0.147621,  0.716567 ,.. 
+ -0.442863, -0.238856,  0.864188 ,.. 
+ -0.587785, -0.425325,  0.688191 ,.. 
+ -0.309017, -0.500000,  0.809017 ,.. 
+ -0.147621, -0.716567,  0.681718 ,.. 
+ -0.425325, -0.688191,  0.587785 ,.. 
+ -0.162460, -0.262866,  0.951056 ,.. 
+  0.442863, -0.238856,  0.864188 ,.. 
+  0.162460, -0.262866,  0.951056 ,.. 
+  0.309017, -0.500000,  0.809017 ,.. 
+  0.147621, -0.716567,  0.681718 ,.. 
+  0.000000, -0.525731,  0.850651 ,.. 
+  0.425325, -0.688191,  0.587785 ,.. 
+  0.587785, -0.425325,  0.688191 ,.. 
+  0.688191, -0.587785,  0.425325 ,.. 
+ -0.955423,  0.295242,  0.000000 ,.. 
+ -0.951056,  0.162460,  0.262866 ,.. 
+ -1.000000,  0.000000,  0.000000 ,.. 
+ -0.850651,  0.000000,  0.525731 ,.. 
+ -0.955423, -0.295242,  0.000000 ,.. 
+ -0.951056, -0.162460,  0.262866 ,.. 
+ -0.864188,  0.442863, -0.238856 ,.. 
+ -0.951056,  0.162460, -0.262866 ,.. 
+ -0.809017,  0.309017, -0.500000 ,.. 
+ -0.864188, -0.442863, -0.238856 ,.. 
+ -0.951056, -0.162460, -0.262866 ,.. 
+ -0.809017, -0.309017, -0.500000 ,.. 
+ -0.681718,  0.147621, -0.716567 ,.. 
+ -0.681718, -0.147621, -0.716567 ,.. 
+ -0.850651,  0.000000, -0.525731 ,.. 
+ -0.688191,  0.587785, -0.425325 ,.. 
+ -0.587785,  0.425325, -0.688191 ,.. 
+ -0.425325,  0.688191, -0.587785 ,.. 
+ -0.425325, -0.688191, -0.587785 ,.. 
+ - 0.587785 , - 0.425325 , - 0.688191 , .. 
+ -0.688191, -0.587785, -0.425325]
+</pre> <br><br></td></tr></table><br>
+<a name="927717"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jesse</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> "identifier ShadowDistance not found". <br><br></td></tr></table><br>
+<a name="927723"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nawi</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> I forgot the first lines from ngl.bmx, updated the post again.. <br><br></td></tr></table><br>
+<a name="929714"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >FreakForFreedom</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Wow nice, very nice work.<br>I'm currently working myself on an ogl engine and your code sure helps :)<br>Thanks a lot! <br><br></td></tr></table><br>
+<a name="929819"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >matty47</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Second that. Worked first time on OS X. Thank you muchly for sharing <br><br></td></tr></table><br>
+<a name="940016"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >*</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Brilliant stuff even works on eeebuntu on an asus 701SD <br><br></td></tr></table><br>
+<a name="941078"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >slenkar</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> it says unable to calculate tex size<br>I put my own wall.jpg file in  the folder that was 64x64 pixels <br><br></td></tr></table><br>
+<a name="941494"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >*</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> try a 256x256 <br><br></td></tr></table><br>
+<a name="942281"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >beanage</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Excellent work!!!<br><br>.. nice to have some simple, clever and free code showcasing some basics of 3d programming like particle zbuffering, vertice and matrix maths, openGL ... just need something like that for my own project, great.<br><br>Thanx dude, u've just made it into my credits^^!<br><br>[EDIT]: u got a name for that? <br><br></td></tr></table><br>
+<a name="942298"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >*</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> im definately gonna look at this and make a engine out of it (maybe C++ :) ) <br><br></td></tr></table><br>
+<a name="944375"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nawi</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> BeAnAge: My real name is Panu Horsmalahti.<br><br><div class="quote"> <br>it says unable to calculate tex size<br>I put my own wall.jpg file in the folder that was 64x64 pixels <br> <br></div><br>Weird, texture loading is done by BlitzMax so I cannot say why it doesn't work:<br>Local TXMap:TPixmap = LoadPixmap(Filename) <br><br></td></tr></table><br>
+<a name="945039"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >beanage</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> @nawi: ok, i'll change it to the credits :) <br><br></td></tr></table><br>
+<a name="945216"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nawi</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> Btw, I translated the basics of the engine to C++, it can render a textureless cube atm.. Not much motivation to continue<br><br>gllib.cpp<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+/*
+ *      gllib.cpp
+ *      
+ *      Copyright 2009 Panu Horsmalahti &lt;nawi&gt;
+ *      
+ *      This program is free software, you can redistribute it
+ *      , modify it and use it in any way including commercial applications.
+ * 		It is released under public domain license.
+ */
+ 
+#include &lt;iostream&gt;
+#include &lt;string&gt;
+#include &lt;fstream&gt;
+#include &lt;math.h&gt;
+#include &lt;SDL/SDL.h&gt;
+#include &lt;time.h&gt;
+#include &lt;GL/glew.h&gt;
+#include &lt;GL/gl.h&gt;
+#include &lt;GL/glu.h&gt;
+#include &lt;GL/glext.h&gt;
+#include &lt;list&gt;
+#include "gllib.h"
+
+using namespace std;
+
+
+void runtimeerror(std::string error)
+{
+	cout &lt;&lt; error &lt;&lt; endl;
+	exit(1);	
+}
+
+	
+Point::Point() {
+	X=0; Y=0; Z=0;
+}
+	
+void Point::Translate(float newx,float newy,float newz) {
+	X+=newx; Y+=newy; Z+=newz;
+}
+	
+void Point::Position(float newx,float newy,float newz) {
+	X=newx; Y=newy; Z=newz;	
+}
+	
+float Point::DotProduct(Point * p2) {
+	return X*p2-&gt;X+Y*p2-&gt;Y+Z*p2-&gt;Z;	
+}
+	
+void Point::Normalize() {
+	float f = 1.0/sqrt(DotProduct(this));
+	X = X * f;
+	Y = Y * f;
+	Z = Z * f;	
+}
+
+
+
+Vertex::Vertex() {
+	Alpha = 1.0; R=1.0; G=1.0; B=1.0;	
+}
+
+
+
+Camera::Camera() {
+	Enabled = 1;
+	Pitch = 0; Yaw = 0; Roll = 0;
+	X = 0; Y = 0; Z = 0;
+	Near = 0.1; Far = 1000.0;
+	Fog = 0;
+	ClsColor[0] = 0.0;
+	ClsColor[1] = 0.0;
+	ClsColor[2] = 0.0;
+	
+	Camera::CameraList.push_back(this);
+}
+	
+void Camera::EnableFog(float NewFogStart,float NewFogEnd,int NewFogR,int NewFogG,
+	int NewFogB,float NewFogDensity) {
+	Fog = 1;
+	FogStart = NewFogStart; FogEnd = NewFogEnd;
+	FogColor[0] = NewFogR/255.0; FogColor[1] = NewFogG/255.0; FogColor[2] = NewFogB/255.0;
+	FogDensity = NewFogDensity;
+}
+
+void Camera::DisableFog() {
+	Fog = 0;
+}
+	
+void Camera::Turn(float NewPitch,float NewYaw,float NewRoll) {
+	//Pitch = Pitch+NewPitch % 360;
+	//Yaw = Yaw+NewYaw % 360.0;
+	//Roll = Roll+NewRoll % 360.0;
+	if(Pitch&lt;0.0) Pitch=Pitch+360.0;
+	if(Yaw&lt;0.0) Yaw=Yaw+360.0;
+	if(Roll&lt;0.0) Roll=Roll+360.0;
+	if(Pitch&gt;360.0) Pitch=Pitch-360.0;
+	if(Yaw&gt;360.0) Yaw=Yaw-360.0;
+	if(Roll&gt;360.0) Roll=Roll-360.0;
+}
+
+void Camera::SetClearColor(int NewR,int NewG,int NewB) {
+	ClsColor[0] = NewR/255.0; ClsColor[1] = NewG/255.0; ClsColor[2] = NewB/255.0; 
+}
+
+void Camera::Rotate(float NewPitch,float NewYaw,float NewRoll) {
+	//Pitch = NewPitch % 360.0;
+	//Yaw = NewYaw % 360.0;
+	//Roll = NewRoll % 360.0;
+	while(Pitch&lt;0.0) {
+		Pitch=Pitch+360.0;
+	}
+	while(Yaw&lt;0.0) {
+		Yaw=Yaw+360.0;
+	}
+	while(Roll&lt;0.0) {
+		Roll=Roll+360.0;
+	}
+	while(Pitch&gt;360.0) {
+		Pitch = Pitch-360.0;
+	}
+	while(Yaw&gt;360.0) {
+		Yaw = Yaw-360.0;
+	}
+	while(Roll&gt;360.0) {
+		Roll = Roll-360.0;
+	}
+}
+
+
+Shader::Shader() {
+	ProgramObject = 0;
+	ShaderName = "";
+}
+
+
+Entity::Entity() {
+	name = "";
+	triangles = 0;
+	AlphaEnabled=0;
+	Pitch = 0.0;
+	Yaw = 0.0;
+	Roll = 0.0;
+	Alpha = 1.0;
+	Frame = 0;
+	Frames = 1;
+	FrameTime = 1;
+	FrameTimer = clock();
+	ScaleX=1.0,ScaleY=1.0,ScaleZ=1.0;
+	TextureEnabled=0;
+	TextureWidth=0,TextureHeight=0;
+	Texture=0;
+	WireFrame=0;
+	CamDistance=0.0;
+	Triangles=0;
+	CreateDList=0;
+	ColX=0,ColY=0,ColZ=0;
+	ColWidth=0;ColHeight=0;ColDepth=0;
+	ShaderEnabled=0;
+	EntityType=0;
+	Blend=0;
+	RenderFirst=0;
+	Shadows=0;
+	Sha = 0;
+	Entity::entityList.push_back(this);
+}
+	
+void Entity::AddTriangle(Vertex v1,Vertex v2,Vertex v3,
+	float v1s,float v1t,
+	float v2s,float v2t,
+	float v3s,float v3t,
+	char v1n,char v2n,char v3n) {
+	Triangle newtri;
+	newtri.V1s = v1s; newtri.V1t = v1t;
+	newtri.V2s = v2s; newtri.V2t = v2t;
+	newtri.V3s = v3s; newtri.V3t = v3t;
+	newtri.V1 = v1; newtri.V2 = v2; newtri.V3 = v3;
+	triangleList[Frame].push_back(&amp;newtri);		 	
+}
+	
+void Entity::EntityColor(int NewR,int NewG,int NewB) {
+	list&lt;Triangle*&gt;::const_iterator triIterator;
+	for(int Fr=0; Fr&lt;Frames; Fr++)
+	{
+		for(triIterator=triangleList[Fr].begin(); triIterator!= triangleList[Fr].end(); ++triIterator)
+		{
+			(*triIterator)-&gt;V1.R = NewR/255.0;
+			(*triIterator)-&gt;V1.G = NewG/255.0;
+			(*triIterator)-&gt;V1.B = NewB/255.0;
+			(*triIterator)-&gt;V2.R = NewR/255.0;
+			(*triIterator)-&gt;V2.G = NewG/255.0;
+			(*triIterator)-&gt;V2.B = NewB/255.0;
+			(*triIterator)-&gt;V3.R = NewR/255.0;
+			(*triIterator)-&gt;V3.G = NewG/255.0;
+			(*triIterator)-&gt;V3.B = NewB/255.0;
+		}
+	}
+	CreateDList = 1;
+}
+					 
+void Entity::AddTri(float v1x,float v1y,float v1z,
+	float v2x,float v2y,float v2z,
+	float v3x,float v3y,float v3z,
+	float v1s,float v1t,
+	float v2s,float v2t,
+	float v3s,float v3t,
+	char v1n,char v2n,char v3n) {
+	Vertex *nv1 = new Vertex,*nv2 = new Vertex,*nv3 = new Vertex;
+	nv1-&gt;OrigX = v1x; nv1-&gt;OrigY = v1y; nv1-&gt;OrigZ= v1z;
+	nv2-&gt;OrigX = v2x; nv2-&gt;OrigY = v2y; nv2-&gt;OrigZ= v2z;
+	nv3-&gt;OrigX = v3x; nv3-&gt;OrigY = v3y; nv3-&gt;OrigZ= v3z;
+	nv1-&gt;X = v1x; nv1-&gt;Y = v1y; nv1-&gt;Z = v1z;
+	nv2-&gt;X = v2x; nv2-&gt;Y = v2y; nv2-&gt;Z = v2z;
+	nv3-&gt;X = v3x; nv3-&gt;Y = v3y; nv3-&gt;Z = v3z;
+	Triangle *newtri = new Triangle;
+	newtri-&gt;V1s = v1s; newtri-&gt;V1t = v1t;
+	newtri-&gt;V2s = v2s; newtri-&gt;V2t = v2t;
+	newtri-&gt;V3s = v3s; newtri-&gt;V3t = v3t;
+	newtri-&gt;V1 = *nv1; newtri-&gt;V2 = *nv2; newtri-&gt;V3 = *nv3;
+	triangleList[Frame].push_back(newtri);
+	VertexList[Frame].push_back(nv1);
+	VertexList[Frame].push_back(nv2);
+	VertexList[Frame].push_back(nv3);
+	Triangles++;
+}
+	
+void Entity::AddCube() {
+	AddTri(-1,1,1,-1,-1,1,1,1,1,0,0,0,1,1,0); //FRONT TRI 1
+	AddTri(-1,-1,1,1,-1,1,1,1,1,0,1,1,1,1,0); //'FRONT TRI2
+	AddTri(1,1,1,1,-1,1,1,-1,-1,1,0,1,1,0,1); //'RIGHT TRI1
+	AddTri(1,1,1,1,-1,-1,1,1,-1,1,0,0,1,0,0); //'RIGHT TRI2
+	AddTri(1,1,-1,1,-1,-1,-1,-1,-1,0,0,0,1,1,1); //'BACK TRI1
+	AddTri(1,1,-1,-1,-1,-1,-1,1,-1,0,0,1,1,1,0); //'BACK TRI2
+	AddTri(-1,1,-1,-1,-1,-1,-1,-1,1,1,0,1,1,0,1); //'LEFT TRI1
+	AddTri(-1,1,-1,-1,-1,1,-1,1,1,1,0,0,1,0,0); //'LEFT TRI2
+	AddTri(-1,-1,1,-1,-1,-1,1,-1,-1,0,1,0,0,1,0); //'BOTTOM TRI1
+	AddTri(-1,-1,1,1,-1,-1,1,-1,1,0,1,1,0,1,1); //'BOTTOM TRI2
+	AddTri(1,1,-1,-1,1,-1,-1,1,1,1,1,0,1,0,0); //'TOP TRI1
+	AddTri(1,1,1, 1,1,-1,-1,1,1,1,0,1,1,0,0 ); //'TOP TRI2
+	CreateDList = 1;
+}
+
+Entity::~Entity() {
+	list&lt;Triangle*&gt;::const_iterator triIterator;
+	for(int a=0; a&lt;Frames; a++) {
+		if(DisplayListCreated[a] == 1) glDeleteLists(DisplayList[a],1);
+		for(triIterator=triangleList[a].begin(); triIterator!= triangleList[a].end(); ++triIterator)
+		{
+			//delete triIterator;
+		}
+	}
+}	
+	
+void Entity::CreateDisplayList() {
+	int AlphaEnabled = 0;
+	float CAlpha;int OptimizeColors=0;//int Stepper=0;
+	list&lt;Triangle*&gt;::const_iterator triIterator;
+	for(int a=0; a&lt;Frames; a++) {
+		if(DisplayListCreated[a] == 1) glDeleteLists(DisplayList[a],1);
+		DisplayListCreated[a] = 1;
+		DisplayList[a] = glGenLists(1);
+		glNewList(DisplayList[a], GL_COMPILE);
+		glBegin(GL_TRIANGLES);
+		for(triIterator=triangleList[a].begin(); triIterator!= triangleList[a].end(); ++triIterator)
+		{
+			if(Alpha*((*triIterator)-&gt;V1.Alpha+(*triIterator)-&gt;V2.Alpha+(*triIterator)-&gt;V3.Alpha) &lt; 3.0) AlphaEnabled = 1;
+		
+			if( (*triIterator)-&gt;V1.R+(*triIterator)-&gt;V1.G+(*triIterator)-&gt;V1.B+(*triIterator)-&gt;V2.R+(*triIterator)-&gt;V2.G
+			+(*triIterator)-&gt;V2.B+(*triIterator)-&gt;V3.R+(*triIterator)-&gt;V3.G+(*triIterator)-&gt;V3.B
+			==9.0) OptimizeColors=1;
+		
+			//v1
+			if(TextureEnabled == 1) {
+				glTexCoord2f((*triIterator)-&gt;V1s,(*triIterator)-&gt;V1t);
+				if((*triIterator)-&gt;V1NX*(*triIterator)-&gt;V1NX&lt;0.01 
+				|| (*triIterator)-&gt;V1NY*(*triIterator)-&gt;V1NY&lt;0.01 
+				|| (*triIterator)-&gt;V1NZ*(*triIterator)-&gt;V1NZ&lt;0.01) 
+				glNormal3f((*triIterator)-&gt;V1NX,(*triIterator)-&gt;V1NY,(*triIterator)-&gt;V1NZ);
+			}
+			CAlpha = Alpha*(*triIterator)-&gt;V1.Alpha;
+			if(CAlpha &lt; 1.0) {
+				glColor4f((*triIterator)-&gt;V1.R,(*triIterator)-&gt;V1.G,(*triIterator)-&gt;V1.B,CAlpha);
+			} else {
+				glColor3f((*triIterator)-&gt;V1.R,(*triIterator)-&gt;V1.G,(*triIterator)-&gt;V1.B);
+			}
+			glVertex3f((*triIterator)-&gt;V1.X,(*triIterator)-&gt;V1.Y,(*triIterator)-&gt;V1.Z);
+	
+			cout &lt;&lt; (*triIterator)-&gt;V1.R &lt;&lt; " " &lt;&lt; (*triIterator)-&gt;V1.G &lt;&lt; " " &lt;&lt; (*triIterator)-&gt;V1.B
+			&lt;&lt; endl;
+	
+			//V2
+			if(TextureEnabled == 1) {
+				glTexCoord2f((*triIterator)-&gt;V2s,(*triIterator)-&gt;V2t);
+				if((*triIterator)-&gt;V2NX*(*triIterator)-&gt;V2NX&lt;0.01 
+				|| (*triIterator)-&gt;V2NY*(*triIterator)-&gt;V2NY&lt;0.01 
+				|| (*triIterator)-&gt;V2NZ*(*triIterator)-&gt;V2NZ&lt;0.01) 
+				glNormal3f((*triIterator)-&gt;V2NX,(*triIterator)-&gt;V2NY,(*triIterator)-&gt;V2NZ);
+			}
+			CAlpha = Alpha*(*triIterator)-&gt;V2.Alpha;
+			if(CAlpha &lt; 1.0) {
+				glColor4f((*triIterator)-&gt;V2.R,(*triIterator)-&gt;V2.G,(*triIterator)-&gt;V2.B,CAlpha);
+			} else {
+				glColor3f((*triIterator)-&gt;V2.R,(*triIterator)-&gt;V2.G,(*triIterator)-&gt;V2.B);
+			}
+			glVertex3f((*triIterator)-&gt;V2.X,(*triIterator)-&gt;V2.Y,(*triIterator)-&gt;V2.Z);	
+			
+			
+			//V3
+			if(TextureEnabled == 1) {
+				glTexCoord2f((*triIterator)-&gt;V3s,(*triIterator)-&gt;V3t);
+				if((*triIterator)-&gt;V3NX*(*triIterator)-&gt;V3NX&lt;0.01 
+				|| (*triIterator)-&gt;V3NY*(*triIterator)-&gt;V3NY&lt;0.01 
+				|| (*triIterator)-&gt;V3NZ*(*triIterator)-&gt;V3NZ&lt;0.01) 
+				glNormal3f((*triIterator)-&gt;V3NX,(*triIterator)-&gt;V3NY,(*triIterator)-&gt;V3NZ);
+			}
+			CAlpha = Alpha*(*triIterator)-&gt;V3.Alpha;
+			if(CAlpha &lt; 1.0) {
+				glColor4f((*triIterator)-&gt;V3.R,(*triIterator)-&gt;V3.G,(*triIterator)-&gt;V3.B,CAlpha);
+			} else {
+				glColor3f((*triIterator)-&gt;V3.R,(*triIterator)-&gt;V3.G,(*triIterator)-&gt;V3.B);
+			}
+			glVertex3f((*triIterator)-&gt;V3.X,(*triIterator)-&gt;V3.Y,(*triIterator)-&gt;V3.Z);	
+			
+		}
+		glEnd();
+		glEndList();
+	}
+}
+
+
+
+Graphics::Graphics(int newwidth,int newheight,int newdepth,int newfullscreen)
+{
+	Width = newwidth;
+	Height = newheight;
+	Depth = newdepth;
+	Fullscreen = newfullscreen;
+	FPS=0,FPSCount=0,FPSTimer=clock();
+	Lighting=0;
+	Triangles=0;
+	TextureEnabled=0,CurrentTexture=0;
+	WireframeEnabled=0,AlphaEnabled=0;
+	CurrentProgramObject=0;
+
+	if(SDL_Init(SDL_INIT_VIDEO)&lt;0) runtimeerror("Could not init SDL!");
+	videoinfo = SDL_GetVideoInfo();
+	if(!videoinfo) runtimeerror("Could not get SDL video info!");
+	sdl_flags = SDL_OPENGL|SDL_GL_DOUBLEBUFFER|SDL_HWPALETTE|SDL_RESIZABLE;
+	if(videoinfo-&gt;hw_available) {
+		sdl_flags |= SDL_HWSURFACE;	
+	} else {
+		sdl_flags |= SDL_SWSURFACE;
+	}
+	if(videoinfo-&gt;blit_hw) sdl_flags |= SDL_HWACCEL;
+	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER,1);
+	
+	surface = SDL_SetVideoMode(Width,Height,Depth,sdl_flags);
+	if(!surface) runtimeerror("Could not create SDL surface!");
+	
+	glViewport(0,0,(GLint)Width,(GLint)Height);
+	glShadeModel(GL_SMOOTH);
+	glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glClearColor(0,0,0, 0.0);
+	glColor3f(1.0, 1.0, 1.0);
+	glClearDepth(1.0);
+	glEnable(GL_CULL_FACE);
+	glEnable(GL_DEPTH_TEST); 
+	glDepthFunc(GL_LEQUAL);
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	gluPerspective(45.0, float(Width)/float(Height), 0.1, 1000.0);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+}
+
+void Graphics::RenderEntity(Entity* NEnt,Camera* NCam) {
+	list&lt;Entity*&gt;::const_iterator childIterator;
+	if(NEnt-&gt;Alpha&gt;0.0 &amp;&amp; NEnt-&gt;CamDistance&lt;NCam-&gt;Far) {
+		
+		if(NEnt-&gt;Sha == 0) {
+			if(CurrentProgramObject != 0) {
+				CurrentProgramObject = 0;
+				glUseProgramObjectARB(0);
+				glDisable(GL_VERTEX_PROGRAM_ARB);
+				glDisable(GL_FRAGMENT_PROGRAM_ARB);
+			}
+		} else {
+			if(CurrentProgramObject != NEnt-&gt;Sha-&gt;ProgramObject) {
+				CurrentProgramObject = NEnt-&gt;Sha-&gt;ProgramObject;
+				if(NEnt-&gt;ShaderEnabled==0) CurrentProgramObject = 0;
+				glUseProgramObjectARB(CurrentProgramObject);
+				if(CurrentProgramObject != 0) {
+					glEnable(GL_VERTEX_PROGRAM_ARB);
+					glEnable(GL_FRAGMENT_PROGRAM_ARB);
+				} else {
+					glDisable(GL_VERTEX_PROGRAM_ARB);
+					glDisable(GL_FRAGMENT_PROGRAM_ARB);
+				}
+			}
+		}
+		
+		//Texture
+		if(TextureEnabled != NEnt-&gt;TextureEnabled) {
+			TextureEnabled = NEnt-&gt;TextureEnabled;
+			if(TextureEnabled) { 
+				glEnable(GL_TEXTURE_2D);
+			} else {
+				glDisable(GL_TEXTURE_2D);
+			}
+		}
+		if(CurrentTexture!=NEnt-&gt;Texture &amp;&amp; NEnt-&gt;TextureEnabled) {
+			CurrentTexture = NEnt-&gt;Texture;
+			glBindTexture(GL_TEXTURE_2D, CurrentTexture);
+		}
+		
+		//Wireframe
+		if(WireframeEnabled != NEnt-&gt;WireFrame) {
+			WireframeEnabled = NEnt-&gt;WireFrame;
+			if(WireframeEnabled) { 
+				glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+			} else {
+				glPolygonMode(GL_FRONT, GL_FILL);
+			}
+		}
+		
+		//Alpha
+		if(AlphaEnabled != NEnt-&gt;AlphaEnabled) {
+			AlphaEnabled = NEnt-&gt;AlphaEnabled;
+			if(AlphaEnabled==1) {
+				glEnable(GL_BLEND);
+			} else {
+				glDisable(GL_BLEND);
+			}
+		}
+		if(NEnt-&gt;Blend &amp;&amp; (AlphaEnabled == 0)) {
+			AlphaEnabled = 1;
+			glEnable(GL_BLEND);
+		}
+		
+		glPushMatrix();
+		glTranslatef(NEnt-&gt;X,NEnt-&gt;Y,NEnt-&gt;Z);
+		glRotatef(NEnt-&gt;Pitch,1.0,0,0);
+		glRotatef(NEnt-&gt;Yaw,0,1.0,0);
+		glRotatef(NEnt-&gt;Roll,0,0,1.0);
+
+		if(NEnt-&gt;DisplayListCreated[NEnt-&gt;Frame]) {
+			/*'glEnableClientState(GL_VERTEX_ARRAY)
+			'glEnableClientState(GL_TEXTURE_COORD_ARRAY)
+			'glBindBufferARB( GL_ARRAY_BUFFER_ARB, NEnt.VertexVBO[NEnt.Frame] )
+			'glVertexPointer( 3, GL_FLOAT, 0, Null)
+			'	
+			'glBindBufferARB( GL_ARRAY_BUFFER_ARB, NEnt.UvVBO[NEnt.Frame] )
+			'glTexCoordPointer( 2, GL_FLOAT, 0, Null)
+			'glDrawArrays(GL_TRIANGLES,0, NEnt.VertexArrayLength[NEnt.Frame])
+			'glDisableClientState(GL_VERTEX_ARRAY)
+			'glDisableClientState(GL_TEXTURE_COORD_ARRAY)*/
+			glCallList(NEnt-&gt;DisplayList[NEnt-&gt;Frame]);
+		} else {
+			runtimeerror("Displaylist not created!");
+		}
+		Triangles += NEnt-&gt;Triangles/NEnt-&gt;Frames;
+		
+		//Children
+		for(childIterator=NEnt-&gt;ChildList.begin(); childIterator!=NEnt-&gt;ChildList.end(); ++childIterator) {
+			RenderEntity(*childIterator,NCam);
+		}
+		glPopMatrix();
+	}
+}
+
+void Graphics::Render()
+{
+	list&lt;Entity*&gt;::const_iterator entityIterator;
+	list&lt;Camera*&gt;::const_iterator camIterator;
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+	Triangles=0;
+	//int a = 0;
+	for(camIterator=Camera::CameraList.begin(); camIterator!=Camera::CameraList.end(); ++camIterator) {
+		gluPerspective(45.0, float(Width)/float(Height), (*camIterator)-&gt;Near, (*camIterator)-&gt;Far);
+		if((*camIterator)-&gt;Enabled == 1) {
+			glLoadIdentity();
+			glClearColor((*camIterator)-&gt;ClsColor[0],(*camIterator)-&gt;ClsColor[1],(*camIterator)-&gt;ClsColor[2], 0.0);
+			
+			
+			//Fog
+			if((*camIterator)-&gt;Fog) {
+				glEnable(GL_FOG);
+				glFogi(GL_FOG_MODE, GL_LINEAR);
+				glFogfv(GL_FOG_COLOR, (*camIterator)-&gt;FogColor);
+				glFogf(GL_FOG_DENSITY, (*camIterator)-&gt;FogDensity);
+				glHint(GL_FOG_HINT, GL_NICEST);
+				glFogf(GL_FOG_START, (*camIterator)-&gt;FogStart);
+				glFogf(GL_FOG_END, (*camIterator)-&gt;FogEnd);
+			} else {
+				glDisable(GL_FOG);
+			}
+			
+			//Position camera
+			glRotatef((*camIterator)-&gt;Pitch,1.0,0,0);
+			glRotatef((*camIterator)-&gt;Yaw,0,1.0,0);
+			glRotatef((*camIterator)-&gt;Roll,0,0,1.0);
+			glTranslatef((*camIterator)-&gt;X,(*camIterator)-&gt;Y,(*camIterator)-&gt;Z);
+			
+			
+			//Lights
+			
+			//Z-Order
+			for(entityIterator=Entity::entityList.begin(); entityIterator!= Entity::entityList.end(); ++entityIterator) {
+				(*entityIterator)-&gt;CamDistance =
+				sqrt(((*camIterator)-&gt;X-(*entityIterator)-&gt;X)*((*camIterator)-&gt;X-(*entityIterator)-&gt;X)+
+				((*camIterator)-&gt;Y-(*entityIterator)-&gt;Y)*((*camIterator)-&gt;Y-(*entityIterator)-&gt;Y)+
+				((*camIterator)-&gt;Z-(*entityIterator)-&gt;Z)*((*camIterator)-&gt;Z-(*entityIterator)-&gt;Z));
+				if((*entityIterator)-&gt;RenderFirst) (*entityIterator)-&gt;CamDistance = 0;
+				//Display list
+				if((*entityIterator)-&gt;CreateDList == 1) { 
+					(*entityIterator)-&gt;CreateDisplayList();
+					(*entityIterator)-&gt;CreateDList = 0;
+				}
+			}
+			//NEntity.NEntityList.Sort(True,NEntity.CompareDistance)
+			
+			for(entityIterator=Entity::entityList.begin(); entityIterator!= Entity::entityList.end(); ++entityIterator)
+			{
+				//a++;
+ 				//cout &lt;&lt; a &lt;&lt; (*entityIterator)-&gt;name &lt;&lt; endl;
+ 				RenderEntity(*entityIterator,*camIterator);
+			}
+			
+			if(CurrentProgramObject != 0) {
+				CurrentProgramObject = 0;
+				glUseProgramObjectARB(0);
+				glDisable(GL_VERTEX_PROGRAM_ARB);
+				glDisable(GL_FRAGMENT_PROGRAM_ARB);
+			}
+			
+			//Texture
+			if(TextureEnabled!=1) {
+				TextureEnabled =  1;
+				glEnable(GL_TEXTURE_2D);
+			}
+			
+			if(AlphaEnabled==0) glDisable(GL_BLEND);
+		}
+	}
+	
+	FPSCount++;
+	if(clock() &gt; FPSTimer+CLOCKS_PER_SEC) {
+		FPS=FPSCount;
+		FPSTimer=clock();
+		FPSCount=0;
+	}
+
+
+	SDL_GL_SwapBuffers();
+}
+
+
+
+</textarea><br><br>gllib.h<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+//GLLIB .h file
+using namespace std;
+void runtimeerror(std::string error="");
+
+class Point
+{
+public:
+	float X,Y,Z;
+	Point();
+	void Translate(float newx,float newy,float newz);
+	void Position(float newx,float newy,float newz);
+	float DotProduct(Point * p2);
+	void Normalize();
+};
+
+class Vertex : public Point
+{
+public:
+	float OrigX,OrigY,OrigZ,R,G,B,Alpha;
+	Vertex();
+private:	
+};
+
+class Triangle
+{
+public:
+	float V1s,V1t,V2s,V2t,V3s,V3t;
+	float V1NX,V1NY,V1NZ;
+	float V2NX,V2NY,V2NZ;
+	float V3NX,V3NY,V3NZ;
+	Vertex V1,V2,V3;
+private:	
+};
+
+class Camera : public Point
+{
+public:
+	static list&lt;Camera*&gt; CameraList;
+	int Enabled;
+	float Pitch;
+	float Yaw;
+	float Roll;
+	float Near,Far;
+	float ClsColor[4];
+	int Fog;float FogStart;float FogEnd;float FogColor[3];float FogDensity;
+
+	Camera();
+	void EnableFog(float NewFogStart,float NewFogEnd,int NewFogR=128,int NewFogG=128,
+		int NewFogB=128,float NewFogDensity=0.35);
+	void DisableFog();
+	void Turn(float NewPitch,float NewYaw,float NewRoll);
+	void SetClearColor(int NewR,int NewG,int NewB);
+	void Rotate(float NewPitch,float NewYaw,float NewRoll);
+private:	
+};
+list&lt;Camera*&gt; Camera::CameraList; 
+
+class Shader
+{
+public:
+	string ShaderName;
+	char VertexShader;
+	char FragmentShader;
+	int ProgramObject;
+	int LoadShader(string VertexFilename,string FragmentFilename);
+	Shader();
+private:	
+};
+
+class Entity : public Point
+{
+public:
+	static list&lt;Entity*&gt; entityList;
+	string name;
+	list&lt;Triangle*&gt; triangleList[512];
+	int triangles;
+	int AlphaEnabled;
+	
+	float Pitch;
+	float Yaw;
+	float Roll;
+	float Alpha;
+	list&lt;Vertex*&gt; VertexList[512];
+	int Frame;
+	int Frames;
+	int FrameTime;
+	int FrameTimer;
+	float ScaleX,ScaleY,ScaleZ;
+	int TextureEnabled;
+	int TextureWidth,TextureHeight;
+	int Texture;
+	int WireFrame;
+	float CamDistance;
+	int Triangles;
+	int DisplayList[512];
+	int DisplayListCreated[512];
+	int CreateDList;
+	float ColX,ColY,ColZ;
+	float ColWidth,ColHeight,ColDepth;
+	Shader *Sha;
+	int ShaderEnabled;
+	Entity *Parent;
+	list&lt;Entity*&gt; ChildList;
+	int EntityType;
+	int Blend;
+	int RenderFirst;
+	int Shadows;
+
+	Entity();
+	~Entity();
+	
+	void AddTriangle(Vertex v1,Vertex v2,Vertex v3,
+		float v1s,float v1t,
+		float v2s,float v2t,
+		float v3s,float v3t,
+		char v1n=0,char v2n=0,char v3n=0);
+		
+	void EntityColor(int NewR,int NewG,int NewB);
+					 
+	void AddTri(float v1x,float v1y,float v1z,
+		float v2x,float v2y,float v2z,
+		float v3x,float v3y,float v3z,
+		float v1s,float v1t,
+		float v2s,float v2t,
+		float v3s,float v3t,
+		char v1n=0,char v2n=0,char v3n=0);
+	
+	void AddCube();
+	void CreateDisplayList();
+};
+list&lt;Entity*&gt; Entity::entityList; 
+
+class Graphics
+{
+public:
+	SDL_Surface *surface;
+	SDL_Event event;
+	int Width;
+	int Height;
+	int Depth;
+	int Fullscreen;
+	int FPS,FPSCount;
+	clock_t FPSTimer;
+	int Lighting;
+	int Triangles;
+	int TextureEnabled,CurrentTexture;
+	int WireframeEnabled,AlphaEnabled;
+	int CurrentProgramObject;
+	//int ShadowList:TList
+	static Graphics* Gfx;
+	
+	Graphics(int newwidth,int newheight,int newdepth,int newfullscreen);
+	void Render();
+	void RenderEntity(Entity* NEnt,Camera* NCam);
+private:
+	const SDL_VideoInfo *videoinfo;
+	int sdl_flags;
+};
+</textarea><br><br>gltest.cpp:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+//GL TEST prog
+#include "gllib.cpp"
+
+void delay(int ms) {
+	int t = clock();
+ 	while(clock()-t&lt;ms);
+}
+
+int main() {
+	Graphics Gfx(800,600,32,0);
+	int loop=1;
+	
+	SDL_WM_SetCaption("gl test", NULL);
+	
+	Camera cam;
+
+	Entity box;
+	box.name = "foo";
+	box.AddCube();
+	box.EntityColor(255,128,0);
+	//Entity box2;
+	//box2.AddCube();
+	clock_t fpst = clock();
+
+	
+
+	box.Translate(0,0,-5);
+	//box2.Translate(0,0,-5);
+	
+
+	Uint8* Keyboard; 
+	while(loop) {
+		Keyboard= SDL_GetKeyState(NULL);
+		if(Keyboard[SDLK_DOWN]) cam.Translate(0,0,-0.1);
+		if(Keyboard[SDLK_UP]) cam.Translate(0,0,0.1);
+		if(Keyboard[SDLK_LEFT]) cam.Translate(0.1,0,0);
+		if(Keyboard[SDLK_RIGHT]) cam.Translate(-0.1,0,0);
+		while(SDL_PollEvent(&amp;Gfx.event)) {
+			switch(Gfx.event.type) {
+				case SDL_QUIT:
+					loop=0;
+					break;
+				case SDL_KEYDOWN:
+					if(Gfx.event.key.keysym.sym == SDLK_ESCAPE) loop=0;
+					break;
+			}
+		}
+		Gfx.Render();
+		delay(1);
+		if(clock()-fpst &gt; CLOCKS_PER_SEC) {
+			fpst = clock();
+		//	cout &lt;&lt; "FPS: " &lt;&lt; Gfx.FPS &lt;&lt; endl;
+		//	cout &lt;&lt; "   Triangles: " &lt;&lt; Gfx.Triangles &lt;&lt; endl;
+		}
+	}
+	
+	return EXIT_SUCCESS;
+}
+ </textarea> <br><br></td></tr></table><br>
+<a name="946139"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pete Carter</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> nice, thanks for sharing. <br><br></td></tr></table><br>
+<a name="947549"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >slenkar</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> you could use a 3rd party library for collisions? <br><br></td></tr></table><br>
+<a name="948444"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nawi</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> I don't see why not. <br><br></td></tr></table><br>
+<a name="948581"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DreamLoader</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> hi nawi? can you modify the minib3d to support shadows? <br><br></td></tr></table><br>
+<a name="950606"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nawi</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> No, I'm not involved in minib3d at all, and I haven't even created proper shadows for my own lib.. <br><br></td></tr></table><br>
+<a name="1080182"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >FBEpyon</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#22">[#22]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hello Nawi,<br><br>Sorry for bringing this back to life, but its worth having sticky... :P<br><br>I wanted to ask if this engine has multitexturing already applied to it or is there anyway you could throw me in the right spot (code?).<br><br>Thanks,<br><br>FBEpyon <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

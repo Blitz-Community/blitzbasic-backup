@@ -1,0 +1,250 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Faster GrabPixmap , GrabToPixmap()</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Faster GrabPixmap , GrabToPixmap()</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Faster GrabPixmap , GrabToPixmap()</a><br><br>
+<a name="1334933"></a>
+
+<a name="1334934"></a>
+
+<a name="1334935"></a>
+
+<a name="1334936"></a>
+
+<a name="1334938"></a>
+
+<a name="1334939"></a>
+
+<a name="1334940"></a>
+
+<a name="1334941"></a>
+
+<a name="1334942"></a>
+
+<a name="1334953"></a>
+
+<a name="1334983"></a>
+
+<a name="1334985"></a>
+
+<a name="1334990"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted February)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> An attempt at an optimized <b>GrabPixmap</b>, <b>GrabToPixmap</b>. Which doesnt allocate a new pixmap every time, and tries to minimize copying.<br><br>!! They arent really any faster, except for GrabToPixmap_D3D9 on Windows 7.<br><br><b>Note that it does NOT check for out of bounds! So make sure to stay within the screen</b><br><b>And its made for 32-bit frame buffers, dont try it on anything else ;)</b><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+SuperStrict
+
+Import BRL.GLMax2D
+Import BRL.D3D9Max2D
+
+
+Private
+Global _d3ddev:IDirect3DDevice9
+Global _d3dsurf:IDirect3DSurface9
+Global _glpixels:Byte Ptr
+
+Function free_resources()
+	If _d3dsurf Then _d3dsurf.Release_()
+	If _glpixels Then MemFree _glpixels
+EndFunction
+
+OnEnd free_resources
+Public
+
+
+Function InitGrabToPixmap_D3D9( g:TGraphics)
+	If Not g Then Throw "no graphics!"
+	_d3ddev = TD3D9Graphics(TMax2DGraphics(g)._graphics).GetDirect3DDevice()
+	_d3ddev.CreateOffscreenPlainSurface( GraphicsWidth(),GraphicsHeight(), D3DFMT_X8R8G8B8, D3DPOOL_SYSTEMMEM, _d3dsurf, Null)
+EndFunction
+
+Function InitGrabToPixmap_GL( g:TGraphics)
+	If Not g Then Throw "no graphics!"
+	_glpixels = MemAlloc( GraphicsWidth() * GraphicsHeight() * 4)
+EndFunction
+
+
+Function GrabToPixmap_D3D9( pix:TPixmap, x:Int = 0, y:Int = 0)
+	Local surf:IDirect3DSurface9
+	If _d3ddev.GetRenderTarget( 0, surf) &lt; 0 Then Throw "GetRendderTarget failed"
+
+' ** slow on Windows 7
+'	Local s:Byte Ptr, d:Byte Ptr
+'	If surf.GetDC(s) &lt; 0 Then Throw "src.GetDC failed"
+'	If _d3dsurf.GetDC(d) &lt; 0 Then Throw "dst.GetDC failed"
+'	
+'	BitBlt Int(d), 0,0, pix.Width,pix.Height, Int(s),x,y, ROP_SRCCOPY
+'
+'	_d3dsurf.ReleaseDC(d)
+'	surf.ReleaseDC(s)
+'	surf.Release_()
+
+	If _d3ddev.GetRenderTargetData( surf, _d3dsurf) &lt; 0 Then Throw "GetRendderTargetData failed"
+	surf.Release_()
+	
+	Local lockedrect:D3DLOCKED_RECT = New D3DLOCKED_RECT
+	If _d3dsurf.LockRect( lockedrect, Null, D3DLOCK_READONLY) &lt; 0 Then Throw "surf.LockRect failed"
+
+	' convert rectangle BGRA to RGBA
+	Local src:Byte Ptr = lockedrect.pBits + (y * lockedrect.Pitch)
+	Local dst:Byte Ptr = pix.Pixels
+	For Local yy:Int = 0 Until pix.Height
+		Local lsrc:Int Ptr = Int Ptr(src) + x
+		Local ldst:Int Ptr = Int Ptr(dst)
+		For Local xx:Int = 0 Until pix.Width
+			Local p:Int = lsrc[xx]
+			ldst[xx] = ((p &amp; $FF) Shl 16) | ((p &amp; $FF0000) Shr 16) | (p &amp; $FF00FF00)
+		Next
+		src :+ lockedrect.Pitch
+		dst :+ pix.Pitch
+	Next
+	
+	_d3dsurf.UnlockRect()
+EndFunction
+
+Function GrabToPixmap_GL( pix:TPixmap, x:Int = 0, y:Int = 0)
+	Local blend:Int = GetBlend()
+	
+	glDisable(GL_BLEND)
+	glDisable(GL_ALPHA_TEST)
+	glReadPixels( x,y, pix.Width,pix.Height, GL_RGBA, GL_UNSIGNED_BYTE, _glpixels)
+	
+	' flip Y
+	Local src:Byte Ptr = _glpixels + (pix.Pitch * (pix.Height - 1))
+	Local dst:Byte Ptr = pix.Pixels
+	For Local y:Int = 0 Until pix.Height
+		Local lsrc:Int Ptr = Int Ptr(src)
+		Local ldst:Int Ptr = Int Ptr(dst)
+		For Local x:Int = 0 Until pix.Width
+			ldst[x] = lsrc[x]
+		Next
+		src :- pix.Pitch
+		dst :+ pix.Pitch
+	Next
+
+	SetBlend blend
+EndFunction
+
+</textarea><br>D3D9 Example:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+SuperStrict
+
+Import "GrabToPixmap.bmx"
+
+SetGraphicsDriver D3D9Max2DDriver()
+InitGrabToPixmap_D3D9 Graphics(800,600)
+
+Local pix:TPixmap = CreatePixmap( GraphicsWidth(), GraphicsHeight(), PF_RGBA8888)
+
+Local img:TImage
+Local angle:Float
+
+SetBlend ALPHABLEND
+Repeat
+
+	img = LoadImage(pix)
+	SetImageHandle img, 400,300
+	
+	angle :+ 1
+	If angle &gt;= 360  Then angle = 0
+	SetRotation Sin(angle) * Cos(angle) * 3
+	
+	SetColor 255,255,255
+	DrawImage img, 400,300
+	
+	SetRotation 0
+	SetColor Rand(256),Rand(256),Rand(256)
+	DrawRect 200,200,400,200
+	
+	GrabToPixmap_D3D9 pix
+'	pix = GrabPixmap( 0,0, GraphicsWidth(),GraphicsHeight())
+	
+	SetColor 255,255,255
+	DrawText FPS(), 0,0
+	
+	Flip
+	Cls
+
+Until KeyHit(KEY_ESCAPE) Or AppTerminate()
+End
+
+Function FPS:Int()
+	Const UPDATE:Float = 0.5
+	Global count:Int, lastcount:Int, lastupdate:Int
+	
+	If (MilliSecs() - lastupdate) &gt; Int(UPDATE * 1000.0)
+		lastcount = Float(count / UPDATE)
+		count = 1
+		lastupdate = MilliSecs()
+	Else
+		count :+ 1
+	EndIf
+	Return lastcount
+EndFunction
+
+</textarea><br>GL Example:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+SuperStrict
+
+Import "GrabToPixmap.bmx"
+
+SetGraphicsDriver GLMax2DDriver()
+InitGrabToPixmap_GL Graphics(800,600)
+
+Local pix:TPixmap = CreatePixmap( GraphicsWidth(), GraphicsHeight(), PF_RGBA8888)
+
+Local img:TImage
+Local angle:Float
+
+SetBlend ALPHABLEND
+Repeat
+
+	img = LoadImage(pix)
+	SetImageHandle img, 400,300
+	
+	angle :+ 1
+	If angle &gt;= 360  Then angle = 0
+	SetRotation Sin(angle) * Cos(angle) * 3
+	
+	SetColor 255,255,255
+	DrawImage img, 400,300
+	
+	SetRotation 0
+	SetColor Rand(256),Rand(256),Rand(256)
+	DrawRect 200,200,400,200
+	
+	GrabToPixmap_GL pix
+'	pix = GrabPixmap( 0,0, GraphicsWidth(),GraphicsHeight())
+	
+	SetColor 255,255,255
+	DrawText FPS(), 0,0
+	
+	Flip
+	Cls
+
+Until KeyHit(KEY_ESCAPE) Or AppTerminate()
+End
+
+Function FPS:Int()
+	Const UPDATE:Float = 0.5
+	Global count:Int, lastcount:Int, lastupdate:Int
+	
+	If (MilliSecs() - lastupdate) &gt; Int(UPDATE * 1000.0)
+		lastcount = Float(count / UPDATE)
+		count = 1
+		lastupdate = MilliSecs()
+	Else
+		count :+ 1
+	EndIf
+	Return lastcount
+EndFunction
+
+</textarea> <br><br></td></tr></table><br>
+<a name="1334937"></a>
+
+<a name="1334943"></a>
+
+<a name="1334944"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted February)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm, maybe i should have tested this before posting. But on Windows 10 i dont notice any difference between GrabPixmap and GrabToPixmap...<br><br>EDIT: Made GrabToPixmap_D3D9 use an offscreen surface, makes it faster than GrabPixmap on windows 7. <br><br></td></tr></table><br>
+<a name="1334969"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >gpete</td><td align="right"><font class=tiny>(Posted February)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Grable ,<br><br>what is this for? what I am looking for is a method to read the red value of an image file to generate a color map for a blitz3d terrain. I have someone else's example of a terrain colorer. Is that what you are working on? <br><br></td></tr></table><br>
+<a name="1334970"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted February)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Its a GrabPixmap replacement. I thought it would be faster by not allocating anything, but i guess i was wrong :p<br>Still, one nice thing about it is that it copies into an already existing pixmap, for what thats worth.<br><br><div class="quote"> read the red value of an image file <br></div>You can do that with TPixmap. <br><br></td></tr></table><br>
+<a name="1334984"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted February)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Fixed bug in GrabToPixmap_D3D9 not respecting x,y coords. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

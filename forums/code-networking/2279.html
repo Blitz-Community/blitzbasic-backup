@@ -1,0 +1,154 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Download file</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Supports downloading files, php sites and redirected sites. (Fast), language=bb, category=Networking'><meta name='author' content='bytecode77'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=4>Networking</a>/Download file</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2279.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Download file by bytecode77</td><td align="right">2008 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Unlike BlitzGet Deluxe this download routine is faster, because it downloads 4 KB blocks instead of byte-per-byte.<br>It also supports automatic redirects as well as chunked transfer encoding, which is required to download php/css files.<br>0 byte sized files will not be threaded like they don't exist. </td></tr><tr ><td class="cell"><pre class="code">Graphics 640, 480, 32, 2
+SetBuffer BackBuffer()
+
+;Download a normal file (easy)
+Print Download("http://www.google.com/intl/en_us/images/logo.gif")
+
+;Download a php file, which is chunked!
+Print Download("http://www.blitzbasic.com/index.php", "", "blitzbasic.com.index.html")
+
+;A download which will be redirected, which is also chunked!
+Print Download("http://example.com/index.php", "", "index.html")
+
+Print ""
+Print "Done."
+Print "What the download function returned is printed on the screen."
+Print "0 = download failed"
+Print "1 = download successful"
+WaitKey()
+End
+
+;=============================================================================================
+
+
+;link$      - The link. You may enter the link just like you enter it
+;             in your browser. Very tolerant. No http:// required.
+;savepath$  - The path where the file should be saved
+;savefile$  - The filename of the saved file. When given "", it will
+;             be named like the file in the link$.
+
+Function Download(link$, savepath$ = "", savefile$ = "")
+;Strip protocol and return false if not "http"
+inst = Instr(link$, "://")
+If inst Then
+	If Lower(Trim(Left(link$, inst - 1))) &lt;&gt; "http" Then Return False
+	link$ = Right(link$, Len(link$) - inst - 2)
+EndIf
+
+;Seperate host from link
+inst = Instr(link$, "/")
+If inst = 0 Then Return False
+host$ = Trim(Left(link$, inst - 1))
+link$ = Trim(Right(link$, Len(link$) - inst + 1))
+
+;Seperate path and file from the link
+For i = Len(link$) To 1 Step -1
+	If Mid(link$, i, 1) = "/" Then
+		link_path$ = Trim(Left(link$, i))
+		link_file$ = Right(link$, Len(link$) - i)
+		Exit
+	EndIf
+Next
+If link_file$ = "" Then Return False
+If savefile$ = "" Then savefile$ = link_file$
+
+;Open TCP stream
+tcp = OpenTCPStream(host$, 80)
+If tcp = 0 Then Return False
+WriteLine tcp, "GET " + link_path$ + link_file$ + " HTTP/1.1" + Chr(13) + Chr(10) + "Host: " + host$ + Chr(13) + Chr(10) + "User-Agent: Download_Function_By_bytecode77" + Chr(13) + Chr(10)
+
+;Download file
+l$ = ReadLine(tcp)
+inst1 = Instr(l$, " ")
+inst2 = Instr(l$, " ", inst1 + 1)
+num = Mid(l$, inst1, inst2 - inst1)
+Select num
+	Case 200
+		conlen = -1
+		chunk = False
+		
+		Repeat
+			l$ = Trim(ReadLine(tcp))
+			If l$ = "" Then Exit
+			
+			inst = Instr(l$, ":")
+			l1$ = Trim(Left(l$, inst - 1))
+			l2$ = Trim(Right(l$, Len(l$) - inst))
+			Select Lower(l1$)
+				Case "content-length"
+					conlen = l2$
+				Case "transfer-encoding"
+					If Lower(l2$) = "chunked" Then chunk = True
+			End Select
+		Forever
+		
+		If conlen = 0 Then
+			file = WriteFile(savepath$ + savefile$)
+			CloseFile file
+			CloseTCPStream tcp
+			Return True
+		ElseIf conlen &gt; 0 Then
+			file = WriteFile(savepath$ + savefile$)
+			bnk = CreateBank(4096)
+			pos = 0
+			Repeat
+				avail = conlen - pos
+				If avail &gt; 4096 Then
+					ReadBytes bnk, tcp, 0, 4096
+					WriteBytes bnk, file, 0, 4096
+					pos = pos + 4096
+				Else
+					ReadBytes bnk, tcp, 0, avail
+					WriteBytes bnk, file, 0, avail
+					Exit
+				EndIf
+			Forever
+			FreeBank bnk
+			CloseFile file
+			CloseTCPStream tcp
+			Return True
+		ElseIf chunk Then
+			file = WriteFile(savepath$ + savefile$)
+			bnk = CreateBank(4096)
+			
+			Repeat
+				l$ = Trim(Upper(ReadLine(tcp)))
+				ln = 0
+				For i = 1 To Len(l$)
+					ln = 16 * ln + Instr("123456789ABCDEF", Mid$(l$, i, 1))
+				Next
+				If ln = 0 Then Exit
+				
+				If BankSize(bnk) &lt; ln Then ResizeBank bnk, ln
+				ReadBytes bnk, tcp, 0, ln
+				WriteBytes bnk, file, 0, ln
+				ReadShort(tcp)
+			Forever
+			
+			FreeBank bnk
+			CloseFile file
+			CloseTCPStream tcp
+			Return True
+		Else
+			CloseTCPStream tcp
+			Return False
+		EndIf
+	Case 301, 302
+		Repeat
+			l$ = Trim(ReadLine(tcp))
+			If l$ = "" Then Exit
+			
+			inst = Instr(l$, ":")
+			l1$ = Trim(Left(l$, inst - 1))
+			l2$ = Trim(Right(l$, Len(l$) - inst))
+			Select Lower(l1$)
+				Case "location"
+					CloseTCPStream tcp
+					Return Download(l2$, savepath$, savefile$)
+			End Select
+		Forever
+	Default
+		CloseTCPStream tcp
+		Return False
+End Select
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Wings</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Hey this stuff is usefull..<br><br>i added some extra thing just in case somthing hapends while downloading file..<br><br><br><br>Function checkstream(stream)<br>	If Eof(stream)&lt;=-1<br>	<br>		RuntimeError "Cowabonga lost connection.. download failed"<br>		End<br>	End If<br>	<br>End Function <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Chasson629</td><td align="right"><font class=tiny>2016</font></td></tr></table></td></tr><tr ><td class="posttext"> Going from intermediate coder to expert.  Many directions. marginal gains possible with two of my projects, however at this stage they were on the back-burner for 1 year.  persistent error.  Even just sharing that i have a problem may help my attitude.  So, this looked like the best place to start.  Happy Easter! <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

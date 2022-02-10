@@ -1,0 +1,147 @@
+<!DOCTYPE html><html lang="en" ><head ><title >DirectSound bug - please help me test</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >DirectSound bug - please help me test</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >DirectSound bug - please help me test</a><br><br>
+<a name="821990"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi, I believe I have found a serious bug with the DirectSound driver but I need to verify it.  It breaks my current game with a MAV when DirectSound is the chosen driver.  I was investigating using DirectSound in WinME and Vista instead of OpenAL which also has some (different) problems becaue FreeAudio is not viable on those systems due to breakup/lag etc.<br><br>I've spent HOURS whittling down the code into a test app as follows:<br><br><pre class=code>
+Strict
+
+SetAudioDriver("DirectSound") 'comment this out for no crash
+
+Const MAX_CHANNELS=4
+Global channels:TChannel[MAX_CHANNELS]
+Global CurrentChannel=0
+
+For Local i=0 To MAX_CHANNELS-1
+	channels[i]=AllocChannel()
+Next
+
+Local Counter=0
+Local sound:TSound = LoadSound("test.wav")
+
+Graphics 400,300,0
+test()
+test() 'if you comment this line out, it doesn't crash on my PC ... go figure!
+GCCollect()
+
+While Not KeyHit(KEY_ESCAPE)
+	Cls
+	Counter:+1
+	If Counter=5 Then
+		Play(Sound)
+		Counter=0
+	EndIf
+	DrawText CurrentChannel,10,10
+	Flip
+Wend
+
+Function test()
+	Local TestSound:TSound = LoadSound("test.wav")
+	Play(TestSound)
+End Function
+
+Function Play(sample:TSound)
+	Local ch:TChannel=channels[CurrentChannel]
+	CueSound(sample, ch)
+	ResumeChannel(ch)		
+	CurrentChannel:+1
+	If CurrentChannel=MAX_CHANNELS Then CurrentChannel=0
+End Function
+</pre><br><br>You need this sample: <a href="http://www.greyaliengames.com/misc/test.wav" target="_blank">http://www.greyaliengames.com/misc/test.wav</a> (18k)<br><br>Basically if I put that sample in the same folder as the app and run it I get a "Unhandled Memory Exception Error".  With Debug enabled it appears to be happening in Stop() called by Cue() called by Cue() called by CueSound().  I noticed that self._buff._succ._succ:TBuf = null and I'm not sure if it should be (but that could be a red herring).<br><br>This bug needs weirdly specific circumstances to occur.  I basically figured out that if you load in a sound and play it and then free up that sound (but not the channel), then later on you try to use that channel again, DirectSound crashes.  Yet FreeAudio and OpenAL do NOT crash.  In those other drivers you can quite happily trigger a sound in a channel, kill of the sound and the channel will keep playing and is reuseable.  With DirectSound the channel keeps playing, but it's not reuseable later.<br><br>However, in my above code, if I comment out one of the Test() function calls, it doesn't crash!  If I comment out the GCCollect it doesn't crash, weird.  This must just be something to do with then the GC decides to collect the local variable of TestSound in the Test() function.<br><br>First I'd like to verify that other people get the same crash, and if they do then I can raise it as an official bug.<br><br>My theory is that DirectSound doesn't like it when you free up a sound that is playing yet the other drivers are happy with this.<br><br>Why do I want to free up a sound that is playing?  Well imagine a screen with a button with a special click sound.  The user clicks the button, the sound plays on a GLOBAL channel, and then the screen is freed up and a new screen is showing.  The global button click channel may continue playing for a little bit even though the sound has now been freed up.  Then later on the global channel is reused - works in FreeAudio and OpenAL but not DirectSound.<br><br>Any help appreciated thanks, it would be nice to get to the bottom of this. <br><br></td></tr></table><br>
+<a name="822101"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JazzieB</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Crash confirmed in Vista. <br><br></td></tr></table><br>
+<a name="822121"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks, that's a useful test as it shows it's not XP or my PC.  (It also crashes onmy sons WinME PC) <br><br></td></tr></table><br>
+<a name="822301"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TMK</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Crashes for me in Vista (32bit Home Premium) as well. First time I tried it it played it fine though, but I had WinAMP already playing in case that made a difference so I stopped that, and tried again, and now it always crashes even if I restart WinAMP.<br><br>I have a Realtek AC'97 Audio onboard SFX card. <br><br></td></tr></table><br>
+<a name="822309"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> OK thanks for testing.  It's a weird problem because if small changes are made it can't be duplicated (like removing one of the Test() calls or removing GCCollect()).<br><br>So we know it's not OS related nor Sound card related (I have a SB Audigy 2).<br><br>I'll post it in the bug forum now. <br><br></td></tr></table><br>
+<a name="822329"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Vlad</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Unhandled Memory Exception Error<br><br>Works fine with Const MAX_CHANNELS=<b>3</b> <br><br></td></tr></table><br>
+<a name="822334"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> yeah exactly it's really weird. <br><br></td></tr></table><br>
+<a name="822335"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dreamora</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Is there a chance of getting an unbugged code?<br><br>Right now you locally flood the channels by loading a sound and playing it.<br>But you never free it again, which simply means that you take care that it actually must die.<br><br>Just because the sound goes out of scope, the channel won't be freed instantan.<br>So you either need to stop the sound again or use one of the channel array entries to keep track of it. <br><br></td></tr></table><br>
+<a name="822343"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm sorry I'm not quite following you.<br><br>I know that if a sound goes out of scope that a channel will not be freed (and I don't want to free my channels).  HOWEVER, there seems to be some issue with DirectSound where weirdly if a sound does go out of scope, something goes WRONG with the channel meaning it cannot be reused.  Although it's hard to duplicte precisely as it doesn't ALWAYS seem to happen.  I noticed it in my game when I moved over the buttons.  Sometimes it would crash on the first button and sometimes on button 20, there was no decent reason why unless DirectSound has an internal "next free channel" pointer that is separate from the app or something...<br><br>There is nothing wrong with declaring a reuseable array of TChannel and then using it over an over providing you don't call StopChannel which frees up the channel.<br><br>This approach works very well with FreeAudio and OpenAL but not DirectSound.  I've released 2 games using this approach.<br><br>Maybe you can explain a bit more or give some example about what you mean? Thanks :-) <br><br></td></tr></table><br>
+<a name="822350"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dreamora</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> There is nothing wrong by declaring a reusable array of TChannel.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+SetAudioDriver("DirectSound") 'comment this out for no crash
+
+Const MAX_CHANNELS=4
+Global channels:TChannel[MAX_CHANNELS]
+Global CurrentChannel=0
+
+For Local i=0 To MAX_CHANNELS-1
+	channels[i]=AllocChannel()
+Next
+
+Local Counter=0
+Local sound:TSound = LoadSound("test.wav")
+
+Graphics 400,300,0
+test()
+test() 'if you comment this line out, it doesn't crash on my PC ... go figure!
+GCCollect()
+
+While Not KeyHit(KEY_ESCAPE)
+	Cls
+	Counter:+1
+	If Counter=5 Then
+		Play(Sound)
+		Counter=0
+	EndIf
+	DrawText CurrentChannel,10,10
+	Flip
+Wend
+
+Function test()
+	Local TestSound:TSound = LoadSound("test.wav")
+        Play( TestSound )
+End Function
+
+Function Play(sample:TSound)
+        StopChannel( channels[CurrentChannel] ) ' Make sure the channel we intend to use is not in use right now
+	Local ch:TChannel=channels[CurrentChannel]
+	CueSound(sample, ch)
+	ResumeChannel(ch)		
+	CurrentChannel:+1
+	If CurrentChannel=MAX_CHANNELS Then CurrentChannel=0
+End Function
+</textarea><br><br><br>EDIT: OK forget the stop one. Went through the sources and Play -&gt; Cue -&gt; channel.cue -&gt; stops itself before doing anything.<br>But during that I actually found out that it is the Stop that crashes the app?! <br><br></td></tr></table><br>
+<a name="822351"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >tonyg</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> GA, if you put a delay 1000 before your cuesound the problem does not occur. This *does* suggest it is a timing issue but why Directsound gets it while the others don't.... no idea. <br><br></td></tr></table><br>
+<a name="822361"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Dreamora: That source doesn't compile, but if you take out the globalChannel param from your Play() call in function test() it does, but it still crashes.  So you agree something weird is going on?<br><br>TonyG: Yep, it seems to be some kind of timing issue todo with if a sound is playing or not when it's freed up.  Certainly the behaviour of the drivers should be consistent but it's not... <br><br></td></tr></table><br>
+<a name="822371"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dreamora</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> I think I found the problem.<br><br>In brl.directsoundaudio directsoundaudio.bmx<br>TDirectSoundSound.Create<br><br><pre class=code>
+
+Local desc:DSBUFFERDESC=New DSBUFFERDESC
+		desc.dwSize=SizeOf(DSBUFFERDESC)
+		desc.dwFlags=DSBCAPS_STATIC|DSBCAPS_GLOBALFOCUS|DSBCAPS_CTRLPAN|DSBCAPS_CTRLVOLUME|DSBCAPS_CTRLFREQUENCY 
+		If _driver._mode=1 Or (flags &amp; 2)&lt;&gt;2 desc.dwFlags:|DSBCAPS_LOCSOFTWARE
+		desc.dwBufferBytes=size
+		desc.lpwfxFormat=fmt
+</pre><br><br>should look like this I think.<br>Reason is the effect of this flag: From DX SDK: "The buffer is in on-board hardware memory."<br>bad idea with onboard sound cards actually.<br><br><pre class=code>
+Local desc:DSBUFFERDESC=New DSBUFFERDESC
+		desc.dwSize=SizeOf(DSBUFFERDESC)
+		desc.dwFlags=DSBCAPS_GLOBALFOCUS|DSBCAPS_CTRLPAN|DSBCAPS_CTRLVOLUME|DSBCAPS_CTRLFREQUENCY 
+		If _driver._mode=1 Or (flags &amp; 2)&lt;&gt;2 desc.dwFlags:|DSBCAPS_LOCSOFTWARE
+		desc.dwBufferBytes=size
+		desc.lpwfxFormat=fmt
+</pre><br><br>At least for me it works without dieing on stop <br><br></td></tr></table><br>
+<a name="822395"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sounds EXCELLENT, great research!  However, I can't test this yet due to my compile problems as mentioned in the other thread.<br><br>I'll have to post the proposed fix in the Bug thread and see if Mark or Skidracer (or whoever wrote it) thinks that it's safe and will make it standard...unless there's any potential problems with leaving that flag out... <br><br></td></tr></table><br>
+<a name="822450"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >tonyg</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> It doesn't fix the problem for me.<br>&lt;edit&gt; but that was on a 1.24 machine.<br>&lt;edit&gt; and on 1.26. <br><br></td></tr></table><br>
+<a name="822457"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dreamora</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> Strange ... I runs with 16 channels here on my system (Realtek HD Audio onboard) without crashing ... <br><br></td></tr></table><br>
+<a name="822518"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks Tony.<br><br>OK I made that change (basically removing DSBCAPS_STATIC right?) and recompiled in V1.26 and unfortunately the bug is still there.<br>It loops through the 4 channels and bombs when channel number = 1 (the 2nd channel)<br><br>:-(<br><br>Hope BRL can get to the bottom of this. <br><br></td></tr></table><br>
+<a name="822553"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just run the Grey example test on 1.24 and 1.26<br>1.24 - it runs fine<br>1.26 - confirmed error 'Unhandled Memory Exception Error'<br><br>I've not tested the fix posted. <br><br></td></tr></table><br>
+<a name="822605"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TaskMaster</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> Very strange bug.<br><br>If I set the max counter to only 1, no error.  If I set it to 20, no error.  If I run test() 4 times in a row, no error.<br><br>Very strange. <br><br></td></tr></table><br>
+<a name="822624"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> degac: OK thanks.  That's weird as it's fine in your 1.24 but not TonyG's...wonder if you had different syncmod states?<br><br>TaskMaster: Yep it's really weird, I KNEW the bug existsed as I'd seen it in my game, I could make it happen every time I ran it but NOT in the same place, there was a random feel to it.  So I wrote this app and at first couldn't get the bug until I jiggled the code around to the state you see it in now.  Small changes and it won't crash, it's very odd. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

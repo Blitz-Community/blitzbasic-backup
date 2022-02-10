@@ -1,0 +1,212 @@
+<!DOCTYPE html><html lang="en" ><head ><title >FAST bank to string</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Super fast conversion between bank and string, 20x faster than native BB, language=bb, category=Miscellaneous'><meta name='author' content='Yasha'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=9>Miscellaneous</a>/FAST bank to string</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2972.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >FAST bank to string by Yasha</td><td align="right">2012 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> It's not <i>difficult</i> to copy data between bank and string in pure Blitz Basic. Just loop over the characters or bytes and either poke ascii values, or append the new Chr() to the build-string.<br><br>Unfortunately, it is really, <i>really</i> slow, due to the automatic string memory management behind the scenes having to do a lot of copying, reallocation, etc.<br><br>However, with not one but <i>two</i> dirty tricks, we can use the system runtime libraries to do the hard work for us, resulting in a pair of copy functions something ridiculous like fifty times faster than doing it by hand. This could come in very, very handy when looping over all of the characters in a string!<br><br>Here's a speed comparison:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Const ITNS = 100000
+Local start, i, r
+Local f$ = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", s$, bk
+
+start = MilliSecs()
+For i = 1 To ITNS
+	bk = StringToBank_FAST(f)
+	s = BankToString_FAST(bk)
+	FreeBank bk
+Next
+start = MilliSecs() - start : Print "Fast copy: " + start
+
+Print s
+
+start = MilliSecs()
+For i = 1 To ITNS
+	bk = StringToBank_SLOW(f)
+	s = BankToString_SLOW(bk)
+	FreeBank bk
+Next
+start = MilliSecs() - start : Print "Slow copy: " + start
+
+
+WaitKey
+End
+
+
+Function StringToBank_FAST(s$)
+	Local b = CreateBank(Len(s))
+	API_StringToBank_ b, s, BankSize(b)
+	Return b
+End Function
+
+Function BankToString_FAST$(b)    ;The extra code around the API function here is important!
+	Local hasExtra = False, sz = BankSize(b)
+	If sz = 0
+		ResizeBank b, 1 : PokeByte b, 0, 0 : hasExtra = True
+	ElseIf PeekByte(b, sz - 1)
+		ResizeBank(b), sz + 1 : PokeByte b, sz, 0 : hasExtra = True
+	EndIf
+	Local res$ = API_BankToString_(b, b, 0)    ; 0 should technically be fine here
+	If hasExtra Then ResizeBank(b), sz
+	Return res
+End Function
+
+Function StringToBank_SLOW(s$)
+	Local l = Len(s), b = CreateBank(l), c
+	For c = 1 To l
+		PokeByte b, c - 1, Asc(Mid(s, c, 1))
+	Next
+	Return b
+End Function
+
+Function BankToString_SLOW$(b)
+	Local l = BankSize(b) - 1, s$, c
+	For c = 0 To l
+		s = s + Chr(PeekByte(b, c))
+	Next
+	Return s
+End Function</textarea><br><br>You need the userlib .decls found in the archive box below, but the trick itself only uses system DLLs, so no extra files to package with your program.<br><br><b>Important note:</b> because of incompatibilities between the way B3D and C handle strings (the userlibs assume C is your language), API_BankToString_ <b>will not</b> work correctly on any banks containing a 0 byte, which is the string terminator for C strings. It also won't work correctly - possibly causing crashes - if your bank is not null-terminated, so I <b>strongly recommend</b> you make use of the wrapper functions instead of using the raw API functions, which will perform the necessary safety-check.<br><br>API_StringToBank_ will still work as expected for B3D strings containing Chr(0), however, and this is likely to be the more useful of the two. </td></tr><tr ><td class="cell"><pre class="code">; The decls:
+
+; Quickly copy data from string to bank and bank to string using system functions
+; Both of these functions are more usefully wrapped, to hide the dirty details
+
+.lib "Kernel32.dll"
+
+API_StringToBank_(Dest*, Src$, Sz%) : "RtlMoveMemory"
+
+.lib "msvcrt.dll"
+
+; Dest and Src should ideally be the same bank (dirty hack)
+API_BankToString_$(Dest*, Src*, Sz%) : "memmove"
+
+; The wrappers:
+;
+;Function StringToBank_FAST(s$)
+;	Local b = CreateBank(Len(s))
+;	API_StringToBank_ b, s, BankSize(b)
+;	Return b
+;End Function
+;
+;Function BankToString_FAST$(b)    ;The extra code around the API function here is important!
+;	Local hasExtra = False, sz = BankSize(b)
+;	If sz = 0
+;		ResizeBank b, 1 : PokeByte b, 0, 0 : hasExtra = True
+;	ElseIf PeekByte(b, sz - 1)
+;		ResizeBank(b), sz + 1 : PokeByte b, sz, 0 : hasExtra = True
+;	EndIf
+;	Local res$ = API_BankToString_(b, b, 0)    ; 0 should technically be fine here
+;	If hasExtra Then ResizeBank(b), sz
+;	Return res
+;End Function
+;</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >*</td><td align="right"><font class=tiny>2012</font></td></tr></table></td></tr><tr ><td class="posttext"> couldnt you memcpy or doesnt that work? <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2012</font></td></tr></table></td></tr><tr ><td class="posttext"> memcpy works just as well on my machine, but it also provided no noticeable speedup, so I figured it's better to put the one that doesn't rely on Undefined Behaviour in the public archive.<br><br>It's actually just using memmove/memcpy as an identity function because it happens to also return the dest buffer - in fact <strike>you could probably</strike> I just changed it to pass a 0 for "bytes to copy" and it would be fastest - the work of actually creating the new string is done entirely by B3D's automated glue code for userlib functions that return strings. That's why it's a dirty, sneaky trick: tell B3D that the returned value is a char *, and it will <i>create</i> a string from whatever the function returns (the untouched contents of the bank).<br><br>TBH when you're talking about an order-of-magnitude speedup from the "slow copy", the difference between memmove and memcpy is a seriously minor detail, anyway. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >virtlands</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> "<u>FAST bank to string by Yasha</u>"<br><br>This is awesome code.  I just tried it and received the following results on my PC:<br><br>Fast code timing = 0.411 sec<br>Slow code timing = 25.500 sec<br><br>The difference is that the Fast functions are about 62 times faster than the slow B3D code.<br><br>This combines well with Yasha's other topic of using pointers on strings:<br><br><b>String banks/data buffers</b> by Yasha<br><a href="http://www.blitzbasic.com/codearcs/codearcs.php?code=3017#comments" target="_blank">http://www.blitzbasic.com/codearcs/codearcs.php?code=3017#comments</a><br><br>;;-------------------------------------<br>Function <b>BankToString_FAST$(b)</b><br>	Return API_BankToString_(b, b, 0)    ; 0 should technically be fine here<br>End Function<br><br>In that function, I'm assuming that a B3D string of appropriate length is automatically created.  :amazing:<br><br>In case those banks have <b>zeroes</b> in them, then we <i>could</i> perhaps temporarily replace the zeroes with a replacement number, not previously occurring.<br>And then the rough part would be to turn the stand-ins back into zeroes (in the destination string.) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >virtlands</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> Oh my!  I just found some performance errors with the Fast functions. <br><br> I tested the Fast functions with strings that vary in length from 0 to 1000.<br><br>As seen from the screenshots, the <b>BankToString_Fast()</b><br>function creates some inaccuracies sometimes:<br><br>This first screenshots shows about 7 errors.<br>[ String lengths are shown from 0 to 32; Errors happen at bank lengths 0,16,17,18,19,20,32. ]<br><img src="http://imageshack.us/a/img833/7530/quickbanktostringbyyash.png"><br><br>Testing code for string lengths 0 to 64<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">;; Testing code was created by VirtLands
+;; 
+;; Algorithms and code taken from: 
+;; FAST bank To String by Yasha
+;; <a href="http://www.blitzbasic.com/codearcs/codearcs.php?code=2972" target="_blank">http://www.blitzbasic.com/codearcs/codearcs.php?code=2972</a>
+
+ Graphics 800,500,32,2
+ ClsColor 222,227,231
+ Color 22,121,170 : Cls
+
+ Local b[65]    ;; create this array to store banks
+ Local s$
+ Local Title$ = "Yasha's Quick Bank Transactions "
+
+ Print Title:Print 
+
+ For z=0 To 65
+        b[z] = stringtoBank_Fast( String$("@",z) )                                   ; do a bank deposit
+        s$ = banktostring_Fast( b[z] )                                                     ; take cash out...
+        Print"bank len ="+BankSize(b[z])+" : Str Len="+Len(s)+" : "+s       ; see the accountant          
+
+        If z=32  ;; pause the screen at this point
+                  WaitKey(): Cls :Locate 1,1
+                  Print Title:Print 
+        End If 
+ Next
+
+ For z=0 To 65
+           FreeBank b[z]
+ Next 
+
+ WaitKey():End   
+
+Function StringToBank_FAST(s$)
+	Local b = CreateBank(Len(s))
+	API_StringToBank_ b, s, BankSize(b)
+	Return b
+End Function
+
+Function BankToString_FAST$(b)
+	Return API_BankToString_(b, b, 0)    ; 0 should technically be fine here
+End Function
+
+Function StringToBank_SLOW(s$)
+	Local l = Len(s), b = CreateBank(l), c
+	For c = 1 To l
+		PokeByte b, c - 1, Asc(Mid(s, c, 1))
+	Next
+	Return b
+End Function
+
+Function BankToString_SLOW$(b)
+	Local l = BankSize(b) - 1, s$, c
+	For c = 0 To l
+		s = s + Chr(PeekByte(b, c))
+	Next
+	Return s
+End Function
+</textarea><br><br>Here's a more streamlined program for testing string lengths 0 to 1000.<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">;; This testing code was created by VirtLands
+;; 
+;; Algorithms and code taken from: 
+;; FAST bank To String by Yasha
+;; <a href="http://www.blitzbasic.com/codearcs/codearcs.php?code=2972" target="_blank">http://www.blitzbasic.com/codearcs/codearcs.php?code=2972</a>
+
+ Graphics 660,500,32,2
+ ClsColor 222,227,231
+ Color 22,121,170 : Cls
+
+ Local Title$ =  " Yasha's Quick Bank Transactions "
+ Local b            ;; the bank
+ Local s$
+ Local e$          ;; the error list
+ Local TestStr$  ;;
+
+ Print Title: Print 
+ Print" Errors occur on the following [bank] sizes, using  BankToString_Fast(b): ":Print
+
+ For z=0 To 1000                                  ;; try strings of increasing sizes...
+          teststr = String$("@",z)
+          B =stringtoBank_Fast( teststr )
+          S =banktostring_Fast( B )           ;; back to string again...
+          If Len(teststr)&lt;&gt;Len(S) 
+                    e = e + " "+Len(teststr)
+                    If Len(e)&gt;70
+                               Print e
+                               e = ""
+                    End If
+          End If 
+          FreeBank B 
+ Next 
+ If Len(e) Then Print e
+
+ WaitKey():End 
+
+Function StringToBank_FAST(s$)
+  Local b = CreateBank(Len(s))
+  API_StringToBank_ b, s, BankSize(b)
+  Return b
+End Function
+
+Function BankToString_FAST$(b)
+  Return API_BankToString_(b, b, 0)    ; 0 should technically be fine here
+End Function
+
+Function StringToBank_SLOW(s$)
+   Local l = Len(s), b = CreateBank(l), c
+   For c = 1 To l
+        PokeByte b, c - 1, Asc(Mid(s, c, 1))
+   Next
+   Return b
+End Function
+
+Function BankToString_SLOW$(b)
+   Local l = BankSize(b) - 1, s$, c
+   For c = 0 To l
+ 	s = s + Chr(PeekByte(b, c))
+   Next
+   Return s
+End Function
+</textarea><br><br>The errors happen kind of randomly .. <img src="http://i411.photobucket.com/albums/pp194/aeDream/Yahoo%20emoticons/thinking.gif"> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> Well that's interesting. Bears investigation. Let me get back to ya on that...<br><br><br><b>EDIT:</b> well, I have an answer for you.<br><br>The problem is with API_BankToString_.<br><br>Banks are not null-terminated, the data just goes right up to the end. However, B3D's .decls interface glue code (which is the part providing all the work here) expects to be given a null-terminated string - this is why it will return a shorter-than-expected string when the bank contains a 0 byte.<br><br>The converse is also in effect: if the end of the bank <i>isn't</i> a 0 byte, the glue code will keep copying string data until it finds one, whether that's still within the bounds of the bank or not! That's why the errors consist of extra data beyond the expected string, but everything put into it originally is still returned.<br><br>The obvious fix - to simply trim the result string down to the expected length - is not safe, because if there are no 0 bytes in between the end of the string and unallocated memory, the program will crash. The safe thing is to test the end of the bank to see if it's a 0, and if not, append one (then remove it afterwards because it wasn't part of the user's original data).<br><br>This is a C-programming rookie mistake and I'm embarrassed to have left it in there (in my defence, that's because BankToString already has the showstopper bug that it can't copy all strings anyway, so I didn't think anyone would use it).<br><br>I will make the necessary change to the example code and add a note explaining that users should copy that whole function. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >virtlands</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> Good luck on that. <br><br>  <b>Local teststr$, S$, B,L<br><br>  L = Len(teststr)<br>  B = stringtoBank_Fast( teststr )<br>  S = banktoString_Fast(B)<br>  S = Left$( S, L )</b>     ;; &lt;----<br><br>Simply forcing the resultant string <b>S</b> to be of <br>identical size as the original <b>teststr</b> may be a temporary way of doing it. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> It is done.<br><br>(As I said in comment #5, using Left$ will get the right string data out, but it won't prevent the possibility of a crash.) <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

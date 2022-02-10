@@ -1,0 +1,873 @@
+<!DOCTYPE html><html lang="en" ><head ><title >MIDI test</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >MIDI test</h1><a href="forums.php" >Archives Forums</a>/<a href="topics.php?forum=108" >Win32 Discussion</a>/<a href="#bottom" >MIDI test</a><br><br>
+<a name="470969"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ziltch</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here is some code to play some MIDI music via the Windows API.  <br><br>It can use the Windows or your Sound card Midi softsynth device, so no external synth is needed to hear noises.<br>  <br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+' MIDI Output test
+'
+' Ziltch 26/12/2004
+
+
+Const MAXPNAMELEN =32
+Const MidiNoteOn         = $9  ' play note
+Const MidiNoteOff        = $8  ' Stop note
+Const MidiProgramChange  = $C  ' Change Program
+Const MidiControlChange  = $B  ' Change Program
+
+Type MIDIOUTCAPS 
+	Field wMid:Short
+	Field wPid:Short
+	Field vDriverVersion:Short ' MMVERSION 
+	Field szPname:String[MAXPNAMELEN]
+	Field wTechnology:Short
+	Field wVoices:Short
+	Field wNotes:Short
+	Field wChannelMask:Short
+	Field dwSupport:Int
+EndType
+
+Type MIDIINCAPS 
+	Field wMid:Short
+	Field wPid:Short
+	Field vDriverVersion:Short'MMVERSION 
+	Field szPname:String[MAXPNAMELEN]'CHAR 
+	Field dwSupport:Int
+EndType
+
+Type MidiHdr 
+	Field lpData:Int'LPSTR ptr
+	Field dwBufferLength:Int
+	Field dwBytesRecorded:Int
+	Field dwUser:Int
+	Field dwFlags:Int
+	Field lpNext:Int 'midihdr_tag ptr
+	Field reserved:Int
+	Field dwOffset:Int
+	Field dwReserved:Int[8]
+EndType
+
+Type MidiEvent
+	Field dwDeltaTime:Int
+	Field dwStreamID:Int
+	Field dwEvent:Int
+	Field dwParms:Int[1]
+EndType
+
+
+Type MidiStrmBuffVer 
+	Field dwVersion:Int
+	Field dwMid:Int
+	Field dwOEMVersion:Int
+EndType 
+
+
+Type MidiPropTimeDiv 
+	Field cbStruct:Int
+	Field dwTimeDiv:Int
+EndType
+
+
+Type MidiPropTempo 
+	Field cbStruct
+	Field dwTempo
+EndType
+
+
+Extern "Os"
+' Most functions Untested
+
+Function midiOutGetNumDevs:Int()
+Function midiOutClose(hMidiOut:Int)
+Function midiOutOpen(lphMidiOut:Int ,uDeviceID:Int,dwCallback:Int,dwInstance:Int,dwFlags:Int)
+Function midiOutShortMsg(hMidiOut:Int,dwMsg:Int)
+Function midiOutGetDevCapsA( uDeviceID:Int, lpCaps:MIDIOUTCAPS, uSize:Int)
+
+Function midiInGetDevCapsA( uDeviceID:Int, lpCaps:MIDIINCAPS, uSize:Int)
+
+Function midiInStop(hMidiIn:Int)
+Function midiInStart(hMidiIn:Int)
+Function midiInReset(hMidiIn:Int)
+Function midiInPrepareHeader(hMidiIn:Int, lpMidiInHdr:midihdr , uSize:Int)
+
+Function midiInOpen(lphMidiIn:Int, uDeviceID:Int, dwCallback:Int, dwInstance:Int, dwFlags:Int)
+Function midiInClose(hMidiIn:Int)
+Function midiInMessage(hMidiIn:Int, msg:Int, dw1:Int, dw2:Int)
+Function midiInGetNumDevs()
+Function midiInGetID(hMidiIn:Int, lpuDeviceID:Int)
+Function midiInGetErrorText( err:Int, lpText:String, uSize:Int)
+
+Function midiInAddBuffer(hMidiIn:Int, lpMidiInHdr:midihdr , uSize:Int)
+
+Function midiDisconnect(hmi:Int, hmo:Int, pReserved:Int)
+Function midiConnect(hmi:Int, hmo:Int, pReserved:Int)
+
+End Extern
+
+
+Function SendMidiOut(MidiOutHandle,MidiOutChannel,MidiOutStatus,MidiOutdata1=0,MidiOutData2=0)
+   ' MidiChannel = 1-16
+   ' Status      = $9 for notes            , $B for ControlChange  , ProgramChange  =$C
+   ' Mididata1   = NoteValue (0=C2 127=G8) ,  CC knob / slider     , Instrument (1=piano etc)
+   ' Mididata2   = velocity                ,  value of knob/slider
+
+'   print hex$(MidiOutChannel or (MidiOutdata2 shl 16) or (MidiOutdata1 shl 8 ) or (MidiOutStatus shl 4))
+
+   ret = midiOutShortMsg(MidiOutHandle,( (MidiOutdata2 Shl 16) | (MidiOutdata1 Shl 8 ) | (MidiOutStatus Shl 4) | MidiOutChannel))
+   Return ret
+End Function
+
+
+OutDevID=0 ' &lt;  Change this if No sound. (Devices start at -1 )
+Local Instruments:String[129]
+
+
+'Subtract 1 from this list For Instrument
+Instruments[1] = "Acoustic Grand Piano"
+
+Instruments[2] = "Bright Piano" 	
+Instruments[3] = "Electric Grand Piano" 	
+Instruments[4] = "Honky-Tonk Piano"
+Instruments[5] = "Electric piano 1" 	
+Instruments[6] = "Electric Piano 2" 	
+Instruments[7] = "Harpsichord" 	
+Instruments[8] = "Clavinet" 	
+Instruments[9] = "Celesta" 	
+Instruments[10] = "Glockenspiel" 	
+Instruments[11] = "Music Box" 	
+Instruments[12] = "Vibraphone" 	
+Instruments[13] = "Marimba" 	
+Instruments[14] = "Xylophone" 	
+Instruments[15] = "Tubular bells" 	
+Instruments[16] = "Dulcimer" 	
+Instruments[17] = "Drawbar Organ" 	
+
+Instruments[18] = "Percussive Organ"	
+Instruments[19] = "Rock Organ" 	
+Instruments[20] = "Church Organ" 	
+Instruments[21] = "Reed Organ" 	
+Instruments[22] = "Accordion" 	
+Instruments[23] = "Harmonica" 	
+Instruments[24] = "Tango Accordion" 	
+Instruments[25] = "Nylon String Guitar" 	
+Instruments[26] = "Steel String Guitar" 	
+Instruments[27] = "Jazz Guitar" 	
+Instruments[28] = "Clean Electric Guitar" 	
+Instruments[29] = "Muted Electric Guitar" 	
+Instruments[30] = "Overdrive Guitar" 	
+Instruments[31] = "Distortion Guitar" 	
+Instruments[32] = "Guitar Harmonics" 	
+Instruments[33] = "Accoustic Bass"  	
+Instruments[34] = "Fingered Bass" 	
+Instruments[35] = "Picked Bass" 	
+Instruments[36] = "Fretless Bass" 	
+Instruments[37] = "Slap Bass 1" 	
+Instruments[38] = "Slap Bass 2"	
+Instruments[39] = "Synth Bass 1"	
+Instruments[40] = "Synth Bass 2"	
+Instruments[41] = "Violin" 	
+Instruments[42] = "Viola" 	
+Instruments[43] = "Cello" 	
+Instruments[44] = "Contrabass" 	
+Instruments[45] = "Tremolo Strings" 	
+Instruments[46] = "Pizzicato Strings" 
+Instruments[47] = "Orchestral Harp" 	
+Instruments[48] = "Timpani" 	
+Instruments[49] = "String Ensemble 1" 	
+Instruments[50] = "String Ensemble 2" 
+Instruments[51] = "Synth Strings 1" 	
+Instruments[52] = "Synth Strings 2" 	
+Instruments[53] = "Choir ahh" 	
+Instruments[54] = "Choir oohh" 	
+Instruments[55] = "Synth Voice" 	
+Instruments[56] = "Orchestral Hit" 	
+Instruments[57] = "Trumpet" 	
+Instruments[58] = "Trombone" 
+Instruments[59] = "Tuba"	
+Instruments[60] = "Muted Trumpet" 	
+Instruments[61] = "French Horn" 	
+Instruments[62] = "Brass Section" 	
+Instruments[63] = "Synth Brass 1" 	
+Instruments[64] = "Synth Brass 2" 	
+Instruments[65] = "Soprano Sax"  	 
+Instruments[66] = "Alto Sax" 	
+Instruments[67] = "Tenor Sax" 	
+Instruments[68] = "Baritone Sax" 	
+Instruments[69] = "Oboe" 	
+Instruments[70] = "English Horn" 	
+Instruments[71] = "Bassoon" 	
+Instruments[72] = "Clarinet" 	
+Instruments[73] = "Piccolo" 	
+Instruments[74] = "Flute" 	
+Instruments[75] = "Recorder" 	
+Instruments[76] = "Pan flute" 	
+Instruments[77] = "Blown Bottle" 	
+Instruments[78] = "Shakuhachi" 	
+Instruments[79] = "Whistle" 	
+Instruments[80] = "Ocarina" 	
+Instruments[81] = "Square Wave" 	
+Instruments[82] = "Sawtooth Wave" 	
+Instruments[83] = "Caliope"	
+Instruments[84] = "Chiff" 	
+Instruments[85] = "Charang" 	
+Instruments[86] = "Voice" 	
+Instruments[87] = "Fifths" 	
+Instruments[88] = "Bass &amp; Lead" 	
+Instruments[89] = "New Age" 	
+Instruments[90] = "Warm" 	
+Instruments[91] = "PolySynth" 	
+Instruments[92] = "Choir" 	
+Instruments[93] = "Bowed" 	
+Instruments[94] = "Metallic" 
+Instruments[95] = "Halo" 	
+Instruments[96] = "Sweep" 	
+Instruments[97] = "FX: Rain"
+Instruments[98] = "FX: Soundtrack"
+Instruments[99] = "FX: Crystal"
+Instruments[100] = "FX: Atmosphere"
+Instruments[101] = "FX: Brightness"
+Instruments[102] = "FX: Goblins"
+Instruments[103] = "FX: Echo Drops"
+Instruments[104] = "FX: Star Theme"
+Instruments[105] = "Sitar"
+Instruments[106] = "Banjo"
+Instruments[107] = "Shamisen"
+Instruments[108] = "Koto"
+Instruments[109] = "Kalimba"
+Instruments[110] = "Bagpipe"
+Instruments[111] = "Fiddle"
+Instruments[112] = "Shanai"
+Instruments[113] = "Tinkle bell"
+Instruments[114] = "Agogo"
+Instruments[115] = "Steel Drums"
+Instruments[116] = "Woodblock"
+Instruments[117] = "Taiko Drum"
+Instruments[118] = "Melodic Tom"
+Instruments[119] = "Synth Drum"
+Instruments[120] = "Reverse Cymbal"
+Instruments[121] = "Guitar Fret Noise"
+Instruments[122] = "Breath Noise"
+Instruments[123] = "Seashore"
+Instruments[124] = "Bird Tweet"
+Instruments[125] = "Telephone Ring"
+Instruments[126] = "Helicopter"
+Instruments[127] = "Applause"
+Instruments[128] = "Gunshot"
+
+
+
+instrument = 103'
+DelayTime# = 500
+Velocity =  50
+MidiChannel = 1
+MoreDelay# = 1
+Local MidiOut:Int
+Local MidiOutHandle:Int Ptr 
+
+MidiOutHandle = Varptr MidiOut
+
+Print " Midi Test - Computer Made Music"
+
+Print "-----------------------------------"
+
+ok=midiOutOpen(Int(MidiOutHandle),OutDevID,0,0, 0)
+
+'Print "ok = "+ok + " MidiOutHandle = "+MidiOutHandleI+ "  MidiOut  "+midiout
+
+SendMidiOut(MidiOut,MidiChannel,MidiProgramChange,instrument)
+
+While Not KeyHit(KEY_ESCAPE)
+
+  If Rand(10) = 1 Then
+  
+  End If
+  Count = Count + 1
+  NoteCount  = NoteCount + 1
+  If NoteCount/16.0 = Int(NoteCount/16) Then
+    instrument = 89
+    MoreDelay# = 2
+    Octave = -4
+    MidiChannel = 4
+    Velocity = Rand(80)+50
+
+  ElseIf NoteCount/8.0 = Int(NoteCount/8) Then
+    instrument = 50
+    MoreDelay# = 2
+    Octave = -6
+    MidiChannel = 3
+    Velocity = Rand(80)+50
+
+  else If NoteCount/4.0 = Int(NoteCount/4) Then
+    Velocity = Rand(40)+50
+    MidiChannel = 2
+    instrument = 51
+    Octave = 1
+    MoreDelay# = 1
+
+  Else
+    MidiChannel = 1
+    instrument =103
+    MoreDelay# = .1
+    Octave = 2
+    Velocity = Rand(20)+50
+    
+  End If 
+
+  If Lastinstrument &lt;&gt; instrument Then SendMidiOut(MidiOut,MidiChannel,MidiProgramChange,instrument)
+  Lastinstrument = instrument
+
+  Note = ((Sin(Count/32.0)*4.5)*4+55+(Rand(Sin(Count/2.0)*4.5)*2*Octave)) Mod 128'Note range = 0 - 127
+
+
+  SendMidiOut(MidiOut,MidiChannel,MidiNoteOn,Note,velocity)
+  Print Instruments[instrument-1] +" Note = "+note+" Velocity = "+Velocity
+
+  Delay DelayTime*MoreDelay
+  SendMidiOut(MidiOut,MidiChannel,MidiNoteOff,Note)
+
+  If NoteCount &gt; 500 Then Exit
+
+wend
+
+
+midiOutClose(MidiOut)
+</textarea><br><br>Next MIDI input.... <br><br></td></tr></table><br>
+<a name="470970"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kanati</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice.  Good goin. <br><br></td></tr></table><br>
+<a name="478023"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >LAB[au]</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Midi input would be nice indeed, it would be opening blitzmax proggies to a lot of custom interfaces, faders, etc...<br><br>Good work :) <br><br></td></tr></table><br>
+<a name="480762"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ziltch</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> I am have troubles get into in/out of windows api data structures.<br><br>I wish to figure it out without resorting to peeks and pokes (like my blitz3D version). <br><br></td></tr></table><br>
+<a name="482072"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Russell</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Does the program do anything? For me, it just outputted (?sp) a lot of stuff and then quit (no sound).<br><br>Russell <br><br></td></tr></table><br>
+<a name="483477"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ziltch</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> look in code for the line.<br><br><pre class=code>
+OutDevID=0 ' &lt;  Change this if No sound. (Devices start at -1 )
+</pre><br>If you comp can play midi then try -1,1,2 , etc <br><br></td></tr></table><br>
+<a name="532865"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >McFox</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> this is just awesome !<br>keep going ! <br><br></td></tr></table><br>
+<a name="532999"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Damien Sturdy</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Get the INPUT done. Ive got several projects waiting for something like this :D <br><br>Excelent work. <br><br></td></tr></table><br>
+<a name="544142"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ziltch</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> I have got basic input working using a callback in C.<br>I am now working on a blitmax callback version.  This I think would be far more useful.<br><br>I will post code soon. <br><br></td></tr></table><br>
+<a name="544369"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >semar</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> It works, nice job ADAmor !<br><br>A question (not MIDI related):<br>1)<br>Extern "Os" ---&gt; what does this statement mean ? <br><br>2)<br>Function midiOutGetNumDevs:Int()<br>Function midiOutClose(hMidiOut:Int)<br>etc...<br>I seem that these function are located in the WINMM.DLL.<br>So, shouldn't be Extern "Winmm" instead of Extern "Os" ???<br><br>Would be very nice to have the possibility to monitor the MIDI messages of a midi input driver, without take the driver it in exclusive mode.. well you may already know this whish ;-)<br><br>Please keep on this *good* project !<br><br>Sergio. <br><br></td></tr></table><br>
+<a name="544373"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >semar</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Ziltch,<br>check this page, it may contain useful info about MidiIn and MidiOut:<br><a href="http://www.borg.com/~jglatt/tech/lowmidi.htm" target="_blank">http://www.borg.com/~jglatt/tech/lowmidi.htm</a><br><br>Also, I guess you can call MidiInOpen providing a function callback pointer, so to have a function called at each midi activity.. this would work exaclty as I need, like a Midi Monitor - if I understand correctly.<br><br>That is, no need of MidiInStart in this case. Or am I missing something ?<br><br>How to set up a function callback in BMAX ? Using VarPtr(MyFunction) perhaps ?<br><br>Sergio. <br><br></td></tr></table><br>
+<a name="544606"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ziltch</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> The Extern param does work with 'Winmm'. I can not recall why i put 'Os'!<br><br>That site you mentioned is a great source for MIDI info. Infact I based my code from the code examples.<br><br>The MidiInOpen is what sets up the callback.<br>Then;<br>Prepare the MIDI Header with MidiInPrepareHeader,<br>Setup buffer with midiInAddBuffer,<br>finally the midiInStart starts the capturing (using the callback function).<br>So it is needed!!<br><br>In regards to Midi Monitors, it looks like only one callback at a time can capture MIDI info. If another MIDI prog is running like cubase, then it will want to be capturing the data itself using a callback. So MIDI Monitors are not so simple.<br><br>I have been checking out how to use the midiConnect function. It may help in some kind of work around.<br><br>This is what the PSDK help says about it;<br>"The midiConnect function connects a MIDI input device to a MIDI thru or output device, or connects a MIDI thru device to a MIDI output device."<br><br><br>Here is the purebasic code for my MidiIn.Dll<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;Midi In Dll
+;Ziltch 2005
+
+
+
+Global err
+
+#CALLBACK_TYPEMASK.l   = $00070000    ; callback type mask ;
+#CALLBACK_NULL.l       = $00000000    ; no callback ;
+#CALLBACK_WINDOW.l    = $00010000    ; dwCallback is a HWND ;
+#CALLBACK_TASK.l       = $00020000    ; dwCallback is a HTASK ;
+#CALLBACK_FUNCTION.l   = $00030000    ; dwCallback is a FARPROC ;
+
+
+;Global OutStr.s
+;Global OutStr2.s
+
+#MM_MIM_OPEN        = $3C1
+#MM_MIM_CLOSE       = $3C2
+#MM_MIM_DATA        = $3C3
+#MM_MIM_LONGDATA   = $3C4
+#MM_MIM_ERROR      = $3C5
+#MM_MIM_LONGERROR = $3C6
+
+Global MidiBankAddr,SysXFlag
+
+Global midiHeader.midiHdr
+Global MidiINhandle
+
+Global BufferSize
+BufferSize = 1024
+Dim SysXBuffer.b(BufferSize)
+
+Structure MidiMess
+  ;   OutStr.s
+	Midifunct.w
+	MidiNote.w
+	MidiVel.w
+	MidiTimeStamp.l
+EndStructure
+Global MidiMessCount.l, MaxMidiMess.l
+Global MaxMidiMess
+MaxMidiMess = 64;256
+DefType.midimess MidiMessBuff
+
+Dim MidiMessBuff.MidiMess(MaxMidiMess)
+
+Procedure MidiCallBack(hmIN.l, wMsg.l, dwInstance.l, dwParam1.l, dwParam2.l)
+  
+  ;	if dwParam1 &amp; $000000FF &lt; 254
+	MidiTimeStamp.l =  dwParam2
+	Select wMsg
+		Case #MM_MIM_OPEN
+		OutStr.s = "Open Midi"
+
+		Case #MM_MIM_CLOSE
+		OutStr.s = "Close Midi"
+
+		Case #MM_MIM_DATA
+    
+    ;OutStr.s =  hex(dwParam1 &amp; $000000FF)+" " + hex( (dwParam1&gt;&gt;8) &amp; $000000FF)+" " + hex( (dwParam1&gt;&gt;16) &amp; $000000FF)
+    ;OutStr2.s = str(dwParam2)
+
+		If dwParam1 &amp; $000000FF &gt;253
+			ProcedureReturn
+		EndIf
+		MidiMessCount + 1
+
+		MidiMessBuff(MidiMessCount)\Midifunct = dwParam1 &amp; $000000FF
+		MidiMessBuff(MidiMessCount)\MidiNote = (dwParam1&gt;&gt;8) &amp; $000000FF
+		MidiMessBuff(MidiMessCount)\MidiVel   = (dwParam1&gt;&gt;16) &amp; $000000FF
+		MidiMessBuff(MidiMessCount)\ MidiTimeStamp=  dwParam2
+    ;            	MessageRequester("MIDI data", str(MidiMessBuff(MidiMessCount)\Midifunct))
+		Case #MM_MIM_LONGDATA
+		Case #MM_MIM_ERROR
+		MessageRequester("","MIDI error",0)
+		OutStr.s = "Midi Error"
+
+		Case #MM_MIM_LONGERROR
+		MessageRequester("","long MIDI error",0)
+		OutStr.s = "Long Midi Error"
+
+	EndSelect
+  ;	endif
+EndProcedure
+
+ProcedureDLL StartLookingMidiIn(MPU401IN)
+;Open_Window_Main()
+
+	midiError = midiInOpen_(@MidiIN, MPU401IN,@MidiCallBack(), 0, #CALLBACK_FUNCTION)
+	MidiINhandle = MidiIN
+;debug(MidiIN)
+
+; Store pointer to our input buffer for System Exclusive messages in MIDIHDR
+	midiHeader\lpData =@SysXBuffer.b(0); (LPBYTE)&amp;SysXBuffer[0]
+;  debug("midiHeader\lpData "+str(midiHeader\lpData ))
+; Store its size in the MIDIHDR
+	midiHeader\dwBufferLength =  BufferSize;256;SizeOf(SysXBuffer);
+
+; Flags must be set to 0
+	midiHeader\dwFlags = 0
+
+; Prepare the buffer and MIDIHDR
+	err = midiInPrepareHeader_(MidiIN, @midiHeader.midiHdr, sizeof(midiHeader))
+;debug(str(err));
+	If (err=0)
+  ; Queue MIDI input buffer
+		err = midiInAddBuffer_(MidiIN, @midiHeader, sizeof(midiHeader))
+  ;	debug( midiHeader\lpData)
+		If (err=0)
+    ; Start recording Midi
+			err = midiInStart_(MidiIN)
+    
+		EndIf
+	EndIf
+
+; If there was an error above, then print a message
+;if (err)
+;  debug ("error "+str(err))
+;MessageRequester("","MIDI error",0)
+;endif	
+	ProcedureReturn  err
+EndProcedure
+
+ProcedureDLL StopLookingMidiIn()
+	midiInReset_(MidiINhandle)
+	midiInUnprepareHeader_(MidiINhandle, @midiHeader, sizeof(midiHeader))
+; Unprepare the buffer and MIDIHDR. Unpreparing a buffer that has not been prepared is ok
+	midiInClose_(MidiINhandle)
+EndProcedure
+
+
+ProcedureDLL SetMaxMidiMessages(MaxMidiMsg)
+	MaxMidiMess =MaxMidiMsg
+EndProcedure
+
+ProcedureDLL.l GetMaxMidiMessages()
+	ProcedureReturn MaxMidiMess
+EndProcedure
+
+ProcedureDLL.l LookMidiIn(*MidiBank)
+
+	If MidiMessCount &gt; MaxMidiMess
+		MessageRequester ("MIDI ERROR", "Recieved "+str(MidiMessCount) +" messages . " + str(MaxMidiMess) +" is max allowed!")
+		MidiMessCount = MaxMidiMess
+	EndIf
+
+	PokeW(*MidiBank,MidiMessCount)
+
+	For count = 0 To MidiMessCount-1
+		PokeW(*MidiBank+(count*12)+2,MidiMessBuff(Count+1)\Midifunct)
+		PokeW(*MidiBank+(count*12)+4,MidiMessBuff(Count+1)\MidiNote)
+		PokeW(*MidiBank+(count*12)+6,MidiMessBuff(Count+1)\MidiVel)
+		PokeL(*MidiBank+(count*12)+8,MidiMessBuff(Count+1)\MidiTimeStamp)
+		MidiMessBuff(Count+1)\Midifunct= 0
+		MidiMessBuff(Count+1)\MidiNote= 0
+		MidiMessBuff(Count+1)\MidiVel = 0
+		MidiMessBuff(Count+1)\MidiTimeStamp = 0
+	Next
+	MidiMessC.l =  MidiMessCount
+	MidiMessCount = 0
+
+	ProcedureReturn  MidiMessC
+EndProcedure
+</textarea> <br><br></td></tr></table><br>
+<a name="544805"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >semar</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> ADAmor,<br>With the code below I can't get the callback function to work.. well I get id called once, but suddenly I get unhandled exception error... can you say what is wrong here ?<br><br><pre class=code>
+Graphics 300,200,0
+Extern "Os"
+'midiInOpen(LPHMIDIIN lphMidiIn,UINT_PTR  uDeviceID,DWORD_PTR dwCallback,DWORD_PTR dwCallbackInstance,DWORD dwFlags)
+'Function midiInOpen(lphMidiIn:Byte Ptr, uDeviceID:Byte Ptr, dwCallback:Byte Ptr, dwInstance:Byte Ptr, dwFlags:Int)
+Function midiInOpen(lphMidiIn:Byte Ptr, uDeviceID:Int, dwCallback:Byte Ptr, dwInstance:Int, dwFlags:Int)
+
+Function midiInClose(hMidiIn:Int)
+Function midiInMessage(hMidiIn:Int, msg:Int, dw1:Int, dw2:Int)
+Function midiInGetNumDevs()
+Function midiInStart(hMidiIn:Int)
+Function midiInStop(hMidiIn:Int)
+
+End Extern
+
+Const CF = $30000
+
+'Local p()
+'p = test
+'p
+
+'p = test2
+'p
+
+Local MidiIn:Int
+Local MidiInHandle:Byte Ptr 
+
+MidiInHandle = Varptr MidiIn
+
+'Local callback(handle,  uMsg,  dwInstance,  dwParam1,  dwParam2)
+'callback = mycallback
+
+
+'MidiInStart(1)
+Print "Input Devices: " + midiInGetNumDevs()
+
+Try
+	ok = MidiInOpen(Byte Ptr(MidiInHandle),2,Byte Ptr(MyCallBack),369,CF)
+	'ok = MidiInOpen(Byte Ptr(MidiInHandle),2,Byte Ptr(0),0,0)
+
+'Rem	
+Catch ex:Object
+	'Cls
+	DrawText (ex.Tostring() ,0,30)
+	Flip
+	'WaitKey()
+	Print "catch: " + ex.Tostring()
+EndTry
+'End Rem
+
+Print "ok = " + ok + " Midi handle " + MidiInHandleI
+
+'midiInStart(MIDI)
+
+'MIDI = MidiInOpen(0,0,Byte Ptr(0),0,0)
+'Print "Midi in " + MIDI + " Opened"
+
+While Not KeyDown(KEY_ESCAPE)
+Wend
+
+'midiInStop(MIDI)
+MidiInClose(MIDI)
+Print "Midi in " + MIDI + " Closed"
+
+End
+
+Function test()
+Print "test !"
+End Function
+
+Function test2()
+Print "test 2 !"
+End Function
+
+
+'midiCallback(HMIDIIN handle, UINT uMsg, DWORD dwInstance, DWORD dwParam1, DWORD dwParam2);
+Function MyCallBack ( handle:Byte Ptr,  uMsg,  dwInstance,  dwParam1,  dwParam2)
+'midiCallback(HMIDIIN handle, UINT uMsg, DWORD dwInstance, DWORD dwParam1, DWORD dwParam2);
+'Function MyCallBack()
+
+	DrawText "midi callback",0,0
+	Print "midi callback! " + dwInstance
+	
+	Flip
+
+
+End Function
+</pre><br><br>Thanks for the code m8 !<br><br>Sergio. <br><br></td></tr></table><br>
+<a name="544873"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ziltch</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> I will see if I can see what is wrong. <br><br></td></tr></table><br>
+<a name="544941"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ziltch</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> Got it!<br><br>It still has some problems to iron out, but I thought you may want to have a look.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+' Alpha MIDI In Test
+
+Type MIDIINCAPS 
+	Field wMid:Short
+	Field wPid:Short
+	Field vDriverVersion:Short'MMVERSION 
+	Field szPname_0,szPname_1,szPname_2,szPname_3
+	Field szPname_4,szPname_5,szPname_6,szPname_7
+	Field dwSupport:Int
+EndType
+
+Type MidiHdr 
+	Field lpData:byte ptr  '  tbank ptr 'LPSTR ptr
+	Field dwBufferLength:Int
+	Field dwBytesRecorded:Int
+	Field dwUser:Int
+	Field dwFlags:Int
+	Field lpNext:Int 'midihdr_tag ptr
+	Field reserved:Int
+	Field dwOffset:Int
+	Field dwReserved1:Int
+	Field dwReserved2:Int
+	Field dwReserved3:Int
+	Field dwReserved4:Int
+	Field dwReserved5:Int
+	Field dwReserved6:Int
+	Field dwReserved7:Int
+	Field dwReserved8:Int
+EndType
+
+
+Extern "Win32"
+
+	Function midiInOpen(lphMidiIn:int var, uDeviceID:Int, dwCallback:int , dwInstance:Int, dwFlags:Int)
+	Function midiInPrepareHeader(hMidiIn:Int, lpMidiInHdr:byte ptr , uSize:Int)
+	Function midiInAddBuffer(hMidiIn:Int, lpMidiInHdr:byte ptr, uSize:Int)
+	Function midiInClose(hMidiIn:Int)
+	Function midiInMessage(hMidiIn:Int, msg:Int, dw1:Int, dw2:Int)
+	Function midiInGetNumDevs()
+	Function midiInStart(hMidiIn:Int)
+	Function midiInStop(hMidiIn:Int)
+
+End Extern
+
+Const CF = $30000
+
+global MM_MIM_OPEN      =$3C1  
+global MM_MIM_CLOSE     =$3C2
+global MM_MIM_DATA      =$3C3
+global MM_MIM_LONGDATA  =$3C4
+global MM_MIM_ERROR     =$3C5
+global MM_MIM_LONGERROR =$3C6 
+
+global ControllerType$[128]
+
+ControllerType$(0)  = "Bank Select (coarse)"
+ControllerType$(1)   = "Modulation Wheel (coarse)"
+ControllerType$(2)   = "Breath controller (coarse)"
+ControllerType$(4)   = "Foot Pedal (coarse)"
+ControllerType$(5)   = "Portamento Time (coarse)"
+ControllerType$(6)   = "Data Entry (coarse)"
+ControllerType$(7)   = "Volume (coarse)"
+ControllerType$(8)   = "Balance (coarse)"
+ControllerType$(10)  = "Pan position (coarse)"
+ControllerType$(11)  = "Expression (coarse)"
+ControllerType$(12)  = "Effect Control 1 (coarse)"
+ControllerType$(13)  = "Effect Control 2 (coarse)"
+ControllerType$(16)  = "General Purpose Slider 1"
+ControllerType$(17)  = "General Purpose Slider 2"
+ControllerType$(18)  = "General Purpose Slider 3"
+ControllerType$(19)  = "General Purpose Slider 4"
+ControllerType$(32)  = "Bank Select (fine)"
+ControllerType$(33)  = "Modulation Wheel (fine)"
+ControllerType$(34)  = "Breath controller (fine)"
+ControllerType$(36)  = "Foot Pedal (fine)"
+ControllerType$(37)  = "Portamento Time (fine)"
+ControllerType$(38)  = "Data Entry (fine)"
+ControllerType$(39)  = "Volume (fine)"
+ControllerType$(40)  = "Balance (fine)"
+ControllerType$(42)  = "Pan position (fine)"
+ControllerType$(43  )  = "Expression (fine)"
+ControllerType$(44  )  = "Effect Control 1 (fine)"
+ControllerType$(45  )  = "Effect Control 2 (fine)"
+ControllerType$(64  )  = "Hold Pedal (on/off)"
+ControllerType$(65  )  = "Portamento (on/off)"
+ControllerType$(66 )  = "Sustenuto Pedal (on/off)"
+ControllerType$(67 )  = "Soft Pedal (on/off)"
+ControllerType$(68 )  = "Legato Pedal (on/off)"
+ControllerType$(69 )  = "Hold 2 Pedal (on/off)"
+ControllerType$(70 )  = "Sound Variation"
+ControllerType$(71 )  = "Sound Timbre"
+ControllerType$(72 )  = "Sound Release Time"
+ControllerType$(73 )  = "Sound Attack Time"
+ControllerType$(74 )  = "Sound Brightness"
+ControllerType$(75 )  = "Sound Control 6"
+ControllerType$(76 )  = "Sound Control 7"
+ControllerType$(77 )  = "Sound Control 8"
+ControllerType$(78 )  = "Sound Control 9"
+ControllerType$(79 )  = "Sound Control 10"
+ControllerType$(80 )  = "General Purpose Button 1 (on/off)"
+ControllerType$(81 )  = "General Purpose Button 2 (on/off)"
+ControllerType$(82 )  = "General Purpose Button 3 (on/off)"
+ControllerType$(83 )  = "General Purpose Button 4 (on/off)"
+ControllerType$(91 )  = "Effects Level"
+ControllerType$(92 )  = "Tremulo Level"
+ControllerType$(93 )  = "Chorus Level"
+ControllerType$(94 )  = "Celeste Level"
+ControllerType$(95 )  = "Phaser Level"
+ControllerType$(96 )  = "Data Button increment"
+ControllerType$(97 )  = "Data Button decrement"
+ControllerType$(98 )  = "Non-registered Parameter (fine)"
+ControllerType$(99 )  = "Non-registered Parameter (coarse)"
+ControllerType$(100)  = "Registered Parameter (fine)"
+ControllerType$(101)  = "Registered Parameter (coarse)"
+ControllerType$(120)  = "All Sound Off"
+ControllerType$(121)  = "All Controllers Off"
+ControllerType$(122)  = "Local Keyboard (on/off)"
+ControllerType$(123)  = "All Notes Off"
+ControllerType$(124)  = "Omni Mode Off"
+ControllerType$(125)  = "Omni Mode On"
+ControllerType$(126)  = "Mono Operation"
+ControllerType(127)  = "Poly Operation"
+
+global StatusType$[16]
+StatusType(8) = "(Note Off)"
+StatusType(9) = "(Note On)"
+StatusType(10) = "(AfterTouch / key pressure)"
+StatusType(11) = "(Control Change)"
+StatusType(12) = "(Program (Patch) change)"
+StatusType(13) = "(Channel Pressure)"
+StatusType(14) = "(Pitch Wheel)"
+
+global LinePos
+
+Function MidiCallBackBM:int(hmIN:Int, wMsg:Int, dwInstance:Int, dwParam1:Int, dwParam2:Int)"Win32"
+
+	if hmIN &gt; 0 then 
+		seperator$ = ","
+		time=dwParam2/1000
+		hours = int(time/360) 
+		time   =time-(hours*360)
+		mins   =  int(time/60) 
+		secs      =time-(hours*60)
+		partsec = dwParam2 - (( (hours*360)+(mins*60)+secs) *1000)
+		MidiTimeStamp$ = (hours) +":"+(mins) +":"+(secs) +"."+right("0"+(partsec),3) 
+		MidiNote$ = ""
+		MidiVel$    = "" 
+		MidiChannel$ = ""  
+   
+		Select wMsg
+			Case MM_MIM_OPEN
+			Midifunct$ = "Open Midi"
+    
+			Case MM_MIM_CLOSE
+			Midifunct$ = "Close Midi"
+			Case MM_MIM_DATA 
+		'	MessageRequester("","MIDI data",0)
+			Midifunct$ = hex$((dwParam1 &amp; $000000F0) shr 4)
+			MidiStatus$ = StatusType$((dwParam1 &amp; $000000F0) shr 4 )
+			MidiChannel$ =  hex$(dwParam1 &amp; $0000000F)
+			MidiNote$ =hex$( (dwParam1 shr 8) &amp; $000000FF)
+			If Midifunct$ ="B" 
+				ct$ = ControllerType((dwParam1 shr 8) &amp; $000000FF) 
+				If ct &gt; "" 
+					MidiController$ = " ("+ct$+")"
+				EndIf 
+			EndIf
+			MidiVel$    = hex$((dwParam1 shr 16) &amp; $000000FF)
+
+			Case MM_MIM_ERROR
+			Midifunct$ = "Midi Error"
+			Case MM_MIM_LONGERROR
+			Midifunct$ = "Long Midi Error"
+		End Select
+	output$=MidiTimeStamp$ + "  "+Midifunct$+" "+MidiStatus$+ "  "+MidiChannel$+ "  "+MidiNote$+MidiController$+ "  "+MidiVel$
+	DebugLog output$
+	
+	LinePos:+1
+	if LinePos &gt; 30 then 
+		LinePos = 0
+		cls
+	endif
+    DrawText(output$,20,LinePos*18)
+    flip
+	EndIf
+EndFunction
+
+global MidiIn:Int ,Callback :int , MidiDevice
+global MidiInHandle:int ' 
+
+' MidiInHandle = Varptr MidiIn
+Global midiHeader:MidiHdr = new MidiHdr
+'Global MidiINhandle
+
+Global BufferSize
+BufferSize = 4096 ' 1024
+'global SysXBuffer:byte(BufferSize)
+SysXBuffer:Tbank = CreateBank(BufferSize)
+
+CallBack = int(byte ptr(MidiCallBackBM))
+
+DebugLog " Callback  = "+int(Callback)
+
+Print "Select Input Device: 1 - " + midiInGetNumDevs() ' + " Byte Ptr(MyCallBack) = "+int(Byte Ptr(MyCallBack))
+
+MidiDevice = int(Input( "&gt;"))
+
+Graphics 800,600,0
+
+ok = MidiInOpen(MidiInHandle,MidiDevice-1,CallBack,2778,CF)  
+
+print ok + " MidiInHandle = " + MidiInHandle
+if ok=0 then
+	midiHeader.lpData =  BankBuf(SysXBuffer)
+
+	'  Store its size in the MIDIHDR
+	midiHeader.dwBufferLength =  BufferSize
+	
+	'  Flags must be set to 0
+	midiHeader.dwFlags = 0
+	
+	'  Prepare the buffer and MIDIHDR
+	err = midiInPrepareHeader(MidiInHandle,varptr(midiHeader.lpData), BufferSize)
+	
+		If (err=0) then
+	'  ; Queue MIDI input buffer
+			err = midiInAddBuffer(MidiInHandle,varptr(midiHeader.lpData), BufferSize)
+	'  ;	debug( midiHeader\lpData)
+			If (err=0)
+	'    ; Start recording Midi
+				err = midiInStart(MidiInHandle)
+	print "Midi in " + err + "   Opened"
+	Else
+	print "Midi buffer " + err + "  NOT Opened"
+	EndIf
+	else
+	print "Midi PrepareHeader " + err + "  Failed" + "   varptr(midiHeader) "+int(varptr(midiHeader))
+		EndIf
+	
+	While Not KeyDown(KEY_ESCAPE)
+	Wend
+	
+	midiInStop(MIDI)
+	MidiInClose(MidiInHandle)
+	Print "Midi in " + MIDI + " Closed"
+EndIf
+End
+</textarea><br><br>This makes me very Happy !!!!! <br><br></td></tr></table><br>
+<a name="545078"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ziltch</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> I am getting this error sometimes<br><br>-------------------------------------------------<br>Assertion failed: scopeStackTop&gt;0, file f:/blitzmax/mod/brl.mod/appstub.mod/debu<br>gger.stdio.c, line 487<br><br>This application has requested the Runtime to terminate it in an unusual way.<br>Please contact the application's support team for more information.<br>Unhandled Exception: Received Signal<br>        BlitzMax Console Debugger H=Help<br>-------------------------------------------------<br><br>I am not sure what is causing it! <br><br></td></tr></table><br>
+<a name="545123"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >semar</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'll check it out too - thanks for the code sharing dude !<br><br>Sergio. <br><br></td></tr></table><br>
+<a name="577188"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Curtastic</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> hey this seems cool.<br>I don't understand why this hasn't been asked or stated already but can you use this to play a midi file? <br><br></td></tr></table><br>
+<a name="579002"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ziltch</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> Midi output is alot easier than input.<br>If you want to play a midi file, windows MCI commands can do that.<br>Multi platform code would be harder! <br><br></td></tr></table><br>
+<a name="579527"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Damien Sturdy</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>I don't understand why this hasn't been asked or stated already but can you use this to play a midi file? <br> <br></div><br><br>Well, if you know much about the Midi file format, then yes- since this does output :)<br><br>Man this reminds me of the old days of QBASIC. Hardcore programming :) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

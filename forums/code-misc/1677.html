@@ -1,0 +1,828 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Windows Screen Saver Framework</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='A simple windows screen saver framework for BMax + MaxGUI, language=bmx, category=Miscellaneous'><meta name='author' content='Yan'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=9>Miscellaneous</a>/Windows Screen Saver Framework</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="1677.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Windows Screen Saver Framework by Yan</td><td align="right">2006 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Here's a simple windows screen saver that I wrote a while ago.<br>It shows how to do most of the stuff needed for a saver under 9x and XP, and can be used as a basic framework.<br><br>*** Needs MaxGUI (and Windows, in case you hadn't realised yet) ***<br><br>If you use this, please give either me or the blitz basic community a credit...Ta.<br><br>**Update**<br>Added 'Import BRL.EventQueue' now that MaxGUI doesn't import it. </td></tr><tr ><td class="cell"><pre class="code">Strict
+
+Import "icons.o"
+
+Framework BRL.D3D7Max2D
+Import BRL.RamStream
+Import BRL.PNGLoader
+Import BRL.Timer
+Import BRL.Random
+Import MaxGUI.Drivers ' Pre 1.30 use - BRL.Win32MaxGUI
+Import BRL.EventQueue
+
+Extern "win32"
+	Function GetClientRect(hWnd, lpRect:Byte Ptr) ' I wanna use a type damnit...
+	Function GetWindowRect(hWnd, lpRect:Byte Ptr) ' ...ditto...
+	Function SetWindowLong(hWnd, index, nIndex) = "SetWindowLongA@12"
+	Function SetParent(hWnd, parenthWnd)
+	Function ReleaseDC(hWnd, hDC)
+	Function SystemParametersInfo(uiAction, uiParam, pvParam Var, fWinIni) = "SystemParametersInfoA@16"
+End Extern
+
+Incbin "gfx\cheese.png"
+
+Const SPI_SETSCREENSAVERRUNNING = $61 
+
+Type TRect
+	Field x, y, w, h
+End Type
+
+Type TScreenSaver
+	Const SAVER_NAME$ = "Cheesy"
+	
+	Field graphicsMode = -1 ' Get desktop settings
+	Field imagePath$ = "incbin::gfx\cheese.png" ' Hard coded for this example
+	Field imageScale# = 0.5, imageNumber = 8
+	Field screenWidth, screenHeight
+	
+	Field image:TImage
+	
+	Method Start()
+		ReadCFG()
+		
+		If appargs.length = 1
+			AppArgs = AppArgs[..2]
+			AppArgs[1] = "/c"
+		EndIf
+		
+		Select AppArgs[1].ToLower()[..2]
+			Case "/s", "-s"
+				Local oldState ' (Win9x only)
+				SystemParametersInfo(SPI_SETSCREENSAVERRUNNING, True, oldState, 0) ' (Win9x only)
+				If oldstate Then Return ' (Win9x only) untested
+						
+				DoFullScreen()
+				
+				SystemParametersInfo(SPI_SETSCREENSAVERRUNNING, False, oldState, 0) ' (Win9x only)
+				
+			Case "/c", "-c"
+				DoConfig()
+		
+			Case "/a", "-a"
+				'Start password verification (Win9x only)
+				
+			Case "/p", "-p", "/l", "-l"
+				DoPreviewWindow()
+				
+		End Select
+	End Method
+	
+	Method DoFullScreen()
+		Local screenDepth, screenHertz
+		
+		If graphicsMode &lt; 0
+			Local hWnd = QueryGadget(Desktop(), QUERY_HWND)
+			Local hdc = GetDC(hWnd)
+			If hdc = Null Then Return
+			
+			screenWidth = GetDeviceCaps(hdc, HORZRES)
+			screenHeight = GetDeviceCaps(hdc, VERTRES)
+			screenDepth = GetDeviceCaps(hdc, BITSPIXEL)
+			If screenDepth &lt; 16
+				screenDepth = GetDeviceCaps(hdc, PLANES)
+				If screenDepth &lt; 16
+					ReleaseDC(hWnd, hdc)
+					Return
+				EndIf
+			EndIf	
+			screenHertz = GetDeviceCaps(hdc, VREFRESH)
+			If screenHertz &lt; 60 Then screenHertz = -1
+			
+			ReleaseDC(hWnd, hdc)
+		Else
+			GetGraphicsMode(graphicsMode, screenWidth, screenHeight, screenDepth, screenHertz)
+		EndIf	
+		
+		Graphics screenWidth, screenHeight, screenDepth, screenHertz
+		HideMouse
+		
+		Initialise(imageNumber)
+		
+		ClearEventQueue()
+					
+		Repeat
+			Select PollEvent()			
+				Case EVENT_MOUSEDOWN, EVENT_KEYDOWN
+					Return
+				
+				Case EVENT_APPTERMINATE, EVENT_WINDOWCLOSE
+					Return
+				
+				Case EVENT_MOUSEMOVE
+					Global mx = EventX(), my = EventY()
+					
+					If (Abs(mx - EventX()) &gt; 1) Or (Abs(my - EventY()) &gt; 1) Then Return
+					
+					mx = EventX()
+					my = EventY()
+									
+			End Select
+			
+			Update()
+			Draw()
+			
+			Flip
+		Forever
+	End Method		
+			
+	Method DoPreviewWindow()
+		Local previewTimer:TTimer = CreateTimer(100)
+		
+		Local prevRect:TRect = New TRect
+		Local prevHWnd
+		If AppArgs[1].length = 2
+			prevHWnd = Int(AppArgs[2]) 		
+		Else
+			prevHWnd = Int(AppArgs[1][3..AppArgs[1].length])
+		EndIf
+		
+		GetClientRect(prevhWnd, prevRect)
+		screenWidth = prevRect.w
+		screenHeight = prevRect.h
+		
+		Local previewWindow:TGadget = CreateWindow(SAVER_NAME$ + " Preview", prevRect.x, prevRect.y, prevRect.w, prevRect.h, Null, WINDOW_HIDDEN)
+		Local BMXHWnd = QueryGadget(previewWindow, QUERY_HWND)
+		
+		SetWindowLong(BMXHWnd, GWL_STYLE, WS_VISIBLE | WS_CHILD)
+		SetParent(BMXHWnd, prevHWnd)
+		SetWindowLong(BMXHWnd, GWL_HWNDPARENT, prevHWnd)
+		
+		Local previewCanvas:TGadget = CreateCanvas(0, 0, prevRect.w, prevRect.h, previewWindow)
+		SetGraphics CanvasGraphics(previewCanvas)
+		
+		Initialise(imageNumber)
+		
+		Repeat
+			Select WaitEvent()
+				Case EVENT_TIMERTICK
+					Update()
+					
+					RedrawGadget previewCanvas
+					
+				Case EVENT_GADGETPAINT
+					Draw()
+	
+					Flip
+									
+				Case EVENT_APPTERMINATE, EVENT_WINDOWCLOSE
+					Return
+					
+			End Select
+		Forever
+	End Method
+	
+	'Change folowing methods to suit saver
+	Method DoConfig()
+		Local configWidth = 300, configHeight = 159
+		Local previewTimer:TTimer = CreateTimer(100)
+		Local PropertiesHWnd
+		Local configWindow:Tgadget
+		Local previewCanvas:TGadget
+		Local sizeSlider:TGadget, numberSlider:TGadget, numberText:TGadget
+		Local okButton:TGadget, cancelButton:TGadget
+		
+		If AppArgs[1].length = 2
+			If AppArgs.length &gt; 2 Then PropertiesHWnd = Int(AppArgs[2]) 		
+		Else
+			PropertiesHWnd = Int(AppArgs[1][3..AppArgs[1].length])
+		EndIf
+				
+		If PropertiesHWnd
+			Local propRect:TRect = New TRect
+			GetWindowRect(PropertiesHWnd, propRect)
+			configWindow = CreateWindow(SAVER_NAME$ + " Preferences",..
+																	propRect.x + (((propRect.w - propRect.x) - configWidth) / 2),..
+																	propRect.y + (((propRect.h - propRect.y) - configHeight) / 2),..
+																	configWidth, configHeight, Null, WINDOW_TITLEBAR | WINDOW_CLIENTCOORDS)
+		Else	
+			configWindow = CreateWindow(SAVER_NAME$ + " Preferences", (GadgetWidth(Desktop()) - configWidth) / 2,..
+																	(GadgetHeight(Desktop()) - configHeight) / 2, configWidth, configHeight,..
+																	Null, WINDOW_TITLEBAR | WINDOW_CLIENTCOORDS)
+		EndIf
+		
+		screenWidth = 133
+		screenHeight = 100
+		
+		CreateLabel("Image Size", 153, 15, 137, 20, configWindow, LABEL_CENTER)
+		sizeSlider = CreateSlider(153, 35, 137, 20, configWindow, SLIDER_HORIZONTAL | SLIDER_TRACKBAR)
+		SetSliderRange sizeSlider, 1, 30
+		SetSliderValue sizeSlider, imageScale# * 15.0
+		
+		CreateLabel("Image Number :", 153, 82, 87, 20, configWindow, LABEL_CENTER)
+		numberText = CreateTextField(240, 80, 26, 20, configWindow)
+		SetGadgetText(numberText, imageNumber)
+		numberSlider = CreateSlider(267, 80, 18, 20, configWindow, SLIDER_VERTICAL | SLIDER_STEPPER)
+		SetSliderRange numberSlider, 1, 200
+		SetSliderValue numberSlider, imageNumber
+		
+		CreateLabel("Written by Yan - 2005", 10, 130, 120, 20, configWindow, LABEL_CENTER)
+		
+		okButton = CreateButton("OK", 140, 125, 70, 24, configWindow)
+		cancelButton = CreateButton("Cancel", 220, 125, 70, 24, configWindow)
+		
+		ActivateGadget cancelButton 
+		
+		previewCanvas = CreateCanvas(10, 10, screenWidth, screenHeight, configWindow, 1)
+		SetGraphics  CanvasGraphics(previewCanvas)
+		
+		Initialise(imageNumber)
+		
+		Repeat
+			Select WaitEvent()
+				Case EVENT_GADGETACTION
+					Select EventSource()
+						Case sizeSlider
+							imageScale# = EventData() / 15.0
+							
+						Case numberSlider	
+							AdjustImageNumber(EventData() - ImageNumber)
+							imageNumber = EventData()
+							SetGadgetText(numberText, imageNumber)
+							
+						Case okButton
+							WriteCFG()
+							Return
+							
+						Case cancelButton
+							Return
+							
+					End Select
+				
+				Case EVENT_TIMERTICK
+					Update()
+					
+					RedrawGadget previewCanvas
+					
+				Case EVENT_GADGETPAINT
+					Draw()
+					
+					Flip
+									
+				Case EVENT_APPTERMINATE, EVENT_WINDOWCLOSE, EVENT_APPSUSPEND
+					Return
+					
+			End Select
+		Forever
+	End Method
+	
+	Method Initialise(number)
+		AutoMidHandle True
+		SetBlend ALPHABLEND
+		
+		If image = Null
+			image:TImage = LoadImage(imagepath$, FILTEREDIMAGE | MIPMAPPEDIMAGE)
+			If image = Null Then Return
+		EndIf
+		
+		Local scaleX# = (screenWidth / 1024.0)
+		Local scaleY# = (screenHeight / 768.0)
+		
+		For Local c=1 To number
+			TSprite.Create(image, Rand(0, screenWidth), Rand(0, screenHeight), Rnd(-4, 4) * scaleX#,..
+												Rnd(-4, 4) * scaleY#, 0, scaleX#, scaleY#, Rand(0, 359), Rnd(-4, 4), 1, 0)
+		Next
+	End Method
+	
+	Method AdjustImageNumber(number)
+		If number = 0 Then Return
+		
+		If Sgn(number) = 1
+			Initialise(number)
+		Else
+			For Local c = number To -1
+				spriteList.RemoveLast()
+			Next
+		EndIf
+	End Method
+	
+	Method Update()
+		For Local thisSprite:TSprite = EachIn spriteList
+				thisSprite.Update(screenWidth, screenHeight)
+		Next
+	End Method
+	
+	Method Draw()
+		Cls
+		For Local thisSprite:TSprite = EachIn spriteList
+			thisSprite.Draw(imageScale#)
+		Next
+		
+	End Method
+	
+	Method WriteCFG()
+		Local stream:TStream
+		
+		stream = OpenStream(AppDir$ + "\" + SAVER_NAME$ + "_saver.cfg", False, True)
+		If stream = Null Then Return
+		
+		stream.WriteLine(imageNumber)
+		stream.WriteLine(imageScale#)
+		
+		stream.Close()
+	End Method
+	
+	Method ReadCFG()
+		Local stream:TStream
+	
+		stream = OpenStream(AppDir$ + "\" + SAVER_NAME$ + "_saver.cfg", True, False)
+		If stream = Null
+			WriteCFG()
+			Return
+		EndIf
+		
+		imageNumber = Int(stream.ReadLine())
+		imageScale# = Float(stream.ReadLine())
+	
+		stream.Close()
+	End Method
+	
+	Function ClearEventQueue()
+		Repeat ; Until PollEvent() = 0
+	End Function
+End Type
+
+Global spriteList:TList
+
+Type TSprite
+	Field image:TImage
+	Field x#, y#, vX#, vY#
+	Field gravity#, scaleX#, scaleY#
+	Field angle#, rotation#
+	Field alpha#, fade#			
+																
+	Function Create(image:TImage, x#, y#, vX#, vY#, gravity#, scaleX#, scaleY#, angle#, rotation#, alpha#, fade#)
+		Local thisSprite:TSprite = New TSprite
+		
+		thisSprite.image = image
+		thisSprite.x# = x#
+		thisSprite.y# = y#
+		thisSprite.vX# = vX#
+		thisSprite.vY# = vY#
+ 		thisSprite.gravity# = gravity#
+		thisSprite.scaleX# = scaleX#
+		thisSprite.scaleY# = scaleY#
+		thisSprite.angle# = angle#
+		thisSprite.rotation# = rotation#
+		thisSprite.alpha# = alpha#
+		thisSprite.fade# = fade#
+		
+		If spriteList = Null Then spriteList = New TList
+		spriteList.AddLast(thisSprite)
+	End Function
+	
+	Method Update(maxWidth, maxHeight)
+		x# :+ vX#
+		If x# &gt; maxWidth
+			x# = maxWidth
+			vX# = -vX#
+		EndIf
+		If x# &lt; 0
+			x# = 0
+			vX# = -vX#
+		EndIf
+		
+		y# :+ vY#
+		If y# &gt; maxHeight
+			y# = maxHeight
+			vY# = -vY#
+		EndIf
+		If y# &lt; 0
+			y# = 0
+			vY# = -vY#
+		EndIf
+
+		vY# :+ gravity#
+		angle# :+ rotation#
+		alpha# :- fade#
+	End Method
+	
+	Method Draw(imageScale#)
+		SetTransform(angle#, scaleX# * imagescale#, scaleY# * imageScale#)
+		SetAlpha alpha#
+		DrawImage image, x#, y#
+	End Method
+End Type
+
+'---------------------------------------- MAIN ----------------------------------------
+
+SetGraphicsDriver D3D7Max2DDriver()
+
+SeedRnd MilliSecs()
+
+Local saver:TScreenSaver = New TScreenSaver
+saver.Start()
+
+End
+
+'---------------------------------- GLOBAL FUNCTIONS ----------------------------------
+						
+Function ClearEventQueue()
+	Repeat ; Until PollEvent() = 0
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yan</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> Run this...<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Strict
+
+RestoreData FileInfo
+Local filePath$ ; ReadData filePath$
+Local lineCount ; ReadData lineCount
+
+filePath$ = RequestFile("Save Decoded File...", "ZIP files:zip", True, filePath$)
+If filepath$ = Null Then End 
+
+Local b64Str$ = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+Local stream:TStream = OpenStream(filePath$, False, True)
+If stream = Null Then RuntimeError "Could'nt create ~q" + filePath$ + "~q"  
+
+RestoreData FileData
+For Local i=0 Until lineCount
+	Local line$ ; ReadData line$
+	
+	For Local c=0 Until line$.length Step 4
+		Local oct, endMark
+		
+		For Local b=c Until (c + 4)
+			Local char = b64Str$.Find(Chr(line$[b]))
+			
+			If char = 64
+				char = 0
+				endMark :+ 1
+			EndIf
+			
+			oct = (oct Shl 6) | (char &amp; $3f)
+		Next
+		
+		stream.WriteByte((oct Shr 16) &amp; $ff)
+		If endMark &lt; 2
+			stream.WriteByte((oct Shr 8) &amp; $ff)
+			If endMark = 0 Then stream.WriteByte(oct &amp; $ff)
+		EndIf
+			
+	Next
+Next
+
+stream.Close()
+
+End
+
+
+#FileData
+DefData "UEsDBBQABAAIAOKCsTZ2buTaaQwAAN8pAAAQAAAAQ2hlZXN5IFNhdmVyLmJteMUaa2/ayPYzlfIf"
+DefData "RnSlml2HAmnTNnd3dR1wiFVei52k2W4VuXgCvjU2sk0Cq/vj75mnZ4xJ2O6VFgnwnNecOc8Z226e"
+DefData "hrP86MXRi4vUX+LHJP2GzqeDZu+k927obzq9oxfOcpWkOYVO/aWbp9hfatDJqD9I/ACnGvQmjE86"
+DefData "IKJ/5WhwL1yWKKd+HCS6SPsBx/lva7zGRDWOqIezJM6aSZ3A7E2O0xjVH8k0AKldrONZHiYx6uO8"
+DefData "G4XAP8Wz3FjcxIGJohUZnJ1vc4wmedpAr5CDHv049tE6w8hH+XaFUeAv4zBvNpslcbCUIHl8Whxw"
+DefData "BWGeJyVuV3APknjOuWGMNyaKHfLfQL+gukZl/butLwiwEz+FBXH+FR2Q64ZKNsUR9jPc63KyRa+r"
+DefData "4d1tluMlSAI/g+0yJ75PjHVoUayJ1iFFgfgHeoGu/dRE96CXE4dMywoBoOwpKGvHAWIeof6KZ19D"
+DefData "8M38fvPHbIFxhpureE7d1gUP5sidOHeu7bndqW2PXOvank6vRiNn1IdpfjhtI0LpEY94xM5kESGO"
+DefData "AgRG25roEZbGZiQkBak7SzGOXf+BhFeNT0Rk342sof0DWUGXKLMlxpUy56m/WoSzbJgEGEiO2+BL"
+DefData "cDkKcPYtT1Yow3kexvNMMoRLf44nfr6gEkO61LOz0lJByKWfBmgGUgN0n6QoX4QZwht/uYqwLsud"
+DefData "+RF+CcJazbcmA43Wy684BdB7SZrR1d2EQb4w+eASh/NFri6GMp95Dvlj8CHOF0mA3NxPc4OEQ22K"
+DefData "/aB70WcD8nXukbVaWek8a0Y4nucLmLdNEDUOhjG/+txsdr6oqM/tL8QKr2fEpjXwiXMvxLoQjrMc"
+DefData "FYRNLxkkjzg1GoWYLgQssGd1E9WPMyqkVhskYBGURAFoDQn2ChkQhB82KImjbYORVMby3qgykZeu"
+DefData "sSlFmqjVqBQLpgCajE7rLTDJqXwNVUanRes4xzB/wJjYcmu1XnKxjiIWhQYX+H3aXvhRdoi6qgln"
+DefData "1ISzutAF4v8+nBdeFnQ+pfM53SsaGFBRsgxKf4Agd8L7cObTgvH0hCsqiP6+juh1JCefpPghxI+s"
+DefData "pqm2IFnLAgNGZMDiU4vVXTuygGBB38MrNQPS/E8ljrVk/hm16MSMm9RECFXoKem27wdznBs9luJG"
+DefData "w0S/XdnT27vLm1GvofIEM2CBasBrKsPBPAwxAjXVMKFY+qMkKxcA9pjhrr/KDOA10eV4+vvUdhsK"
+DefData "NcvmanIIDq9ETu1QTX3ueBBcn+yB1Fdl+Rm1T5lDnhU0GVgjMet+MbWdxhPMGhIlDVNUB3alWor6"
+DefData "cc/Sp/YFLP2ytBbG8TM6bTEP6HKO24Uv9mlnQ45RApi0r8SNoQaRub/umnsDssEjna+RfMUE3yOO"
+DefData "8F+GAR4ma6YxDXbYqIR+FGbYUDqGzPYurDktNlEiBSluilfYzymA1+hJEkWU2GgIq7Est6/tkXc3"
+DefData "HF+5dm98MzI54KN9S4YVPt7htSYTz54OnZHl2YL9xhkBe3cwdu1DRNDph+NrQdyPkq+QnMsNOJpq"
+DefData "/Ylk8HIrhrfaams0aAzra2YAx7HkaKBfUbuBxinHbQXuVuLKqS0FalMLWMX8kkUrexx2tQqgtnPa"
+DefData "XuqLOkl/LqJwRS4uEqikdD9TFEtOcqQUzIp6yyrYiiHonvvMo3+gZhe28DmmI6PdasmoKXjo9pZu"
+DefData "vkidw49yI6bQXEI6EUixfyBNXm4hOlRLQQgAB+JLEHa+NBDvCCIN91C2v3w+aTZ3JvhSJJnQXt/3"
+DefData "E3F8u8zXQzn0yixQzccCJ+uwRC527SONfeaxZiKtyn2gbjx/QnXEPVQv1GlulOutcv2oXEMlIF3G"
+DefData "RCxn7i6dXs8eKQ4+H3663O1smoo73Y189XMJl2Ki/s3gzvVuB5CrN+7dteM65wMb/ZcMupfOgPEX"
+DefData "5xHJJ5zXeEY20WFiTSGtSzw75u368YOf7ZiXgY0W7In2m0xbvlBJlmAmQgwNbT6pyzP1dbeG3vhh"
+DefData "zmsoBasVzHOG0MCd7keG0VNfVpUpDqAK8PVqWml0ity+1evb3sRyRh4nkXWEj0Ud4Z8dCX+9PDMZ"
+DefData "ekGrqlJMh1fdhR/PMZyAogRO6nO0pMgM5QnK1mGOMn5ck6VM3beygJhRiEjZkxY4noFkprbfftiJ"
+DefData "nwNKHqOfpMkK2myIM1HQ9GlZls+pW56J0gKdhX9iN4KmnQocnPdpCFVDPbzJd6Uk387XeZ7EBfXM"
+DefData "j2c40qEyZJ+qw7uHvF9Rh3U43QDPF+on6Q8r11LhXeNL+yar/U2opt+U0aWYkpklmOrIA8r0PYbS"
+DefData "NsNwJKV3csofIbu5AQbDMOT4ETYQBbIBIyVwG+g16jSekbgtSVyoEreFRBb3T4lUZtaTpdROPMcb"
+DefData "2OfWlFR4BukOHKgB3fF42mMbf+L22t+zIzJYoFJ9ilNXlYmql8P52RKqBCgWMdH+xVcK/8sGUfcc"
+DefData "+naifXJSAIvq1GoJcmazgf8VR0ad3qVBLlQKMFH77Qn5ge/JOxN1WqZWf0w0sM7twV0XVLGnVI2i"
+DefData "wkhfsKFBRZ3sF+UOnB44C46gzu/jkWcNYLEc5k2t7kdYvuiZTOKUlvBiQpAME7Q0mms/Wus06r2t"
+DefData "H2FpzaeswG94nQlLvAc/vj/MEEUBLco8DOgNMaPzBgS8h2/ndFeY3BnQ6CJMRiFMuxOnTFRt887p"
+DefData "OzZP+/0TJr+muwDV4K5nTyZ2pb3V6ajFO60qk+tkis6V1r5JwzyHmv91i279GPIHhL4lRieqn5Af"
+DefData "ovwBVidf0Z6kMdjQqI8/EpFvqDiIw3dE5JsK26vdbEdIlyJBUKfzrCDyJfexH4Cfb6A02YJG69rl"
+DefData "PSW1QevJE79ulLYMILG1/Af2lmwPaHU9ZywO5JyLcrjJOp0VW03GWaSpANf0O9GUtefnvkFqqshd"
+DefData "+tEEqcEnMTUr+M86y51iaYYq7xg5pUUXCsj73gqDpDg8U3cVFaEqsSQRsLwNTj/aLrfEr0bTMwyl"
+DefData "s35tx2P/wGlAkfs3TwRmQeZeuRN71JP6fu8ZgW/9layIC1da6zwZhsGlHwcRprfxCRRC4Rw2lgGy"
+DefData "BpNLC46oTA3yhU0lDQfE7s9STdTHIgAnDyvpNUu/FXmWY6ILZwALt3vO0OqTI+/QmQxhlRzArFgS"
+DefData "Xr5DpG0NxE1rSKlPJKcMda8ASdXqvGmq5xBKeatQ8g3Ea/Tu9H2zuEkDhkT8hPJLG3kJT0Kqn+eu"
+DefData "SFw3WV1jyzMReb5q6IWtUYbyHRSAAXoMNfZNA7o2135n47RLdPuSnsgFQwEU05y8/aBJpy2NrWoE"
+DefData "Sbw/LnariRIe4JBY1IxW2R2cwJ3HggWJJ1vVwSaPOIqNgYXPAKbm95VrGTXzIMzy5hQvkwdor5ko"
+DefData "znw1Mhj2LEvN+mI68pSQ+fCM+5IUQ3+2cGJUTMqUKGibXNjeznWAmYta0Y2y71ZK0YkKVNqKqkNt"
+DefData "vx56YeapQd85gMn5uwfMtQwKqoxXOGYocgzthSk9g/xRh9/SueSO3m5ozu7ndfmUjdQUEUtSZFV2"
+DefData "F3M2b9ii490GXk2gWEAh6kZJxiJgjy20R7V7TPH/sAR7OkrtUWkJ6tpSx9xT9fQ2Tu4M8MWStVCD"
+DefData "NBqSTu43LqLE30N5kL3kOw6Vzz3Yhgr9C13FeRipTztI1eDihAj9zQL+rKGI8jOPxbp86YBijvY8"
+DefData "gOevLUAZ3ML3gRTGh9uXR8q7Bw9hvn25WzclCRwFwEQmSpOcPpRVMNFq4QPm3g/wS9FztY9mGKUj"
+DefData "cP3MHcXMJzQyd1UxdR2UKK2sGPQOjrQX1VcpF6Kvhtx0Km5DYmTzsgTdEui2DH2gzRZ+y3DaWqn1"
+DefData "kYYQSwasuCyxFj2cX1XhbyX+toxnhgM0uyhhpTmBQPWyJoHamUigFyUstT4g6b8wLclhGbVaRdPB"
+DefData "xCmifCttzQoC2tOKaUTeFYmiVCregJb+hncfuFJaDzjw7CfhFNAMxr8iQUwDl7pYgzBHHnMmWWQY"
+DefData "t3i2T9laT9GT75ZNfyum3/Lp5Qs0lOSXEohFzDFnUxXYFgpsFQWq6MklQcD8anTxkACo5nLu57Nj"
+DefData "6cununW5tcCu2Ev9OLtP0qUhslUE748ss+iwyGoB1qVYRA0l1shsbPMcqoWjpJ5aN18dH/hBQziv"
+DefData "oOeoxIeIVs7bvTSEJobku4psTIo+IcPBlGgXRlHoYjiMUzDvoqT5nalvjMn6VICOXrAeKd+doks8"
+DefData "cHWoPxifWwN0cTWiR3P3gDXSKKJ1+8l+9lw7U5P0f1BLAwQUAAQACACzXIUzIfiQEZQGAAB0FgAA"
+DefData "BwAAAGljb25zLm/tWAlMk1cc/xWqeA/dZBCdNM4tTDc2jfcxD8YRdOoOFW+Zsjk1HiBRdGIVapRy"
+DefData "tQPkUGCoKFRMURABMRVUzKZGFM/p4nRz6jKFFkqRytt7bSlf4cPaYLYl85/8vnf9/+/3vnf83zFF"
+DefData "IACTBU6AMSaEe2BQ4GI0i5CWjaXhBCdj2p7FARWLr3GO8zDm2hnyRYC4Bw1X07BlucBoJ7ajoV+r"
+DefData "cgE6C4F0Y6JVvpInP4B+t7dRj4rGLlIsFcIsIzsABxyb03d6A/2bk3CjYMUiQy0iQ94E/OvCus0e"
+DefData "TcPTLHbNGoK3MHjESCxb5wdJ/CbEZWZgt/I0MvLvYV9hLbJO1NOwBulHrmJOwEQEisXILNIiNbcS"
+DefData "KYdUKKqow5lfyAth7tdT8c1aP96ytGNPIcup5y0rvfkMm+X3YGffB6/1dEPpDX0rHWV5AxKV/G1R"
+DefData "XdPD+8t40x93gkLFz8NFSaUeytNPzen9x3WmvgT2FDyG4mQdonM1yCnT8dqzfwnNuIn9xfcN6UOn"
+DefData "GqhlN4P93oIqQ/3b91ch70f+thy//AyyA2oUXzKWn7jSQMdKRK17IPfMU14ba5g224vav0P7s4G/"
+DefData "zQfrEHukHvFKLU7f1tN+01Ew/me0HXp8sWg9te/ZXZr4m1PWMd0bWceeOmcX6kSKgvoPFPm6ftF7"
+DefData "GwVReaSTOI345eXp5xcXkzkFBWRCZNQDlwUBWXB2dWa/32PgIGefpOT0r8rL9SuuXSNcLLtyhSy9"
+DefData "XElmHj78q4dMHv7muI+HWsxXjvQeNeptqiP5XHHwnF9+ft3cwkLik5RUKOzZ6z0wZ2SbsDXSwZpS"
+DefData "e4UQinvNPskgptUpNoErYjrj7rgCemK0ZX5GBKNvafIz4m54Jf8vYeuhowm8a6MdwupzAZtijr1m"
+DefData "wXPqBsxbuhvL1xciZHslQqPuIzzuCSJ31yIiRUPjVTTvLtaGlWL2kiS49J3EqYvN7LbaOID6s2lU"
+DefData "3x8ek8VYtCIVQVtU2BzzO5IUahw9p6Z+p9GqT2uJ1aEqU/3vYnnIBWxLqEaY/BGCwyowyVeMISNX"
+DefData "YqZ/AnZm/YGyn/l9d3uwIqTAxO+M+P01VvVfNjwmbzH38NqwC1b1uYjNqIVYXoecUuv7Y0uU3mjA"
+DefData "4bMa2AunmflnLIyzateE9DwttuUQ7KskCJLa1m9Hz+kwPUCH3n0zKWsfMz+bWy86h8ronrhiSzVC"
+DefData "Up5h1ZYqq/pc5JTWYNw06tVbnbPGI/+nWqv2XDD9tvbn5yFw65/o0lXSog19kZhtG397IIl/Ass9"
+DefData "VEjzbOvL5yHtSC2tT03Pb/znvB3JNZSzs8UIbIq8ay7PPqHFOukDBEc8oGOmtcrHRZKC+rrsRmRU"
+DefData "EMwL1tJz8pNWOrI9dZSxlwX/hh03zOVrJPcN85thnfSRVU4uCs7XIzC23mA74MO1CFiT1UonJUcL"
+DefData "NuZt8f+Qr8FWeuZMv9CA0Bjb+Bl2KWuxKkoH39nXkZB1v1W5QsX4h1jwb455aKEjTX2MQMkDnLxu"
+DefData "+xxnYOdmvvM/g+q6ju4pn3LYeyA6zTZf0l58NHwVh/99HDj+z60/hiWrFRx+b3put42f+dLwOA2+"
+DefData "k6mxPoaut51VOHWLv7/5IIl/SHm7m/in0HG2bY9dskltWGNN6ySlnGDl1sdgd5CT17X0f6rpWtAY"
+DefData "UFKpwelbzXtV8iE1Bg67RHlNrw0YDeUZtVXOU7ca6J2qBvI9f2Hx5gYzdxMC5Y0TIyPrfBIS9L67"
+DefData "dpHpGRnkMwrflJRGL7lcNzYqWuMujdV0mbFYBxfRHE7/d+7o5JTjvjG0erA0RjNoR0yV247YWjep"
+DefData "vMY96vvqoVEy9djo2GrPWJluemYmWVBWRmYoc0n/0CgiDJIRBO8kgiA5Ea2XkG/pvajlXWlh+Vni"
+DefData "GR+vHbFhY4mLp1co7O3HoPW9R0DvW/6TYmUPl/HU0RaWUwRUVJBlV69a5PsVFZGx4ZLb/WfOkgo6"
+DefData "df4ELf1t2+LY19d3m1dikprvX9oCuwv6n79AvJNT1APmzkuAUMjugy33WVvkdedJHuvGhIXfml1S"
+DefData "8lzuidExtzv26zef+hRPatfTWsU2ioCO13Bnb5+NQ4KDC8ZHRNz1ovNrcmpao3diEhkWsuFip36u"
+DefData "o61V8pKFndO7UjhYU3wl/20hFtLoSvQQxBjXjQHiZthz4gJVC3DKmt4nmvRcqyiNHg6EYDwhOktG"
+DefData "RmMHR0cjHXtJFUAkMqbYOyqbaOmmtjqYX0McjA/Dhhj3Jdn4jMkedP4GUEsDBBQABAAIAKgAhTOW"
+DefData "ihNrHjsAALM7AAAOAAAAZ2Z4L2NoZWVzZS5wbme1WuNzJczTvTe2NnY2G2xsc2N7Y9u2bqyNbdt2"
+DefData "cuONrY1t2+/z+yPemdPVVd01H7o/nOkzNRGK8hLICPgIAAAAWUpSVBkAAAL+Z3Aw/zkdpzKz/xyM"
+DefData "kYyEKGD5v22Doop9/V8E3kFS0xkAQPz2PwMCMrJw/wvCukjJicEuIkHhQKMyYQJlAABSgJSosKrH"
+DefData "v4ts9zRMtaWwrYrTy5OciQkmVqaILIqgMlBkZGSapm5jDXd1jbUWp/8WPsdZR03mxFs1bSRCDR4m"
+DefData "Zhw1N6tJqKHT+Ymq2hZJK2Vc2CjkkW+OX0lnaWfH21J3L8/TuvM0UBgN6v8N+BGUcjMnTKAe0LIn"
+DefData "ITSSzeAbQkA3MrE97FgxtxggOCaAABfCBbYDIkJIgRR4jPoMEhCSRfS/NCsloYPxQ7FJVCGDIG0i"
+DefData "3gCxka7hTXwEzIOAQlnOYk+Amj3ushpjqkFrMrkBu2cfObDb4gLbqQZ2HCIffBc01L5qBABusrei"
+DefData "FEITPCRkf0STux8O8ltJLDD07A5WSWAvlCm4lJaalVRYPNnUpaJo/0wyNX0avlBiBQ7MhMe6FxK5"
+DefData "iFtbyVpZTXSMvD3ZFnWtm7zJR+H3zkV2+UTZY0t87yNlIIWbAPpB0kH1O+H/V4i4TnA2rXsJ68y0"
+DefData "c81tUNbIZhBse43x0NDu2HENq12VsGyTfK2ApqjYSZGba2JytpDO7t/fX7slmhPq+n4DKtPnTU/n"
+DefData "zdZvYsBrnmtOcy2D0Z/YQDQUCgRcGFlH2Rf4KZ8PRWdwNL9XMPrl7MAFPm9LZc7s5GRdPL/wmaZ9"
+DefData "2Nqm2yseNkXIuOdh+kE8qkAkLvKr+M9rnO1esDI4SYUBwoHlG+QfKEqIxKx27wTnh1rWE1+BKmHI"
+DefData "+wo/3w1mEYUIVnkiAjnlU9x1O6KBa4P5YshPNoLzX9j0zxk4X78tGHSJZ20J5D6CSOtQnhnq1DoC"
+DefData "4MCjC+K+ID3wAdjiyM9o4DEqgozNJG88OflgbiT30vA6jm6uw3TnZtDI+iT7UuKtsqXR6AXBrEv7"
+DefData "L85df/MnkKAN/TnVBREd9A1voH3uybHGQx0CL6Yd1UBCDP00vrozNLuAwDwrXj42x/L+Kjeg2jxX"
+DefData "EdkwxJ3V/pKF2MvF/gcaGPod4znEJf4bZCpbH/B4Sqh3LX06Nt9vY+PRq/7tYTbdyTCQw8xFawEE"
+DefData "3JjhDzp1WRBAJxjMHmpzFHvu8oSC4CjDQhamA32L7AOHgFepzTeBWTzD4TqenpHW789synPiRmvE"
+DefData "dGvOt2UF2LuXnXoHUe1kIBoDGiaFjmgNQHa6aNLTp942HWnxbzRdhirmQp3Ha8PZ4SRE7/h58pGD"
+DefData "mFOYDMS7HzpIjTaonDqJfxNMofMraIwCTmIYtxF/yAvRgeTFURxQHAisogWA4IthWZnFqlnyjcsr"
+DefData "nfSxbUPy8NtDSdTy7C8NrK7r97f3BxKsFMsCyKEyrgB1xUpIDCpSiBnDiF/c93bQDE6XZwA9xsPj"
+DefData "+FDHSfdGXO4CgoifhUXqhAH4/tz2n1t0n8+lTrQY5dq369GR6GkoVUIhaLDFzaIAHgjiBa2Pp6wA"
+DefData "Et232CbVyRweCvnO8wSXVyRcWK2sNlF8ViKmD7r3Vxm/r3N573kzmUbUex87h6oALLC0BKGbUu8Z"
+DefData "ExbWT26Y5h1LdiYZLTWovOJRqBoAMXDO2pdIF6P5b3tiwR9ahum50BjckJqRwMNkvZkfZNRmi61R"
+DefData "z0+Z3tWMhyE2vSSFO3+AWMwW3K1a6TPZAkdOnxlgne0rsIRQc1MVnJAzLuj2cGsn7YXhyIqk7VQ6"
+DefData "94l360TM6dTApbAy6yUFI1BS4MXTOp2TMXZIBoJOHx0lOWXVbp7PaevWg8m4oFnSMl2XQF0Jkg52"
+DefData "04Eu0MdSEx00bJS3VEICYBCxBc+6EtGWR2H3nEorLBykPlFUjtSh4Pt57xqEyoyuJco4SqU5rHy3"
+DefData "nx7+txLAs7u7+/cyXsQna2hZv/boihF6ADrErVrMgHs+sBcyl2sedtWbFMJh8CoHsA69vhcOyAjd"
+DefData "qCyt2XDURjCX/0tK5pmU9kKUFrkb0vUxBVMyDVdn3WrLeZy4BnJXokUmAIU3pcAJDXB/XoDlykz5"
+DefData "ATCoC5O8djLsDGlONC1LyGspQiNToBpoOKix5/f5kC5B515u//xyzuNMDqZvzXPX+ga9TSujtICP"
+DefData "gMwA3uzK3hrLFfJQvPhMe1knBT5rQqWeyzI+wl9HA8NIR4mdnsz+HyOf18uI/Vpqarp1WrjJ89cU"
+DefData "27aqNKza/8730UAuCyVZ3oqj7C66I/jME3X2HQKzuIKOmD0rfk4cCtT+/Qwt9uPmr/fsEy8saFNr"
+DefData "7qBcA1SrB4OOPdYVenq3XXgQzGDh0o0/BBKsywD4fEOG87KHPCLCPOYHjzzMZ4QdFuYh49444xLT"
+DefData "XjdA26laMogwjLIO/hnXY75dnz5F+AgHgDpW6C/I1PM42tPt+rbZqdzsTBnbdzAqDuEuXxJjZZie"
+DefData "vG+nOXFmb9P49eYoWlnOvU1BZuAH6R9gwnkZDJGXz3HMh5gV0BiTm56f/rS5uNi23zDPtH6y0jJx"
+DefData "o2AWJVSaMBbJP5HRnpBOkhSyVNOKP0y0EoO7II9+COSNOxhEYQSklyHzPBW4Hc6yiyHqOqZPO4/T"
+DefData "m6PnpkWXRKnrW6x4Qi6oXpUWUac+mV3u3K2qxV/w0tNjVkRJsylBK7Vw/boWqMNerZzJhyKdZX66"
+DefData "cj58EZdFikek8tbZ6iwm6X6VBsTOcI1FLjeayghc9fYmh0T1931At4yMWmrIBJADrnixfxFbqRfC"
+DefData "CfFO3ilIqBXiobYhQXqfW4h4Xwd8IuFxoOjGpujRswWgJRfTarQZoCJiYze4tI/W8LeYasIuGF5D"
+DefData "VirKRLIq3kCTybPAGnnDC1FeGy8w8KOWbXjGCmaVyLXvJyTSrMXMZGSvic7L9u/QpPg0xq06P2bk"
+DefData "+hDPykifB735QmmApB0a4NRwhzCBFp7rZcfduflOVyfEqEvN6t7tFzE3XtLSCucdXZmBMwkrFm7M"
+DefData "7OzoLTY6fQVDFBMvDXxNVtEH3NtiY4KKADphNfGMI1mCX98BchISplsvWEx415b4bl9+XsezYd6i"
+DefData "2V7/qF3I5V7LZkKDb9QvTeaHiSayWzOht6Amur0nHTyhlZDfYbDHItoQnzHSorX01h0LNOBsyQDl"
+DefData "U2pfflnIvFK6bGeh1r6v7Mt/fpB5tt2L5W/Av7YmpKr3hz50pvGXhrOfySJE2bDi8pFOC/9FD0oG"
+DefData "q0/Ro2L57OMAuZLQwYhlmGsAWa6B7XoJhXz33pu5M56GPhs15bTeiAxwAE4HvzdEknpZtKdmut7u"
+DefData "3uKczS8jnggpKnmUIVBvWnNl70Gm2FvahxiWdovWSlgHrJwBb93sDYlP4L9Cg5xziG1oPxDCTjSM"
+DefData "pNzixAixNFuJjhN6Bnas73N/2y9exd9dya5nUZo9NgQyKb/jerdM7PXmnXzE39hCUVyZzVQRBkLN"
+DefData "53r9aX6W8/Parh1rwclFKep1JYVsJd0+vH/3Hm3Ia7d+Qm/NuBTiRj8qSMiyKYCkkrVFBuIi8B1M"
+DefData "PGzYcS6FJG4cPvUK9men88NlauA5XsiaDvlx2K2PZCSfPe83Wj1eoGonJ3P0GYxXOKli/tbJKkEm"
+DefData "OZ0v0VtIjDCPBuNkr5SvTbHJ3KirKdfZ4zX2XjfaeDY3s3NiTG3Zk5x3owCxYkKYYDXOw4UFKrZP"
+DefData "4akAets02/ALLbqv90svfU8qeIKObMT2sWYZRehWVu8aS/luGnJywYorPIeo0bGC77dGLrKEHX5G"
+DefData "2j92HECBgdKHk+nT/oKb9vYb+PkNFZ/vncgTDDcrUjdtDfNkjbRFHOG9t+LCv2kI12XzmWymVZ4+"
+DefData "hFfSUXmf+mo+gmVoHRd5FtbtuC4WqHu+PvruLzgJFRYi0PcMQx8VFTXGliY7n81mBX5XRdZZp+JV"
+DefData "VDU8ODyDOggMR/QVA/811gGwwupIqAuzd1GbsHnE8Wnyjn6DbXHTVBhd8AR9PDB051/ZFRUQ51V7"
+DefData "5xtsZFUmK2loEajXezW5jSE41lqWDTQNMk79uGyM18giESrDCc3c1JStVNRc7x/nXf9OcL2TKsjJ"
+DefData "gZmQ2JBZOiQWJ60JMEjsmUwk1TESQvMst53KjS0zlrZ7vPTmeeSDXalNGhw/WDY9vfmjUp5Xu0t7"
+DefData "sruIq4o87hsl+so+mfJgTVrBRn8sfypptBJhV4VCV9aPJa9YMM86DLjOrvucYWJgzClw5bOTJ+9f"
+DefData "6I30vJOOp9gZ7RglymXKdlKCTDNguTAd6QKawfgLNANGqiZGddXvcPSzKtPQn1BIUJJSS79i+RYW"
+DefData "nVcPSpX09MZCkZNVf6cnJYeuNDSDGuakAZGRtghRdBWVtrePq2HOdS4afMR/R5dm2Rw62RoaXfiI"
+DefData "mZD+jkpRUVEBU7WpqNbCliunPFP3ZY2MVNbuvf3Yn6wF0prjpw+h4LkrVxggnebqpwkD3IY0Zwq1"
+DefData "z/xjid62g16YfFHcLItPnQfCOp4v7Bl/sL4N0vcUWFohqadUmw28flRpnh1likE/zh2g03s8b8BR"
+DefData "1i3cENEBU4BnvA0AH5xnqgdotpM5sTuCDmwiuJW0FNuwXyst0WZrDoo6boVQWCsSvgJtfKo7EZCS"
+DefData "sqTrFD03IzXwBoc4u4EimJoi9NpLnzmq+AsYFk17kuqHWYYGkC0l+e26GTnJpnFpeYkJNkxOqjCz"
+DefData "zI6Dwx2jozFkApvRy2eUAvWeKI0Of6d3xSo9P1/UqtbQWqzdRz3XV46ihTvNWJD+AmPPFJ172Ovp"
+DefData "VlTgvu5Y4inOmOgIbPcdcOzfz2hcyE+KbnrT4lkC2SlsVptCoRE/Jr5K2BpcK4vVfhPN4ZBPNRny"
+DefData "Xuewmmqc/AlD+Y/xwEcx81cWqiq5V/zhNBjoEY9Kcbi1fn8MFROT/tqJqJtNk7s7B4yDC8/QCII0"
+DefData "efN2jZh1h/Odi1csXr35TAglzOmqy4xCXHFbhZtJyDF/XyhfjMDxPm1lDN3bdl5DPFuH15YV8OaF"
+DefData "9A8mJyfiMd/k92d8y5tKd5uQ6RkPIcKpTFdSWiGONXM5wy42N2u78WIPRYmg4DcmDc2P36QPLWKY"
+DefData "fS5IjNkmLzfcC33oup+jOZy6W1v0e+juHEQXMEe6pJ0OFEjftj4SGo+08jh0TWPX5/c7EoTE4zvP"
+DefData "SlwiO6v9J6/pmVaduXSzuFxcpUMEd7lueqKmFrbfXPkLmsJW3NZZ7yhcBH1Sw9QiBoDkCkWKhQWl"
+DefData "VGadJlS/Nik9QKo/X+axKyBe5DoEi3YxICv1Hfeg7zRnGGogbyTCAaOyQlNDcfBRCK67Lpx6Xvni"
+DefData "dQjidusrCWK83zjjnlVOHKDBITAyNkN0dKL0xE0AY2Ju+VurQkZGMnzJ6+GexaiNRbnD9J6cjDnd"
+DefData "feslzv+rdJ2BWtXxclYpzTy2v80RAWnCcq3yo14jEdH9E7+yAP8DFtXEYUQ3lRzgFuzgwNq+VrHa"
+DefData "2JnG7exW7yOWVmDEq6oy0Ed87mRQSQ7hLxpC31oO0IHsQvAIvT/KXs4l52bOaTygI85sJvA0PvD6"
+DefData "FQCoCTQy+npgKAayU50H/MPQ7fy9xMR7aTidvIaMt8Hmdq4cGl9jGE0Q6PdWzOQFcpJ1Y3N6Alcr"
+DefData "GGInG69/drsQe5lkuESSy51ArI1ObgxVqIVU6Wjuf20PSA42hQsem94pYtXEZh6arBzvpXUlL+tH"
+DefData "KMD47+GxgAhCkcr83wc/kpzyllttxt0+b5fodmkqb5JTvn0d/DKSTSQWYrHiLD4lNTyF+ZoRSGvV"
+DefData "/cNsyNXGK3WJqZBU5MqLb2evAIN0KRWbM3S+zsz6r2GRR+MP6jhbPSTNi5SZSuxWlp3yWU817kwm"
+DefData "Arfa5G7cHypf79vGXD7FrzZK8L8MgNlgkcmJtMCLE5l260V/sxORO0R6KbKw9yHxn6LnGM9FQbBb"
+DefData "dWgCwsH96apIZAshCitGXgEfyXzDT0bEm2ECRE/v0K0W2/vLn2m93ah7iWLXw1SgilBXGiu8ejl6"
+DefData "wDrDGMxjeewDjhZsbiqZgHmVjguKCCMPrNvRzUH6PDVMg1EhGUPHHqofCCsznyPH+u92IuuaCrWG"
+DefData "GBNuQR5YQY70V50XrfcdjUb9nMJlC1qJpbIecUxaia362ywioi3RjJcb1fs5ZJu3aRlH1gO7mSc7"
+DefData "g+rv6mLCUpE6bog4aDQCkZq1SQoW0TWc8VO+LdeQyJfv/HLkHI5cQ0N+SCIjF0uOndEwn9ExWKqu"
+DefData "E8JELPBhkx0WauMN8GHS1BNbQlJSwRe8CwiPm11o3k8pSpp4hnuUiQ23w7HTP0t3Li9w30W8+sqA"
+DefData "uPp0sEkKl7FlOjC23wEbAIy91e8DChZ0n6AO4P5VK57gpymgo8TC5aokPrk8hRYJcm4uwcHbJyyX"
+DefData "oNO1ocGnTVeaNCFhvciN3yV6HuebgrTVV0lEBV4eqT/9Thz+jOmB4e3dGblHxQel9+PCEeVWozfJ"
+DefData "WouEA2GHqvra+bjgJWkrKc0zFQ4c0nkUNsLO2MYoBcheIoga0IpYkoUSA9jn+n6tow0HNkBBLkAP"
+DefData "NnbnErkg4Urr/575H9Ss8TNYJHrTLLV8ZcNLiJ7bsAeElh+mM999ydFt1n6P8HOlTeKtjFgXnIsk"
+DefData "i8QCeBMxynE5wuf0uPc3XPkHjH2Qll0TkIN+AHSp4Otgc4ZOFdNUBLX/8LvFRe4usOHOojYo17vj"
+DefData "5AFxgIyQydX0AG6uPga8jTgov4vgfIiiqqn7bMTxvDbC8RNBa2+TBqS8gki6+f5lg23LRb+CLMTJ"
+DefData "HTdq0VWOiGbIa8mgWRs/0W63YGHiX9CHSTMG0CNMZTHR5f6+PnS8/7U7M0d66IPT2dKFrWRccbbA"
+DefData "kVn0zef+se3EtYrxJiy38aont47WJuFj3aXK0Hf2zeSXMl8WM+YnKwHIEUy98Hv/NxboX2hrTcYY"
+DefData "F17khYgVAuSu0YquJnKyXzN8aeHbTzM/aG+EWRDYFOd6ksRv+EKi7fbwitagxzT/YnMkR+Ro7bj4"
+DefData "wIMOcbIhnO9NQQBZgutUb88hbcEhuMk43EpTFdOba+Kya8LOo7YzSwmgRDyxgBlY/hMqGkb490+p"
+DefData "H4OiznZBrdmbGLacphip2dwxR4f0u1MJCF29X5x8vpw/hvuajwon06KwYtDCKnLb48QPmVzYRbCA"
+DefData "0gkY8OOKNlTO/8Se2jRa1H8PhBIpfrP5UtwqrDfh73olK7E1xuXJ/HwyxMLzDN5KyVnMtgRwR2sc"
+DefData "9LxiUOYeH72FULWfrlunJeuD1fRrldU/eBlCslzajl3un3ohtvkWYLpj8Z0nSmDCzXiuonF34S3U"
+DefData "vUwaUJKg61xERj5yvBF3/PWBvWP16i5rzT6E3yYtuIOiqf5JtPoLKkBbvTEx+oP476yZXJ6nfoQ7"
+DefData "GfMsvTgvjJw0RQJ+kCZz80JttachLIij92gi7kiOvMUMHVzfn63w3i02+QiRbHrtM1wmN7q/75s4"
+DefData "3QW13kBvP8HOfj6TVE1jD8wIXG/cMbkcwF1E/yv2npjclOv2y4WUBVSU6IpamnFifSNt4j/56eJ/"
+DefData "Qs+hhc39MqRRCJPnKnPJtcVYi+b3AbOUZTqWfhi9G51eG4dN4DuhW9S/c7iJ/1qW/yM5hdX8AabB"
+DefData "KlCUUSeIiHmWEinI1jPpKHUb0ot7PuC76pyyNtQ21OAZBTPhzjwFLXcxZbj1iADuEk7HYLO/6naM"
+DefData "7/Wgfj1O1e8g/fk0zje5gs5SZrEpnflZ14SR2KGPvqP3xq5AsnwmZpmlAU7rOutf5+X3eyJYO1Ii"
+DefData "3GTfFOHF++nZodF40FB9YglAnADvIbO2o9brR5yxnyvEGth0erBPH8S/bWoI3u/Me4J5eYPu9v+w"
+DefData "k7RGBejLH6V+vcE5W/tCvFBYeCOejAdI2bAEZHK/K1doAKj+YvW5ji/afDhwtGOp3Zfd72W0Qmxm"
+DefData "IwaQqr4kJzJVI2Nc2UwHCfZCTncBTWkIh+7Fb4bXW28eL2eb6Cv74/F44j6f1sN1FScICFqUbdaK"
+DefData "8pxk2fZVRqgcjpMKInLfMK/J866/cszHLQu1zKpVLIgDSCmePtNae3T+HgjpDsvFEtCOIUc4Hvuy"
+DefData "klGgd5QKufGYuKit+u0ZZ3y2tyCv3RoMp16fGJ0HznWEt3cJf3gcNQvOsbYj4ozjWelWVGg2exK8"
+DefData "5fjksNMusUy1S4YFVCpZDmnJAi4BelBVgl+RWCqUzOIZvcYGGZjT+mPLCnwDHYHfa1joMUA/YtDu"
+DefData "4nHDkhNjOJpQ/60Ix8VDODKjHQXhbsV/wH0CktT/0zH/DcBV/wKT9ZU5i++9131ej/npei3xYwlC"
+DefData "MYMsZCo+9rOdGM6UbgAEAYhK0DIo+eUBQmrUtQWVHOY5M8xMSAnThCOmiJtHDbcIS3S6kwXQMtdd"
+DefData "jyjeiidrDE6yokQOqWpGSWr9FfTXwyOnuJrlcfEVpxCDHqgThITMhmfEzU2pnTiPqdSoTc5daHUH"
+DefData "FeUTX7kSuBeO5O09/wJuEVxOydFwIDtj7/+ZHUWvdsdGkwKJiOKDPeS53flKs3iJ/T4Vfbtebxe7"
+DefData "miwJFiuX5n1XafjW3OcJJIEdkOcMiq3iBfmP5F3uyw/nnV/esg+e7ZAR3yw5/e7UzSDceVC3dqjZ"
+DefData "YTK8EkJ5x3ZPsgeuBPwTw4pXeS+S8vnQioooJT/XvkyHD3U6LsbIvSfFfeLhVssoijxOG7GhFRdt"
+DefData "IruVMJFJZD8XnDXZbRGePPlMyDtF15INwhPg1et6yoJvyuiHvnFJ09yUaAEWkQWYxDO6VRTwMIwK"
+DefData "pMIjSo42OBfM3RCgNH9ryKqRhguimfjLCU1e6cK46dCZ/UGlZQ64nO35JgjTy1pvyssbJV1Gz8CM"
+DefData "gwUnKoMIjtFqLPjnb1T0iI0ySDB0XHU5h5IdzWnegHLKoTkZWGi/ZG1FGncOwAxG+Xtee4qwn1RQ"
+DefData "gTGPDwGoaPgZQHoydx4482mz0i8RQuHaCdiSwDq3ZAf+hWWSwyg6gc7/eDlGtFLM70VXpRfuZIc2"
+DefData "IBDiCozX/4sz9x4409PFQuQQ+QCIwr/LOYQDi4NbbLvW3Ik25qnhfp0ZZaQFGOiK2gErwi0qEYRy"
+DefData "WEfCN7sVUiCg8/lfTBi+GuisWr0/UsV5TjPJAYtTOuRuR8S7+5hwv95uLvDnALnGn/7rK0/NwdB5"
+DefData "k69/kJ0QoPI3Jr6210gwRMUML2GSqRqaoUnDvyEl6UsmZMEIW1AB6+oqKtSq5ZPsGXqr6UBWgDUr"
+DefData "HRhlYTStnA3v9OiKJeiKKlxbMoChARXIdF5BPoi0CfXLK/YDmbjGlhYIoMIGXB9c7otxYwXOPNps"
+DefData "6aZ+rimQp35pSQOsBGX1u4Ha8iGkTfQ7TJ2ptTXat2uDSi2fLaEAG+EQgtNMZ6mUeTI4WxlN6AAr"
+DefData "weaheaed58DbDFqAmBB3nprqTuL/kgwAGKa6PmjuuRQIxZ31+w+xwfETtOCWg1z7W+IFsd0a/s0n"
+DefData "TnWAdAALqN8oMGWxLWEwkLQJSbuFRPHL3lcbUQh5KmePnQA+rD9p/Cd6cEthXVsNtQJFXWk1dF7V"
+DefData "EgTA6RcRk0KcqaHY97QW+krM/gix5ly5oWJRbtSnmWBZ3RrsdwG7TkjkeiHQC6uA2Rerf0lFR2hR"
+DefData "fKmBrjt3gMzUnvIAV5FLAqkLzyNWHAnc0uL7WvjYyvohhCIB0gInZkFTNwEFbsH+Rqzma+NWgp3W"
+DefData "n19YfTM9upBbNfmvEgqNl5yClE+BjbhXN6SWjCHyMlJ4DKSznm1YMVuwyxgQiifvtk8+11hqSeuv"
+DefData "IgKaPaFRii/ncgadI2Jq1L/w47ARWE/79ONmezlJet9QGW49pZJrfrjM/QQFVEDZADu3n0vb6ZWI"
+DefData "u2pOJal19BnzJuU+SRfVN/v6D6zTDpE+I5U+PN1fazU6t688vm6ZZIx83gmaA376qjAs673ym4UO"
+DefData "uEJQwmVHRkrrlBXQp7BC5/FD5TE8Pk+md60SIxtqBte2Zae387ahXVvgE/i7C151P7LWEC4kyvgo"
+DefData "3WdyBUbhfCVa1/KELQdgkFqdodj13gjnNFY95nbA9d80mFBkWoUBCOvIyuSgSVdyotEQVNw2Pt59"
+DefData "937XOJaQ8X4+UvMy4I7Ihb35CnaH8Pr5ovpDJw+a3CD4Pd+k0qVeLryUw8e9LcH6cO0gbF658rx5"
+DefData "ZcsXLZ8kZXFH64f1uwYdBBtecro6+yGurOlBbNsbJDR5cl1nvVRpdgWeKbqitG5wRvtnuyGYE548"
+DefData "ZIQyH7gQ++zzmPHOA7eCBKns7AVoTeFc5W0InE9oDnPd4NsFvTIivO/akY5Dbx0pLqb2Pkm+XgfH"
+DefData "tRbzKMMuNJovvgOaKwHnq8stKM3r2ROe10ceSjkzGZXTpktEqU69JUT8Evkl6L4XJnYE/CBUgGwU"
+DefData "s+BndBH7WdLdNk2Kvi9qrY4vJz9tBRdqePQjBh4nlF0GxIYKU8AxHgnz53+t/oaS6F7w/mhQZtd1"
+DefData "wPGAS08GiH98vmmRe04JW8GMYYKpg3nYHhix35bXtdfJx2hF3LoTLEplxZrBoTNcqOlmwTqWxcRs"
+DefData "fK2yrNJvicwM+E+UCOxhNh2R9D/skl//db0uzGQq6E4TGov1n0wv1ZtojRUcsr5LvV6rsHrvQ1vM"
+DefData "ZpacaIGX+O6KlbncWgpoQkRMvfnM8dWJaPg46v1k7WjTHeGEjogyOy8PesGAy8Tmz/2gojXRcEWJ"
+DefData "lNF0XWJzS1VzgNw+nUXO+SJ7zSUJVYENWtPczmFCuuxCElmuA9WYYslmf+rbddwIE+N5Ec9CThu9"
+DefData "FCqwOLsTf53K9vofEW8ihZylbMrI8wDb9phlSbGo37Z4V66id7NKCI9iUWcU5ldQ2sx9h/Hyr2+u"
+DefData "yjD+paxnV/FeKI9BCjNAndcH1X3ekLOvbMCKtbQhte1AeDwK32tsGdbefzP3GRwylzN+1m70yG9s"
+DefData "6ku5GATWTw1UUyUDfJrTOK0hZKGbcEm2ZImmV+X4f/sgHVEO3bCDTBP57dERTcNddTgOG8zGkKHI"
+DefData "0SkB/05KDQR8Ob1aTWaaBnpHTIU0saDOyA+cA6hAgryHjbYDcVQ5O1W2nc/u5hZhcwh8ZSwGADWq"
+DefData "6P3ZKCQAgIDtf38BAKqqDXc9uXE7ZblfAZVlbnhFbEdp7voBsMnL4KchCK+/TGdp56sjY7T2pT8I"
+DefData "DX+ALUWY/D0JapqMfxRvpaP6pwcQxeTlfz+0g82BuYSdgvyEg7LBvS5NjWi0rYrZxH5DvMlHCIDK"
+DefData "P3Gky5YHEHtHMlZWpMPF4Y6vy1AxtbSPEK5HuZgTFzNqCkeYEn2VIOS7lleYPYRwxml/25YFMUPu"
+DefData "lHc6uFoH33+Zc+ynKlqTvOOnLW9veYJVwE7gtAe8D4i+xygLWzp29jal8az8RHGA26XpQendKcz7"
+DefData "kiD/YA0uyeokv50bPh5xKgL8Zk/mc7iURqjOiNEuW4raWztSngTn87yIhW4n4ZuvmGmdhe2G9CLL"
+DefData "thrXPoI+TNfR+lWvM6oMb5+qRavzcmDJ07I8BeDrTgIbAhIwRTTQv+Pb3kwRk4k2nmdhr1v6l0UO"
+DefData "z4EIem3Ybxdvk472qBM0S/XtbBX2P/nveKXfiex2ISEBPe4DkjZy5mpZ3kzvbdpDBAeaut59WmXg"
+DefData "Qq+UQ+W1Jb3o0xtV3WUj+nkhGrsQudP6JDEM1OzV+bDXfppjfws4nlCt0t8M3aRqvLna6oDtR3cZ"
+DefData "Uc0ZiXefOHBvKCm/eONA5tjPrsv2HXd7Lyl+vOrU9cnBlZnG7hoLrno1QGv/dM/y/IpZIyYj+DvD"
+DefData "dr7GIEyy9MTFSPggddo/hbktuWC2REEBX13YGm25lLyHCAih6gKovjkGSPu79HGxaLFUTvd8N1NX"
+DefData "XYZWs3HpNLl2hSL2TNDEUpMFpPFh2zp9W+/uKYMkJr6YWEpu5XXne3J5b1fSRRLCzegp7p6HA42r"
+DefData "2Z+e037PxUYS1msPgcrjNHg4E4swbBpb+MWFsmRveFPqnA7h0VEK3uMU8pm4IaEqpG1DslE1K6Pd"
+DefData "rlN/ot52OfKr2WynDFCb9HQufSnX3Cjvg/fUaYmPf6GQkwE54KpYHeVuGULSNEpvf2o7WGbsI9nY"
+DefData "53jlFOeVeKrnIo7Cy/FOpQXE5cgOtr9+1bLOoGIH5ORVnP1wN7RMKlV5CWjJxYSIS+w7zod8GXb0"
+DefData "uu/cdfydqsrmj3jVeffssuzHAM3kwqEg0HiiFPIratJ+vFd3AA80S4FSko0s101jXtL/cLTH4WJD"
+DefData "CumBzNXoxnPikEMOyNeuEedEKuAVZl1sCXdVhgMZxn2eM+KGJL6WFWRc6VxD3h75jSO2bBSBibzv"
+DefData "7Mw+bikoIXQDxtZqTMvXxOzxAi/GOyZ9sOEqjqciyEnJWvCIdMLGp4Mrp6s7T59gSiD9hQ6QjiHW"
+DefData "9zTgPglq8uzNLcjHa5wh5jYhFFMhSf+5D7IvYedLYIts+QRElznItwqCoZ8+cjJDN/5aM/aMvx0s"
+DefData "+iyk7e1j3Rwm1rLsRY7ghUTSht//NRk2fnLoROp9NJ9tLQKcMEBa714fkjAOw8bqobbqFzxCcwX6"
+DefData "o9IgODDMIJJSZrTuGuHNSmX8bKFAmcP4vOxY+LeKJ6cfY0FnHOZ88sf/+pIoNkFbZwyXdKmh7S4E"
+DefData "D0o/TTh/ZPJIDzWTnwHBvjvNeSbpNpMyXl3AJEcQ/JNdmJKr/wD4/cZRNvcBofTvzBnus1papfZy"
+DefData "xKCH9rC0K57DdLLDI7WHHc/S3MNxitYz0WmXyZV+rsDLqXbLcWBqTaufEbScCAlzmuXdZv5xae8B"
+DefData "CYnPVHC4VAdr2DhSyChSCDfq9nLY5bVAZT4W9DmhQPjX58VyFjZBIUca3EXsWjR8WkvIoX3fn0Q7"
+DefData "HKQLyN5OEt8pFo9P24ldJySw9NnY+by4o5K5RW4GoBNfY3PyX+sMxqkWJ85J9rxbZ1mBb9H7p/n7"
+DefData "9poCnJx//ANO9sBaPXPXmVs9VrOWYgzCG1JBIAVN1pF0l5LPRi+nf9YLBsHmB9WTm1xK31Y8Ln8S"
+DefData "Rh6pjVEXO0EgvY4TxxLsiuKJ+od+kNz0B0RuDae9uqU2sz/8FSduZ+baGkTZWgKzH5J704sodei8"
+DefData "BGrQ7MBp7pr+39I1t/hWU174AFKGVsRGc45kJeKJTW6T4hIHhjLAt/w9ZiO4Dx+9lGWotA4Povd7"
+DefData "kuvB6Djc5Xfjq5+g3ulg1MNlW1QGrxu8lmiiPjUqY+3cOGZ7S11uwWraLA5pGBXzwT2z694v2ZeD"
+DefData "1nq846fZXyv1qGcliLPTxNCzI3jF6MyGAygaDcR6X3CRtA4M7zZ+N5aP2Zz5zmmfRGoAGC7/O6RC"
+DefData "BpEIUraofEi8m3NGj5eb0p+oUHiNfryvCp+h7EWcr5rkhpKMkjJOEy9BcCH5BfhWv+rMaH264NzO"
+DefData "yZVPas+u1HQTNV7HSKiJF2ItqZx5W4MBCzCqqrgwo3OuISlC89e6LOneI0jmZ+xPt6813TpoHCcd"
+DefData "RqxVK1X93onf4Hjx/FFJCYUrb42hBo7Z+zr4iRnyhk3r3P6p9rzO+q4T4sxzv1k7ptN4nPHRWSsA"
+DefData "Z/B90LU7qmfmXGSKp9dbT1j9fzb63xLcul2YssxQGBmdM3KXDFkWtABhu5XofN/1mqKm+lLXQ0jc"
+DefData "DjlW2zOhTrNBvGsqgLksAjBKbKezh1LI1Mgzcxbvk22dbYV69VEtYuq87SdGAbavDDJs6AOEBuQb"
+DefData "WLO0EJVEtC+4PuvqgUVKq961BNAM5SJVTNb0uUBq9mxAjCuAe9kTIMkVuCXw5+LEcW+R7UaquQXQ"
+DefData "5qj8LZZYOmtNDMdSOR95CHzgmOsz600v5Vy7OiqEYVDqOjTn+iM5lLSJZch0MM/HfrHJWQCQagyt"
+DefData "kX4ipyBHB/dr7+dP8iW8zuQLesDoFHKrhNMJfP8oB3SZ3IQlyvHGPURIIKmLHZCUIzSOrZQ0Swdi"
+DefData "pnAJgss1+F8gLVz/KDmguTwJsYAvQVEETZ4SKAmDAXDJ1rGUFrbw/Y6O0KPzl+PI8Cfb9NMSIfA4"
+DefData "cqw5xpCNkVgTLXjYUMuiRRfHASf48GUzgxyAJ4QE3o9wSVYhh8uOPRS9dJXAmodDPQ5SyFBG00pm"
+DefData "UjRek2OEXJqDiLvs6m2wdkq8vUUMdLCpWiR4nh//IrNaOvIA1YMPiIQBVojUqg9jdnpcBaRwsNFe"
+DefData "Ub769Id3sP59m5HSNWJYzNwe7sZAtqvdNRugQ+c16gkjMyBwRvl80vxmErWe3x020cEKm4MU4INA"
+DefData "B7NZSsQKYQp87jq/FZfiphe2YCiR2vHOrbuupxptMPxnOGwO9/zt+tsI1YydCghqgQbgWG8D/bPs"
+DefData "J9wkGZrBU1JmWr0xp7tK7g41qqSlwWsvNN+ichBJRg8SF6Zqw5CU+XbKPBXcJO67sFPp5sQ4r5sz"
+DefData "FdoBB9zw6zNBHeHp8LIgCFZxyFYLqTDiqhOpDY3pqg2l0V7BFPk/puoNTQjzH9JPqTFS4ZJNX5Yx"
+DefData "1KnKyo2ZKG69nUu54AOIUg0Zf9266Qi9H278cR0+ljW/bn2OWSuRBbokQSrCIiR2NmVxfycUTBEj"
+DefData "7Y2L1m5tvA9ZLltvifIbKl5H9NDPlm8eN5inSPT8PBl5qVmjB2oTRXPfefoOYNtBGWHs1fm5UnlV"
+DefData "ofboScWwCrgDUSHFqm9e5NABqDHmykH9LifKF4GWytdjLmYTz+FZcu33YQMpHLERaX98noxfxb6/"
+DefData "H67q3wrOORHBrpXcPkqMwsx1EU9Q2Q2m/TeSf0EmqX8LGXu88zWwtvYNK0EQUgA11agemDh1ZI21"
+DefData "FFYF4n35JM5E1TpGIrvPgWONj2e6ae8ng+flAwpYPB5Evvcx1ZP4jq5Ofyr/qyW/qXX3xGojMZiz"
+DefData "+HM33D+cXWeAleKsZ857KEgkB3gFFP1o/IZLVdrwUF5juLb1OVSAo5cfizzgwDfELMBVzOn2ZdMk"
+DefData "VZjnDvNcQDoGSYHF5IuyY4CLI9mfEiNKCr7UfxeWGzXy1VjOjb1kMdhEgMs8BpF4VDf3SqhAGTBN"
+DefData "Ueb9YXv8W27jS0Ozyv3Ck4KJ6QiPVmm5kq67kwDPZAd3Py3Oq9M3IaSIBwOIhzOW70xSv+oNWa9k"
+DefData "PEQfiHP5dzG66eNkmzkKKIT9lSsLJ2Fw0dKRWgXdcxwOoage7u0g+N2JRhvHH9nTXH9obM4JCxcD"
+DefData "J5r9wubeekrl8HNWUi5w1PimixeVlpDM0p+M82uf85y+dru4034fdq7jYsTf7IbdARscsjdT2L2N"
+DefData "Cq5570i1gaTRevNmo0AxaLtrPX1vfI7JGlsixyy4XrdOU9GaKgZVKlC+38Hfk+h5n/ehbrNsz57t"
+DefData "PD0VxhKpPrkMOzMy93QFLs71X4xkRLuuNv2VF9xVzYyhBPxcSIXcwiehKgdrJ073GPn5BdDo85fB"
+DefData "HuoTh/bxx17hKhGnseF/PuKuO8WT0xnOtV7mKWq1fdx4kVIobSyzhceWv6lTyg9Xx/wA6IJsQM9c"
+DefData "jxTD6LSlda7U9MY7Qb2kMNdi3vX+r/x/7Capu0/dhL8IZ9jpSFuadL5z8ULo7i62A6/bDDW2OvyR"
+DefData "YRhOLSDiQscgwX/J0pSUXBJVVnh82uMwxo0gwCGl+ch/ldTDD7cdF4nI88tUEcxbqDpq3s3FTNFc"
+DefData "lsyRiGq4EHcL6pViHqkCpNgEPe2j4MEWhLW3cZ8JsHXsnpemCIDcmj736epeabYwGDGXj5v6XbCt"
+DefData "QkNnI2rSkf/y5+uRtzn4AScPj4eD5uLTH9SptNr6TxcwvLDZ7oQQtM/WQixG8Qf67zECpHfTBHPr"
+DefData "UYBlPqQavCNG/0aOjpfAh+Ppq28DnGzlp7+7DsJydqxZ2ewq1jMrE2wbsZbby6MHFGnGK53QeGex"
+DefData "FEDR2miNZsbcoTaFW28wOPtBRjaEn6U8/redYOi9OVcdpsEjxgQ08pLJOoPHtdXzAOQMY+XliSNY"
+DefData "BtwKZgQpsfmy6idCkRJIQkuejf1OnX1HxYmRk6szjVHRg0bMll+iCDi1s7RC1rIgMTI+ftw3TgIu"
+DefData "HiziKvREcptrdlNsOw6sku8MSey8qQvXXmpkhBIcI78TPqN54LQhSNogAv86TsRfN0Vdn3RwxWt9"
+DefData "s8fsBKbYgTebSWw6NZegopZ+1SPQ1k8Tjmjp2mdzF89wsSEvs6c6eTrh6EFDeCMyE7+wLu0xgr3v"
+DefData "DMbtqCuVx4PVc/83nH0MI86uM1RkixQBUwFfYf8UZorUsvcc6ZEdSoBYhfKWqwuD/fk67tCfOHoU"
+DefData "u6jbHUetGv4+gG773/MxyfpItT6Sg9xbvFe9YtUMcBfT709cR7P6N0OwjdysmJSHe2LXN98fepNE"
+DefData "6XJLN92ttUTpoqSzFN9hjJ+PwPLbD3sf73vMe1fQoSc8Q71feOZs7lLSXDzGoRjse8ZmqmqsFVUI"
+DefData "F0EvKyGmFhvKpD8/n2G+FL6AtK3U1lcFzmmuFwdZ5PTrzA54RToO2L6wT+ZTCck2VY/fop3uLT8B"
+DefData "WmLsXhfVc7HjLagE3oVAbRAjt0F9KXqKpDG9sgHkDPnYwBHBoTT2dst/crErym63MvA7A7QPKBs3"
+DefData "jJ0U1thBAZdVETqBUJYaqfNp4PWCyRsv/oMCtwU5Ap4u640jaM84U8AcUytWMc1A6ufhn1gP2w9s"
+DefData "5THaCHoaMm7cArtK9aQwIasGaZQGE4oaxbTRMsIA820uLG0RwBRAAGZXHg8sw6p/+Jtb11ZEDvRR"
+DefData "2zVUsfUVjaktFrZI+Wfwov/eCwV5hEPOxf8adJJ9ctdwk93b6GhAUpP0m5/5+cl74mXUnruUG2JG"
+DefData "g2pb0nwTve2Q5VV6vpVIgNHyaX1w35O1zPOZ4XBkhEVivgzGqh+9SlrwUlowB4azVb+aUBSE3xq1"
+DefData "vhPkaXq55hLf52+ETqDSqi4E+8ppiTAnGZ+2/U5/vFU5hfiziSx9g2svh2Anh2Bxb4jWw/zDbNfJ"
+DefData "PWG7tvwJ4N0t2tBZaVskAqvM44V75L2+TknvsRuPpgCVTMEFzMBOW8YFzoDQAfCOmMgEgyFz9xfT"
+DefData "5eRpbqdwlmGJ6QuYv8puDeCFBM29PHTiyaPTIYp29wGyl/1auqmhOMExQvIwUsSozbzwXvNgwYUE"
+DefData "CCb4Zh2LLVdI7v890TOHPzIXuT8CIbZtLYEOAWPaMJhPU5YfUNCBpGw5Avwru+vRItUYzWWAHxCl"
+DefData "XE/OrHOmsOmkLj8YerdB/V0qWloAI6IjCF9v5eyEQQtLJ+FjrvuLIbiyRghxp6y1kFgKgIjjbsxI"
+DefData "tEl7DTkQHDgTICk9iPNtMgbGD1RDTwHAX7DF/9l+YLUq9B2OCDk39Q+reOXg9zLRAs3/kjdgS0DH"
+DefData "VEYSw33cIXZwzIh7ScNsuzXgm7Y04HVXFEeOJ1vRBulkbiFw5gZXMAU2Xx5KvDkJ8EesGNhKGWPd"
+DefData "fVr0XwWoqQHxOVqc4m+8KgFm8CCUrLN1xm4nBHVJVsRfI4NM1zps8ETNQDoi/F7DK0lvYIOiDMJz"
+DefData "F92DZ3se5IfefMOq3dqDZYPNG3gRXm5gyXWGHYNLvraM1EU89L4UDi7vETorUhplzgSIC+sC2++u"
+DefData "t1Uj489hVct6kFz10euu2WZEdOJ8qBKqdSspHiL4aH2dY2QAW5evzoFlHPZNMA/1rdcbvtSL749r"
+DefData "FUGqC96OqNEuV2h+ZMTwr7091xi2NnsIPRgbOePhwKe/kgoHf1rehVOGpkLG0/z2gs4lDsj55tGL"
+DefData "0/b4VKHKhG0zdfhdSM/s2xIuzWPI0xIG6edcg7+FCJvfaZL+NUkScTBwhsoTvKaswGwrtq5qN0Ig"
+DefData "EXBDNf/hvnO+9I7+ib+k8AVq7/2gdWQHTgmZktulddbhUzvbvZSxjMEq6CdkVfrgjPyQ5jrGLc4Y"
+DefData "jszRlPW/g6Ys/eHYU0LUWgf3K8xo8IVPXW8UUgjeCt7fWQUasICx7QxendqGx4fRz+aO8Wz1S72E"
+DefData "fGOhHAuqPvMo5EPiryCy30MN1Vi7bjeAm2xA8dnIiPZx2lLgKq7IkFoIY9OKsWwEPNeybt9laY8q"
+DefData "CSxdhAu7q4oVwpf5IuOVvXtxzUe1J05t7229p0lJRcgm2/1w+e33pC7wPH4m6/r6MDkl1jUKAWId"
+DefData "+US/Hhh4t6evG9ijZHPZnhWJ/GBPO2s1cDK4vJVdQCkJdSns+eEEpQZ9oLtNZL69NmlTyKV62YSo"
+DefData "lKxuzaksum7X89lnS9d9BmMn5KlMca55rOpzza3Pd+0szm18jL7tPokFyKr8ot72Bg9NYTWzw3N/"
+DefData "hqWC1GIymtk69ujaiTzK+uwRALW+b8wREfA69LrSx7JVm2B/xs5ksrKCAkGYHCt4YNmQyAf+XvRU"
+DefData "2CDv4X39LdSKUDlrG222pw+9GHgTpvYN+xmM96c6+lIDuAxo5VaBQdQ4dmOmIs+eW6tRu0ErH4Vq"
+DefData "6Nh78nQ0N3eIduHML6z3JGBlbMvpEyLZxtpeMtacnGR2tkbE9eB2s20ohBeSEHJ/h+oVoQ8gtkuv"
+DefData "w10pFebi0VITZ0GqKPStCE5ljCw4q83zWlCciooYlg0n33Uz/o/xhAn//NJGg1PmPv31uASFC3gf"
+DefData "b1dszQBkhbs4q94xj+zOEjQpGVdSa8aINSJfm7v9dyq/fQMK5sH0Iq/n/GNqSAfrID+zJMAQNJ6X"
+DefData "e+cZOEM4BqNgpCAHIvsOmCxEHJNaDfKSOACMsIQ7+nwfnaoujw/tVKwkOJMngeZvKD/OEDXt1Uu6"
+DefData "PxsCbXLrOM3cj9OWinHhvyF4PP0ZxwVp9VknASRF13d+utpZxzDpXnPbmnP5s6tODCqaWy2gYvVu"
+DefData "QypnPf1wNEBTablz/9t/UOfATQZ2KZGitELmJNHwH8ad2Ak6yY2XN90iTkI9HjhOs5BPnf/BVtSA"
+DefData "UBhAgWc14S0KiCE5gxP4M52lXS35oyCF35goIBwyNC8rZlWI8agi5/R9+qyrhUOcbPSF17VPWSMv"
+DefData "UiAZSNEhnmx3nbw2ZCdS+jxsiWssEZedJMlVjJi/gDl80rFvz7W6ki3RNH9lo5rBpA2V9yFawCFp"
+DefData "6R90pE54z9PKOinpBuOPc/TSFyMWH6TlGVHgd8Iy29AXKfSjQO89dXmHsVYlggYjnoRgMrSIYUJO"
+DefData "2uRqPyJNZWqHrxZ2/KA/Jopi6MIIlFXwLZad4Kc7FCnUPsch/y7k8bMHEdk1T08YsIzrSjjGg62k"
+DefData "RQRqBTlpcKShWZ+x6vLk/CxdbCfEfL5Rv7ajequZ7bHt10i+zfWPwwWotrn0HvlgyEJ7MYA8UlOQ"
+DefData "HaTif9pMESuLJVtb3dzLkY12yM3Ob8RkHeK83YVF86fUwh+iqc15cWZmjkOAfxDDR8levQkFo98T"
+DefData "cY0jHahWMfNoEIJrlImQJHA6nWOwEKIVhuupMfutPCaW7JF6BIFbIMzKgLeOeMX7A8uFRDCFYUO5"
+DefData "XEqOkr+aFkemsZWxREpuC74Lfj2wAtmD6roDDuTA1VHwmxKDsNIwnBzDlyD8V9LdMlfggWKwk/hS"
+DefData "G79qp24S5XDj/fn8jSx/WH19fRoDJC9FhKIR35HVP6UQcS55K4gq2lpS93GU25wXVtpImRNtxYkg"
+DefData "6txNTrBqTI+SPJQQFxSRpAi0CEXBb1oYrvnIzQX7cTeV3nfPovIhvyPpJu5qWjJ9zPwkEzfgoLiK"
+DefData "5/hi0n83dDMDpA6DjRxkqrC/HK+J88qor2nrCgaCkuFaXW94dG33ZP/k2l/N7oD8z4yOSPAo8mZC"
+DefData "GILJ277HYWLgjIZPmUk9dwy1ScFvhgbuKZumsrhrXWp714OZgLSgV2W8byIGiiQIbMjeDv46vt63"
+DefData "24bBNAdQVvOBoajv7D6PV0+rHa6w5bn+0MUHf5yq6j8JfRft2B2w6k48iKQDZ1R1pkAuvPOhdmXP"
+DefData "oT1lalGzU87lUxcWKkCCZi1DpV5INh1atLKZ00hqVB3/kDGvswcMeRklMeaOUqVsNIm/THWw94YV"
+DefData "nJFkRMXxdFHv0dqeL2vN0m00NBE09FT428VfdUM300jC0AmW8tod5agsvG3ZkSBksEDSgD332N7V"
+DefData "EVfrRBQArloKk+bvT2ws6BNhen0Ue4MeN0c9dQI0V77gctSxCnFuBlvkCnZkxGhpXWMqgxMesVCl"
+DefData "1rOmGCoS3p5f+AB9eqP50juU8CtwQziL3CvxOWc93esah1LL68dP5H9D7mxnJMn9DPtpD2Jg5ZGm"
+DefData "Wje7EGQ/50R0INq/b62s193UYSY4qtsqGXdfetTmpkl7seFuMGmtfW8b2Y5eV8+SdCMd8Nzz+RRC"
+DefData "ycbDVw56jcjN+PM04QC47BANcx70IOmzUHLcn/KClxIft+b2I//CC30DM6xK6fJSFMez+3rwko8K"
+DefData "YFb2kK7Vpha7dNGAaPLiryQDUPYIQFXS5J+TtHCBpP9foPrxhXpLuSU525+fDfhvSYnJi9b8Mgj8"
+DefData "P1BLAQIUABQABAAIAOKCsTZ2buTaaQwAAN8pAAAQAAAAAAAAAAEAICAAAAAAAABDaGVlc3kgU2F2"
+DefData "ZXIuYm14UEsBAhQAFAAEAAgAs1yFMyH4kBGUBgAAdBYAAAcAAAAAAAAAAQAgAAAAlwwAAGljb25z"
+DefData "Lm9QSwECFAAUAAQACACoAIUzlooTax47AACzOwAADgAAAAAAAAABACAAAABQEwAAZ2Z4L2NoZWVz"
+DefData "ZS5wbmdQSwUGAAAAAAMAAwCvAAAAmk4AAAAA"
+
+#FileInfo
+DefData "CheesySaver.zip", 357</textarea><br><br>...to produce a ZIP file which contains the above code and all required media. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Boiled Sweets</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> any chance of posting an exe (or scr so I can see it in action?) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yan</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> Clicky &gt;&gt;&gt;<a href="http://homepage.ntlworld.com/mollymole/storage/Cheesy.scr" target="_blank"><b><u>Aye...</u></b></a> &lt;&lt;&lt; Clicky<br><br>[edit]<br>Made the *link* to the *.scr* file clearer! :o)<br>[/edit]<br><br><b>[/edit]<br>Above link now dead<br>[edit]</b> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Boiled Sweets</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> Erm thats not a exe.  I do not have max gui <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yan</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> You failed my little IQ test. ;op<br><br>I do tend to inadvertently disguise links...It's a gift. ;o) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Boiled Sweets</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> Oops!  Nice one.  I appear to be missing icons.o <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yan</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> You've run the second program?<br><br>This should give you a zip which contains...<br><pre class=code>&lt;Base Dir&gt; -&gt;Cheesy Saver.bmx
+             icons.o
+             &lt;gfx&gt; -&gt;Cheese.png</pre> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoeRetro</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> Nice job Jeremy!  You give me a reason to purchase BlitzMax now......j/k. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >wedoe</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> Great framework Yan, thanks a lot :o) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >WendellM</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> Cool beans - has a live preview window and ever'thing!  Great work. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Filax</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Really good ! <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

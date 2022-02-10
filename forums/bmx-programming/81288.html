@@ -1,0 +1,94 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Irrklang &amp; Incbin / loading from stream</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Irrklang &amp; Incbin / loading from stream</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Irrklang &amp; Incbin / loading from stream</a><br><br>
+<a name="915678"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Firstdeathmaker</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi there,<br><br>I've got a problem: I'ld like to play my sounds out of incbin:: with Irrklang, does anybody know how to do this? Or is it not possible? <br><br>Alternatively I would like to play them out of a TStream or Bank (so I could encrypt them). The problem is, that I don't want the soundfiles laying around unsecured in my gamefolder's datadir. <br><br></td></tr></table><br>
+<a name="915724"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >plash</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here is typically how I would encrypt my data: Give your sound types the DeSerialize(TStream) and Serialize(TStream) methods, and have them save (Serialize) and load (DeSerialize) in the same order. So you could, for example, serialize the type into a bankstream (in memory) and encrypt the bankstream (using <a href="/codearcs.php?code=1711" target="_blank">RC4</a>) before outputting to the external file. When DeSerializing you just have to load the stream into a bankstream again and decrypt before passing it off to the DeSerialize type.<br><br>Here is some example code (progressive saving):<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">'The TTile type..
+		Method DeSerialize:TTile(stream:TStream)
+			
+			SetId(stream.ReadInt())
+			SetName(ReadNString(stream))
+			
+			setFlags(stream.ReadInt())
+			
+			texture = TTileTexture.Load(stream)
+			
+		   Return Self
+		   
+		End Method
+		
+		Method Serialize(stream:TStream)
+			
+			stream.WriteInt(getID())
+			WriteNString(stream, GetName())
+			
+			stream.WriteInt(GetFlags())
+			
+			texture.Serialize(stream)
+			
+		End Method
+
+'The TTileTexture type
+		Method Serialize(stream:TStream)
+			
+			PixmapDataType.WriteObject(getPixmap(), stream)
+			
+		End Method
+		
+		Method DeSerialize:TTileTexture(stream:TStream)
+		  Local pix:Object
+			
+			pix = PixmapDataType.ReadObject(stream)
+			
+			SetPixmap(TPixmap(pix))
+			
+		   Return Self
+		   
+		End Method</textarea><br><br>Now, I'm not certain the sound module has implemented the saving of sound data, if it does there should be a SoundDataType (or similar) global instance defined somewhere in one of the sound/audio modules - you might have to figure out how to save it without!<br><br>And loading a 'soundmap,' if you will, could be done with a While...Wend loop (TTile.Load() is a wrapper function for creating and DeSerializing a TTile):<br><pre class=code>'The TTileMap type..
+		Method DeSerialize:TTileMap(stream:TStream)
+			
+			While Not stream.Eof()
+				
+				InsertTile(TTile.Load(stream))
+				
+			Wend
+			
+		   Return Self
+		   
+		End Method</pre><br><br>A Serializing example:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Local mainset:TTileMap = New(TTileMap).Create()
+'Insert some tiles...
+
+'Save the information in-memory and then output it to 'set00.dts'
+Local stream:TBankStream = CreateBankStream(Null)
+	
+	mainset.Serialize(stream)
+	
+	CryptStream(stream, "inputkeyhere!")
+	stream._bank.Save("set00.dts")
+	
+stream.Close()
+
+'Since RC4 can be used the exact same way to encrypt and decrpyt information, this function can be used to Decrypt or Encrypt the stream
+Function CryptStream:TBankStream(url:Object, Key:String)
+  Local bstream:TBankStream = TBankStream(url)
+	
+	If bstream = Null
+		
+		bstream = TBankStream.Create(TBank.Load(url))
+		
+	End If
+	
+	If bstream &lt;&gt; Null
+		
+		RC4_Bytes(bstream._bank.Lock(), bstream._bank.Capacity(), Key)
+		
+	End If
+	
+   Return bstream
+   
+End Function</textarea><br><br>I'll be releasing all the memcrypt modules within the next few weeks. <br><br></td></tr></table><br>
+<a name="915748"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Firstdeathmaker</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> hmm, thanks, but my problem is, that the Irrklang module can't read from streams, just from strings (=filepath). But I just figured out that it is possible to use "incbin::" with the modules function Play2DSound(). So:<br><br>&lt; PROBLEM SOLVED &gt;<br><br>By the way, i read that you're working on memcrypt modules? A few weeks ago I released the fdm.tcrypt module here in the module section, with aes encryption. But sadly my implementation is too slow... Maybe you want to take a look on that? <br><br></td></tr></table><br>
+<a name="915756"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >plash</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> My current memcrypt code is basically just RC4_Bytes and CryptStream, which both work snappily. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

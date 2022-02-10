@@ -1,0 +1,110 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Anti-alias logo onto background</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Anti-alias logo onto background, language=bb, category=Graphics'><meta name='author' content='Grey Alien'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=1>Graphics</a>/Anti-alias logo onto background</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="1475.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Anti-alias logo onto background by Grey Alien</td><td align="right">2005 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> I wanted to get a logo and show it on a background without the edges looking all pixely (i.e. unprofessional).  At first I did this in a paint package using masks and feathering.  Then I needed to actually show the same logo in more than one place so thought, OK, time to write some code!<br><br>To use this, you need a backgound, an image(logo) to draw onto it and importantly - an alphamap.  The alphamap is basically a greyscale image of your logo on a black background, with any parts that you want to be solid in pure white and any parts that you want to be transparent in grey e.g. dark grey = very transparent and light grey = not very transparent.<br><br>Load the image (logo) and alphamap into memory and call ccDrawImageAlpha.<br><br>Note that if you call ccDrawImageAlpha once it's fine, but you shouldn't call it in a loop which updates every frame or similar.  If you need to draw the logo in a loop, call ccAlphaDrawSetup before the loop and then during the loop call ccAlphaDraw (this is about 5 times faster!)<br><br>Enjoy!<br><br>P.S. I know it's weird that it calls ccReadImagePixelsVert as a separate function, but this code is part of a larger library I am making. </td></tr><tr ><td class="cell"><pre class="code">Global ScreenWidth% = 800
+Global ScreenHeight% = 600
+Dim ScreenPixels%(ScreenWidth*ScreenHeight)
+Dim ImagePixels%(ScreenWidth*ScreenHeight)
+Dim amPixels#(ScreenWidth*ScreenHeight)
+
+Function ccDrawImageAlpha(image%, bx, by, alphamap%, background%)
+	;Use an Alphamap image to blend an image onto the background.
+	;Alphamap MUST be same size as image.
+	;Background MUST be same size or larger
+	;bx and by are the coords of where the image should be drawn on the background
+	Local w = ImageWidth(image)
+	Local h = ImageHeight(image)
+		
+	ccAlphaDrawSetup(image, bx, by, alphamap, background)
+	ccAlphaDraw(bx, by, w, h)
+End Function
+
+Function ccAlphaDrawSetup(image%, bx, by, alphamap%, background%)
+	Local w = ImageWidth(image)
+	Local h = ImageHeight(image)
+	Local ami = 0	
+	;Read the alphamap into an array
+	SetBuffer ImageBuffer(alphamap)
+	LockBuffer ImageBuffer(alphamap)
+	For x = 0 To w-1
+		For y = 0 To h-1
+			;make it into a number in the range 0 to 1
+			amPixels(ami) = (ReadPixelFast(x,y) And 255)/255.0 ;we only care about greyscale!
+			ami = ami + 1
+		Next
+	Next		
+	UnlockBuffer ImageBuffer(alphamap)	
+	
+	;Read the image pixels into an array
+	ccReadImagePixelsVert(image%)
+	
+	;Read the background into an array	
+	SetBuffer ImageBuffer(background)
+	LockBuffer ImageBuffer(background)
+	Local counter = 0
+	For x = 0 To w-1
+		For y = 0 To h-1
+			ScreenPixels(counter) = ReadPixelFast(bx+x, by+y)
+			Counter = Counter + 1
+		Next
+	Next
+	UnlockBuffer ImageBuffer(background)	
+	SetBuffer BackBuffer() ;important
+End Function
+
+Function ccAlphaDraw(bx, by, w, h)
+	;Draws on the BackBuffer
+	;(could be modified to draw onto an image for storage and use later)
+	LockBuffer BackBuffer()	
+	Local n = 0
+	For x = bx To bx+w-1
+		For y = by To by+h-1
+			;Check alpha map
+			;If 0, don't draw
+			Local amRGB# = amPixels(n)
+			If amRGB &gt; 0 Then
+				;If 255, then draw normally
+				If amRGB = 1 Then
+					Local RGB = ImagePixels(n)
+					WritePixelFast x,y, RGB 
+				Else
+					;alpha blend!
+					Local im = ImagePixels(n)
+					Local back = ScreenPixels(n)
+					Local am# = amPixels(n)	
+					;get background colours
+					bR = (back Shr 16) And 255 
+					bG = (back Shr 8 ) And 255
+					bB = (back       ) And 255			
+					;work out difference between colours	
+					;then multiply difference by alphamap
+					dR = (((im Shr 16) And 255) - bR)*am  
+					dG = (((im Shr 8 ) And 255) - bG)*am
+					dB = (((im       ) And 255) - bB)*am
+					;work out and draw final colour in the right place
+					WritePixelFast x,y, ((bR+dR) Shl 16) Or ((bG+dG) Shl 8) Or (bB+dB)
+				EndIf
+			EndIf
+			n = n +1
+		Next
+	Next	
+	UnlockBuffer BackBuffer()	
+End Function
+
+; -----------------------------------------------------------------------------
+; ccReadImagePixelsVert
+; -----------------------------------------------------------------------------
+Function ccReadImagePixelsVert(image%)
+	;Read an image into an array of pixels vertically for faster processing.
+	Local counter = 0
+	Local x,y
+	;lock the buffer
+	LockBuffer ImageBuffer(image)
+	SetBuffer ImageBuffer(image)
+	;read into an array of pixels
+	For x = 0 To ImageWidth(image)-1
+		For y = 0 To ImageHeight(image)-1
+			ImagePixels(counter) = ReadPixelFast(x, y)
+			Counter = Counter + 1
+		Next
+	Next
+	;unlock the buffer
+	UnlockBuffer ImageBuffer(image)
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br>None.<br><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

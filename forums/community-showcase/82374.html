@@ -1,0 +1,431 @@
+<!DOCTYPE html><html lang="en" ><head ><title >GetMax - BlitzMax Downloader</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >GetMax - BlitzMax Downloader</h1><a href="forums.php" >Community Forums</a>/<a href="topics.php?forum=61" >Showcase</a>/<a href="#bottom" >GetMax - BlitzMax Downloader</a><br><br>
+<a name="928685"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Otus</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> GetMax does what its name says: Gets the latest (SVN) version of BlitzMax for you.<br><br>Upsides: has a simple GUI, does NOT require an SVN client and is small.<br><br>Downsides: rather slow, does not update and has no error handling.<br><br>Source available below.<br><br><img src="http://jan.varho.org/wp-content/uploads/maxget.png"><br><br>Updated with SebHoll's changes.<br><br>Source:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Framework MaxGUI.Drivers
+Import BRL.EventQueue
+
+Import BRL.FileSystem
+Import BRL.SocketStream
+
+Import Bah.Base64
+
+AppTitle = "Get BlitzMax"
+
+Function CreateHttpStream:TSocketStream( server:String, port:Int, file:String = "/", auth:String = "" )
+	Local stream:TSocketStream=TSocketStream.CreateClient( server, port )
+	If Not stream Return Null
+	
+	stream.WriteLine "GET "+file+" HTTP/1.0"
+	stream.WriteLine "Host: "+server
+	stream.WriteLine "Authorization: Basic "+auth
+	stream.WriteLine ""
+	
+	Return stream
+End Function
+
+Function DLDir(base:String, dir:String, auth:String, text:Int(t:String))
+	Local stream:TSocketStream = CreateHttpStream("blitzbasic.com", 81, base+dir, auth)
+	PollSystem()
+	
+	While stream And Not stream.Eof()
+		If stream.ReadLine()="" Exit
+	Wend
+	
+	If stream And Not stream.Eof()
+		If Not CreateDir( dir, True ) Return
+	End If
+	
+	While stream And Not stream.Eof()
+		Local l:String = stream.ReadLine().Trim()
+		If l.StartsWith("&lt;li&gt;&lt;a")
+			Local href:String = l.Split("~q")[1].Replace("%20", " ")
+			If href.EndsWith("/")
+				If href&lt;&gt;"../" Then DLDir base, dir+href, auth, text
+			Else
+				DLFile base, dir, href, auth, text
+			End If
+		End If
+	Wend
+End Function
+
+Function DLFile(base:String, dir:String, file:String, auth:String, text:Int(t:String))
+	If FileType(dir+file) Return
+	PollSystem()
+	
+	Local stream:TSocketStream = CreateHttpStream("blitzbasic.com", 81, base+dir+file, auth)
+	Local length%
+	
+	While stream And Not stream.Eof()
+		Local l:String = stream.ReadLine()
+		If l.StartsWith("Content-Length") Then length = Int(l.Split(" ")[1])
+		If l="" Exit
+	Wend
+	
+	Local out:TStream
+	If stream And Not stream.Eof()
+		out = WriteFile(dir+file)
+		If Not out Return
+		text String(dir+file).Replace("%20"," ") + " ("+Int((length/1000.0)+1)+"KB)"
+	End If
+	
+	Local data:Byte[]
+	
+	While stream And Not stream.Eof()
+		Local tmpBytes:Byte[SocketReadAvail(SocketStreamSocket(stream))]
+		stream.ReadBytes( tmpBytes, tmpBytes.length )
+		data:+tmpBytes
+		PollSystem()
+	Wend
+	
+	Assert data.length = length, "File length mismatch!"
+	
+	If out Then 
+		If data Then out.WriteBytes data, data.length
+		out.close()
+	EndIf
+	
+End Function
+
+Local win:TGadget = CreateWindow(AppTitle, 100, 100, 400, 300, Null, WINDOW_TITLEBAR|WINDOW_CLIENTCOORDS )
+
+'User details
+
+Local ulabel:TGadget = CreateLabel("Username: ", 10,15,70,25, win)
+Local user:TGadget = CreateTextField(80,10,110,25, win)
+
+Local plabel:TGadget = CreateLabel("Password: ", 210,15,70,25, win)
+Local pass:TGadget = CreateTextField(280,10,110,25, win, TEXTFIELD_PASSWORD)
+
+'Directory
+Local dlabel:TGadget = CreateLabel("Target: ", 10,50,70,25, win)
+Local dir:TGadget = CreateTextField(80,45,220,25, win)
+Local dirget:TGadget = CreateButton("Browse...", 310,45,80,25, win)
+
+'Platforms
+
+Local blabel:TGadget = CreateLabel("Platform: ", 10,85,70,25, win)
+Local binary:TGadget = CreateComboBox(80,80,110,25, win)
+AddGadgetItem binary, "Windows (x86)", GADGETITEM_DEFAULT, -1, "", "win32_x86"
+AddGadgetItem binary, "Linux (x86)", 0, -1, "", "linux_x86"
+AddGadgetItem binary, "Mac OS X (x86)", 0, -1, "", "macos_x86"
+AddGadgetItem binary, "Mac OS X (PPC)", 0, -1, "", "macos_ppc"
+
+'MaxGUI?
+
+Local guimod:TGadget = CreateButton("Get MaxGUI", 200,80,110,25, win, BUTTON_CHECKBOX)
+
+'Start
+
+Local start:TGadget = CreateButton("Start", 310,80,80,25, win)
+DisableGadget start
+
+'Output Display
+
+Global outputdisp:TGadget = CreateListBox(10,115,380,175, win)
+
+
+ActivateGadget user
+
+Repeat
+	Select WaitEvent()
+	Case EVENT_GADGETACTION
+		Select EventSource()
+			Case start
+				Exit
+			Case dirget
+				SetGadgetText dir, RequestDir("Choose a new BlitzMax directory...")
+		EndSelect
+		If GadgetText(user) And GadgetText(pass) And GadgetText(dir) Then EnableGadget(start) Else DisableGadget(start)
+	Case EVENT_WINDOWCLOSE
+		End
+	End Select
+Forever 
+
+DisableGadget dir
+DisableGadget dirget
+DisableGadget user
+DisableGadget pass
+DisableGadget binary
+DisableGadget guimod
+DisableGadget start
+
+EnableGadget outputdisp
+
+Function ShowText:Int(s:String)
+	If s Then AddGadgetItem outputdisp,s,GADGETITEM_DEFAULT
+End Function
+
+If Not FileType(GadgetText(dir)) Then CreateDir(GadgetText(dir), True)
+
+If Not ChangeDir(GadgetText(dir))
+	Notify "Unable to create directory: "+GadgetText(dir), True
+	End
+End If
+
+If Not user Or Not pass
+	Notify "Username/password required!", True
+	End
+End If
+
+Local auth:String = GadgetText(user)+":"+GadgetText(pass)
+Local c:Byte Ptr = auth.ToCString()
+auth = TBase64.Encode(c, auth.length)
+MemFree c
+
+DLDir "/svn/blitzmax/dev/main/", "", auth, ShowText
+DLDir "/svn/blitzmax/dev/"+String(GadgetItemExtra(binary, SelectedGadgetItem(binary)))+"/", "", auth, ShowText
+
+If ButtonState(guimod)
+	If Not FileType(GadgetText(dir)+"/mod/maxgui.mod") Then CreateDir(GadgetText(dir)+"/mod/maxgui.mod", True)
+	
+	If Not ChangeDir(GadgetText(dir)+"/mod/maxgui.mod")
+		Notify "Unable to create directory: "+GadgetText(dir)+"/mod/maxgui.mod", True
+		End
+	End If
+	
+	DLDir "/svn/maxgui/dev/maxgui.mod/", "", auth, ShowText
+End If
+
+Notify "All done!", False</textarea> <br><br></td></tr></table><br>
+<a name="928688"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GaryV</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> No offense, but based on the latest issue with EXEs, you might want to release the source now, as I doubt many will touch an EXE right now. <br><br></td></tr></table><br>
+<a name="928690"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Otus</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I get your point. EDIT: Source released. Messy but works. <br><br></td></tr></table><br>
+<a name="928692"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GaryV</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Should be a useful utility for folks ;) <br><br></td></tr></table><br>
+<a name="928698"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sounds great.<br><br>Would be awesome if such a downloader would be included in the IDE. <br><br></td></tr></table><br>
+<a name="928716"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >MikeHart</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks a ton! <br><br></td></tr></table><br>
+<a name="928717"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Would be awesome if such a downloader would be included in the IDE.  <br></div><br>Except of  course you'll need to have MinGW installed to use the source.<br>And it's a lot to download each time you want to check if something has been updated.<br><br>But otherwise, it does usefully fill a gap :-) <br><br></td></tr></table><br>
+<a name="928723"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SebHoll</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice work!<br><br>I've tweaked the UI slightly and swapped the byte-by-byte stream code for the much the faster ReadBytes()/WriteBytes() alternatives:<br><br>Otus, feel free to update your original post if you approve.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Framework MaxGUI.Drivers
+Import BRL.EventQueue
+
+Import BRL.FileSystem
+Import BRL.SocketStream
+
+Import Bah.Base64
+
+AppTitle = "Get BlitzMax"
+
+Function CreateHttpStream:TSocketStream( server:String, port:Int, file:String = "/", user:String = "", pass:String = "" )
+	Local stream:TSocketStream=TSocketStream.CreateClient( server, port )
+	If Not stream Return Null
+	
+	stream.WriteLine "GET "+file+" HTTP/1.0"
+	stream.WriteLine "Host: "+server
+	
+	If user And pass
+		Local auth:String = user+":"+pass
+		Local c:Byte Ptr = auth.ToCString()
+		
+		auth = TBase64.Encode(c, auth.length)
+		
+		stream.WriteLine "Authorization: Basic "+auth
+		MemFree c
+	End If
+	
+	stream.WriteLine ""
+	
+	Return stream
+End Function
+
+Function CreateHttpHeadStream:TSocketStream( server:String, port:Int, file:String = "/", user:String = "", pass:String = "" )
+	Local stream:TSocketStream=TSocketStream.CreateClient( server, port )
+	If Not stream Return Null
+	
+	stream.WriteLine "HEAD "+file+" HTTP/1.0"
+	stream.WriteLine "Host: "+server
+	
+	If user And pass
+		Local auth:String = user+":"+pass
+		Local c:Byte Ptr = auth.ToCString()
+		
+		auth = TBase64.Encode(c, auth.length)
+		
+		stream.WriteLine "Authorization: Basic "+auth
+		MemFree c
+	End If
+	
+	stream.WriteLine ""
+	
+	Return stream
+End Function
+
+
+Function DLDir(base:String, dir:String, user:String, pass:String, text:Int(t:String))
+	Local stream:TSocketStream = CreateHttpStream("blitzbasic.com", 81, base+dir, user, pass)
+	PollSystem()
+	
+	While stream And Not stream.Eof()
+		If stream.ReadLine()="" Exit
+	Wend
+	
+	If stream And Not stream.Eof()
+		If Not CreateDir( dir, True ) Return
+		text dir.Replace("%20", " ")
+	End If
+	
+	While stream And Not stream.Eof()
+		Local l:String = stream.ReadLine().Trim()
+		If l.StartsWith("&lt;li&gt;&lt;a")
+			Local href:String = l.Split("~q")[1]
+			If href.EndsWith("/")
+				If href&lt;&gt;"../" Then DLDir base, dir+href, user, pass, text
+			Else
+				DLFile base, dir, href, user, pass, text
+			End If
+		End If
+	Wend
+End Function
+
+Function DLFile(base:String, dir:String, file:String, user:String, pass:String, text:Int(t:String))
+	If FileType(dir+file) Return
+	PollSystem()
+	
+	Local stream:TSocketStream = CreateHttpHeadStream("blitzbasic.com", 81, base+dir+file, user, pass)
+	Local length:Int
+	
+	While stream And Not stream.Eof()
+		Local l:String = stream.ReadLine()
+		If l.StartsWith("Content-Length") Then length = Int(l.Split(" ")[1])
+		If l="" Exit
+	Wend
+	
+	If FileSize(dir+file) = length Return
+	
+	stream = CreateHttpStream("blitzbasic.com", 81, base+dir+file, user, pass)
+	
+	While stream And Not stream.Eof()
+		Local l:String = stream.ReadLine()
+		If l="" Exit
+	Wend
+	
+	Local out:TStream
+	If stream And Not stream.Eof()
+		out = WriteFile(dir+file)
+		If Not out Return
+		text String(dir+file).Replace("%20"," ") + " ("+Int((length/1000.0)+1)+"KB)"
+	End If
+	
+	Local data:Byte[]
+	
+	While stream And Not stream.Eof()
+		Local tmpBytes:Byte[SocketReadAvail(SocketStreamSocket(stream))]
+		stream.ReadBytes( tmpBytes, tmpBytes.length )
+		data:+tmpBytes
+		PollSystem()
+	Wend
+	
+	Assert data.length = length, "File length mismatch!"
+	
+	If out Then 
+		If data Then out.WriteBytes data, data.length
+		out.close()
+	EndIf
+	
+End Function
+
+Local win:TGadget = CreateWindow(AppTitle, 100, 100, 400, 300, Null, WINDOW_TITLEBAR|WINDOW_CLIENTCOORDS )
+
+'User details
+
+Local ulabel:TGadget = CreateLabel("Username: ", 10,15,70,25, win)
+Local user:TGadget = CreateTextField(80,10,110,25, win)
+
+Local plabel:TGadget = CreateLabel("Password: ", 210,15,70,25, win)
+Local pass:TGadget = CreateTextField(280,10,110,25, win, TEXTFIELD_PASSWORD)
+
+'Directory
+Local dlabel:TGadget = CreateLabel("Target: ", 10,50,70,25, win)
+Local dir:TGadget = CreateTextField(80,45,220,25, win)
+Local dirget:TGadget = CreateButton("Browse...", 310,45,80,25, win)
+
+'Platforms
+
+Local blabel:TGadget = CreateLabel("Platform: ", 10,85,70,25, win)
+Local binary:TGadget = CreateComboBox(80,80,110,25, win)
+AddGadgetItem binary, "Windows (x86)", GADGETITEM_DEFAULT, -1, "", "win32_x86"
+AddGadgetItem binary, "Linux (x86)", 0, -1, "", "linux_x86"
+AddGadgetItem binary, "Mac OS X (x86)", 0, -1, "", "macos_x86"
+AddGadgetItem binary, "Mac OS X (PPC)", 0, -1, "", "macos_ppc"
+
+'MaxGUI?
+
+Local guimod:TGadget = CreateButton("Get MaxGUI", 200,80,110,25, win, BUTTON_CHECKBOX)
+
+'Start
+
+Local start:TGadget = CreateButton("Start", 310,80,80,25, win)
+DisableGadget start
+
+'Output Display
+
+Global outputdisp:TGadget = CreateListBox(10,115,380,175, win)
+
+
+ActivateGadget user
+
+Repeat
+	Select WaitEvent()
+	Case EVENT_GADGETACTION
+		Select EventSource()
+			Case start
+				Exit
+			Case dirget
+				SetGadgetText dir, RequestDir("Choose a new BlitzMax directory...")
+		EndSelect
+		If GadgetText(user) And GadgetText(pass) And GadgetText(dir) Then EnableGadget(start) Else DisableGadget(start)
+	Case EVENT_WINDOWCLOSE
+		End
+	End Select
+Forever 
+
+DisableGadget dir
+DisableGadget dirget
+DisableGadget user
+DisableGadget pass
+DisableGadget binary
+DisableGadget guimod
+DisableGadget start
+
+EnableGadget outputdisp
+
+Function ShowText:Int(s:String)
+	If s Then AddGadgetItem outputdisp,s,GADGETITEM_DEFAULT
+End Function
+
+If Not FileType(GadgetText(dir)) Then CreateDir(GadgetText(dir), True)
+
+If Not ChangeDir(GadgetText(dir))
+	Notify "Unable to create directory: "+GadgetText(dir), True
+	End
+End If
+
+DLDir "/svn/blitzmax/dev/main/", "", GadgetText(user), GadgetText(pass), ShowText
+DLDir "/svn/blitzmax/dev/"+String(GadgetItemExtra(binary, SelectedGadgetItem(binary)))+"/", "", GadgetText(user), GadgetText(pass), ShowText
+
+If ButtonState(guimod)
+	If Not FileType(GadgetText(dir)+"/mod/maxgui.mod") Then CreateDir(GadgetText(dir)+"/mod/maxgui.mod", True)
+	
+	If Not ChangeDir(GadgetText(dir)+"/mod/maxgui.mod")
+		Notify "Unable to create directory: "+GadgetText(dir)+"/mod/maxgui.mod", True
+		End
+	End If
+	
+	DLDir "/svn/maxgui/dev/maxgui.mod/", "", GadgetText(user), GadgetText(pass), ShowText
+End If
+
+Notify "All done!", False
+</textarea> <br><br></td></tr></table><br>
+<a name="928728"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Otus</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Nice work!<br><br>I've tweaked the UI slightly and swapped the byte-by-byte stream code for the much the faster ReadBytes()/WriteBytes() alternatives:<br><br>Otus, feel free to update your original post if you approve. <br></div><br><br>Thanks, I updated with your changes and a couple of other issues. <br><br></td></tr></table><br>
+<a name="928807"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dawlane</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice work. Makes life a little easier than using SVN all we need now for it to do is update only the new or changed files. I will test this on the Mac and Ubuntu.<br><br>Edit: Ubuntu's ok. But for some reason it will only work on a Mac within the IDE in debug any ideas? (I'm not a big Mac OS X user) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

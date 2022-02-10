@@ -1,0 +1,232 @@
+<!DOCTYPE html><html lang="en" ><head ><title >FileSystemWatcher</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >FileSystemWatcher</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >FileSystemWatcher</a><br><br>
+<a name="1039525"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> This code will detect files and folders that are created, deleted, moved, and renamed in a specified directory and emit events.<br><br>The only problem is the ReadDirectoryChangesW() does not have a timeout value.  There is a way to get asynchronous results from the function, but it's pretty complicated:<br><a href="http://msdn.microsoft.com/en-us/library/aa365465%28VS.85%29.aspx" target="_blank">http://msdn.microsoft.com/en-us/library/aa365465%28VS.85%29.aspx</a><br><br>Any ideas on how to do this?  I am trying the file completion routine with no luck.<br><br><pre class=code>SuperStrict
+
+Framework pub.win32
+Import brl.eventqueue
+Import brl.standardio
+
+Private
+
+'Externs
+Extern "win32"
+	Function ReadDirectoryChangesW(hDirectory:Int,lpBuffer:Byte Ptr,nBufferLength:Int,bWatchSubtree:Int,dwNotifyFilter:Int,lpBytesReturned:Byte Ptr,lpOverlapped:Byte Ptr,lpCompletionRoutine:Byte Ptr)
+	Function CreateFileA(lpFileName$z,dwDesiredAccess:Int,dwShareMode:Int,lpSecurityAttributes:Byte Ptr,dwCreationDisposition:Int,dwFlagsAndAttributes:Int,hTemplateFile:Int)
+	Function GetOverlappedResult(hFile:Int,lpOverlapped:OVERLAPPED,lpNumberOfBytesTransferred:Byte Ptr,bWait:Int)
+EndExtern
+
+'Constants
+Const FILE_FLAG_BACKUP_SEMANTICS:Int=$02000000
+Const FILE_FLAG_OVERLAPPED:Int=$40000000
+
+Const GENERIC_READ:Int=$80000000 
+Const FILE_SHARE_READ:Int=$00000001
+Const OPEN_EXISTING:Int=3
+
+Const INVALID_HANDLE_VALUE:Int=-1
+Const FILE_SHARE_WRITE:Int=$00000002
+
+Const WAIT_FAILED% = $FFFFFFFF 
+Const WAIT_OBJECT_0%  = $0 
+Const WAIT_ABANDONED% = $80 
+Const WAIT_TIMEOUT% = $102
+
+Const FILE_NOTIFY_CHANGE_FILE_NAME:Int=$00000001
+Const FILE_NOTIFY_CHANGE_DIR_NAME:Int=$00000002
+Const FILE_NOTIFY_CHANGE_ATTRIBUTES:Int=$00000004
+Const FILE_NOTIFY_CHANGE_SIZE:Int=$00000008
+Const FILE_NOTIFY_CHANGE_LAST_WRITE:Int=$00000010
+Const FILE_NOTIFY_CHANGE_LAST_ACCESS:Int=$00000020
+Const FILE_NOTIFY_CHANGE_CREATION:Int=$00000040
+Const FILE_NOTIFY_CHANGE_SECURITY:Int=$00000100
+
+'Types
+Type OVERLAPPED
+	Field Internal:Int
+	Field InternalHigh:Int
+	Field Offset:Int
+	Field OffsetHigh:Int
+	Field Pointer:Byte Ptr
+	Field hEvent:Int
+EndType
+
+Const FILE_ACTION_ADDED:Int=$00000001
+Const FILE_ACTION_REMOVED:Int=$00000002
+Const FILE_ACTION_MODIFIED:Int=$00000003
+Const FILE_ACTION_RENAMED_OLD_NAME:Int=$00000004
+Const FILE_ACTION_RENAMED_NEW_NAME:Int=$00000005
+
+Public
+
+'Event constants
+Const EVENT_FILECREATED:Int=6870001
+Const EVENT_FILEDELETED:Int=6870002
+Const EVENT_FILERENAMED:Int=6870003
+Const EVENT_FILEMODIFIED:Int=6870004
+
+'FileSystemWatcher type
+Type TFileSystemWatcher
+	
+	Field path:String
+	Field hfile:Int
+	'Field overlap:OVERLAPPED=New OVERLAPPED
+	Field recursive:Int
+	
+	Function Create:TFileSystemWatcher(path:String="",recursive:Int=True)
+		Local filesystemwatcher:TFileSystemWatcher=New TFileSystemWatcher
+		filesystemwatcher.path=RealPath(path)
+		filesystemwatcher.recursive=recursive
+		filesystemwatcher.hfile=CreateFileA(path,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,Null,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS,0)'|FILE_FLAG_OVERLAPPED
+		Return filesystemwatcher
+	EndFunction
+	
+	Method Check:Int()
+		Local buffer:Byte[1024]
+		Local bytesreturned:Int
+		Local flags:Int
+		Local bytestransferred:Int
+		Local renamedfilepreviousname:String
+		
+		flags:+FILE_NOTIFY_CHANGE_FILE_NAME
+		flags:+FILE_NOTIFY_CHANGE_DIR_NAME
+		'flags:+FILE_NOTIFY_CHANGE_ATTRIBUTES
+		'flags:+FILE_NOTIFY_CHANGE_SIZE
+		flags:+FILE_NOTIFY_CHANGE_LAST_WRITE
+		'flags:+FILE_NOTIFY_CHANGE_LAST_ACCESS
+		'flags:+FILE_NOTIFY_CHANGE_CREATION
+		'flags:+FILE_NOTIFY_CHANGE_SECURITY	
+				
+		If ReadDirectoryChangesW(Self.hfile,buffer,buffer.length,Self.recursive,flags,Varptr bytesreturned,Null,Null)
+			If bytesreturned
+				Local bank:TBank=CreateBank(bytesreturned)
+				MemCopy(bank.buf(),buffer,bytesreturned)
+				Local stream:TStream=CreateBankStream(bank)
+				Local NextEntryOffset:Int
+				Local Action:Int
+				Local FileNameLength:Int
+				Local FileName:String
+				Local pos:Int
+				While Not stream.Eof()
+					pos=stream.pos()
+					NextEntryOffset=stream.ReadInt()
+					Print "NextEntryOffset: "+NextEntryOffset
+					Action=stream.ReadInt()
+				'	Print "Action: "+action
+					FileNameLength=stream.ReadInt()
+				'	Print "FileNameLength: "+FileNameLength
+					FileName=stream.ReadString(FileNameLength)
+					Local event:TEvent=New TEvent
+					event.source=filename
+					Select action
+						Case FILE_ACTION_ADDED
+							event.id=EVENT_FILECREATED
+							Print "File ~q"+filename+"~q created."
+						Case FILE_ACTION_REMOVED
+							event.id=EVENT_FILEDELETED
+							Print "File ~q"+filename+"~q deleted."
+						Case FILE_ACTION_MODIFIED
+							event.id=EVENT_FILEMODIFIED
+							Print "File ~q"+filename+"~q modified."							
+						Case FILE_ACTION_RENAMED_OLD_NAME
+							renamedfilepreviousname=filename
+							event=Null
+						Case FILE_ACTION_RENAMED_NEW_NAME
+							event.id=EVENT_FILERENAMED
+							event.extra=renamedfilepreviousname
+							Print "File renamed from ~q"+renamedfilepreviousname+"~q to ~q"+filename+"~q."
+							renamedfilepreviousname=""
+					EndSelect
+					If event EmitEvent event
+					If NextEntryOffset stream.seek(pos+NextEntryOffset) Else Exit
+				Wend
+				Print "DONE"
+			EndIf
+		EndIf
+	EndMethod
+	
+EndType
+
+
+'Example
+'Create, delete, and rename files in the app directory, and watch the program output display your changes.
+Local filesystemwatcher:TFileSystemWatcher=TFileSystemWatcher.Create(AppDir,True)
+
+Repeat
+	filesystemwatcher.Check()
+	Delay 10
+Forever</pre> <br><br></td></tr></table><br>
+<a name="1039534"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ked</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> <strike>Code Archives?</strike><br>Nevermind, you edited your question in. :) <br><br></td></tr></table><br>
+<a name="1039536"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is the OVERLAPPED structure:<br><pre class=code>typedef struct _OVERLAPPED {
+  ULONG_PTR Internal;
+  ULONG_PTR InternalHigh;
+  union {
+    struct {
+      DWORD Offset;
+      DWORD OffsetHigh;
+    } ;
+    PVOID  Pointer;
+  } ;
+  HANDLE    hEvent;
+} OVERLAPPED, *LPOVERLAPPED;</pre><br><br>Is this BMX code the same thing?:<br><pre class=code>Type OVERLAPPED
+	
+	Method Delete()
+		CloseHandle(hEvent)
+	EndMethod
+	
+	Field Internal:Int
+	Field InternalHigh:Int
+	Field Offset:Int
+	Field OffsetHigh:Int
+	Field Pointer:Byte Ptr
+	Field hEvent:Int=CreateEventA(0,0,False,"MyEvent")
+EndType</pre> <br><br></td></tr></table><br>
+<a name="1039539"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Josh, this isn't the same. You *have* to match the type sizes listed, ie. add up the sizes of the fields in the C struct and make sure your Blitz type matches it.<br><br>Typing while drunk, but the ULONG_PTR values in OVERLAPPED would probably be OK as "Byte Ptr".<br><br>The union here is two Ints -- it can be accessed as integer values <i>Offset</i> and <i>OffsetHigh</i> in C/C++ (2 x 4 bytes) or as Pointer:Byte Ptr (treating Offset as a Byte Ptr, ignoring OffsetHigh).<br><br>With unions, the same block of memory is used for two different possible values, depending on what the programmer wants to access. (The union is 8 bytes here -- Offset:Int plus OffsetHigh:Int, <i>or</i>, using the first 4 bytes only, Pointer:Byte Ptr, that is Pointer is at the same offset as Internal.)<br><br>If it helps, the union looks like this in memory (two 4-byte ints in a row), and you can access it as version #1 or version #2:<br><br><pre class=code>
+#1 [Offset: 00000000] [OffsetHigh: 00000000]
+
+#2 [Pointer:  00000000] [Ignored:      00000000]
+</pre><br><br>In C/C++ you'd just name the field you want to access (Internal/InternalHigh or Pointer), while in Blitz, you'd have to declare the two int fields as normal, access them as Offset and OffsetHigh, or treat the Offset offset in the object as a Byte Ptr, ie. the Pointer field in the struct), depending on the circumstances.<br><br>I think the rest looks OK.<br><br>Your Delete method is basically trying to cram in a 4-byte function pointer before the rest of the fields. Think of the C-struct as a fixed-size block of memory with a specific format -- add up the byte-sizes of the fields -- and you should see why this won't work.<br><br>Converting C/C++ byte/short fields to Blitz can be tricky, but these are all 4-byte fields, which simplifies things greatly.<br><br>God, I hope that makes some kind of sense. <br><br></td></tr></table><br>
+<a name="1039540"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Can you just type what the BMX equivalent should be?<br><br>The code is working here, but I would like your help to make sure that class is right:<br><a href="http://blitzmax.com/codearcs/codearcs.php?code=2747" target="_blank">http://blitzmax.com/codearcs/codearcs.php?code=2747</a> <br><br></td></tr></table><br>
+<a name="1039572"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sorry for the delay -- I believe this would be right:<br><br><pre class=code>
+
+Rem
+
+struct _OVERLAPPED {
+  ULONG_PTR Internal;
+  ULONG_PTR InternalHigh;
+  union {
+    struct {
+      DWORD Offset;
+      DWORD OffsetHigh;
+    } ;
+    PVOID  Pointer;
+  } ;
+  HANDLE    hEvent;
+} OVERLAPPED, *LPOVERLAPPED;
+
+End Rem
+
+Type OVERLAPPED
+
+	Field Internal:Byte Ptr
+	Field InternalHigh:Byte Ptr
+	Field Offset:Int
+	Field OffsetHigh:Int
+	Field hEvent:Int
+
+End Type
+</pre><br><br>Notice no "Pointer" field -- the union means it occupies the same space as Offset. The relevant function docs would tell you whether to treat this field as Offset or Pointer, depending on the scenario.<br><br>Blitz doesn't do unions, so you'd have to treat the value in the Offset field as a Byte Ptr if you're told to use the Pointer field.<br><br>You could probably just tack your Method on to the end, though <i>theoretically</i> Microsoft could expand the structure in future, in which case it would fail.<br><br><i>Sorry, I mixed up Internal/InternalHigh and Offset/OffsetHigh last night in my post, which wouldn't have helped -- edited.</i> <br><br></td></tr></table><br>
+<a name="1039592"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks!  I also updated the code to handle the unicode strings.  This is one of the coolest little routines I have seen:<br><a href="http://blitzmax.com/codearcs/codearcs.php?code=2747" target="_blank">http://blitzmax.com/codearcs/codearcs.php?code=2747</a> <br><br></td></tr></table><br>
+<a name="1039593"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Interesting.. wxMax does it too - in a cross-platform way. Yay to cool new things! <br><br></td></tr></table><br>
+<a name="1039595"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> I think your Internal/InternalOffset should be :Byte Ptr, but I guess it doesn't matter if you're not accessing the structure yourself -- four bytes is four bytes as far as Win32 is concerned. <br><br></td></tr></table><br>
+<a name="1039598"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> How does the wxMax code work?  Is it using some OS feature, or does it do something funny like a constant file time check? <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

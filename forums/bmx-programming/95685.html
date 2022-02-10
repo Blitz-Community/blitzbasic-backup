@@ -1,0 +1,106 @@
+<!DOCTYPE html><html lang="en" ><head ><title >TList objects and SortList weirdness</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >TList objects and SortList weirdness</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >TList objects and SortList weirdness</a><br><br>
+<a name="1103776"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Michiel</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hello!<br><br>I just spend two days hunting a pesky little bug that generated behaviour I really couldn't explain. This is what happened:<br><br>I used a Tlist with "baddies". This list is checked for collision whenever the fire button is pressed and all was working just fine. Until I decided to sort the list using the SortList command, that is. The sorting was necessary to have characters appear behind one another properly (using their y-coordinate to sort on) and this seemed to work fine too. Until I started noticing some strange behaviour: if I killed a baddie by shooting it, at certain random times, another baddie would also disappear from the stage.<br><br>After debugging this for quite some time, I finally managed to narrow the problem down: the despawning routine (just a Remove call to get a baddie object from the list) was messing up. And pretty badly too. In my debug log I saw something like this happening:<br><br>* created baddie with ID 5<br>* created baddie with ID 6<br>* created baddie with ID 7<br>* baddie 5 takes 100 damage<br>* baddie 5 has died<br>* despawning baddie 5<br>* baddie 6 takes 100 damage<br>* baddie 7 takes 100 damage<br>* baddie 6 has died<br>* despawning baddie 6<br>* despawning baddie 6<br><br>As you probably noticed, the last two lines show the problem: the despawn routine is reporting that it's despawning the same object twice, while in reality, it did despawn the correct baddie (ID 7), but at the same time that it despawned the baddie with ID 6 and reported the baddie with ID 7 to be the one with ID 6. This creates really weird in-game behaviour where some baddies despawn halfway through their dying animation because the DeSpawn routine removes the wrong baddie.<br><br>This kind of drove me mad, until I decided to remove the SortList calls I used. Then, everything worked fine again and the despawn routine did not remove the wrong baddie. This led me to the conclusion that if I made a copy of the baddies TList and sorted that one, in stead of sorting the baddie's list itself, I might have more luck. And indeed, I did. So I have fixed the problem but am still wondering why this happened in the first place.<br><br>I have the tendency to first blame myself for creating bugs  but I have a hard time blaming myself for this one, it just feels as if Blitzmax is doing something wrong when it comes to sorting lists. Is there anyone else who has had a similar problem? Or am I just missing something that explains the behaviour I described above?<br><br>Any feedback would be highly appreciated! <br><br></td></tr></table><br>
+<a name="1103780"></a>
+
+<a name="1103783"></a>
+
+<a name="1103784"></a>
+
+<a name="1103785"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xcessive</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> The only problem with BMaxs list sort function I have had is that it is inordinately slow. I have have had to grapple with performance issues as opposed to weird behavior.<br><br>Anyways I dug up the code for the sort method. It uses a variation of mergesort, so I doubt theres something wrong with it as its a widely used sorting algorithm.<br><br>As a side note you might find this interesting. Its a simple data structure I came up with to get around the slowness of having to sort lots of game entities so to render them in Y order.<br><br><pre class=code>
+
+'a data structure used to map entites to y locations
+'it is adaptive in that most recently moved entites are at the top
+'hence statics float to the bottom
+'it doesnt need to be sorted, thus giving better performance than a standard list
+Type TAdaptiveEntityMap
+	'an array of lists, representing each y location
+	Field map:TList[]
+	
+	'creates a new map
+	Function construct:TAdaptiveEntityMap(mapSize:Int)
+		Local temp:TAdaptiveEntityMap = New TAdaptiveEntityMap
+		temp.map = New TList[mapSize]
+		For Local i:Int = 0 To mapSize - 1
+			temp.map[i] = New TList
+		Next
+		Return temp
+	End Function
+	
+	'gets a list for a given y value, this can be used for iterating through
+	Method getList:TList(val:Int)
+		Return map[val]
+	End Method
+	
+	'gets a certain entity out of the map, then retruns it
+	Method removeEntity:TEntity(e:TEntity)
+		map[e.yLocation].Remove(e)
+	End Method
+	
+	'adds a given entity (e) to the map
+	Method addEntity(e:TEntity)
+		'addfirst is important, it forms the "adaptive" part of this data structure
+		'it ensures recently moves entites are always near the front
+		map[e.yLocation].AddFirst(e)
+	End Method
+EndType
+</pre><br><br><font class="tiny">Last edited 2011</font><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1103788"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Michiel</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks xcessive! It's funny that you mention the slowness of the sorting method used by Blitzmax, 'cause that seems to be what is causing the problems in my situation too... I get the idea that the sort isn't properly updated yet when I cycle through the list's components. At first I thought that this couldn't be the case since it would require some kind of multithreading to be happening (and that is not what I'm using for this project) but now that you mention it too, I am really starting to wonder if it (the slowness) could actually be what is going wrong.<br><br>The problem only happened when two baddies had to be despawned VERY close to each other, so if the time in between is just a few milliseconds (about 15 to 20). It's just really weird :PBut: thanks a lot for your solution, I'll get it implemented ASAP. <br><br></td></tr></table><br>
+<a name="1103789"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jur</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> You are probably using custom compare method for sorting. This mess up removing from list.  Use compare function as the argument for the SortList instead.<br>This feature-bug should be fixed or documented as it guaranteed time waster for everyone who is not aware of it (like me once). <br><br></td></tr></table><br>
+<a name="1103796"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Michiel</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Jur, yes indeed, I made a custom compare method (to use the Y-coordinate as the sorting key). Thanks a lot for the suggestion of using the compare function as an argument to SortList and I agree on what you say: it would be nice if this got fixed or if this is supposed to be a feature, some documentation would be highly appreciated. Would of have saved me a couple of days thinking there was something wrong with my code ;) <br><br></td></tr></table><br>
+<a name="1103817"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xcessive</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> I just had a look at the code for the sort method again. Indeed it uses the default compare method unless you pass it a function point to your custom one. I can't believe I didn't know this! <br><br></td></tr></table><br>
+<a name="1103818"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Michiel</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> @ xcessive<br><br>And so we learn, every single day again :) Ain't life wonderful? ;) <br><br></td></tr></table><br>
+<a name="1103853"></a>
+
+<a name="1103854"></a>
+
+<a name="1103855"></a>
+
+<a name="1103856"></a>
+
+<a name="1103857"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Czar Flavius</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> If you change your compare method to fit this style (the line with super) does it fix the problem? You need this line to activate the default comparison behavior if your custom sort cannot proceed. This should be explained in the documentation but isn't.<br><br><pre class=code>Type TInt Final
+	Field value:Int
+	
+	Function Create:TInt(v:Int)
+		Local i:TInt = New TInt
+		i.value = v
+		Return i
+	End Function
+	
+	Method ToString:String()
+		Return String(value)
+	End Method
+	
+	Method Compare:Int(withObject:Object)
+		Local other:TInt = TInt(withObject)
+		If Not other Then Return Super.Compare(withObject)
+		If Self.value &gt; other.value Then Return 1
+		If Self.value &lt; other.value Then Return -1
+		Return 0
+	End Method
+End Type</pre><br><br>I don't think it's fair to go around saying sorting lists is too slow for problems not related to their performance. There are not going to be tens of thousands of baddies in this game, I assume? If not, then there is no noticable performance difference.<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1103889"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Michiel</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Dear Czar,<br><br>The clue I found suggested to me that the SortList function took a little while (a few milliseconds) to update the list, since the problem only appears when I destroy two baddies at almost the same time (which is fairly easy, given the fact that the game uses a very high speed weapon). This led me to think that it might have to do with some performance issue, although there also are quite a lot of arguments to suggest that it doesn't. I just don't know, really ;) It just kinda felt wrong to see Blitzmax try and despawn the same object that wasn't the same object but magically did have the properties of the previous object. If you'd like, I can of course make a zip file of the project so far so you can have a look yourself. Oh yeah, you were right about the baddy count: we're talking hundreds, not tens of thousands ;)<br><br>And I'll give your option a try as soon as I get back to my weekendly game coding. Thanks! <br><br></td></tr></table><br>
+<a name="1103894"></a>
+
+<a name="1103895"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Czar Flavius</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Are you using list.remove(myobject) (or whatever the function equivalent is)? This function is very slow and shouldn't be used in general. It iterates through every object in the list until it finds yours, and then removes it.<br><br>When you use the functions to add to a list, it returns a TLink object, which is like the object's bookmark in the list. Add a link:TLink field to your objects you want to go into the list, and store the link returned from the list in this field. Then when you want to destroy the object, instead of mylist.remove(myobj), use myobj.link.remove(). This will remove the object immediately regardless of how many items in the list. This could be causing your performance problem. TLink also doesn't depend on the compare method, whereas list remove does.<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1103904"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Htbaa</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Good call Czar, I remember that to be a huge speed improvement as well.  Forgot about that one :-). <br><br></td></tr></table><br>
+<a name="1104564"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Michiel</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Dear Czar,<br><br>Thanks a lot! Trying that right now. <br><br></td></tr></table><br>
+<a name="1104569"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Michiel</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> Dear Czar,<br><br>I have added your solution and now the game functions exactly as it should. So indeed, the problem seems to relate to me using the Remove method on a TList object instead of the Remove method on a TLink property of an object like you suggested. Thanks a lot! <br><br></td></tr></table><br>
+<a name="1104594"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Taron</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> woh...thanks, Czar! I totally missed that one.  :o.<br>kewl! <br><br></td></tr></table><br>
+<a name="1104596"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Czar Flavius</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> Excellent! I'm glad to hear it! =D <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

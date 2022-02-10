@@ -1,0 +1,286 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Terrain Erosion</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Fluvial (rain) and thermal (cracking) erosion for procedural terrains, language=bb, category=3D Graphics - Mesh'><meta name='author' content='Yasha'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=12>3D Graphics - Mesh</a>/Terrain Erosion</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2443.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Terrain Erosion by Yasha</td><td align="right">2009 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Two functions to apply erosion to terrain meshes created with regular mesh commands (to use on Blitz terrains you'd have to save the heightmap again afterwards). Thermal erosion refers to the way rocks break and fall downhill over time. This will eventually turn terrains into a rough pyramid if run long enough. Fluvial erosion is the effect of rain and surface water carrying particles downhill. Tends to result in terrain looking like a seabed. Used together they can turn a simple hand-drawn or procedural terrain into something much more natural-looking. Sorry for the messy code. (<b>EDIT: Replaced with a vastly-improved version that uses banks</b>)<br><br>Here's a sample heightmap to test it on:<br><img src="http://img253.imageshack.us/img253/1135/heightmap.png"><br><br>There are several functions in the archives already for creating random terrains from scratch (follow my name for some of them, although there are better ones out there). </td></tr><tr ><td class="cell"><pre class="code">Graphics3D 1024,768,32,6
+SetBuffer BackBuffer()
+
+;SeedRnd(MilliSecs())
+
+Local heightMap=LoadImage("heightmap.bmp"),terrainBank=CreateBank(),terrainScale#=20
+Local heightMap2=CopyImage(heightMap),wireMode
+
+HeightmapToBank heightMap,terrainBank,terrainScale
+
+Local blitzTerrain=BlitzTerrainFromBank(terrainBank,ImageWidth(heightMap),ImageHeight(heightMap),terrainScale)
+
+Local light=CreateLight()						;Setup light&amp;camera
+PositionEntity light,-100,100,-100
+Local centrecam=CreatePivot(),camera=CreateCamera(centrecam)
+PositionEntity camera,0,26,(ImageWidth(heightMap)+ImageHeight(heightMap))/2.6
+PointEntity camera,centrecam
+PointEntity light,centrecam
+
+
+Local SC_FPS=60,ctime		;"CPU breathing code" - nothing to do with erosion
+Local rtime=Floor(1000.0/SC_FPS),limited=True
+
+
+While Not KeyDown(1)
+	ctime=MilliSecs()
+	
+	TurnEntity centrecam,0,KeyDown(205)-KeyDown(203),0
+	MoveEntity camera,0,0,KeyDown(200)-KeyDown(208)
+	
+	If KeyHit(28)		;Erode!
+		;Play with these parameters
+		ErodeThermal(terrainBank,50,0.0625*terrainScale,ImageWidth(heightMap),ImageHeight(heightMap))
+		ErodeFluvial(terrainBank,50,0.01,0.5,ImageWidth(heightMap),ImageHeight(heightMap))
+		
+		;Rebuild the demo terrain
+		FreeEntity blitzTerrain
+		blitzTerrain=BlitzTerrainFromBank(terrainBank,ImageWidth(heightMap),ImageHeight(heightMap),terrainScale)
+		
+		;Update the "eroded" heightmap image
+		BankToHeightmap terrainBank,heightMap2
+	EndIf
+	
+	If KeyHit(17)
+		wireMode=Not wireMode
+		WireFrame wireMode
+	EndIf
+	
+	RenderWorld
+	Text 50,25,"Press Enter to apply erosion, W to toggle wireframe, Esc to exit"
+	DrawImage heightMap,50,75
+	Text 50,50,"Original"
+	DrawImage heightMap2,100+ImageWidth(heightMap),75
+	Text 100+ImageWidth(heightMap),50,"Eroded"
+	
+	Delay rtime-(MilliSecs()-ctime)-(limited+1)		;Free any spare CPU time
+	Flip limited
+Wend
+End
+
+
+
+
+Function ErodeFluvial(bank,iterations,solubility#,deposition#,xSize,zSize)		;Fluvial erosion.
+	Local i,x,z,rainTable,dMax#,hiPointIndex,index,indexHeight#,rainHeight#
+	Local zs4=zSize*4	;Just to speed things up below
+	
+	rainTable=CreateBank(BankSize(bank))
+	
+	For i=1 To iterations
+		For index=0 To (xSize*zSize*4)-4 Step 4	;Add water &amp; dissolve terrain
+			PokeFloat rainTable,index,PeekFloat(rainTable,index)+solubility
+			PokeFloat bank,index,PeekFloat(bank,index)-solubility
+		Next
+		
+		For x=0 To xSize-1
+			For z=0 To zSize-1
+				
+				;Identify dmax and high point
+				dMax=0
+				index=4*(x*zSize+z)
+				indexHeight=PeekFloat(bank,index)+PeekFloat(rainTable,index)
+				
+				If z&gt;0
+					If x&gt;0
+						If indexHeight-(PeekFloat(bank,(index-zs4)-4)+PeekFloat(rainTable,(index-zs4)-4))&gt;dMax
+							hiPointIndex=(index-zs4)-4
+							dMax=indexHeight-(PeekFloat(bank,hiPointIndex)+PeekFloat(rainTable,hiPointIndex))
+						EndIf
+					EndIf
+					If indexHeight-(PeekFloat(bank,index-4)+PeekFloat(rainTable,index-4))&gt;dMax
+						hiPointIndex=index-4
+						dMax=indexHeight-(PeekFloat(bank,hiPointIndex)+PeekFloat(rainTable,hiPointIndex))
+					EndIf
+					If x&lt;xSize-1
+						If indexHeight-(PeekFloat(bank,(index+zs4)-4)+PeekFloat(rainTable,(index+zs4)-4))&gt;dMax
+							hiPointIndex=(index+zs4)-4
+							dMax=indexHeight-(PeekFloat(bank,hiPointIndex)+PeekFloat(rainTable,hiPointIndex))
+						EndIf
+					EndIf
+				EndIf
+				
+				If x&lt;xSize-1
+					If indexHeight-(PeekFloat(bank,index+zs4)+PeekFloat(rainTable,index+zs4))&gt;dMax
+						hiPointIndex=index+zs4
+						dMax=indexHeight-(PeekFloat(bank,hiPointIndex)+PeekFloat(rainTable,hiPointIndex))
+					EndIf
+				EndIf
+				
+				If z&lt;zSize-1
+					If x&gt;0
+						If indexHeight-(PeekFloat(bank,(index-zs4)+4)+PeekFloat(rainTable,(index-zs4)+4))&gt;dMax
+							hiPointIndex=(index-zs4)+4
+							dMax=indexHeight-(PeekFloat(bank,hiPointIndex)+PeekFloat(rainTable,hiPointIndex))
+						EndIf
+					EndIf
+					If indexHeight-(PeekFloat(bank,index+4)+PeekFloat(rainTable,index+4))&gt;dMax
+						hiPointIndex=index+4
+						dMax=indexHeight-(PeekFloat(bank,hiPointIndex)+PeekFloat(rainTable,hiPointIndex))
+					EndIf
+					If x&lt;xSize-1
+						If indexHeight-(PeekFloat(bank,(index+zs4)+4)+PeekFloat(rainTable,(index+zs4)+4))&gt;dMax
+							hiPointIndex=(index+zs4)+4
+							dMax=indexHeight-(PeekFloat(bank,hiPointIndex)+PeekFloat(rainTable,hiPointIndex))
+						EndIf
+					EndIf
+				EndIf
+				
+				If x&gt;0
+					If indexHeight-(PeekFloat(bank,index-zs4)+PeekFloat(rainTable,index-zs4))&gt;dMax
+						hiPointIndex=index-zs4
+						dMax=indexHeight-(PeekFloat(bank,hiPointIndex)+PeekFloat(rainTable,hiPointIndex))
+					EndIf
+				EndIf
+				
+				;Movement of water
+				If dMax&gt;0
+					rainHeight=PeekFloat(rainTable,index)
+					If rainHeight+PeekFloat(rainTable,hiPointIndex)+PeekFloat(bank,hiPointIndex)&lt;=indexHeight-rainHeight
+						PokeFloat rainTable,index,0
+						PokeFloat rainTable,hiPointIndex,PeekFloat(rainTable,hiPointIndex)+rainHeight
+					EndIf
+					If rainHeight+PeekFloat(rainTable,hiPointIndex)+PeekFloat(bank,hiPointIndex)&gt;=indexHeight
+						PokeFloat rainTable,index,rainHeight-(dMax/2.0)
+						PokeFloat rainTable,hiPointIndex,PeekFloat(rainTable,hiPointIndex)+(dMax/2.0)
+					EndIf
+					If rainHeight+PeekFloat(rainTable,hiPointIndex)+PeekFloat(bank,hiPointIndex)&gt;indexHeight-rainHeight
+						If rainHeight+PeekFloat(rainTable,hiPointIndex)+PeekFloat(bank,hiPointIndex)&lt;indexHeight
+							PokeFloat rainTable,index,(rainHeight-(dMax-rainHeight))/2.0
+							PokeFloat rainTable,hiPointIndex,PeekFloat(rainTable,hiPointIndex)+(rainHeight-(rainHeight-(dMax-rainHeight))/2.0)
+						EndIf
+					EndIf
+				EndIf
+			Next
+		Next
+		
+		For index=0 To (xSize*zSize*4)-4 Step 4	;Evaporate water &amp; deposit sediment
+			rainHeight=PeekFloat(rainTable,index)
+			PokeFloat rainTable,index,rainHeight-rainHeight*deposition
+			PokeFloat bank,index,PeekFloat(bank,index)+rainHeight*deposition
+		Next
+	Next
+	
+	For index=0 To (xSize*zSize*4)-4 Step 4
+		PokeFloat bank,index,PeekFloat(bank,index)+PeekFloat(rainTable,index)
+	Next
+	
+	FreeBank rainTable
+End Function
+
+Function ErodeThermal(bank,iterations,talus#,xSize,zSize)	;Thermal erosion. Target mesh, no. of iterations, talus angle, terrain dimensions
+	Local i,x,z,dMax#,hiPointIndex,index,indexHeight#
+	
+	Local zs4=zSize*4	;Just to speed things up below
+	
+	For i=1 To iterations
+		For x=0 To xSize-1
+			For z=0 To zSize-1
+				
+				;Identify dmax and high point
+				dMax#=0
+				index=4*(x*zSize+z)
+				indexHeight=PeekFloat(bank,index)
+				
+				If z&gt;0
+					If x&gt;0
+						If indexHeight-PeekFloat(bank,(index-zs4)-4)&gt;dMax Then hiPointIndex=(index-zs4)-4:dMax=indexHeight-PeekFloat(bank,hiPointIndex)
+					EndIf
+					If indexHeight-PeekFloat(bank,index-4)&gt;dMax Then hiPointIndex=index-4:dMax=indexHeight-PeekFloat(bank,hiPointIndex)
+					If x&lt;(xSize-1)
+						If indexHeight-PeekFloat(bank,(index+zs4)-4)&gt;dMax Then hiPointIndex=(index+zs4)-4:dMax=indexHeight-PeekFloat(bank,hiPointIndex)
+					EndIf
+				EndIf
+				
+				If x&lt;(xSize-1)
+					If indexHeight-PeekFloat(bank,index+zs4)&gt;dMax Then hiPointIndex=index+zs4:dMax=indexHeight-PeekFloat(bank,hiPointIndex)
+				EndIf
+				
+				If z&lt;(zSize-1)
+					If x&gt;0
+						If indexHeight-PeekFloat(bank,(index-zs4)+4)&gt;dMax Then hiPointIndex=(index-zs4)+4:dMax=indexHeight-PeekFloat(bank,hiPointIndex)
+					EndIf
+					If indexHeight-PeekFloat(bank,index+4)&gt;dMax Then hiPointIndex=index+4:dMax=indexHeight-PeekFloat(bank,hiPointIndex)
+					If x&lt;(xSize-1)
+						If indexHeight-PeekFloat(bank,(index+zs4)+4)&gt;dMax Then hiPointIndex=(index+zs4)+4:dMax=indexHeight-PeekFloat(bank,hiPointIndex)
+					EndIf
+				EndIf
+				
+				If x&gt;0
+					If indexHeight-PeekFloat(bank,index-zs4)&gt;dMax Then hiPointIndex=index-zs4:dMax=indexHeight-PeekFloat(bank,hiPointIndex)
+				EndIf
+				
+				If dMax&gt;talus
+					PokeFloat bank,index,indexHeight-(dMax/2)
+					PokeFloat bank,hiPointIndex,PeekFloat(bank,hiPointIndex)+(dMax/2)
+				EndIf
+				
+			Next
+		Next
+	Next
+End Function
+
+
+;The following functions are for demonstration purposes only and are in no way guaranteed to be safe
+;===================================================================================================
+
+Function HeightmapToBank(image,bank,scale#)
+	Local x,y
+	ResizeBank bank,ImageHeight(image)*ImageWidth(image)*4
+	LockBuffer ImageBuffer(image)
+	For x=0 To ImageWidth(image)-1
+		For y=0 To ImageHeight(image)-1
+			PokeFloat bank,4*(x*ImageHeight(image)+y),((ReadPixelFast(x,y,ImageBuffer(image)) And $00FF0000) Shr 16)/255.0*scale
+		Next
+	Next
+	UnlockBuffer ImageBuffer(image)
+End Function
+
+Function BankToHeightmap(bank,image)	;This function doesn't check the size of the image or bank!
+	Local x,y,hiPoint#,loPoint#,scale#,grey
+	
+	hiPoint=PeekFloat(bank,0):loPoint=hiPoint
+	
+	For x=0 To ImageWidth(image)-1
+		For y=0 To ImageHeight(image)-1
+			scale=PeekFloat(bank,4*(x*ImageHeight(image)+y))
+			If scale&gt;hiPoint Then hiPoint=scale
+			If scale&lt;loPoint Then loPoint=scale
+		Next
+	Next
+	
+	scale=255.0/(hiPoint-loPoint)
+	
+	LockBuffer ImageBuffer(image)
+	For x=0 To ImageWidth(image)-1
+		For y=0 To ImageHeight(image)-1
+			grey=(PeekFloat(bank,4*(x*ImageHeight(image)+y))-loPoint)*scale		;Normalise the values to 0-255
+			WritePixelFast x,y,(grey Shl 16) Or (grey Shl 8) Or grey,ImageBuffer(image)
+		Next
+	Next
+	UnlockBuffer ImageBuffer(image)
+End Function
+
+Function BlitzTerrainFromBank(bank,xSize,ySize,scale#)	;Create a Blitz terrain with the bank's data. DEMO PURPOSES ONLY
+	Local terrain,x,y
+	
+	;Create a terrain of large enough sides for this bank
+	If Ceil(Log(xSize)/Log(2))&gt;Ceil(Log(ySize)/Log(2))
+		terrain=CreateTerrain(2^Ceil(Log(xSize)/Log(2)))
+	Else
+		terrain=CreateTerrain(2^Ceil(Log(ySize)/Log(2)))
+	EndIf
+	
+	TerrainDetail terrain,12000,True
+	TerrainShading terrain,True
+	MoveEntity terrain,-(xSize/2.0),0,-(ySize/2.0)	;Centre the relevant bit
+	ScaleEntity terrain,1,scale,1
+	
+	For x=0 To xSize-1
+		For y=0 To ySize-1
+			ModifyTerrain terrain,x,y,PeekFloat(bank,(x*ySize+y)*4)/scale
+		Next
+	Next
+	
+	Return terrain
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Works very well, thanks. (For anyone else trying, hit Enter to run the erosion routines.) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RifRaf</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Neat, I would love to see a few versions that will work on the image (heightmap) rather than the mesh. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> The simplest way would be to replace the mesh in the functions with either a bank or array of floats to represent the heights - basically exactly the same method. To work directly on an image would not in my opinion be a very good idea - firstly, being limited to 256 values while working and having no set scale makes it less accurate, and harder to control; secondly (and far more importantly), ReadPixelFast is really, really slow - the functions get to something like twenty times slower if you replace the vertex commands with Read and WritePixelFast. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RifRaf</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> If you need faster effects and dont want to save an image for other apps to get ahold of then yeah I would agree. :)<br><br>Good idea with the bank though, ill just do that then normalise to 256 range and save the image. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pongo</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Very nice!<br><br>I'm getting a MAV when I try to replace the image with my own though. (any image different than 129x129) Any idea where this is coming from? It looks like the code should work for multiple resolutions, but I can't see the error.<br><br>it MAV's at the renderworld line. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for pointing that out. I assume you're trying to load a bigger image?<br><br>Blitz3D surfaces have a vertex count limit of 65535 - if, as I guess, you're trying to use a 256x256 heightmap, you're creating 65536, which can result in MAVs on some machines or just garbage renders on others. I forgot about this when I originally put the functions up.<br><br>I'll rewrite this to use banks instead of meshes, and that hopefully will fix the problem (I guess the result can probably be displayed using Blitz Terrains - don't like them much though). Give me a couple of hours.... <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pongo</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Ahhh,... that makes complete sense now.<br><br>The MAV was so vague I was having trouble figuring it out. I kept going through the code and could not find anything wrong! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> <b>EDIT:</b> THe new version is now in the main archive box.<br><br>Still doesn't look exactly the same as the original - I have no idea why - but fixed the error that was throwing the results way out. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Heliotrope</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> I am trying to run it but it comes up with an error message<br><br>"memory access violation". <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Did you supply an input image, such as the one at the top of the description? Remember Blitz3D can't load files from relative paths unless you save the source code first. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Heliotrope</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Yes,I did <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> You should get a more useful error message than MAV with the debugger turned on. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

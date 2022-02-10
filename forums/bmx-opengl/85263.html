@@ -1,0 +1,1875 @@
+<!DOCTYPE html><html lang="en" ><head ><title >image processing with glsl shaders</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >image processing with glsl shaders</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=103" >OpenGL Module</a>/<a href="#bottom" >image processing with glsl shaders</a><br><br>
+<a name="964185"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TWH</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> <img src="http://www.softswit.ch/bmaxprosjekter/imageprocessing_sobel_320.png"><br><br>I've converted the image processing example from the OpenGL Superbible. <br>Chapter 23 in  the 3. edition.<br>Chapter 17 in the 4. edition.<br><br>I removed the teapot from the scene and replaced it with a cone.<br><br>I began with Tom Speed / ChrisC's glsl.bmx, but I couldn't get the program to render to texture. So I converted the shaderloaders from the book. glsl.bmx would have worked. The problem was me not setting the texture size properly.. It appeared that I had a 0x512 texture &gt;&lt;<br><br>Here all the code is, copy-paste-n-run ;), with a freelook camera I got from this gamedev.net article: <br><br><a href="http://www.gamedev.net/reference/articles/article2160.asp" target="_blank">http://www.gamedev.net/reference/articles/article2160.asp</a><br><br>OR. Download a zip file with the code and the 8 shaders<br>www.softswit.ch/bmaxprosjekter/imageprocessing.zip<br><br>Edit: <br>The code would not compile in release mode because of<br>?debug<br> code<br>?debug &lt;- changed to "?" only<br>This error gave me "expecting expression but encountered end-of-file"<br><br>Also, I had commented out 'glClear(GL_COLOR_BUFFER_BIT); when doing the rendering passes for the filters. But this didn't seem to make a change.<br><br>Also. I've added an FPS counter<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Import pub.glew
+
+AppTitle = "Imageprocessing with openGL"
+'for shapes:
+Global quadObj:Byte Ptr = Null;
+
+'Globals, consts:
+Global lowLevelAvailable:Int = False;
+Global highLevelAvailable:Int = False;
+Global useHighLevel:Int = False;
+
+Const PASS_THROUGH:Int=  0
+Const BLUR:Int=          1
+Const SHARPEN:Int=       2
+Const DILATION:Int=      3
+Const EROSION:Int=       4
+Const LAPLACIAN:Int=     5
+Const SOBEL:Int=         6
+Const PREWITT:Int=       7
+Const TOTAL_SHADERS:Int=  8
+
+Const MAX_INFO_LOG_SIZE:Int = 2048
+
+Global ids:Int[TOTAL_SHADERS]
+Global vShader:Int[TOTAL_SHADERS]
+Global fShader:Int[TOTAL_SHADERS], progObj:Int[TOTAL_SHADERS] 'high level shader object handles
+Global needsValidation:Int[TOTAL_SHADERS] 'if program obj changed, then revalidate
+Global shaderNames:String[] = ["passthrough", "blur", "sharpen", "dilation", "erosion", "laplacian", "sobel", "prewitt"]
+
+Global whichShader:Int = 5
+
+Global windowWidth:Int = 512;                '// window size
+Global windowHeight:Int = 512;
+Global textureWidth:Int = 512;               '// texture size
+Global textureHeight:Int = 512;
+
+Global maxTexSize:Int = 0 'maximum allowed size for 1D/2D texture
+
+Global lightPos:Float[] = [ 140.0, 250.0, 140.0, 1.0];
+Global ambientLight:Float[] = [ 0.2, 0.2, 0.2, 1.0];
+Global diffuseLight:Float[] = [ 0.7, 0.7, 0.7, 1.0];
+
+Global lightRotation:Float = 0.0
+Global texCoordOffsets:Float[18]
+Global numPasses:Int = 1
+
+
+Global camera:tCamera = New tCamera			
+camera.setCamera(0,100,150,Pi/2,180)
+Global posh:Float=0, posv:Float=0
+Global oldMouseX:Int
+Global oldMouseY:Int
+Global elapsed:Long = 0
+Global fps:Int = 0
+Global Wireframe:Byte = 0
+'end globals
+
+mainloop() '################## START MAIN LOOP #####################
+End
+
+' Load shader from disk into a null-terminated string
+Function LoadShaderText:Byte[](filename:String)
+	Local fileLength:Int = FileSize(filename)
+	Local shaderText:Byte[fileLength+1]
+	Local shaderLength:Int = 0
+	
+	Local file:TStream = OpenFile( filename, True, False )
+	If Not file RuntimeError "could not open file: "+filename
+
+	
+	While Not Eof(file)
+		shaderText[shaderLength] = ReadByte(file)
+		shaderLength:+1
+		If shaderLength&gt;fileLength Then shaderLength = shaderLength
+	Wend
+	CloseFile(file)
+	
+	If shaderLength &gt; fileLength
+		Print "todo"
+	EndIf
+	
+	shaderText[shaderLength] = 0
+	CloseFile( file )
+	
+	Return shaderText
+End Function
+
+' Compile shaders
+Function PrepareShader(shaderNum:Int)
+	Print "----------- PrepareShader:"+shaderNum
+	Local fullFileName:String
+	Local fsString:Byte Ptr
+	
+	' Create high-level shader objects and specify shader text
+	If(highLevelAvailable)
+		Local fsStringPtr:Byte Ptr[1]
+		Local success:Int = False
+		
+		'################# LOAD FRAGMENT SHADER ###################
+		fullFileName = shaderNames[shaderNum] + ".frag"
+		
+		fsString = LoadShaderText( fullFileName )
+		If Not fsString
+			Print "unable to load "+fullFileName 
+			End
+		EndIf
+		
+		
+		
+		fShader[shaderNum] = glCreateShaderObjectARB(GL_FRAGMENT_SHADER_ARB);
+        	fsStringPtr[0] = fsString;
+        	glShaderSourceARB(fShader[shaderNum], 1, fsStringPtr, Null);
+        	fsString = Null
+
+        '// Compile shaders And check For any errors
+        glCompileShaderARB(fShader[shaderNum]);
+        glGetObjectParameterivARB(fShader[shaderNum], GL_OBJECT_COMPILE_STATUS_ARB, Varptr success);
+        If ( Not success)
+            Local infoLog:Byte[MAX_INFO_LOG_SIZE];
+            glGetInfoLogARB(fShader[shaderNum], MAX_INFO_LOG_SIZE, Null, infoLog);
+            Print "Error in high-level fragment shader "+shaderNum+" compilation!";
+            Print  "Info log: "+String.FromCString(infoLog); 
+            End
+        Else
+            Local infoLog:Byte[MAX_INFO_LOG_SIZE];
+            glGetInfoLogARB(fShader[shaderNum], MAX_INFO_LOG_SIZE, Null, infoLog);
+            Print "High-level fragment shader #"+shaderNum+" compile info Log: "+String.FromCString(infoLog);;
+        EndIf
+
+
+        '// Create program Object, attach shader, Then link
+        progObj[shaderNum] = glCreateProgramObjectARB();
+        glAttachObjectARB(progObj[shaderNum], fShader[shaderNum]);
+
+        glLinkProgramARB(progObj[shaderNum]);
+        glGetObjectParameterivARB(progObj[shaderNum], GL_OBJECT_LINK_STATUS_ARB, Varptr success);
+        If ( Not success)
+             Local infoLog:Byte[MAX_INFO_LOG_SIZE];
+            glGetInfoLogARB(progObj[shaderNum], MAX_INFO_LOG_SIZE, Null, infoLog);
+            Print "Error in high-level program #"+shaderNum+" linkage!"
+            Print "Info log:" +String.FromCString(infoLog);;
+            End
+        Else
+             Local infoLog:Byte[MAX_INFO_LOG_SIZE];
+            glGetInfoLogARB(progObj[shaderNum], MAX_INFO_LOG_SIZE, Null, infoLog);
+            Print "High-level program #"+shaderNum+" link info Log: "+String.FromCString(infoLog);;
+
+        EndIf
+
+        '// Program Object has changed, so we should revalidate
+        needsValidation[shaderNum] = True;
+	EndIf	
+	Print "preparation of shader done"
+End Function
+
+
+Function DrawModels()
+	Local lightPosEye:Float[3]
+	Local mv:Float[16]
+	
+	' Transform light position to eye space
+	glPushMatrix()
+	glRotatef(lightRotation, 0.0, 1.0, 0.0)
+	glGetFloatv(GL_MODELVIEW_MATRIX, mv)
+	gltTransformPoint(lightPos, mv, lightPosEye) 'OpenGL superbible VectorMath.c
+	glLightfv(GL_LIGHT0, GL_POSITION, lightPos)
+	glPopMatrix()
+	
+	' Draw a plane that the objects rest on
+	glColor3f(0,0,0.9); 'blue
+	glNormal3f(0+.0, 1.0, 0.0)
+	glBegin(GL_QUADS)
+		'glMultiTexCoord2f(GL_TEXTURE0, 0.0, 0.0);
+		glVertex3f(-100.0, -25.0, -100.0);
+		'glMultiTexCoord2f(GL_TEXTURE0, 1.0, 0.0);
+		glVertex3f(-100.0, -25.0, 100.0);
+		'glMultiTexCoord2f(GL_TEXTURE0, 1.0, 1.0);		
+		glVertex3f(100.0,  -25.0, 100.0);
+		'glMultiTexCoord2f(GL_TEXTURE0, 1.0, 0.0);
+		glVertex3f(100.0,  -25.0, -100.0);
+	glEnd()
+	
+	' Draw red cube
+	glColor3f(1.0, 0.0, 0.0)
+	glutSolidCube(48.0)
+	
+	' Draw green sphere
+	glColor3f(0.0, 1.0, 0.0)
+	glPushMatrix()
+	glTranslatef(-60, 0.0, 0.0)
+	glScalef(25,25,25)
+	Sphere() 'todo glutSolidSphere 25, 50, 50
+	glPopMatrix()
+	
+	' Draw magenta torus
+	glColor3f(1.0, 0.0, 1.0)
+	glPushMatrix()
+	glTranslatef(0.0, 0.0, 60.0)
+	glutSolidTorus(8.0, 16.0, 50, 50)
+	glPopMatrix()
+	
+	' Draw yellow cone
+	glColor3f(1.0, 1.0, 0.0)
+	glPushMatrix()
+	glRotatef(-90.0, 1, 0, 0)
+	glTranslatef(60.0, 0.0, -24.0)
+	glutSolidCone(25.0, 50.0, 50, 50)
+	glPopMatrix()
+	
+	' Draw cyan teapot
+	glColor3f(0.0, 1.0, 1.0)
+	glPushMatrix()
+	
+	glTranslatef(0.0, 20.0, -60.0)
+	glRotatef(-90.0, 1, 0, 0)
+	'glutSolidTeapot(25.0)
+	'glScalef(15,15,15)
+	'teapot(25.0, 0,0)
+	glutSolidCone(25.0, 50.0, 50, 50)
+	glPopMatrix()	
+End Function
+
+Function RenderScene()
+	Local pass:Int = 0
+	
+	' Track camera angle
+	glMatrixMode(GL_PROJECTION)
+	glLoadIdentity()
+	gluPerspective(45.0, 1.0, 1.0, 1000.0)
+	glMatrixMode(GL_MODELVIEW)
+	glLoadIdentity()
+	gluLookAt( camera.vPosition._v[0], camera.vPosition._v[1], camera.vPosition._v[2],..
+			camera.vView._v[0], camera.vView._v[1], camera.vView._v[2],..
+			camera.vUpVector._v[0], camera.vUpVector._v[1], camera.vUpVector._v[2] )
+	
+	glClearColor(0.0, 0.0, 0.0, 1.0)
+	
+	' clear the window
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+	
+	' Validate our shader before first use
+	If needsValidation[whichShader]
+		Local success:Int = False
+		
+		glValidateProgramARB(progObj[whichShader])
+		glGetObjectParameterivARB(progObj[whichShader], GL_OBJECT_VALIDATE_STATUS_ARB, Varptr success);
+		
+		If Not success
+			Local infoLog:Byte[MAX_INFO_LOG_SIZE];
+			glGetInfoLogARB(progObj[whichShader], MAX_INFO_LOG_SIZE, Null, infoLog);
+			Print "Error in high-level program #"+whichShader+" linkage!"
+			Print "Info log:" +String.FromCString(infoLog);
+			End
+		EndIf
+		
+		needsValidation[whichShader] = False
+	EndIf
+	
+	If Wireframe
+		glPolygonMode( GL_FRONT_AND_BACK, GL_LINE )
+	Else
+		glPolygonMode( GL_FRONT_AND_BACK, GL_FILL ) 'wireframe
+	EndIf
+
+	'Draw objects in the scene
+	DrawModels()
+	
+	
+	' Redraw texture w/fragment shader
+	If useHighLevel
+		glUseProgramObjectARB(progObj[whichShader]);
+		
+		Local uniformLoc:Int
+		uniformLoc = glGetUniformLocationARB(progObj[whichShader], "sampler0");
+		If( uniformLoc &lt;&gt; -1 )
+			glUniform1iARB(uniformLoc, 0);
+		Else
+			'Print "error. could not find uniformLoc for variable sampler0"
+		EndIf		
+		
+		uniformLoc = glGetUniformLocationARB(progObj[whichShader], "tc_offset" )
+		If( uniformLoc &lt;&gt; -1 )
+			glUniform2fvARB( uniformLoc, 9, texCoordOffsets )
+		Else
+			'Print "error. could not find uniformLoc for variable tc_offset"
+		EndIf
+	End If
+
+	glDisable(GL_DEPTH_TEST);
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glColor3ub(0,0,255)
+    For pass = 0 Until numPasses
+        '// Copy original scene To texture
+        glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, (windowWidth-textureWidth)/2, (windowHeight-textureHeight)/2, textureWidth, textureHeight, 0);
+
+
+        glClear(GL_COLOR_BUFFER_BIT);
+        glBegin(GL_QUADS);
+            glMultiTexCoord2f(GL_TEXTURE0, 0.0, 0.0);
+            glVertex2f(-(textureWidth / Float(windowWidth)), -(textureHeight / Float(windowHeight)));
+            glMultiTexCoord2f(GL_TEXTURE0, 0.0, 1.0);
+            glVertex2f(-(textureWidth / Float(windowWidth)), (textureHeight / Float(windowHeight)));
+            glMultiTexCoord2f(GL_TEXTURE0, 1.0, 1.0);
+            glVertex2f((textureWidth / Float(windowWidth)), (textureHeight / Float(windowHeight)));
+            glMultiTexCoord2f(GL_TEXTURE0, 1.0, 0.0);
+            glVertex2f((textureWidth / Float(windowWidth)), -(textureHeight / Float(windowHeight)));
+        glEnd();
+    Next
+
+	glEnable(GL_DEPTH_TEST);
+	
+
+	If useHighLevel
+		glUseProgramObjectARB(0);
+	EndIf
+	
+	?debug
+	Local errorCode:Int = glGetError()
+	If errorCode = GL_NO_ERROR
+		'all ok
+	Else
+		Print "GL ERROR!"
+		If errorCode = GL_INVALID_ENUM Print "invalid enum"
+		If errorCode = GL_INVALID_VALUE Print "invalid value"
+		If errorCode = GL_INVALID_OPERATION Print "invalid operation"
+		If errorCode = GL_STACK_OVERFLOW Print "stack overflow"
+		If errorCode = GL_STACK_UNDERFLOW Print "stack underflow"
+		If errorCode = GL_OUT_OF_MEMORY Print "GL_OUT_OF_MEMORY"
+		If errorCode = GL_TABLE_TOO_LARGE Print "GL_TABLE_TOO_LARGE"
+	EndIf
+	?
+	
+	
+	glColor3ub(255,255,255)
+	glDisable(GL_LIGHTING);
+	GLDrawText("hold left mouse to draw camera, use WASD to move",20,0)
+	GLDrawText("hold right mouse for wireframe",20,15)
+	GLDrawText("active shader program:"+shaderNames[whichShader], 20, 30)
+	glColor3ub(255,255,0)
+	GLDrawText("Press 1-7 to change whichshader = "+whichshader, 20, 45)
+	glColor3ub(255,255,255)
+	GLDrawText("Press PG_UP/PG_DOWN to rotate light0", 20, 60)
+	GLDrawText("Press arrow up/down to change numPasses = "+numPasses, 20, 75)
+	GLDrawText("fps:"+fps,20,90)
+	glEnable(GL_LIGHTING);
+	Flip
+End Function
+
+Function SetupRC()	
+	If GL_ARB_fragment_shader And GL_ARB_shader_objects And GL_ARB_shading_language_100
+		highLevelAvailable = True
+		useHighLevel = True
+	EndIf
+	
+	If GL_ARB_fragment_program Then lowLevelAvailable = True
+	
+	If Not highLevelAvailable
+		If lowLevelAvailable Print "your card supports lowlevel shaders but..."
+		Print "this program only supports highlevel shaders, GLSL... so its quitting now"
+		End
+	EndIf
+	
+	' Make sure we have multitexture and cube maps!
+	If GL_VERSION_1_3
+		Print "gl version 1.3 or higher. good to go."
+	Else
+		Print "OpenGL 1.3 is not available. Quitting"
+		End
+	EndIf
+	
+	glGetIntegerv(GL_MAX_TEXTURE_SIZE, Varptr maxTexSize);
+	Print "max tex size:"+maxTexSize
+	
+	' ifndef apple/macOS
+	' No needed to look up 
+	'glActiveTexture
+	'glMultiTexCoord2f 
+	'glMultiTexCoord2fARB
+	'and various shader extensions
+	'because glew finds the function pointers for us
+
+	
+	glClearColor(0.5, 0.5, 0.5, 0.0)	' Color to clear the screen with
+	glClearDepth 1.0										' The depth to clear the Zbuffer to (0.0=near clip plane, 1.0=far clip plane)
+	glDepthFunc(GL_LESS)								' Only draw pixels if the fragment/pixel Z depth, is LESS than the Zbuffer value
+	glEnable(GL_DEPTH_TEST)							' Enable depth testing (Z sorting of pixels)
+	glFrontFace(GL_CW)									' Draw polys facing viewer Clockwise
+	glShadeModel(GL_SMOOTH)	
+	glViewport(0,0,800,600)
+	
+	glMatrixMode(GL_PROJECTION)				' The Matrix to which subsequent Matrix operations work on
+	glLoadIdentity()
+	Local aspect# = Float(800)/Float(600)
+	gluPerspective(45.0,aspect#,1.0,100.0) ' y-FoV#, Aspect#, Near#, Far#
+	
+	' Misc. state
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LEQUAL);
+	glShadeModel(GL_SMOOTH);
+	glEnable(GL_LIGHTING);
+	glEnable(GL_COLOR_MATERIAL);
+	glEnable(GL_NORMALIZE);
+	glEnable(GL_LIGHT0);
+	glLightfv(GL_LIGHT0, GL_AMBIENT, ambientLight);
+	glLightfv(GL_LIGHT0, GL_DIFFUSE, diffuseLight);	
+	
+	'Texture state
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	
+	' Load and compile shaders
+	For Local i:Int = 0 Until TOTAL_SHADERS
+		PrepareShader(i)
+	Next
+End Function
+
+Function ChangeSize(w:Int, h:Int)
+    Local i:Int, j:Int;
+
+    windowWidth = w;
+    windowHeight = h;
+    glViewport(0, 0, windowWidth, windowHeight);
+
+    '// find largest power-of-two texture smaller than window
+	textureWidth = maxTexSize
+	textureHeight = maxTexSize
+    While (textureWidth &gt; windowWidth)
+        textureWidth = textureWidth / 2;
+    Wend
+
+    While (textureHeight &gt; windowHeight)
+        textureHeight = textureHeight / 2;
+    Wend
+    textureWidth :*2 'not quite correct?
+    textureHeight :* 2
+
+    Local xInc:Float = 1.0/ Float(textureWidth);
+    Local yInc:Float = 1.0/ Float(textureHeight);
+
+    For i = 0 To 2 
+        For j=0 To 2
+            texCoordOffsets[(((i*3)+j)*2)+0] = (-1.0 * xInc) + ( Float(i) * xInc);
+            texCoordOffsets[(((i*3)+j)*2)+1] = (-1.0 * yInc) + ( Float(j) * yInc);
+        Next
+    Next
+
+	Print "texsize:" + textureWidth +"x"+textureHeight
+	Print "window:" + windowWidth +"x"+windowHeight 
+End Function
+
+Function mainloop()
+	SetGraphicsDriver GLGraphicsDriver()
+	GLGraphics 800,600,0,0,GRAPHICS_BACKBUFFER|GRAPHICS_DEPTHBUFFER 
+	glewInit() 'must be done AFTER window creation
+	
+	
+	initCamera()
+	SetupRC()
+	ChangeSize(GraphicsWidth(), GraphicsHeight() )
+	
+	Local frames:Int = 0
+	Local frameTime:Long = 0
+	
+	While Not KeyDown(KEY_ESCAPE) And Not AppTerminate()
+		Local time:Long = MilliSecs()
+		Wireframe=MouseDown(2)
+		RenderScene()
+		
+		elapsed = MilliSecs() - time
+		frames:+1
+		frameTime :+ elapsed
+		If(frameTime &gt; 1000)
+			fps = frames
+			frames = 0
+			frameTime = 0
+		EndIf
+		Keys() 'poll keys for camera movement
+	Wend
+	
+	If glDeleteObjectARB
+		For Local i:Int = 0 Until TOTAL_SHADERS
+			glDeleteObjectARB( progObj[i] )
+			glDeleteObjectARB( fShader[i] )
+		Next
+	EndIf
+	
+	If glDeleteProgramsARB
+		glDeleteProgramsARB(TOTAL_SHADERS, ids)
+	EndIf
+	
+	End
+
+End Function
+
+Function keys()
+	For Local nums:Int = 0 To 7
+	 If KeyDown(49+nums) Then whichshader = nums
+	Next
+
+	If KeyDown(KEY_PAGEUP) lightRotation :- 5.0
+	If KeyDown(KEY_PAGEDOWN) lightRotation :+ 5.0
+	
+	If KeyHit(KEY_UP) numPasses:+1
+	If KeyHit(KEY_DOWN) numPasses:-1
+	If numPasses &gt; 4 numPasses = 4
+	If numPasses &lt; 1 numPasses = 1
+	
+	Local inputL:Int =0
+	Local inputR:Int =0
+	Local inputU:Int =0
+	Local inputD:Int =0
+	
+	If KeyDown(KEY_A) Then inputL=1
+	If KeyDown(KEY_D) Then inputR=1
+	If KeyDown(KEY_W) Then inputU=1
+	If KeyDown(KEY_S) Then inputD=1
+	
+	
+	Local vx:Int = inputR-inputL
+	Local vy:Int = 0 ' up down
+	Local vz:Int = inputU-inputD 'fwd bkwd
+	'camera.moveCamera( vz * 0.01 )
+	camera.moveCam(vz*1)
+	camera.slideCam( -vx, 0 )
+	
+	Local mouseSpeedX:Float = (Float(MouseX()) -Float(oldMouseX)) / elapsed * 0.1
+	Local mouseSpeedY:Float = (Float(MouseY()) -Float(oldMouseY)) / elapsed * 0.1
+	oldMouseX = MouseX()
+	oldMouseY = MouseY()
+	If MouseDown(1)
+		
+		MoveMouse( oldMouseX, oldMouseY )
+		posh = mouseSpeedX
+		posv = mouseSpeedY
+		camera.rotateCamera( posh, posv )
+		posh=0
+		posv=0
+	EndIf
+End Function
+
+'// Transform a point by a 4x4 matrix
+Function gltTransformPoint( vSrcVector:Float[], mMatrix:Float[], vOut:Float[] )
+	vOut[0] = mMatrix[0] * vSrcVector[0] + mMatrix[4] * vSrcVector[1] + mMatrix[8] *  vSrcVector[2] + mMatrix[12];
+	vOut[1] = mMatrix[1] * vSrcVector[0] + mMatrix[5] * vSrcVector[1] + mMatrix[9] *  vSrcVector[2] + mMatrix[13];
+	vOut[2] = mMatrix[2] * vSrcVector[0] + mMatrix[6] * vSrcVector[1] + mMatrix[10] * vSrcVector[2] + mMatrix[14];    
+End Function
+
+Function initCamera()
+	MoveMouse(GraphicsWidth()/2, GraphicsHeight()/2)
+End Function
+
+Type tCamera
+	Field vPosition:Vec3d = New Vec3d
+	Field vView:Vec3d = New Vec3d
+	Field vUpVector:Vec3d = New Vec3d
+	
+	Field radius:Float = 1
+	Field moveDist:Float = 1
+	
+	Field hRadians:Float
+	Field vRadians:Float
+	
+	Method setCamera(x#,y#,z#,h#,v#)
+		vPosition.set(x,y,z)
+		vView.set(0,0,0)
+		vUpVector.set(0,0,0)
+		hRadians = h
+		vRadians = v
+		
+		rotateCamera(0,0)
+	End Method
+	
+	Method rotateCamera(h:Float, v:Float)
+		hRadians :+ h
+		vRadians :+ v
+		
+		vView._v[1] = vPosition._v[1] + radius * sinRad(vRadians)	
+		vView._v[0] = vPosition._v[0] + (radius * cosRad(vRadians)*cosRad(hRadians))	
+		vView._v[2] = vPosition._v[2] + (radius * cosRad(vRadians)*sinRad(hRadians))
+		
+		vUpVector._v[0] = vPosition._v[0] - vView._v[0]
+		vUpVector._v[1] = Abs(vPosition._v[1] + (radius*sinRad(vRadians+Pi/2)))
+		vUpVector._v[2] = vPosition._v[2] - vView._v[2]
+	End Method
+	
+	Method moveCam(d:Float)
+		vPosition._v[1] :+ d*moveDist*sinRad(vRadians)
+		vPosition._v[0] :+ d*moveDist*cosRad(vRadians)*cosRad(hRadians)
+		vPosition._v[2] :+ d*moveDist*cosRad(vRadians)*sinRad(hRadians)
+		rotateCamera(0,0)
+	End Method
+	
+	Method slideCam(h:Float, v:Float)
+		vPosition._v[1] :+ v*moveDist
+		vPosition._v[0] :+ h*moveDist*cosRad(hRadians+Pi/2)
+		vPosition._v[2] :+ h*moveDist*sinRad(hRadians+Pi/2)
+		rotateCamera(0,0)		
+	End Method
+End Type
+
+Type Vec3d
+	'"private"
+	Field _v:Double[3]
+	
+	Method New()
+		_v[0] = 0; _v[1] = 0; _v[2] = 0;
+	End Method
+	
+	Method set(x:Double, y:Double, z:Double)
+		_v[0] = x; _v[1] = y; _v[2] = z
+	End Method
+End Type
+
+Function sinRad:Float(r:Float)
+	Return Sin(r*180/Pi)
+End Function
+
+Function cosRad:Float(r:Float)
+	Return Cos(r*180/Pi)
+End Function
+
+Function radToDeg:Float(r#)
+	Return r*180/Pi
+End Function
+
+' Taken from the glEarth.kc example/demo that comes with Ken Silvermans Evaldraw
+Function sphere() 'glutSolidSphere takes radius, slices, stacks
+	Local nu# = 32; Local du# = Pi*2/nu;
+	Local nv# = 16; Local dv# = Pi/nv;
+	Local v#=Pi;
+	Local iv# = 0;
+	glBegin(GL_TRIANGLE_STRIP);
+	While iv&lt;=nv
+			iv:+1
+			v:+dv
+			
+			Local u#=0;
+			Local iu#=0;
+			While iu&lt;=nu
+			iu:+1; u:+du;
+			glTexCoord2f(u*.5/Pi,v/Pi);
+			glVertex3f(Sin( radToDeg(v) )*Cos( radToDeg(u) ),Cos(radToDeg(v)),Sin(radToDeg(v))*Sin(radToDeg(u)));
+			glTexCoord2f(u*.5/Pi,(v-dv)/Pi);
+			glVertex3f(Sin(radToDeg(v-dv))*Cos(radToDeg(u)),Cos(radToDeg(v-dv)),Sin(radToDeg(v-dv))*Sin(radToDeg(u)));
+			
+		Wend	
+	
+	Wend
+	glEnd()
+End Function
+
+
+Function drawBox(size:Float, drawStyle:Int )
+
+  Local n:Float[][] =[.. '6*3
+    [-1.0, 0.0, 0.0],..
+    [0.0, 1.0, 0.0],..
+    [1.0, 0.0, 0.0],..
+    [0.0, -1.0, 0.0],..
+    [0.0, 0.0, 1.0],..
+    [0.0, 0.0, -1.0]..
+  ];
+
+
+  Local faces:Float[][] =[.. '6*4
+    [0.0, 1.0, 2.0, 3.0],..
+    [3.0, 2.0, 6.0, 7.0],..
+    [7.0, 6.0, 5.0, 4.0],..
+    [4.0, 5.0, 1.0, 0.0],..
+    [5.0, 6.0, 2.0, 1.0],..
+    [7.0, 4.0, 0.0, 3.0]..
+  ];
+
+  Local v:Float[8,3] '8*3
+	v[0,0] = -size / 2;
+	v[1,0] = -size / 2;
+	v[2,0] = -size / 2;
+	v[3,0] = -size / 2;
+	
+	v[4,0] = size / 2;
+	v[5,0] = size / 2;
+	v[6,0] = size / 2;
+	v[7,0] = size / 2;
+	
+	v[0,1] = -size / 2;
+	v[1,1] = -size / 2;
+	v[4,1] = -size / 2;
+	v[5,1] = -size / 2;
+	
+	v[7,1] = size / 2;
+	v[3,1] = size / 2;
+	v[2,1] = size / 2;
+	v[6,1] = size / 2;
+	
+	v[7,2] = -size / 2;
+	v[4,2] = -size / 2;
+	v[0,2] = -size / 2;
+	v[3,2] = -size / 2;
+	
+	v[6,2] = size / 2;
+	v[5,2] = size / 2;
+	v[1,2] = size / 2;
+	v[2,2] = size / 2;
+
+  For Local i:Int = 5 To 0 Step -1
+    glBegin(drawStyle);
+    glNormal3fv(Varptr n[i][0] );
+    glVertex3fv(Varptr v[faces[i][0],0]);
+    glVertex3fv(Varptr v[faces[i][1],0]);
+    glVertex3fv(Varptr v[faces[i][2],0]);
+    glVertex3fv(Varptr v[faces[i][3],0]);
+    glEnd();
+  Next
+End Function
+
+Function glutSolidCube(size:Double)
+	drawBox(size, GL_QUADS)
+End Function
+
+Function glutSolidTorus(innerRadius:Float, outerRadius:Float, nsides:Int, rings:Int)
+	doughnut(innerRadius, outerRadius, nsides, rings)
+End Function
+
+Function doughnut(r:Float, _r:Float, nsides:Int, rings:Int)
+  Local i:Int, j:Int;
+  Local theta:Float, phi:Float, theta1:Float;
+  Local cosTheta:Float, sinTheta:Float;
+  Local cosTheta1:Float, sinTheta1:Float;
+  Local ringDelta:Float, sideDelta:Float;
+
+  ringDelta = 2.0 * 180 / rings; 'changed from PI to 180degrees because bmax uses degrees in cos/sin
+  sideDelta = 2.0 * 180 / nsides;
+
+  theta = 0.0;
+  cosTheta = 1.0;
+  sinTheta = 0.0;
+  For i = rings-1 To 0 Step -1
+    theta1 = theta + ringDelta;
+    cosTheta1 = Cos(theta1);
+    sinTheta1 = Sin(theta1);
+    glBegin(GL_QUAD_STRIP);
+    phi = 0.0;
+    For j = nsides To 0 Step -1
+      Local cosPhi:Float, sinPhi:Float, dist:Float;
+
+      phi :+ sideDelta;
+      cosPhi = Cos(phi);
+      sinPhi = Sin(phi);
+      dist = _R + r * cosPhi;
+
+      glNormal3f(cosTheta1 * cosPhi, -sinTheta1 * cosPhi, sinPhi);
+      glVertex3f(cosTheta1 * dist, -sinTheta1 * dist, r * sinPhi);
+      glNormal3f(cosTheta * cosPhi, -sinTheta * cosPhi, sinPhi);
+      glVertex3f(cosTheta * dist, -sinTheta * dist,  r * sinPhi);
+    Next
+    glEnd();
+    theta = theta1;
+    cosTheta = cosTheta1;
+    sinTheta = sinTheta1;
+  Next
+End Function
+
+Function glutSolidCone(base:Double, height:Double, slices:Int, stacks:Int)
+  QUAD_OBJ_INIT();
+  gluQuadricDrawStyle(quadObj, GL_FILL);
+  gluQuadricNormals(quadObj, GL_SMOOTH);
+  ' If we ever changed/used the texture Or orientation state
+  '   of quadObj, we'd need to change it to the defaults here
+  '   with gluQuadricTexture And/Or gluQuadricOrientation. */
+  gluCylinder(quadObj, base, 0.0, height, slices, stacks);
+End Function
+
+Function QUAD_OBJ_INIT()
+	If Not quadObj Then initQuadObj()
+End Function
+
+Function initQuadObj()
+  quadObj = gluNewQuadric();
+  If (Not quadObj) Then RuntimeError("Could not make quad obj. out-of-memory")
+End Function
+</textarea><br><br><br>The fragment shader programs:<br>passthrough.frag<br><pre class=code>
+// pass through a single texel value
+uniform sampler2D sampler0;
+
+void main(void)
+{
+    gl_FragColor = texture2D(sampler0, gl_TexCoord[0].st);
+}
+</pre><br><br>blur.frag<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+// blur (low-pass) 3x3 kernel
+
+uniform sampler2D sampler0;
+uniform vec2 tc_offset[9];
+
+void main(void)
+{
+    vec4 sample[9];
+
+    for (int i = 0; i &lt; 9; i++)
+    {
+        sample[i] = texture2D(sampler0, 
+                              gl_TexCoord[0].st + tc_offset[i]);
+    }
+
+//   1 2 1
+//   2 1 2   / 13
+//   1 2 1
+
+    gl_FragColor = (sample[0] + (2.0*sample[1]) + sample[2] + 
+                    (2.0*sample[3]) + sample[4] + (2.0*sample[5]) + 
+                    sample[6] + (2.0*sample[7]) + sample[8]) / 13.0;
+}
+</textarea><br>sharphen.frag<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+// sharpen.fs
+//
+// 3x3 sharpen kernel
+
+uniform sampler2D sampler0;
+uniform vec2 tc_offset[9];
+
+void main(void)
+{
+    vec4 sample[9];
+
+    for (int i = 0; i &lt; 9; i++)
+    {
+        sample[i] = texture2D(sampler0, 
+                              gl_TexCoord[0].st + tc_offset[i]);
+    }
+
+//   -1 -1 -1
+//   -1  9 -1
+//   -1 -1 -1
+
+    gl_FragColor = (sample[4] * 9.0) - 
+                    (sample[0] + sample[1] + sample[2] + 
+                     sample[3] + sample[5] + 
+                     sample[6] + sample[7] + sample[8]);
+}
+
+</textarea><br><br>dilation.frag<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+// dilation.fs
+//
+// maximum of 3x3 kernel
+
+uniform sampler2D sampler0;
+uniform vec2 tc_offset[9];
+
+void main(void)
+{
+    vec4 sample[9];
+    vec4 maxValue = vec4(0.0);
+
+    for (int i = 0; i &lt; 9; i++)
+    {
+        sample[i] = texture2D(sampler0, 
+                              gl_TexCoord[0].st + tc_offset[i]);
+        maxValue = max(sample[i], maxValue);
+    }
+
+    gl_FragColor = maxValue;
+}
+
+</textarea><br><br>erosion.frag<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+// erosion.fs
+//
+// minimum of 3x3 kernel
+
+uniform sampler2D sampler0;
+uniform vec2 tc_offset[9];
+
+void main(void)
+{
+    vec4 sample[9];
+    vec4 minValue = vec4(1.0);
+
+    for (int i = 0; i &lt; 9; i++)
+    {
+        sample[i] = texture2D(sampler0, 
+                              gl_TexCoord[0].st + tc_offset[i]);
+        minValue = min(sample[i], minValue);
+    }
+
+    gl_FragColor = minValue;
+}
+
+</textarea><br><br>laplacian.frag<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+// laplacian.fs
+//
+// Laplacian edge detection
+
+uniform sampler2D sampler0;
+uniform vec2 tc_offset[9];
+
+void main(void)
+{
+    vec4 sample[9];
+
+    for (int i = 0; i &lt; 9; i++)
+    {
+        sample[i] = texture2D(sampler0, 
+                              gl_TexCoord[0].st + tc_offset[i]);
+    }
+
+//   -1 -1 -1
+//   -1  8 -1
+//   -1 -1 -1
+
+    gl_FragColor = (sample[4] * 8.0) - 
+                    (sample[0] + sample[1] + sample[2] + 
+                     sample[3] + sample[5] + 
+                     sample[6] + sample[7] + sample[8]);
+}
+</textarea><br><br><br>sobel.frag<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+// sobel.fs
+//
+// Sobel edge detection
+
+uniform sampler2D sampler0;
+uniform vec2 tc_offset[9];
+
+void main(void)
+{
+    vec4 sample[9];
+
+    for (int i = 0; i &lt; 9; i++)
+    {
+        sample[i] = texture2D(sampler0, 
+                              gl_TexCoord[0].st + tc_offset[i]);
+    }
+
+//    -1 -2 -1       1 0 -1 
+// H = 0  0  0   V = 2 0 -2
+//     1  2  1       1 0 -1
+//
+// result = sqrt(H^2 + V^2)
+
+    vec4 horizEdge = sample[2] + (2.0*sample[5]) + sample[8] -
+                     (sample[0] + (2.0*sample[3]) + sample[6]);
+
+    vec4 vertEdge = sample[0] + (2.0*sample[1]) + sample[2] -
+                    (sample[6] + (2.0*sample[7]) + sample[8]);
+
+    gl_FragColor.rgb = sqrt((horizEdge.rgb * horizEdge.rgb) + 
+                            (vertEdge.rgb * vertEdge.rgb));
+    gl_FragColor.a = 1.0;
+}
+
+</textarea><br><br><br>prewitt.frag<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+// prewitt.fs
+//
+// Prewitt edge detection
+
+uniform sampler2D sampler0;
+uniform vec2 tc_offset[9];
+
+void main(void)
+{
+    vec4 sample[9];
+
+    for (int i = 0; i &lt; 9; i++)
+    {
+        sample[i] = texture2D(sampler0, 
+                              gl_TexCoord[0].st + tc_offset[i]);
+    }
+
+//    -1 -1 -1       1 0 -1 
+// H = 0  0  0   V = 1 0 -1
+//     1  1  1       1 0 -1
+//
+// result = sqrt(H^2 + V^2)
+
+    vec4 horizEdge = sample[2] + sample[5] + sample[8] -
+                     (sample[0] + sample[3] + sample[6]);
+
+    vec4 vertEdge = sample[0] + sample[1] + sample[2] -
+                    (sample[6] + sample[7] + sample[8]);
+
+    gl_FragColor.rgb = sqrt((horizEdge.rgb * horizEdge.rgb) + 
+                            (vertEdge.rgb * vertEdge.rgb));
+    gl_FragColor.a = 1.0;
+}
+
+</textarea><br><br>You can download the orignal source from the books website:<br><a href="http://www.starstonesoftware.com/OpenGL/index.htm" target="_blank">http://www.starstonesoftware.com/OpenGL/index.htm</a> <br><br></td></tr></table><br>
+<a name="964191"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cool, thanks. The superbible is a great book. <br><br></td></tr></table><br>
+<a name="964225"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TWH</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> It is! <br><br>I've now added a textured quad. "texture.jpg"<br><br><img src="http://www.softswit.ch/bmaxprosjekter/imageproc_bmax_320.png"><br><br>Press space (or 1) to toggle filter.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Import pub.glew
+'Import BRL.BMPLoader
+Import BRL.JPGLoader
+
+AppTitle = "Imageprocessing with openGL"
+'for shapes:
+Global quadObj:Byte Ptr = Null;
+
+'Globals, consts:
+Global lowLevelAvailable:Int = False;
+Global highLevelAvailable:Int = False;
+Global useHighLevel:Int = False;
+
+Const PASS_THROUGH:Int=  0
+Const BLUR:Int=          1
+Const SHARPEN:Int=       2
+Const DILATION:Int=      3
+Const EROSION:Int=       4
+Const LAPLACIAN:Int=     5
+Const SOBEL:Int=         6
+Const PREWITT:Int=       7
+Const TOTAL_SHADERS:Int=  8
+
+Const MAX_INFO_LOG_SIZE:Int = 2048
+
+Global ids:Int[TOTAL_SHADERS]
+Global vShader:Int[TOTAL_SHADERS]
+Global fShader:Int[TOTAL_SHADERS], progObj:Int[TOTAL_SHADERS] 'high level shader object handles
+Global needsValidation:Int[TOTAL_SHADERS] 'if program obj changed, then revalidate
+Global shaderNames:String[] = ["passthrough", "blur", "sharpen", "dilation", "erosion", "laplacian", "sobel", "prewitt"]
+
+Global whichShader:Int = 5
+
+Global windowWidth:Int = 512;                '// window size
+Global windowHeight:Int = 512;
+Global textureWidth:Int = 512;               '// texture size
+Global textureHeight:Int = 512;
+
+Global maxTexSize:Int = 0 'maximum allowed size for 1D/2D texture
+
+Global lightPos:Float[] = [ 140.0, 250.0, 140.0, 1.0];
+Global ambientLight:Float[] = [ 0.2, 0.2, 0.2, 1.0];
+Global diffuseLight:Float[] = [ 0.7, 0.7, 0.7, 1.0];
+
+Global lightRotation:Float = 0.0
+Global texCoordOffsets:Float[18]
+Global numPasses:Int = 1
+
+
+Global camera:tCamera = New tCamera			
+camera.setCamera(0,100,150,Pi/2,180)
+Global posh:Float=0, posv:Float=0
+Global oldMouseX:Int
+Global oldMouseY:Int
+Global elapsed:Long = 0
+Global fps:Int = 0
+Global Wireframe:Byte = 0
+
+Global RENDERTEXTURE:Int[1] 'handle of texture we render the filter to
+Global textureQuad:tTexturedQuad
+Global drawFilter:Int = True
+'end globals
+
+mainloop() '################## START MAIN LOOP #####################
+End
+
+' Load shader from disk into a null-terminated string
+Function LoadShaderText:Byte[](filename:String)
+	Local fileLength:Int = FileSize(filename)
+	Local shaderText:Byte[fileLength+1]
+	Local shaderLength:Int = 0
+	
+	Local file:TStream = OpenFile( filename, True, False )
+	If Not file RuntimeError "could not open file: "+filename
+
+	
+	While Not Eof(file)
+		shaderText[shaderLength] = ReadByte(file)
+		shaderLength:+1
+		If shaderLength&gt;fileLength Then shaderLength = shaderLength
+	Wend
+	CloseFile(file)
+	
+	If shaderLength &gt; fileLength
+		Print "todo"
+	EndIf
+	
+	shaderText[shaderLength] = 0
+	CloseFile( file )
+	
+	Return shaderText
+End Function
+
+' Compile shaders
+Function PrepareShader(shaderNum:Int)
+	Print "----------- PrepareShader:"+shaderNum
+	Local fullFileName:String
+	Local fsString:Byte Ptr
+	
+	' Create high-level shader objects and specify shader text
+	If(highLevelAvailable)
+		Local fsStringPtr:Byte Ptr[1]
+		Local success:Int = False
+		
+		'################# LOAD FRAGMENT SHADER ###################
+		fullFileName = shaderNames[shaderNum] + ".frag"
+		
+		fsString = LoadShaderText( fullFileName )
+		If Not fsString
+			Print "unable to load "+fullFileName 
+			End
+		EndIf
+		
+		
+		
+		fShader[shaderNum] = glCreateShaderObjectARB(GL_FRAGMENT_SHADER_ARB);
+        	fsStringPtr[0] = fsString;
+        	glShaderSourceARB(fShader[shaderNum], 1, fsStringPtr, Null);
+        	fsString = Null
+
+        '// Compile shaders And check For any errors
+        glCompileShaderARB(fShader[shaderNum]);
+        glGetObjectParameterivARB(fShader[shaderNum], GL_OBJECT_COMPILE_STATUS_ARB, Varptr success);
+        If ( Not success)
+            Local infoLog:Byte[MAX_INFO_LOG_SIZE];
+            glGetInfoLogARB(fShader[shaderNum], MAX_INFO_LOG_SIZE, Null, infoLog);
+            Print "Error in high-level fragment shader "+shaderNum+" compilation!";
+            Print  "Info log: "+String.FromCString(infoLog); 
+            End
+        Else
+            Local infoLog:Byte[MAX_INFO_LOG_SIZE];
+            glGetInfoLogARB(fShader[shaderNum], MAX_INFO_LOG_SIZE, Null, infoLog);
+            Print "High-level fragment shader #"+shaderNum+" compile info Log: "+String.FromCString(infoLog);;
+        EndIf
+
+
+        '// Create program Object, attach shader, Then link
+        progObj[shaderNum] = glCreateProgramObjectARB();
+        glAttachObjectARB(progObj[shaderNum], fShader[shaderNum]);
+
+        glLinkProgramARB(progObj[shaderNum]);
+        glGetObjectParameterivARB(progObj[shaderNum], GL_OBJECT_LINK_STATUS_ARB, Varptr success);
+        If ( Not success)
+             Local infoLog:Byte[MAX_INFO_LOG_SIZE];
+            glGetInfoLogARB(progObj[shaderNum], MAX_INFO_LOG_SIZE, Null, infoLog);
+            Print "Error in high-level program #"+shaderNum+" linkage!"
+            Print "Info log:" +String.FromCString(infoLog);;
+            End
+        Else
+             Local infoLog:Byte[MAX_INFO_LOG_SIZE];
+            glGetInfoLogARB(progObj[shaderNum], MAX_INFO_LOG_SIZE, Null, infoLog);
+            Print "High-level program #"+shaderNum+" link info Log: "+String.FromCString(infoLog);;
+
+        EndIf
+
+        '// Program Object has changed, so we should revalidate
+        needsValidation[shaderNum] = True;
+	EndIf	
+	Print "preparation of shader done"
+End Function
+
+
+Function DrawModels()
+	Local lightPosEye:Float[3]
+	Local mv:Float[16]
+	
+	' Transform light position to eye space
+	glPushMatrix()
+	glRotatef(lightRotation, 0.0, 1.0, 0.0)
+	glGetFloatv(GL_MODELVIEW_MATRIX, mv)
+	gltTransformPoint(lightPos, mv, lightPosEye) 'OpenGL superbible VectorMath.c
+	glLightfv(GL_LIGHT0, GL_POSITION, lightPos)
+	glPopMatrix()
+	
+	' Draw a plane that the objects rest on
+	glColor3f(0,0,0.9); 'blue
+	glNormal3f(0.0, 1.0, 0.0)
+	glBegin(GL_QUADS)
+		glMultiTexCoord2f(GL_TEXTURE0, 0.0, 0.0);
+		glVertex3f(-100.0, -25.0, -100.0);
+		glMultiTexCoord2f(GL_TEXTURE0, 1.0, 0.0);
+		glVertex3f(-100.0, -25.0, 100.0);
+		glMultiTexCoord2f(GL_TEXTURE0, 1.0, 1.0);		
+		glVertex3f(100.0,  -25.0, 100.0);
+		glMultiTexCoord2f(GL_TEXTURE0, 1.0, 0.0);
+		glVertex3f(100.0,  -25.0, -100.0);
+	glEnd()
+	
+	' Draw red cube
+	glColor3f(1.0, 0.0, 0.0)
+	glutSolidCube(48.0)
+	
+	' Draw green sphere
+	glColor3f(0.0, 1.0, 0.0)
+	glPushMatrix()
+	glTranslatef(-60, 0.0, 0.0)
+	glScalef(25,25,25)
+	Sphere() 'todo glutSolidSphere 25, 50, 50
+	glPopMatrix()
+	
+	' Draw magenta torus
+	glColor3f(1.0, 0.0, 1.0)
+	glPushMatrix()
+	glTranslatef(0.0, 0.0, 60.0)
+	glutSolidTorus(8.0, 16.0, 50, 50)
+	glPopMatrix()
+	
+	' Draw yellow cone
+	glColor3f(1.0, 1.0, 0.0)
+	glPushMatrix()
+	glRotatef(-90.0, 1, 0, 0)
+	glTranslatef(60.0, 0.0, -24.0)
+	glutSolidCone(25.0, 50.0, 50, 50)
+	glPopMatrix()
+	
+	' Draw cyan teapot
+	glColor3f(0.0, 1.0, 1.0)
+	glPushMatrix()
+	
+	glTranslatef(0.0, 20.0, -60.0)
+	glRotatef(-90.0, 1, 0, 0)
+	'glutSolidTeapot(25.0)
+	'glScalef(15,15,15)
+	'teapot(25.0, 0,0)
+	glutSolidCone(25.0, 50.0, 50, 50)
+	glPopMatrix()
+	
+	' Go away
+	glColor4f(1.0, 1.0, 1.0, 1.0)
+	glPushMatrix()
+		
+		glTranslatef(0.0, 100.0, -100.0)	
+		glRotatef(180, 0,1,0)
+		glRotatef(90, 1,0,0)
+		
+		textureQuad.draw()
+	glPopMatrix()
+End Function
+
+Function RenderScene()
+	Local pass:Int = 0
+	
+	' Track camera angle
+	glMatrixMode(GL_PROJECTION)
+	glLoadIdentity()
+	gluPerspective(45.0, 1.0, 1.0, 1000.0)
+	glMatrixMode(GL_MODELVIEW)
+	glLoadIdentity()
+	gluLookAt( camera.vPosition._v[0], camera.vPosition._v[1], camera.vPosition._v[2],..
+			camera.vView._v[0], camera.vView._v[1], camera.vView._v[2],..
+			camera.vUpVector._v[0], camera.vUpVector._v[1], camera.vUpVector._v[2] )
+	
+	glClearColor(0.0, 0.0, 0.0, 1.0)
+	
+	' clear the window
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+	
+	' Validate our shader before first use
+	If needsValidation[whichShader]
+		Local success:Int = False
+		
+		glValidateProgramARB(progObj[whichShader])
+		glGetObjectParameterivARB(progObj[whichShader], GL_OBJECT_VALIDATE_STATUS_ARB, Varptr success);
+		
+		If Not success
+			Local infoLog:Byte[MAX_INFO_LOG_SIZE];
+			glGetInfoLogARB(progObj[whichShader], MAX_INFO_LOG_SIZE, Null, infoLog);
+			Print "Error in high-level program #"+whichShader+" linkage!"
+			Print "Info log:" +String.FromCString(infoLog);
+			End
+		EndIf
+		
+		needsValidation[whichShader] = False
+	EndIf
+	
+	If Wireframe
+		glPolygonMode( GL_FRONT_AND_BACK, GL_LINE )
+	Else
+		glPolygonMode( GL_FRONT_AND_BACK, GL_FILL ) 'wireframe
+	EndIf
+
+	'Draw objects in the scene
+	DrawModels()
+	
+	If drawFilter
+	' Redraw texture w/fragment shader
+	If useHighLevel
+		glUseProgramObjectARB(progObj[whichShader]);
+		
+		Local uniformLoc:Int
+		uniformLoc = glGetUniformLocationARB(progObj[whichShader], "sampler0");
+		If( uniformLoc &lt;&gt; -1 )
+			glUniform1iARB(uniformLoc, 0);
+		Else
+			'Print "error. could not find uniformLoc for variable sampler0"
+		EndIf		
+		
+		uniformLoc = glGetUniformLocationARB(progObj[whichShader], "tc_offset" )
+		If( uniformLoc &lt;&gt; -1 )
+			glUniform2fvARB( uniformLoc, 9, texCoordOffsets )
+		Else
+			'Print "error. could not find uniformLoc for variable tc_offset"
+		EndIf
+	End If
+
+	glDisable(GL_DEPTH_TEST);
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glColor3ub(0,0,255)
+	glBindTexture(GL_TEXTURE_2D, RENDERTEXTURE[0])
+    For pass = 0 Until numPasses
+        '// Copy original scene To texture
+        glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, (windowWidth-textureWidth)/2, (windowHeight-textureHeight)/2, textureWidth, textureHeight, 0);
+
+
+        glClear(GL_COLOR_BUFFER_BIT);
+        glBegin(GL_QUADS);
+            glMultiTexCoord2f(GL_TEXTURE0, 0.0, 0.0);
+            glVertex2f(-(textureWidth / Float(windowWidth)), -(textureHeight / Float(windowHeight)));
+            glMultiTexCoord2f(GL_TEXTURE0, 0.0, 1.0);
+            glVertex2f(-(textureWidth / Float(windowWidth)), (textureHeight / Float(windowHeight)));
+            glMultiTexCoord2f(GL_TEXTURE0, 1.0, 1.0);
+            glVertex2f((textureWidth / Float(windowWidth)), (textureHeight / Float(windowHeight)));
+            glMultiTexCoord2f(GL_TEXTURE0, 1.0, 0.0);
+            glVertex2f((textureWidth / Float(windowWidth)), -(textureHeight / Float(windowHeight)));
+        glEnd();
+    Next
+
+	glEnable(GL_DEPTH_TEST);
+	
+
+	If useHighLevel
+		glUseProgramObjectARB(0);
+	EndIf
+	
+	EndIf 'drawFilter 
+	
+	?debug
+	Local errorCode:Int = glGetError()
+	If errorCode = GL_NO_ERROR
+		'all ok
+	Else
+		Print "GL ERROR!"
+		If errorCode = GL_INVALID_ENUM Print "invalid enum"
+		If errorCode = GL_INVALID_VALUE Print "invalid value"
+		If errorCode = GL_INVALID_OPERATION Print "invalid operation"
+		If errorCode = GL_STACK_OVERFLOW Print "stack overflow"
+		If errorCode = GL_STACK_UNDERFLOW Print "stack underflow"
+		If errorCode = GL_OUT_OF_MEMORY Print "GL_OUT_OF_MEMORY"
+		If errorCode = GL_TABLE_TOO_LARGE Print "GL_TABLE_TOO_LARGE"
+	EndIf
+	?
+	
+	glColor3ub(255,255,255)
+	glDisable(GL_LIGHTING);
+	GLDrawText("hold left mouse to draw camera, use WASD to move",20,0)
+	GLDrawText("hold right mouse for wireframe",20,15)
+	GLDrawText("active shader program:"+shaderNames[whichShader], 20, 30)
+	glColor3ub(255,255,0)
+	GLDrawText("Press 1-7 to change whichshader = "+whichshader, 20, 45)
+	glColor3ub(255,255,255)
+	GLDrawText("Press PG_UP/PG_DOWN to rotate light0", 20, 60)
+	GLDrawText("Press arrow up/down to change numPasses = "+numPasses, 20, 75)
+	GLDrawText("fps:"+fps,20,90)
+	glEnable(GL_LIGHTING);
+	Flip
+End Function
+
+Function SetupRC()	
+	If GL_ARB_fragment_shader And GL_ARB_shader_objects And GL_ARB_shading_language_100
+		highLevelAvailable = True
+		useHighLevel = True
+	EndIf
+	
+	If GL_ARB_fragment_program Then lowLevelAvailable = True
+	
+	If Not highLevelAvailable
+		If lowLevelAvailable Print "your card supports lowlevel shaders but..."
+		Print "this program only supports highlevel shaders, GLSL... so its quitting now"
+		End
+	EndIf
+	
+	' Make sure we have multitexture and cube maps!
+	If GL_VERSION_1_3
+		Print "gl version 1.3 or higher. good to go."
+	Else
+		Print "OpenGL 1.3 is not available. Quitting"
+		End
+	EndIf
+	
+	glGetIntegerv(GL_MAX_TEXTURE_SIZE, Varptr maxTexSize);
+	Print "max tex size:"+maxTexSize
+	
+	' ifndef apple/macOS
+	' No needed to look up 
+	'glActiveTexture
+	'glMultiTexCoord2f 
+	'glMultiTexCoord2fARB
+	'and various shader extensions
+	'because glew finds the function pointers for us
+
+	
+	glClearColor(0.5, 0.5, 0.5, 0.0)	' Color to clear the screen with
+	glClearDepth 1.0										' The depth to clear the Zbuffer to (0.0=near clip plane, 1.0=far clip plane)
+	glDepthFunc(GL_LESS)								' Only draw pixels if the fragment/pixel Z depth, is LESS than the Zbuffer value
+	glEnable(GL_DEPTH_TEST)							' Enable depth testing (Z sorting of pixels)
+	glFrontFace(GL_CW)									' Draw polys facing viewer Clockwise
+	glShadeModel(GL_SMOOTH)	
+	glViewport(0,0,800,600)
+	
+	glMatrixMode(GL_PROJECTION)				' The Matrix to which subsequent Matrix operations work on
+	glLoadIdentity()
+	Local aspect# = Float(800)/Float(600)
+	gluPerspective(45.0,aspect#,1.0,100.0) ' y-FoV#, Aspect#, Near#, Far#
+	
+	' Misc. state
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LEQUAL);
+	glShadeModel(GL_SMOOTH);
+	glEnable(GL_LIGHTING);
+	glEnable(GL_COLOR_MATERIAL);
+	glEnable(GL_NORMALIZE);
+	glEnable(GL_LIGHT0);
+	glLightfv(GL_LIGHT0, GL_AMBIENT, ambientLight);
+	glLightfv(GL_LIGHT0, GL_DIFFUSE, diffuseLight);	
+	
+	'Texture state
+	glActiveTexture(GL_TEXTURE0);
+	glGenTextures(1, RENDERTEXTURE)
+	glBindTexture(GL_TEXTURE_2D, RENDERTEXTURE[0]);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	
+	' Load and compile shaders
+	For Local i:Int = 0 Until TOTAL_SHADERS
+		PrepareShader(i)
+	Next
+End Function
+
+Function ChangeSize(w:Int, h:Int)
+    Local i:Int, j:Int;
+
+    windowWidth = w;
+    windowHeight = h;
+    glViewport(0, 0, windowWidth, windowHeight);
+
+    '// find largest power-of-two texture smaller than window
+	textureWidth = maxTexSize
+	textureHeight = maxTexSize
+    While (textureWidth &gt; windowWidth)
+        textureWidth = textureWidth / 2;
+    Wend
+
+    While (textureHeight &gt; windowHeight)
+        textureHeight = textureHeight / 2;
+    Wend
+    textureWidth :*2 'not quite correct?
+    textureHeight :* 2
+
+    Local xInc:Float = 1.0/ Float(textureWidth);
+    Local yInc:Float = 1.0/ Float(textureHeight);
+
+    For i = 0 To 2 
+        For j=0 To 2
+            texCoordOffsets[(((i*3)+j)*2)+0] = (-1.0 * xInc) + ( Float(i) * xInc);
+            texCoordOffsets[(((i*3)+j)*2)+1] = (-1.0 * yInc) + ( Float(j) * yInc);
+        Next
+    Next
+
+	Print "texsize:" + textureWidth +"x"+textureHeight
+	Print "window:" + windowWidth +"x"+windowHeight 
+End Function
+
+Function mainloop()
+	SetGraphicsDriver GLGraphicsDriver()
+	GLGraphics 800,600,0,0,GRAPHICS_BACKBUFFER|GRAPHICS_DEPTHBUFFER 
+	glewInit() 'must be done AFTER window creation
+	
+	
+	initCamera()
+	SetupRC()
+	ChangeSize(GraphicsWidth(), GraphicsHeight() )
+	textureQuad= New tTexturedQuad
+	
+	Local frames:Int = 0
+	Local frameTime:Long = 0
+	
+	While Not KeyDown(KEY_ESCAPE) And Not AppTerminate()
+		Local time:Long = MilliSecs()
+		Wireframe=MouseDown(2)
+		RenderScene()
+		
+		elapsed = MilliSecs() - time
+		frames:+1
+		frameTime :+ elapsed
+		If(frameTime &gt; 1000)
+			fps = frames
+			frames = 0
+			frameTime = 0
+		EndIf
+		Keys() 'poll keys for camera movement
+	Wend
+	
+	If glDeleteObjectARB
+		For Local i:Int = 0 Until TOTAL_SHADERS
+			glDeleteObjectARB( progObj[i] )
+			glDeleteObjectARB( fShader[i] )
+		Next
+	EndIf
+	
+	If glDeleteProgramsARB
+		glDeleteProgramsARB(TOTAL_SHADERS, ids)
+	EndIf
+	
+	End
+
+End Function
+
+Function keys()
+	If KeyHit(KEY_SPACE) drawFilter = Not drawFilter 
+	
+	For Local nums:Int = 0 To 7
+	 If KeyDown(49+nums) Then whichshader = nums
+	Next
+
+	If KeyDown(KEY_PAGEUP) lightRotation :- 0.1
+	If KeyDown(KEY_PAGEDOWN) lightRotation :+ 0.1
+	
+	If KeyHit(KEY_UP) numPasses:+1
+	If KeyHit(KEY_DOWN) numPasses:-1
+	If numPasses &gt; 4 numPasses = 4
+	If numPasses &lt; 1 numPasses = 1
+	
+	Local inputL:Int =0
+	Local inputR:Int =0
+	Local inputU:Int =0
+	Local inputD:Int =0
+	
+	If KeyDown(KEY_A) Then inputL=1
+	If KeyDown(KEY_D) Then inputR=1
+	If KeyDown(KEY_W) Then inputU=1
+	If KeyDown(KEY_S) Then inputD=1
+	
+	
+	Local vx:Int = inputR-inputL
+	Local vy:Int = 0 ' up down
+	Local vz:Int = inputU-inputD 'fwd bkwd
+	'camera.moveCamera( vz * 0.01 )
+	camera.moveCam(vz*1)
+	camera.slideCam( -vx, 0 )
+	
+	Local mouseSpeedX:Float = (Float(MouseX()) -Float(oldMouseX)) / elapsed * 0.1
+	Local mouseSpeedY:Float = (Float(MouseY()) -Float(oldMouseY)) / elapsed * 0.1
+	oldMouseX = MouseX()
+	oldMouseY = MouseY()
+	If MouseDown(1)
+		
+		MoveMouse( oldMouseX, oldMouseY )
+		posh = mouseSpeedX
+		posv = mouseSpeedY
+		camera.rotateCamera( posh, posv )
+		posh=0
+		posv=0
+	EndIf
+End Function
+
+'// Transform a point by a 4x4 matrix
+Function gltTransformPoint( vSrcVector:Float[], mMatrix:Float[], vOut:Float[] )
+	vOut[0] = mMatrix[0] * vSrcVector[0] + mMatrix[4] * vSrcVector[1] + mMatrix[8] *  vSrcVector[2] + mMatrix[12];
+	vOut[1] = mMatrix[1] * vSrcVector[0] + mMatrix[5] * vSrcVector[1] + mMatrix[9] *  vSrcVector[2] + mMatrix[13];
+	vOut[2] = mMatrix[2] * vSrcVector[0] + mMatrix[6] * vSrcVector[1] + mMatrix[10] * vSrcVector[2] + mMatrix[14];    
+End Function
+
+Function initCamera()
+	MoveMouse(GraphicsWidth()/2, GraphicsHeight()/2)
+End Function
+
+Type tCamera
+	Field vPosition:Vec3d = New Vec3d
+	Field vView:Vec3d = New Vec3d
+	Field vUpVector:Vec3d = New Vec3d
+	
+	Field radius:Float = 1
+	Field moveDist:Float = 1
+	
+	Field hRadians:Float
+	Field vRadians:Float
+	
+	Method setCamera(x#,y#,z#,h#,v#)
+		vPosition.set(x,y,z)
+		vView.set(0,0,0)
+		vUpVector.set(0,0,0)
+		hRadians = h
+		vRadians = v
+		
+		rotateCamera(0,0)
+	End Method
+	
+	Method rotateCamera(h:Float, v:Float)
+		hRadians :+ h
+		vRadians :+ v
+		
+		vView._v[1] = vPosition._v[1] + radius * sinRad(vRadians)	
+		vView._v[0] = vPosition._v[0] + (radius * cosRad(vRadians)*cosRad(hRadians))	
+		vView._v[2] = vPosition._v[2] + (radius * cosRad(vRadians)*sinRad(hRadians))
+		
+		vUpVector._v[0] = vPosition._v[0] - vView._v[0]
+		vUpVector._v[1] = Abs(vPosition._v[1] + (radius*sinRad(vRadians+Pi/2)))
+		vUpVector._v[2] = vPosition._v[2] - vView._v[2]
+	End Method
+	
+	Method moveCam(d:Float)
+		vPosition._v[1] :+ d*moveDist*sinRad(vRadians)
+		vPosition._v[0] :+ d*moveDist*cosRad(vRadians)*cosRad(hRadians)
+		vPosition._v[2] :+ d*moveDist*cosRad(vRadians)*sinRad(hRadians)
+		rotateCamera(0,0)
+	End Method
+	
+	Method slideCam(h:Float, v:Float)
+		vPosition._v[1] :+ v*moveDist
+		vPosition._v[0] :+ h*moveDist*cosRad(hRadians+Pi/2)
+		vPosition._v[2] :+ h*moveDist*sinRad(hRadians+Pi/2)
+		rotateCamera(0,0)		
+	End Method
+End Type
+
+Type Vec3d
+	'"private"
+	Field _v:Double[3]
+	
+	Method New()
+		_v[0] = 0; _v[1] = 0; _v[2] = 0;
+	End Method
+	
+	Method set(x:Double, y:Double, z:Double)
+		_v[0] = x; _v[1] = y; _v[2] = z
+	End Method
+End Type
+
+Function sinRad:Float(r:Float)
+	Return Sin(r*180/Pi)
+End Function
+
+Function cosRad:Float(r:Float)
+	Return Cos(r*180/Pi)
+End Function
+
+Function radToDeg:Float(r#)
+	Return r*180/Pi
+End Function
+
+' Taken from the glEarth.kc example/demo that comes with Ken Silvermans Evaldraw
+Function sphere() 'glutSolidSphere takes radius, slices, stacks
+	Local nu# = 32; Local du# = Pi*2/nu;
+	Local nv# = 16; Local dv# = Pi/nv;
+	Local v#=Pi;
+	Local iv# = 0;
+	glBegin(GL_TRIANGLE_STRIP);
+	While iv&lt;=nv
+			iv:+1
+			v:+dv
+			
+			Local u#=0;
+			Local iu#=0;
+			While iu&lt;=nu
+			iu:+1; u:+du;
+			glTexCoord2f(u*.5/Pi,v/Pi);
+			glVertex3f(Sin( radToDeg(v) )*Cos( radToDeg(u) ),Cos(radToDeg(v)),Sin(radToDeg(v))*Sin(radToDeg(u)));
+			glTexCoord2f(u*.5/Pi,(v-dv)/Pi);
+			glVertex3f(Sin(radToDeg(v-dv))*Cos(radToDeg(u)),Cos(radToDeg(v-dv)),Sin(radToDeg(v-dv))*Sin(radToDeg(u)));
+			
+		Wend	
+	
+	Wend
+	glEnd()
+End Function
+
+
+Function drawBox(size:Float, drawStyle:Int )
+
+  Local n:Float[][] =[.. '6*3
+    [-1.0, 0.0, 0.0],..
+    [0.0, 1.0, 0.0],..
+    [1.0, 0.0, 0.0],..
+    [0.0, -1.0, 0.0],..
+    [0.0, 0.0, 1.0],..
+    [0.0, 0.0, -1.0]..
+  ];
+
+
+  Local faces:Float[][] =[.. '6*4
+    [0.0, 1.0, 2.0, 3.0],..
+    [3.0, 2.0, 6.0, 7.0],..
+    [7.0, 6.0, 5.0, 4.0],..
+    [4.0, 5.0, 1.0, 0.0],..
+    [5.0, 6.0, 2.0, 1.0],..
+    [7.0, 4.0, 0.0, 3.0]..
+  ];
+
+  Local v:Float[8,3] '8*3
+	v[0,0] = -size / 2;
+	v[1,0] = -size / 2;
+	v[2,0] = -size / 2;
+	v[3,0] = -size / 2;
+	
+	v[4,0] = size / 2;
+	v[5,0] = size / 2;
+	v[6,0] = size / 2;
+	v[7,0] = size / 2;
+	
+	v[0,1] = -size / 2;
+	v[1,1] = -size / 2;
+	v[4,1] = -size / 2;
+	v[5,1] = -size / 2;
+	
+	v[7,1] = size / 2;
+	v[3,1] = size / 2;
+	v[2,1] = size / 2;
+	v[6,1] = size / 2;
+	
+	v[7,2] = -size / 2;
+	v[4,2] = -size / 2;
+	v[0,2] = -size / 2;
+	v[3,2] = -size / 2;
+	
+	v[6,2] = size / 2;
+	v[5,2] = size / 2;
+	v[1,2] = size / 2;
+	v[2,2] = size / 2;
+
+  For Local i:Int = 5 To 0 Step -1
+    glBegin(drawStyle);
+    glNormal3fv(Varptr n[i][0] );
+    glVertex3fv(Varptr v[faces[i][0],0]);
+    glVertex3fv(Varptr v[faces[i][1],0]);
+    glVertex3fv(Varptr v[faces[i][2],0]);
+    glVertex3fv(Varptr v[faces[i][3],0]);
+    glEnd();
+  Next
+End Function
+
+Function glutSolidCube(size:Double)
+	drawBox(size, GL_QUADS)
+End Function
+
+Function glutSolidTorus(innerRadius:Float, outerRadius:Float, nsides:Int, rings:Int)
+	doughnut(innerRadius, outerRadius, nsides, rings)
+End Function
+
+Function doughnut(r:Float, _r:Float, nsides:Int, rings:Int)
+  Local i:Int, j:Int;
+  Local theta:Float, phi:Float, theta1:Float;
+  Local cosTheta:Float, sinTheta:Float;
+  Local cosTheta1:Float, sinTheta1:Float;
+  Local ringDelta:Float, sideDelta:Float;
+
+  ringDelta = 2.0 * 180 / rings; 'changed from PI to 180degrees because bmax uses degrees in cos/sin
+  sideDelta = 2.0 * 180 / nsides;
+
+  theta = 0.0;
+  cosTheta = 1.0;
+  sinTheta = 0.0;
+  For i = rings-1 To 0 Step -1
+    theta1 = theta + ringDelta;
+    cosTheta1 = Cos(theta1);
+    sinTheta1 = Sin(theta1);
+    glBegin(GL_QUAD_STRIP);
+    phi = 0.0;
+    For j = nsides To 0 Step -1
+      Local cosPhi:Float, sinPhi:Float, dist:Float;
+
+      phi :+ sideDelta;
+      cosPhi = Cos(phi);
+      sinPhi = Sin(phi);
+      dist = _R + r * cosPhi;
+
+      glNormal3f(cosTheta1 * cosPhi, -sinTheta1 * cosPhi, sinPhi);
+      glVertex3f(cosTheta1 * dist, -sinTheta1 * dist, r * sinPhi);
+      glNormal3f(cosTheta * cosPhi, -sinTheta * cosPhi, sinPhi);
+      glVertex3f(cosTheta * dist, -sinTheta * dist,  r * sinPhi);
+    Next
+    glEnd();
+    theta = theta1;
+    cosTheta = cosTheta1;
+    sinTheta = sinTheta1;
+  Next
+End Function
+
+Function glutSolidCone(base:Double, height:Double, slices:Int, stacks:Int)
+  QUAD_OBJ_INIT();
+  gluQuadricDrawStyle(quadObj, GL_FILL);
+  gluQuadricNormals(quadObj, GL_SMOOTH);
+  ' If we ever changed/used the texture Or orientation state
+  '   of quadObj, we'd need to change it to the defaults here
+  '   with gluQuadricTexture And/Or gluQuadricOrientation. */
+  gluCylinder(quadObj, base, 0.0, height, slices, stacks);
+End Function
+
+Function QUAD_OBJ_INIT()
+	If Not quadObj Then initQuadObj()
+End Function
+
+Function initQuadObj()
+  quadObj = gluNewQuadric();
+  If (Not quadObj) Then RuntimeError("Could not make quad obj. out-of-memory")
+End Function
+
+
+Type tTexturedQuad
+	Field texture:Int[1]
+	
+	Method New()
+		loadTexture()
+	End Method
+	
+	Method loadTexture()
+		Local image:TPixmap = LoadPixmap("texture.jpg")
+		If image &lt;&gt; Null
+			Print "texture load success"
+		Else 
+			Print "texture could not be loaded"
+			Print "quitting..."
+			End
+		EndIf
+		
+		glGenTextures(1, texture) 'generate tex name for 1
+		glBindTexture(GL_TEXTURE_2D, texture[0])
+		
+		'actually generate texture:
+		'expects png or jpg, not bmp
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, image.width, image.height, 0, GL_RGB, GL_UNSIGNED_BYTE, image.pixels)	
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR) 'linear filtering
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR) 'linear filtering
+		
+		image = Null 'loaded into opengl now, so free it
+	End Method
+	
+	Method draw()
+		glEnable(GL_TEXTURE_2D)
+		glBindTexture(GL_TEXTURE_2D, texture[0])
+		glNormal3f(0.0, 1.0, 0.0)
+			glBegin(GL_QUADS)
+				glTexCoord2f(1.0, 0.0);
+				glVertex3f(-100.0, 0.0, -100.0);
+				glTexCoord2f( 1.0, 1.0);
+				glVertex3f(-100.0, 0.0, 100.0);
+				glTexCoord2f(0.0, 1.0);		
+				glVertex3f(100.0,  0.0, 100.0);
+				glTexCoord2f(0.0, 0.0);
+				glVertex3f(100.0,  0.0, -100.0);
+			glEnd()
+		glDisable(GL_TEXTURE_2D)
+	End Method
+End Type
+</textarea><br><br>The shaders are the same as before. <br><br></td></tr></table><br>
+<a name="986034"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Scienthsine</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Are the OpenGL shader functions like glShaderSourceARB and glGetObjectParameterivARB a part of BMax now?<br><br>Been away awhile, and not at home atm. <br><br></td></tr></table><br>
+<a name="986657"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >plash</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Are the OpenGL shader functions like glShaderSourceARB and glGetObjectParameterivARB a part of BMax now? <br></div>A part of pub.glew, so yes. <br><br></td></tr></table><br>
+<a name="986714"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Scienthsine</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> w00t, yays <br><br></td></tr></table><br>
+<a name="988082"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >FreakForFreedom</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> very nice, thanks for sharing <br><br></td></tr></table><br>
+<a name="1004673"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Uncle</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>Has anyone managed to get this working on a Mac?  I've managed to get it rendering but its not working properly.  All the shaders seem to do is colour everything blue?  Also the program fails on the OpenGL 1.3 check.  My Mac should be at least 1.4 compliant, but the check fails.<br><br>Cheers,<br><br><br>Unc<br><br>PS the graphics card is a GMA 950 I think. <br><br></td></tr></table><br>
+<a name="1283946"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RupeB</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yep got this working perfectly on a Mac. 6 years later I can confirm this, maybe changes to BlitzMAX through these years have happened to make it so. But it does works now. <br><br></td></tr></table><br>
+<a name="1284109"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kimor</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Maybe a VBO would work but I´m trying to convert this now, <br>where GPU is used for the actual tiling in every possible way. <br><br>We'll see how that goes.<br><br><a href="http://blog.tojicode.com/2012/07/sprite-tile-maps-on-gpu.html" target="_blank">http://blog.tojicode.com/2012/07/sprite-tile-maps-on-gpu.html</a><br><a href="http://media.tojicode.com/zelda/" target="_blank">http://media.tojicode.com/zelda/</a><br><br>The primary reason is that ever teeny weeny work is put onto the GPU here, and I kind of like that. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

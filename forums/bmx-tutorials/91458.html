@@ -1,0 +1,358 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Threading Basics</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Threading Basics</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=112" >BlitzMax Tutorials</a>/<a href="#bottom" >Threading Basics</a><br><br>
+<a name="1040605"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've noticed a large number of requests and questions regarding threading so I thought I'd put together some examples to try to help people get started. The documentation on threading is pretty sparse so this is mainly an attempt to clarify.<br><br>The examples are intended to be "like" real work examples, in that they show you how to do something, but they may just be a framework to do it. As with any code there's a million ways to go about anything, these should in no way be considered the "right" way, just something to get you going.<br><br>It's VERY important to note that not everything is thread safe! You can't just throw code in a thread and expect it to work. However just because it's not thread safe doesn't mean you can't use it in a multi-threaded application, you just HAVE to use non thread safe things in the main thread (or sometimes just one thread only which could be a child thread as long as it's ONLY accessed from there... rule of thumb, keep it to main thread if there's any doubt)<br>Here are some examples of places you need to take special care.<br>Graphics: Graphics actions are not thread safe, this is as a result graphics systems not being thread safe (opengl and directx). They MUST be handled from the main thread. Interestingly in bmax image loading, despite creating a graphics texture, seems to work from child threads... Perhaps this is an intentional modification done to the loading process, I don't really know...<br>Events: The event que is not thread safe, and since you can't control when an event will be created you can't force it with your own mutex. One workaround however is to create your own second event que that you handle in a thread safe manner and dump that into the main que when you see fit.<br>Memory Changes: It is safe to read something in memory from multiple threads at once, however it is not safe to modify memory if it may be accessed. You can't change something from 2 places at once, and you can't change something WHILE it's being read from somewhere else. Safely managing access is the point of the bellow tutorials.<br><br>Another important thing to remember is that threads have overhead. Spawning 2 threads on a single core system will result in slower performance than just 1 since the system has to spend time managing both threads. However both will be working essentially at the same time, so if you can afford the overhead it may still make sense. More cores means you can handle more threads without them bogging each other down, however you still have to share time with the rest of the computer. This isn't usually too big of an issue for things like games where you can expect to have the user's full attention, but if you get sent to the background, or if you have a UI that allows the user to do other things (using windows instead of full screen for example) you may need to take into account what your child threads are doing and find a way to give time back to the system... <br><br></td></tr></table><br>
+<a name="1040606"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> A basic loading thread<br><br>This is your first example of when you might find threading useful. This simply allows you to do something while your resources are loading, such as update a progress animation, or show your user some tips, etc.<br><br><pre class=code>
+SuperStrict
+
+' Threading tutorial 1:
+' A basic loading thread
+
+
+' a threadable function
+' threadable functions must return an Object and take 1 object as input, they don't need to be used
+Function loadResources:Object(in:Object)
+	Print "Starting a child thread..." 
+	For Local counter:Int = 0 Until 20 ' just a loop to make stuff happen
+		Print "Pretending to load resource " + counter
+		Delay(300) ' just to make this take some time like loading a real resource would
+	Next
+	Print "Child thread complete."
+End Function
+
+
+
+'####### Main code starts here
+
+' Create a thread with loadResources() and Null as it's input object value
+Local loadingThread:TThread = CreateThread(loadResources, Null)
+
+Print "Starting the main loop..."
+While(ThreadRunning(loadingThread)) ' as long as that child thread is still running...
+	Print "Waiting on our resources..."
+	Delay(100) ' we could do whatever we want here...
+Wend
+Print "Main loop complete."
+</pre> <br><br></td></tr></table><br>
+<a name="1040607"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Mutexes<br><br>Here you will see how to control access to an object to make it thread safe. By using a mutex to control the access flow you can prevent multiple threads from accessing it at the same time and therefore keep them from crashing.<br><br><pre class=code>
+SuperStrict
+
+' Threading tutorial 2:
+' Mutexes
+
+
+' Creating global vars because we have to access them from a function and from main.
+Global resourceList:TList = CreateList() ' create a list to store resources in
+Global resourceListMutex:TMutex = CreateMutex() ' create a mutex to control access to the resource list
+
+
+' a threadable function
+Function loadResources:Object(in:Object)
+	Print "Starting a child thread..." 
+	For Local counter:Int = 0 Until 20 ' just a loop to make stuff happen
+		Print "Pretending to load resource " + counter
+		
+		Delay(300) ' just to make this take some time like loading a real resource would
+		Local newResource:String = "This is pretend resource " + counter ' create a pretend resource as if we'd loaded something
+		
+		
+		LockMutex(resourceListMutex) ' lock the mutex to prevent overlapping access. This will wait until we get access before proceeding
+		ListAddLast(resourceList, newResource) ' add the new resource to the list since we know the list is safe to use
+		UnlockMutex(resourceListMutex) ' ALWAYS unlock when you're done with a mutex...
+	Next
+	Print "Child thread complete."
+End Function
+
+
+
+'####### Main code starts here
+
+' Create a thread with loadResources() and Null as it's input object value
+Local loadingThread:TThread = CreateThread(loadResources, Null)
+
+Print "Starting the main loop..."
+While(ThreadRunning(loadingThread)) ' as long as that child thread is still running...
+	Print "Waiting on our resources..."
+	Delay(100) ' we could do whatever we want here...
+	
+	If(TryLockMutex(resourceListMutex)) ' TRY to lock the mutex... if we can get the lock then this code will run, if we fail we'll try again later
+		Print "Currently have " + CountList(resourceList) + " resources loaded" ' since we got the lock we can access the resourceList safely
+		UnlockMutex(resourceListMutex) ' if we got into this if's code block then we've locked the mutex, have to unlock when we're done with it
+	End if
+Wend
+Print "Main loop complete."
+</pre> <br><br></td></tr></table><br>
+<a name="1040608"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Semaphores<br><br>Semaphores are another way to control access flow. Unlike mutexes however they are used to notify across threads when something is safe to use, rather than by preventing access when it isn't. I really only use them for loading routines as it allows for relatively easy flow control between 2 threads where one loads items, and another works on loaded items, when it runs out of things to work on it will just wait for the next thing to load.<br><br><pre class=code>
+SuperStrict
+
+' Threading tutorial 3:
+' Semaphores
+
+
+Global loadedResources:String[20] ' Create an array we will fill with "resources"
+Global loadedResourcesSemaphore:TSemaphore = CreateSemaphore(0) ' Create a semaphore to control loading flow, 0 pre-posted
+
+
+' a threadable function
+Function loadResources:Object(in:Object)
+	Print "Starting a child thread..." 
+	For Local counter:Int = 0 Until 20 ' just a loop to make stuff happen
+		Print "Pretending to load resource " + counter
+		Delay(300) ' just to make this take some time like loading a real resource would
+		
+		loadedResources[counter] = "This is fake resource " + counter
+		
+		PostSemaphore(loadedResourcesSemaphore) ' notify that another object has been loaded. This incriments the semaphore by 1
+	Next
+	Print "Child thread complete."
+End Function
+
+
+
+'####### Main code starts here
+
+' Since we don't need to monitor it's progress or get a return value we can save
+' system overhead of tracking the thread by calling DetachThread()
+DetachThread(CreateThread(loadResources, Null))
+
+Local onResource:Int = 0 ' an integer to keep track of how many resources we've handled so far
+Print "Starting the main loop..."
+For Local onResource:Int = 0 Until 20 ' until we've processed all 20 resources...
+	WaitSemaphore(loadedResourcesSemaphore) ' wait until the semaphore has been posted to
+	' Each time wait semaphore releases and lets the code continue the semaphore is reduced by 1
+	' if it has been posted to again before we get to the next wait then it won't have to wait, it will just reduce by 1 and continue
+	
+	' since we can only get here after a semaphore has been posted up to or above our onResource counter
+	' then loadedResources[onResource] must be filled and safe to access
+	Print "Got resource " + loadedResources[onResource]
+	
+	Delay(250 + Rand(100)) ' probably do some sort of post-process that requires the main thread here...
+	' this is doing a randomized Delay so sometimes we'll get another post to handle right away and sometimes we have to wait
+next
+Print "Main loop complete."
+</pre> <br><br></td></tr></table><br>
+<a name="1040609"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> CondVars<br><br>CondVars are more of a notification system than direct flow control. They allow you to essentially send up a flare from one thread to notify the rest of your application that something has happened. In the bellow example a condvar is used to continue the flow of 2 threads that are waiting for the same resource to load. CondVars can be used more like mutexes to signal a single thread rather than all as well.<br><br>This example also shows that you can use more than just one child thread.<br><br><pre class=code>
+SuperStrict
+
+' Threading tutorial 4:
+' CondVars
+
+
+Global myResource:String
+Global theCondition:TCondVar = CreateCondVar() ' Create a condition variable 
+Global theConditionMutex:TMutex = CreateMutex() ' Create a mutex to use with the condvar
+
+' a threadable function
+Function loadResource:Object(in:Object)
+	Print "Starting a loading thread..." 
+	For Local counter:Int = 0 Until 20 ' just a loop to make stuff happen
+		Print "Pretending to load resource " + counter
+		Delay(300) ' just to make this take some time like loading a real resource would
+		
+		myResource = "The resource is loaded"
+		
+		LockMutex(theConditionMutex) ' you must lock your condvar mutex when using it
+		BroadcastCondVar(theCondition) ' notify EVERYONE that the resource is loaded
+		UnlockMutex(theConditionMutex) ' unlock whenever you lock...
+	Next
+	Print "Loading thread complete."
+End Function
+
+
+' another threadable function
+Function processResource:Object(in:Object)
+	Print "Starting processing thread..."
+	
+	' do some prep for our process here, maybe load some associated resources we'll need...
+	Local resourceTail:String = " and has been processed"
+	
+	
+	LockMutex(theConditionMutex) ' you must lock/unlock the associated mutex when using a condvar wait
+	WaitCondVar(theCondition, theConditionMutex) ' provide the condvar as well as the mutex you're using with it
+	UnlockMutex(theConditionMutex) ' unlock whenever you lock...
+	
+	
+	' we've been told the resource is loaded...
+	myResource = myResource + resourceTail
+	
+	
+	Print "Processing thread complete."
+End Function
+
+
+
+'####### Main code starts here
+
+' Create a thread with loadResource() and Null as it's input object value, detach it because we won't be watching it
+DetachThread(CreateThread(loadResource, Null))
+
+' Create another thread that will wait for a chance to do some processing
+Local processResourceThread:TThread = CreateThread(processResource, Null)
+
+
+Print "Waiting for the signal..."
+LockMutex(theConditionMutex) ' you must lock/unlock the associated mutex when using a condvar wait
+WaitCondVar(theCondition, theConditionMutex) ' provide the condvar as well as the mutex you're using with it
+UnlockMutex(theConditionMutex) ' unlock whenever you lock...
+Print "The condvar has been loaded."
+
+While(ThreadRunning(processResourceThread))
+	Print "Waiting for process to complete..."
+	Delay(200)
+Wend
+Print "The resource is processed to ~q" + myResource + "~q"
+</pre> <br><br></td></tr></table><br>
+<a name="1040610"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Threaded input and output<br><br>This example shows you how to use a child thread more like a normal function where you pass it input and get output as a result. Since a threaded function must conform to the object in object out format you must type cast your input so you can work with it. Further you can not pass or return values (such as integers), only objects. A simple work around in bmax is to use strings since they are objects (so you can pass them) and they can be converted to and from values with ease.<br><br><pre class=code>
+SuperStrict
+
+' Threading tutorial 5:
+' Thread input and output
+
+
+' a threadable function
+' threadable functions must return an Object and take 1 object as input, they don't need to be used
+Function loadResources:Object(in:Object)
+	Local inputString:String = String(in) ' typecast our input object so that it's easier to deal with
+	
+	Print "Starting a child thread..."
+	Local counter:Int ' seperate from the loop so we can use the value after the loop is done
+	For counter = 0 Until 20 ' just a loop to make stuff happen
+		Print "Pretending to load resource " + counter + " to " + inputString
+		Delay(300) ' just to make this take some time like loading a real resource would
+	Next
+	Print "Child thread complete."
+	
+	Return "Loaded " + counter + " things to " + inputString
+End Function
+
+
+
+'####### Main code starts here
+
+' Create a thread with loadResources() and Null as it's input object value
+Local loadingThread:TThread = CreateThread(loadResources, "some input text") ' give it an object (in this case a string)
+
+Print "Starting the main loop..."
+While(ThreadRunning(loadingThread)) ' as long as that child thread is still running...
+	Print "Waiting on our resources..."
+	Delay(100) ' we could do whatever we want here...
+Wend
+Print "Main loop complete."
+
+' Wait thread will wait for the thread to complete (it already has in this code)
+' it also gets the return object from the thread
+Local resultObject:Object = WaitThread(loadingThread)
+Local result:String = String(resultObject) ' type case the return object so it's easier to deal with
+Print "The result is ~q" + result + "~q"
+</pre> <br><br></td></tr></table><br>
+<a name="1040616"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nate the Great</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> great tutorial, really helped me understand semaphores and condvars.<br>Can you give an example of atomic add?  I cannot understand what it is used for. <br><br></td></tr></table><br>
+<a name="1041588"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks very much for these examples.<br>I have a question about example #4 - Condvars. Running it I get this output:<br><pre class=code>
+Building untitled4
+Compiling:untitled4.bmx
+flat assembler  version 1.68  (1552848 kilobytes memory)
+3 passes, 7731 bytes.
+Linking:untitled4.debug.mt.exe
+Executing:untitled4.debug.mt.exe
+WSatSiattraitrnitgni gnf goa r p lrtoohacede issnsigig nntgah lrt.eh.ar.de.a.
+d....
+
+Pretending to load resource 0
+PTPrhreeot cecenosdnsidivnang to lrog a hdta hsrr eebsaeodeu nrc complete.le
+o a1
+ded.
+The resource is processed to "The resource is loaded and has been processed"
+
+Processo completato
+</pre><br>Is this the expected result? I though that all the resources should be processed adding to the string the final part ' and has been processed" - but maybe I dont' understand the working of condvars &amp; Mt. <br><br></td></tr></table><br>
+<a name="1041691"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> You'll notice a lot of overlap in the output from the print commands because you may be firing 2 print commands at the same time. Wrap the prints with a mutex to get more linear/readable output. e.g.<br><br><pre class=code>
+global printMutex:TMutex = CreateMutex()
+
+LockMutex(printMutex)
+print "All prints should be wrapped with a mutex to prevent overlapping output"
+UnlockMutex(printMutex)
+</pre><br><br><br>As for the Atomic functions, those are used to make changes to a variable in a thread safe manner. Since variables, unlike objects, can be modified from 2 places at once without crashing you may enter "race conditions" where each thread races to modify the variable rather than both taking turns. Essentially it's like wrapping the change in a mutex but more efficient. See <a href="http://supercomputingblog.com/cuda/cuda-tutorial-4-atomic-operations/" target="_blank">http://supercomputingblog.com/cuda/cuda-tutorial-4-atomic-operations/</a> for some more details about atomic operations and race conditions. Not blitz specific but gives a good run down on what's going on. <br><br></td></tr></table><br>
+<a name="1041827"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Drackbolt</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Fantastic; I think I finally understand how to use a Mutex.  Thanks! <br><br></td></tr></table><br>
+<a name="1041828"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Glad I could help! I hope the help documentation and examples get refined at some point and make these tutorials superfluous, but until then hopefully they will help break the ice for those interested :0) <br><br></td></tr></table><br>
+<a name="1043296"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Drackbolt</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Me too.  I know that getting into threading is risky business, but it's just too tempting not to try and understand since almost every computer will be multicore.  I really hope something can be done to improve the debugging situation as well, though I'm sure it would be difficult.<br><br>A follow-up question: what is best practice for using mutexes?  For instance, if I have an RTS game with hundreds of objects, can I give each of them their own mutex?  Or would it be better to have a single mutex per class?<br><br>[edit] And actually a bigger question too is, how much time is lost creating threads?  Should I try to create them more or less often as possible? <br><br></td></tr></table><br>
+<a name="1043377"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> As with any object the fewer the better for memory use, so if it's feesable I would aim for mutexes per type,however that may not be practical, it all depends on your flow and how you intend to use threading.<br><br>Time is lost both at creation and cleanup of a thread, the longer you can keep it running typically you will have better performance. <br><br></td></tr></table><br>
+<a name="1043561"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Drackbolt</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks a lot for the info!  I might very well go with mutex-per-object then, if memory is the only concern, so I can try to get as much a performance boost as possible.  My game doesn't require much memory in the first place.  I can have up to 6 players at once, so maybe I'll see about putting each of them in their own thread right from the start.<br><br>Thanks again for this and for the nice tutorial. <br><br></td></tr></table><br>
+<a name="1043641"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Drackbolt</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> I have another question. :)  What exactly happens when a linked list is called inside a mutex?  Is each object in the list then protected automatically?  I ask because I have objects that have multiple links to various lists.  So for instance, one unit in my game might be part of a list that contains all units in the game, and also a list that contains all units for a certain player, or all units of a certain type.  I am wondering how much I need to protect each of my lists, while doing so as little as possible to retain performance. <br><br></td></tr></table><br>
+<a name="1043659"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> Locking a mutex just locks the mutex. It doesn't know exactly what you are trying to protect with that mutex. It just prevents other things from running that would also lock that mutex by making their threads pause until the mutex is unlocked again. If you access a list regularly, but don't modify the list, just read it/iterate through it, you don't need to prevent multiple threads from reading it at once. If you're making changes to objects in the list you will want to ensure that no 2 threads modify a given object at the same time by using a mutex for the object in question.<br><br>If you want to minimize the locking time then you want your mutex as specific as possible (i.e. a mutex for each object). If however you want to minimize the time spend managing locks, or you want to simplify your code, you may want to just have a mutex for the list and operate under the assumption that if the list mutex is locked then the objects in the list should also be considered locked...<br><br>If you're accessing the same object from multiple lists, you probably want a mutex for that object so as to prevent access through each list to the same object multiple times. If those lists themselves can change from multiple points/threads they may need their own mutexes to prevent the list object itself from getting manipulated...<br><br>There's a lot of stuff with threading that you just have to figure out what is the best approach for you, in this project, for this task. All the locking etc. is a safety net to prevent crashes, if you never access the same things from multiple threads you don't need any of it since there is no access overlap... <br><br></td></tr></table><br>
+<a name="1043671"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Drackbolt</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, thanks again.  That's what I was afraid of, so I'll have to re-think how I am going to use mutexes.  Going by whole lists would certainly simplify things but it would also mean a lot of waiting for unlocks.  I can see how it would also lead to some serious problems if I used complex nested iterations of the same list (which is necessary sometimes).<br><br>That leads to another question though: if I did use mutexes per object, would I encounter any errors when an object was created and added to a list while the list was being iterated by another thread?  Should I find ways to lock a whole list when adding a link to it? (edit: sorry, I think you already answered this above after I read it again...) <br><br></td></tr></table><br>
+<a name="1043696"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Drackbolt</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> So just to brainstorm a bit here (and make sure I understand things), I wrote up a sample:<br><pre class=code>
+Type yUnit
+	Field linkUnit:TLink
+	Field linkUnitEnemy:TLink
+	Field X%
+	Field Y%
+	Field mutie:TMutex = CreateMutex()
+	Function CreateIt()
+		Local fU:yUnit
+		fU = New yUnit
+		fU.X = Rand(0,15)
+		fU.Y = Rand(0,15)
+		fU.linkUnit = ListAddLast(GListUnit,fU)
+		If Rand(0,1) = 1 Then fU.linkUnitEnemy = ListAddLast(GListUnitEnemy,fU) 'some units are also Enemies
+	EndFunction
+EndType
+Global U:yUnit, U2:yUnit, U3:yUnit
+Global GListUnit:TList = CreateList() 'stores all units
+Global GListUnitEnemy:TList = CreateList() 'stores all unfriendly units
+Global mutieGListUnit:TMutex = CreateMutex()
+Global mutieGListUnitEnemy:TMutex = CreateMutex()
+
+
+For k = 1 To 20
+	yUnit.CreateIt()
+Next
+
+Local dThread = CreateThread(fTargetFinder,Null)
+LockMutex(mutieGListUnit)
+For U = EachIn GListUnit	'iterate through all units
+	DebugLog "Unknown Unit is at " + U.X + ", " + U.Y
+	U.X = Rand(0,15)
+	U.Y = Rand(0,15)
+	DebugLog "Unknown Unit shuffled to " + U.X + ", " + U.Y
+Next
+UnlockMutex(mutieGListUnit)
+LockMutex(mutieGListUnitEnemy)
+For U = EachIn GListUnitEnemy	'iterate through enemy units only
+	DebugLog "Enemy is at " + U.X + ", " + U.Y
+Next
+UnlockMutex(mutieGListUnitEnemy)
+
+Function fTargetFinder:Object(fvObj:Object)	'threaded function
+	LockMutex(mutieGListUnitEnemy)	'this locks the enemy list mutex but not the main list of all objects
+	For U2 = EachIn GListUnitEnemy
+		LockMutex(U2.mutie)	'this makes sure the object itself is protected in case an object gets accessed from the main list
+		If Sqr(Abs((8 - U2.X)^2) + Abs((8 - U2.Y)^2)) &lt; 6
+			U2.X = Rand(0,15)
+			U2.Y = Rand(0,15)
+			DebugLog "Enemy targeted!  They flee to: " + U2.X + ", " + U2.Y
+''			yUnit.CreateIt()	'create a random new unit - THIS CRASHES
+		EndIf
+		UnlockMutex(U2.mutie)
+	Next
+	UnlockMutex(mutieGListUnitEnemy)
+EndFunction
+</pre><br>Note the "THIS CRASHES" line.  This code seems to run exactly as I expect it otherwise.  But here, why exactly is it crashing?  I would expect it to crash I think (occasionally at least), but I'd like to know why, because it will affect the way I do a great deal of code I think.  Is it because the list itself is not locked?  Is the list actually in use by the main thread all the while it is iterating through objects?<br>I understand now with threading that you want to be as "unsafe as safely possible" with locking to get the performance increase.  If I can understand a few more pieces of the puzzle I think I'll be ready to start using it. :)<br><br>And on a side note, I just installed 1.41, and it seems to have drastically improved the performance gains of threading.  I unhooked my code (15k lines) from all timers or delays and was running at about 4-5x normal speed before, but now it's literally 100x faster.  Hours of gameplay flash by in seconds.  I doublechecked my compile settings and all sorts of things and it really does seem the update did this.  I hope it stays this way, or that I'm not crazy. <br><br></td></tr></table><br>
+<a name="1044314"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> Haven't been able to really dig through your example but it looks like you're modifying a list or 2 in the createit() method, and those lists may or may not be in use by the main thread. You can read anywhere as much as you want, but if you change anything you have to stop everything related to that change. i.e. you can iterate a list from 3 threads at once no problem, but if one thread adds or removes from the list all the other threads must make sure the list is not being modified while they iterate it...<br><br>changes requires locking to be safe. anything that is reading what could be changed needs to respect the changing locks. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

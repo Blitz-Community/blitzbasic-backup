@@ -1,0 +1,112 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Network test</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Network test</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=507" >Monkey Programming</a>/<a href="#bottom" >Network test</a><br><br>
+<a name="2056514"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skid</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm slowly getting the hang of python programming on google app engine.<br><br>The following is a network chat test, select html5 preview, then click connect, then wait, then click chat. <br><br><a href="http://nitromux.appspot.com/" target="_blank">http://nitromux.appspot.com/</a><br><br>I'm up for next hour if you want to say hi... <br><br>It's also embedded in a facebook page here:<br><br><a href="http://www.facebook.com/nitrologic/app_581373191875358" target="_blank">http://www.facebook.com/nitrologic/app_581373191875358</a> <br><br></td></tr></table><br>
+<a name="2056521"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >slenkar</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> does it do the push notifications or some kind of direct connection thingie <br><br></td></tr></table><br>
+<a name="2056658"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skid</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> The monkey client fires off multiple httprequests per second which get answered by a python script running on an appengine account.<br><br>Once the game starts to take shape I will be adding game hosting that runs at 10 packets per second. If this works out OK I would like to start hosting other monkey games that want to go multiplayer.<br><br>The ping to nitromux.appspot.com is 170ms from here in nz so that's kind of suck for low latency competition.<br><br>The python server currently looks like this, still needs more tidy and optimizing before I add anything more.<br><br><pre class=code>
+import cgi
+import os
+import time
+
+from google.appengine.ext import db
+from google.appengine.ext import webapp
+from google.appengine.ext.webapp.util import run_wsgi_app
+from google.appengine.api import memcache
+from google.appengine.api import users
+
+class Session(db.Model):
+	player = db.UserProperty()
+	simulation = db.StringProperty()
+	lastframe = db.IntegerProperty()
+	startTime = db.FloatProperty()
+	nextSlot = db.IntegerProperty()
+
+def getSim():
+	simcount=memcache.get('simcount',0)
+	return 'sim'+str(simcount)
+
+class ResetSync(webapp.RequestHandler):	
+	def get(self):
+		simcount=memcache.incr('simcount',1,None,0)
+		json="[sim,"+getSim()+"]"
+		self.response.out.write(json)
+
+class ConnectSync(webapp.RequestHandler):	
+	def get(self):
+		sim=getSim()
+		sessioncount=memcache.incr('sessions',1,None,0)
+		session = Session()
+		session.key='session'+str(sessioncount)
+		session.startTime=time.clock()
+		session.nextSlot=0
+		session.simulation=sim
+		session.lastframe=0
+		if users.get_current_user():
+			session.player = users.get_current_user()
+		memcache.set(session.key,session);		
+		json="[connect,"+session.key+"]"
+		self.response.out.write(json)
+ 	
+class ServeSync(webapp.RequestHandler):	
+	def get(self):
+		session_id = self.request.get('session')
+		if session_id:
+			session = memcache.get(session_id)
+			if not session:
+				self.response.out.write('[]')
+				return
+			sim=session.simulation
+			t=time.clock()-session.startTime
+			slot=int(t*10)
+			msg=self.request.get('msg')
+			if msg:
+				messagecount=memcache.incr(sim+'_mcount',1,None,0)
+				msgkey=sim+'msg'+str(messagecount)
+				memcache.set(msgkey,'['+str(slot)+',['+msg+']]')
+
+			lastmessagecount=session.lastframe
+			messagecount=int(memcache.incr(sim+'_mcount',0,None,0))
+						
+			msg=""
+			if messagecount&gt;lastmessagecount:
+
+				session.lastframe=messagecount			
+				memcache.set(session.key,session)
+
+				for i in range(lastmessagecount,messagecount):
+
+					if i&gt;lastmessagecount+1:
+						msg+=","
+						
+					msgkey=sim+'msg'+str(i+1)
+					mget=memcache.get(msgkey)
+
+					if mget:
+						msg+=mget
+					else:
+						msg+="ERR"
+									
+			msg='['+sim+','+str(slot)+',['+msg+"]]"
+
+			self.response.out.write(msg)
+		
+class IndexPage(webapp.RequestHandler):
+	def get(self):
+		path = os.path.join(os.path.dirname(__file__), 'index.html')
+		self.response.out.write(template.render(path, None))
+
+application = webapp.WSGIApplication([
+	('/', IndexPage),
+	('/sync', ServeSync),
+	('/reset', ResetSync),
+	('/connect', ConnectSync)],debug=True)
+									
+def main():
+	run_wsgi_app(application)
+
+if __name__ == '__main__':
+	main()
+</pre> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

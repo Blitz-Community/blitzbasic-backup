@@ -1,0 +1,1543 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Need Help Converting a Dungeon Gen to Max</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Need Help Converting a Dungeon Gen to Max</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Need Help Converting a Dungeon Gen to Max</a><br><br>
+<a name="636952"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Why0Why</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi all.  I am fairly new to Max, but have been using B2D for years.  I have a nice dungeon generator written by someone else.  I have gone through and tried to make it into a nice OO version to use with Max and am having some difficulty.  I would appreciate if one of the gurus could show me how to do it properly.  I have intentionally left out certain functions, but feel like I have the essentials in.  I am going to be working on a roguelike in Max.<br><br>Here is the original file:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;***************************************************
+;*          RANDOM DUNGEON GENERATOR v1.0          *
+;***************************************************
+;*    By Max Russell (max_russell@...)     *
+;***************************************************
+;* See '2DDungeon.bb' and '3DDungeon.bb' for       *
+;* examples of using this include file.            *
+;*                                                 *
+;* At the moment all that's generated is a         *
+;* map of a specified width and height, containing *
+;* walls, passages, rooms and doors. It's          *
+;* basically just a maze interspersed with         *
+;* rectangular rooms. The dungeons it generates    *
+;* are most suited to a rogue-like dungeon hack    *
+;* game. Obviously you would need to add the code  *
+;* to generate all the things that make these      *
+;* games fun to play (monsters, items, etc).       *
+;*                                                 *
+;* Feel free to use/modify/improve this to your    *
+;* heart's content. In fact, much of the code here *
+;* was directly converted from the C++ of Jamis    *
+;* Buck's random dungeon generator. My code does   *
+;* vary slightly - mostly in the room placement    *
+;* method. You can find his code, and an           *
+;* explanation of the algorithms used at           *
+;* <a href="http://www.aarg.net/~minam/dungeon_design.html" target="_blank">http://www.aarg.net/~minam/dungeon_design.html</a>  *
+;*                                                 *
+;* At the moment there's no support for multiple   *
+;* dungeon levels connected with stairs. This may  *
+;* appear in a later version.                      *
+;*                                                 *
+;***************************************************
+
+Const c_NORTH = %01000
+Const c_SOUTH = %00100
+Const c_WEST  = %00010
+Const c_EAST  = %00001
+Const c_MARK  = %10000
+
+Const r_NORTH = 1
+Const r_SOUTH = 2
+Const r_WEST  = 3
+Const r_EAST  = 4
+
+Const c_Wall = 1
+Const c_Passage = 2
+Const c_Room = 3
+Const c_Door = 4
+
+;Change this to make the rooms in the dungeon bigger or smaller.
+Const minRoomX = 3
+Const maxRoomX = 6
+Const minRoomY = 3
+Const maxRoomY = 6
+
+;Global stuff.
+Dim m_maze(1,1)
+Dim RoomMask(1,1)
+Dim m_dungeon(1,1)
+Global m_x
+Global m_y
+
+;Create an object of type DungeonType in your main program before calling 'MakeDungeon'. You can
+;access various attributes of your dungeon, including the size and position of each room, using
+;the fields below. But to get map data, use the 'GetDungeon' function.
+Type DungeonType
+  Field Map ;This will be a databank containing all the map data.
+  Field W, H ;Width and height of the map.
+  Field RoomCount
+  Field FirstRoom.RoomType
+  Field LastRoom.RoomType
+End Type
+
+Type RoomType
+  Field x,y
+  Field w,h
+  Field Entrances
+  Field Entrance[3]
+End Type
+
+
+;MAKEDUNGEON arguments
+;----------- ---------
+;(  D: DungeonType pointer. If it points to an existing DungeonType object it will overwrite it,
+;       otherwise a new DungeonType object will be created.
+;   dwidth, dheight: dimensions of the dungeon map. NOTE: At the moment these should be odd numbers
+;   [RP]: The percentage of the map area you'd like to see filled with rooms. Setting this to 100%
+      ;won't make the entire map a dungeon, since rooms must be connected with passageways, but
+      ;it'll fit as many rooms as it can in.
+;  [Windiness]: Basically, how windy your corridors are from 0 to 100. The lower you set this the
+      ;more long straight sections of corridor there'll be.
+;  [Sparseness]: How many times you want to 'sparsify' your dungeon, which will thin out some of
+      ; passages for a less densely packed maze. Experiment with this.
+;  [DeadEndC]: A percentage indicating how many dead ends you'd like removed.
+
+Function MakeDungeon.DungeonType(D.DungeonType,dwidth,dheight,RP = 50, Windiness = 50, Sparseness = 15, DeadEndC = 100)
+
+  StartTime = MilliSecs()
+
+  m_x = (dwidth - 1) / 2 : m_y = (dwidth - 1) / 2
+  Dim m_maze(m_x,m_y)
+  Dim RoomMask(m_x,m_y)
+  Dim m_dungeon(dwidth,dheight)
+  t# = m_x * m_y * (Float(RP) / 100)
+  p# = (Float(maxRoomX - minRoomX) / 2) + minRoomX
+  p# = p# * p#
+
+  ;If D does not point to an already existing DungeonType object then create a new one, otherwise
+  ;just wipe the old one.
+  If D = Null
+    D = New DungeonType
+  Else
+    ClearDungeon(D)
+  End If
+
+  D\W = dwidth
+  D\H = dheight
+  D\RoomCount = Floor#(t# / p#)
+
+  DebugLog "Making the rooms..."
+  MakeRooms(D)
+  DebugLog "Making the passageways..."
+  MakeMaze(Windiness)
+  DebugLog "Making the room entrances..."
+  MakeRoomEntrances(D)
+  DebugLog "Sparsifying the passageways..."
+  SparsifyMaze(Sparseness)
+  DebugLog "Clearing dead ends..."
+  ClearDeadEnds(DeadEndC)
+  DebugLog "Dungeonifying..."
+  Dungeonify
+
+  D\Map = CreateBank(D\W * D\H)
+  For y = 0 To D\H - 1
+    For x = 0 To D\W - 1
+      PokeByte D\Map,y * (D\H - 1) + x,m_dungeon(x,y)
+    Next
+  Next
+  Dim m_dungeon(1,1)
+
+  DebugLog "All done!"
+  DebugLog "The process took " + (MilliSecs() - StartTime) + " milliseconds."
+
+  Return D
+
+End Function
+
+;GETDUNGEON
+;----------
+;This returns the type of square at position x,y for dungeon D.
+Function GetDungeon(D.DungeonType,x,y)
+
+  If D\Map &lt;&gt; 0
+    Return PeekByte(D\Map,y * (D\H - 1) + x)
+  End If
+
+End Function
+
+;CLEARDUNGEON
+;------------
+;This will free the map databank for your dungeon when you've finished using it and want that
+;memory back.
+Function ClearDungeon(D.DungeonType)
+  If D\Map &lt;&gt; 0
+    FreeBank D\Map
+  End If
+
+  If D\RoomCount &gt; 0
+    R.RoomType = D\FirstRoom
+    For A = 1 To D\RoomCount
+      R2.RoomType = After R
+      Delete R
+      R = R2
+    Next
+    D\RoomCount = 0
+    D\FirstRoom = Null
+    D\LastRoom = Null
+  End If
+
+End Function
+
+;SAVEDUNGEON
+;-----------
+;Saves a dungeon previously created with MakeDungeon to disk. Use LoadDungeon to get it back.
+
+Function SaveDungeon(FN$,D.DungeonType)
+  F = WriteFile(FN$)
+  If F = 0 Then Return False
+
+  WriteShort F,D\W
+  WriteShort F,D\H
+  For y = 0 To D\H - 1
+    For x = 0 To D\W - 1
+      WriteByte F,PeekByte(D\Map,y * (D\H - 1) + x)
+    Next
+  Next
+
+
+  WriteShort F,D\RoomCount
+  If D\RoomCount &gt; 0
+    R.RoomType = D\FirstRoom
+    For a = 1 To D\RoomCount
+      WriteShort F,R\x
+      WriteShort F,R\y
+      WriteShort F,R\w
+      WriteShort F,R\h
+      WriteShort F,R\Entrances
+      WriteShort F,R\Entrance[1]
+      WriteShort F,R\Entrance[2]
+      WriteShort F,R\Entrance[3]
+      If R &lt;&gt; D\LastRoom Then R = After R
+    Next
+  End If
+  CloseFile F
+  Return True
+
+End Function
+
+;LOADDUNGEON
+;-----------
+;If the D parameter points to an existing DungeonType object this will load the map into
+;this object - otherwise it will load the map into a new object and return its pointer.
+Function LoadDungeon.DungeonType(FN$,D.DungeonType)
+  If D = Null Then
+    D = New DungeonType
+  Else
+    ClearDungeon(D)
+  End If
+
+  F =  ReadFile(FN$)
+  If F = 0 Then Return Null
+
+  D\W = ReadShort(F)
+  D\H = ReadShort(F)
+  DebugLog D\W + ", " + D\H
+  D\Map = CreateBank(D\W * D\H)
+  For y = 0 To D\H - 1
+    For x = 0 To D\W - 1
+      PokeByte D\Map,y * (D\H - 1) + x,ReadByte(F)
+    Next
+  Next
+  D\RoomCount = ReadShort(F)
+  If D\RoomCount &gt; 0
+    For a = 1 To D\RoomCount
+      R.RoomType = New RoomType
+      If a = 1 Then D\FirstRoom = R
+      D\LastRoom = R
+      R\x = ReadShort(F)
+      R\y = ReadShort(F)
+      R\w = ReadShort(F)
+      R\h = ReadShort(F)
+      R\Entrances = ReadShort(F)
+      R\Entrance[1] = ReadShort(F)
+      R\Entrance[2] = ReadShort(F)
+      R\Entrance[3] = ReadShort(F)
+    Next
+  End If
+  CloseFile(F)
+
+  Return D
+
+End Function
+
+;------------------------------------------------------------------------------------------
+
+Function MakeMaze(m_randomness)
+
+  allDirections = %1111
+  straightStretch = 0
+
+  ;Compute how many valid points there are in the maze
+
+  remaining = m_x * m_y - 1
+  For x = 0 To m_x - 1
+    For y = 0 To m_y - 1
+      If RoomMask(x,y) &gt; 0 Then RoomCells = RoomCells + 1
+    Next
+  Next
+  remaining = remaining - RoomCells
+
+  ;Find the point at which we want To start -- make sure the point we
+  ;pick is within the mask.
+
+  directions = 0
+  Repeat
+    x = Rand(0,m_x-1)
+    y = Rand(0,m_y-1)
+  Until RoomMask(x,y) &lt;&gt; 1
+
+  ;For each point remaining in the maze we loop!
+  While remaining &gt; 0
+
+    If directions = allDirections
+
+      ;If we're stuck (boxed in or otherwise), choose another point, this
+      ;time choosing one that has already been visited.
+
+      Repeat
+        x = Rand(0,m_x-1)
+        y = Rand(0,m_y-1)
+      Until m_maze(x,y) &lt;&gt; 0 And RoomMask(x,y) &lt;&gt; 1
+
+      directions = m_maze(x,y)
+    End If
+
+    ;Eliminate obviously impossible directions
+    If x &lt; 1 Then directions = directions Or c_WEST
+    If x+1 &gt;= m_x Then directions = directions Or c_EAST
+    If y &lt; 1 Then directions = directions Or c_NORTH
+    If y+1 &gt;= m_y Then directions = directions Or c_SOUTH
+
+       doRandomSelection = 0;
+    If Rand(0,99) &lt; m_randomness
+         ;Choose a direction at random
+         doRandomSelection = 1
+       Else
+         ;Otherwise move based on the direction last chosen. Note that we're
+         ;only allowing a straight stretch that is less than half as long as the
+         ;relevant dimension of the maze.
+        Select lastDirection
+           Case c_NORTH
+             If (straightStretch &lt; ( m_y Shr 1 )) And y &gt; 0
+          If m_maze(x,y-1) = 0 And RoomMask(x,y-1) = 0
+                   direction = lastDirection
+          Else
+                doRandomSelection = 1
+          End If
+             Else
+          doRandomSelection = 1
+        End If
+      Case c_SOUTH
+        If (straightStretch &lt; ( m_y Shr 1 )) And y+1 &lt; m_y
+          If m_maze(x,y+1) = 0 And RoomMask(x,y+1) = 0
+            direction = lastDirection
+          Else
+            doRandomSelection = 1
+          End If
+        Else
+          doRandomSelection = 1
+        End If
+      Case c_WEST
+        If (straightStretch &lt; ( m_x Shr 1 )) And x &gt; 0
+          If m_maze(x-1,y) = 0 And RoomMask(x-1,y) = 0
+            direction = lastDirection
+          Else
+            doRandomSelection = 1
+          End If
+        Else
+          doRandomSelection = 1
+        End If
+      Case c_EAST
+        If (straightStretch &lt; ( m_x Shr 1 )) And x+1 &lt; m_x
+          If m_maze(x+1,y) = 0 And RoomMask(x+1,y) = 0
+            direction = lastDirection
+          Else
+            doRandomSelection = 1
+          End If
+        Else
+          doRandomSelection = 1
+        End If
+        Default
+             doRandomSelection = 1
+      End Select
+      End If
+
+    If doRandomSelection
+          ;Reset the straight stretch count
+          straightStretch = 0;
+          direction = 0;
+
+      ;Pick a random direction
+      While direction = 0 Or ((directions And direction) &lt;&gt; 0)
+            tx = x
+            ty = y
+            Select Rand(0,3)
+            Case 0
+          If( y &gt; 0 ) Then
+            direction = c_NORTH : ty = ty - 1
+          Else
+            directions = directions Or c_North
+          End If
+            Case 1
+          If( y+1 &lt; m_y ) Then
+            direction = c_SOUTH : ty = ty + 1
+          Else
+            directions = directions Or c_South
+          End If
+            Case 2
+          If( x &gt; 0 ) Then
+            direction = c_WEST : tx = tx - 1
+          Else
+            directions = directions Or c_West
+          End If
+            Case 3
+          If( x+1 &lt; m_x ) Then
+            direction = c_EAST : tx = tx + 1
+          Else
+            directions = directions Or c_East
+          End If
+        End Select
+
+        If m_maze(tx,ty) &lt;&gt; 0 Or RoomMask(tx,ty) = 1
+          directions = directions Or direction
+          If( directions = allDirections )
+                   Goto bottomofloop
+          End If
+          direction = 0
+            End If
+      Wend
+      .bottomofloop
+    Else
+         straightStretch = straightStretch + 1
+       End If
+
+    If directions = allDirections
+      ;If we've tested all directions, Then we are stuck.  Continue To the
+      ;top of the loop, where we will Select a New point To search from.
+      Goto topofloop;continue;
+      End If
+
+    ;Set the given direction in the maze, both at the point of origin And
+    ;the point of destination.
+
+    lastDirection = direction
+    m_maze(x,y) = m_maze(x,y) Or direction
+
+    Select direction
+    Case c_NORTH y=y-1: direction = c_SOUTH
+    Case c_SOUTH y=y+1: direction = c_NORTH
+    Case c_WEST x=x-1: direction = c_EAST
+    Case c_EAST x=x+1: direction = c_WEST
+    End Select
+
+      m_maze(x,y) = m_maze(x,y) Or direction
+      directions = m_maze(x,y)
+
+    ;Decrement the number of points remaining
+
+      remaining = remaining - 1;
+
+    .topofloop
+  Wend
+
+End Function
+
+Function SparsifyMaze(Amount)
+
+  For i = 0 To Amount - 1
+    For x = 0 To m_x - 1
+      For y = 0 To m_y - 1
+              ; If the indicated position (x,y) is a deadend (ie, there is
+              ; only one direction out of it), Then we "erase" the passage
+              ; here And mark it as visited.
+
+              dir = m_maze(x,y)
+        If dir = c_NORTH Or dir = c_SOUTH Or dir = c_EAST Or dir = c_WEST
+          m_maze(x,y) = 0
+          If (dir And c_NORTH) &lt;&gt; 0
+            m_maze(x,y - 1) = m_maze(x,y - 1) And ~c_SOUTH
+            m_maze(x,y - 1) = m_maze(x,y - 1) Or c_MARK
+          Else If (dir And c_SOUTH) &lt;&gt; 0
+            m_maze(x,y + 1) = m_maze(x,y + 1) And ~c_NORTH
+            m_maze(x,y + 1) = m_maze(x,y + 1) Or c_MARK
+          Else If (dir And c_WEST) &lt;&gt; 0
+            m_maze(x - 1,y) = m_maze(x - 1,y) And ~c_EAST
+            m_maze(x - 1,y) = m_maze(x - 1,y) Or c_MARK
+          Else If (dir And c_EAST) &lt;&gt; 0
+            m_maze(x + 1,y) = m_maze(x + 1,y) And ~c_WEST
+            m_maze(x + 1,y) = m_maze(x + 1,y) Or c_MARK
+          End If
+              End If
+      Next
+        Next
+    ; clear the marks so we're ready to go for another pass!
+      For j = 0 To m_x - 1
+          For k = 0 To m_y - 1
+            m_maze(j,k) = m_maze(j,k) And ~c_MARK
+          Next
+      Next
+  Next
+End Function
+
+Function ClearDeadEnds(percentage)
+
+  For x = 0 To m_x - 1
+    For y = 0 To m_y - 1
+
+      dir = m_maze(x,y)
+      If dir = c_North Or dir = c_South Or dir = c_WEST Or dir = c_EAST
+             ; Do we close this deadend or not?
+
+            If Rand(1,100) &gt; percentage
+                Goto DeadEndSkip
+        End If
+
+            ;If so, start at the dead end and randomly meander our way to
+             ;another point, to eliminate the dead end.
+
+        cx = x
+        cy = y
+
+        Repeat
+          dir = 0
+          dirsTested = 0
+          Repeat
+            tx = cx
+            ty = cy
+            Select Rand(0,3)
+                    Case 0
+              If cy &gt; 0
+                dir = c_NORTH : rdir = c_SOUTH : ty = ty -1
+              Else
+                dirsTested = dirsTested Or c_NORTH
+              End If
+                    Case 1
+              If cy+1 &lt; m_y
+                dir = c_SOUTH : rdir = c_NORTH : ty = ty +1
+                              Else
+                dirsTested = dirsTested Or c_SOUTH
+              End If
+            Case 2
+              If cx &gt; 0
+                dir = c_WEST : rdir = c_EAST : tx = tx - 1
+              Else
+                dirsTested = dirsTested Or c_WEST
+              End If
+            Case 3
+              If cx+1 &lt; m_x
+                dir = c_EAST : rdir = c_WEST : tx = tx + 1
+              Else
+                dirsTested = dirsTested Or c_EAST
+              End If
+            End Select
+
+            If m_maze(cx,cy) = dir ;Cell already goes in that direction
+              dirsTested = dirsTested Or dir
+              dir = 0
+            End If
+
+            If RoomMask(tx,ty) &gt; 0
+              dirsTested = dirsTested Or dir
+              dir = 0
+            End If
+
+            If dirsTested = %1111
+              Goto DeadEndSkip2
+            End If
+          Until dir &lt;&gt; 0
+          .DeadEndSkip2
+
+          If dirsTested = %1111
+            Goto DeadEndSkip
+          End If
+
+          m_maze(cx,cy) = m_maze(cx,cy) Or dir
+          m_maze(tx,ty) = m_maze(tx,ty) Or rdir
+
+          cx = tx
+          cy = ty
+        Until m_maze(tx,ty) &lt;&gt; rdir
+      End If
+      .DeadEndSkip
+    Next
+  Next
+
+End Function
+
+Function Dungeonify()
+
+  For x = 0 To m_x -1
+    For y = 0 To m_y -1
+      m_dungeon(x*2,y*2) = c_WALL
+      m_dungeon(x*2,y*2+1) = c_WALL
+      m_dungeon(x*2+1,y*2) = c_WALL
+      m_dungeon(x*2+1,y*2+1) = c_WALL
+      If RoomMask(x,y) &gt; 0
+        If RoomMask(x-1,y) &gt; 0
+          m_dungeon(x*2,y*2+1) = c_Room
+        Else
+          If (m_maze(x-1,y) And c_East) &lt;&gt; 0
+            m_dungeon(x*2,y*2+1) = c_DOOR
+          End If
+        End If
+        If RoomMask(x,y-1) &gt; 0
+          m_dungeon(x*2+1,y*2) = c_Room
+        Else
+          If (m_maze(x,y-1) And c_South) &lt;&gt; 0
+            m_dungeon(x*2+1,y*2) = c_DOOR
+          End If
+        End If
+        If RoomMask(x-1,y) &gt; 0 And RoomMask(x,y-1) &gt; 0
+          m_dungeon(x*2,y*2) = c_Room
+        End If
+        m_dungeon(x*2+1,y*2+1) = c_Room
+      Else
+        dir = m_maze(x,y)
+        If dir &lt;&gt; 0
+          m_dungeon(x*2+1,y*2+1) = c_PASSAGE
+        End If
+        If (dir And c_NORTH) &lt;&gt; 0
+          If RoomMask(x,y-1) &gt; 0
+            m_dungeon(x*2+1,y*2) = c_DOOR
+          Else
+            m_dungeon(x*2+1,y*2) = c_PASSAGE
+          End If
+        End If
+        If (dir And c_WEST) &lt;&gt; 0
+          If RoomMask(x-1,y) &gt; 0
+            m_dungeon(x*2,y*2+1) = c_DOOR
+          Else
+            m_dungeon(x*2,y*2+1) = c_PASSAGE
+          End If
+        End If
+      End If
+    Next
+    m_dungeon(x*2,m_y*2) = c_WALL
+    m_dungeon(x*2+1,m_y*2) = c_WALL
+  Next
+
+  For y = 0 To m_y * 2
+    m_dungeon(m_x * 2,y) = c_WALL
+  Next
+  Dim m_maze(1,1)
+  Dim RoomMask(1,1)
+
+End Function
+
+Function MakeRooms(D.DungeonType)
+
+  For i = 0 To D\roomCount - 1
+
+    R.RoomType = New RoomType
+    If D\FirstRoom = Null Then D\FirstRoom = R
+    D\LastRoom = R
+
+    If maxRoomX = minRoomX
+      R\W = maxRoomX
+    Else
+      R\W = Rand(minRoomX,maxRoomX)
+    End If
+
+    If maxRoomY = minRoomY
+      R\H = minRoomY
+    Else
+      R\H = Rand(minRoomY,maxRoomY)
+    End If
+
+    ;Disallow extremely narrow rooms by requiring that a room never be
+    ;thinner than half it's longest dimension.
+
+    If R\W &gt; ( R\H Shl 1 )
+      R\H = ( R\W Shr 1 ) + 1
+    End If
+    If R\H &gt; ( R\W Shl 1 )
+      R\W = ( R\H Shr 1 ) + 1
+    End If
+.tryagain
+    If PlaceRoom(R) = True
+      For j = 0 To R\W -1
+        For k = 0 To R\H -1
+          RoomMask(R\X + j,R\Y + k) = 1
+        Next
+      Next
+    Else
+      ;Couldn't fit room, so shrink it and see if it'll fit anywhere now.
+      If R\W &gt; minroomx And R\H &gt; minroomy
+        If R\W &gt; minroomx Then R\W = R\W - 1
+        If R\H &gt; minroomy Then R\H = R\H - 1
+        Goto tryagain
+      Else
+        LostRoomCount = LostRoomCount + 1
+        If D\FirstRoom = R Then D\FirstRoom = Null
+        D\LastRoom = Null
+        Delete R
+      End If
+    End If
+  Next
+  D\RoomCount = D\RoomCount - LostRoomCount
+
+End Function
+
+Function PlaceRoom(R.RoomType)
+
+  Local sdir[4]
+
+  If R\W &gt; m_x Then R\W = m_x
+  If R\H &gt; m_y Then R\H = m_y
+
+  ;Work out the difference between the room width and map width etc
+  spaceX = m_x - R\W
+  spaceY = m_y - R\H
+
+  ;Choose a random position for the new room
+  newx = Rand(1,spacex - 1)
+  newy = Rand(1,spacey - 1)
+
+  If RoomOverlaps(newx,newy,R\W,R\H) = False
+    ;Fine: Room can go here
+    R\X = newx : R\Y = newy
+    Return True
+  Else
+    ;Otherwise, move out in a spiral from this point.
+    ;Choose a random sequence of directions forming a spiral
+    sdir[1] = Rand(1,4)
+    Select sdir[1]
+    Case r_North,r_South
+      sdir[2] = Rand(3,4)
+      If sdir[1] = r_North Then sdir[3] = r_South Else sdir[3] = r_North
+      If sdir[2] = r_East Then sdir[4] = r_West Else sdir[4] = r_East
+    Case r_East,r_West
+      sdir[2] = Rand(1,2)
+      If sdir[1] = r_East Then sdir[3] = r_West Else sdir[3] = r_East
+      If sdir[2] = r_North Then sdir[4] = r_South Else sdir[4] = r_North
+    End Select
+
+    Tally = 1
+    TurnMax = 1 ;Number of blocks in this direction
+    TurnCount = TurnMax ;Number of blocks left to go in this direction
+    TurnDir = 1
+
+    Repeat
+      ;Move position
+      Select sdir[TurnDir]
+      Case r_North
+        newy = newy - 1
+      Case r_South
+        newy = newy + 1
+      Case r_West
+        newx = newx - 1
+      Case r_East
+        newx = newx + 1
+      End Select
+      TurnCount = TurnCount - 1
+      If TurnCount = 0
+        ;Change direction
+        Select TurnDir
+        Case 1,2,3
+          TurnDir = TurnDir + 1
+          If TurnDir = 3 Then TurnMax = TurnMax + 1
+        Case 4
+          TurnDir = 1
+          TurnMax = TurnMax + 1
+        End Select
+        TurnCount = TurnMax
+      End If
+
+      If newx =&gt; 1 And newx &lt;= spacex - 1 And newy &gt;= 1 And newy &lt;= spacey -1
+
+        If RoomOverlaps(newx,newy,R\W,R\H) = False
+          ;Found room!
+          R\X = newx : R\Y = newy
+          Return True
+        Else
+          Tally = Tally + 1
+        End If
+
+      End If
+    Until Tally &gt;= (spacex - 1) * (spacey - 1)
+    ;We just can't place the room anywhere. Give up
+    Return False
+  End If
+End Function
+
+Function RoomOverlaps(x,y,w,h)
+  ;We want to check the cells directly outside the room as well, so that the room is not
+  ;touching another room.
+  For j = -1 To w
+    For k = -1 To h
+      If RoomMask(x+j,y+k) &gt; 0 Then Return True
+    Next
+  Next
+
+  Return False
+
+End Function
+
+Function MakeRoomEntrances(D.DungeonType)
+
+  ;What we do here is go through each room and add between 1 and 3 entrances from the maze outside
+  For i = 1 To D\RoomCount
+
+    If i = 1 Then Room.RoomType = D\FirstRoom Else Room = After Room
+
+    Local Entrance[3]
+
+    Room\entrances = Rand(1,4)
+    If Room\entrances = 4 Then Room\entrances = 1
+
+    For a = 1 To Room\entrances
+
+      Repeat
+        t = Rand (1,(Room\w * 2) + (Room\h * 2))
+
+        TryAgain = False
+        If a &gt; 1 Then
+          For b = 1 To a - 1
+            If Entrance[b] = t
+              TryAgain = True
+            End If
+          Next
+        End If
+      Until TryAgain = False
+
+      Entrance[a] = t
+
+      If t &lt;= Room\w Then
+        ;Entrance goes on the north wall
+        m_maze(Room\x + (t-1), Room\y - 1) = m_maze(Room\x + (t-1), Room\y - 1) Or c_South
+      Else
+        If t &lt;= Room\w + Room\h
+          ;Entrance goes on east wall
+          t = Entrance[a] - Room\w
+          m_maze(Room\x + Room\w, Room\y + (t-1)) = m_maze(Room\x + Room\w, Room\y + (t-1)) Or c_West
+        Else
+          If t &lt;= Room\w *2 + Room\h
+            ;Entrance goes on the south wall
+            t = Entrance[a] - Room\w - Room\h
+            m_maze(Room\x + (t-1), Room\y + Room\h) = m_maze(Room\x + (t-1), Room\y + Room\h) Or c_North
+          Else
+            t = Entrance[a] - (Room\w * 2) - Room\h
+            m_maze(Room\x -1, Room\y + (t-1)) = m_maze(Room\x -1, Room\y + (t-1)) Or c_East
+            ;Entrance goes on the west wall
+          End If
+        End If
+      End If
+    Next
+    For b = 1 To 3
+      Room\Entrance[b] = Entrance[b]
+    Next
+  Next
+
+End Function
+</textarea><br><br>Here is my conversion:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+
+Const c_NORTH = %01000
+Const c_SOUTH = %00100
+Const c_WEST  = %00010
+Const c_EAST  = %00001
+Const c_MARK  = %10000
+
+Const r_NORTH = 1
+Const r_SOUTH = 2
+Const r_WEST  = 3
+Const r_EAST  = 4
+
+Const c_Wall = 1
+Const c_Passage = 2
+Const c_Room = 3
+Const c_Door = 4
+
+'Change this To make the rooms in the dungeon bigger Or smaller.
+Const minRoomX = 3
+Const maxRoomX = 6
+Const minRoomY = 3
+Const maxRoomY = 6
+
+Type RoomType
+  Field x,y
+  Field w,h
+  Field Entrances
+  Field Entrance[3]
+End Type
+
+Type DungeonType
+
+	Field Map 'This will be a databank containing all the map data.
+    Field w, h 'Width And height of the map.
+    Field RoomCount
+	Field FirstRoom:RoomType = New RoomType
+    Field LastRoom:RoomType = New RoomType
+	Field m_maze:Int[500,500]
+  	Field RoomMask:Int[500,500]
+  	Field m_dungeon:Int[500,500]
+	Field m_x
+	Field m_y
+
+
+	Function Create:DungeonType()
+		Return New DungeonType
+	End Function
+	
+	Function Make(dwidth,dheight,RP = 50, Windiness = 50, Sparseness = 15, DeadEndC = 100)
+		m_x = (dwidth - 1) / 2
+		m_y = (dwidth - 1) / 2
+  		t# = m_x * m_y * (Float(RP) / 100)
+  		p# = (Float(maxRoomX - minRoomX) / 2) + minRoomX
+  		p# = p# * p#
+		w = dwidth
+  		h = dheight
+  		RoomCount = Floor(t# / p#)
+
+  
+  		MakeRooms()
+  
+  		MakeMaze(Windiness)
+  
+  		MakeRoomEntrances()
+  
+  		SparsifyMaze(Sparseness)
+  		
+	    ClearDeadEnds(DeadEndC)
+	    
+  	    Dungeonify
+
+  		Map = CreateBank(w * h)
+  		For y = 0 To h - 1
+    		For x = 0 To w - 1
+      			PokeByte Map,y * (h - 1) + x,m_dungeon(x,y)
+	    	Next
+  		Next
+  		m_dungeon(1,1)
+	End Function 
+	
+	Function MakeMaze(m_randomness)
+
+  	allDirections = %1111
+  	straightStretch = 0
+
+  'Compute how many valid points there are in the maze
+
+  remaining = m_x * m_y - 1
+  For x = 0 To m_x - 1
+    For y = 0 To m_y - 1
+      If RoomMask(x,y) &gt; 0 Then RoomCells = RoomCells + 1
+    Next
+  Next
+  remaining = remaining - RoomCells
+
+  'Find the point at which we want To start -- Make sure the point we
+  'pick is within the mask.
+
+  directions = 0
+  Repeat
+    x = Rand(0,m_x-1)
+    y = Rand(0,m_y-1)
+  Until RoomMask(x,y) &lt;&gt; 1
+
+  'For each point remaining in the maze we loop!
+  While remaining &gt; 0
+
+    If directions = allDirections
+
+      'If we're stuck (boxed in or otherwise), choose another point, this
+      'time choosing one that has already been visited.
+
+      Repeat
+        x = Rand(0,m_x-1)
+        y = Rand(0,m_y-1)
+      Until m_maze(x,y) &lt;&gt; 0 and RoomMask(x,y) &lt;&gt; 1
+
+      directions = m_maze(x,y)
+    End If
+
+    'Eliminate obviously impossible directions
+    If x &lt; 1 Then directions = directions or c_WEST
+    If x+1 &gt;= m_x Then directions = directions or c_EAST
+    If y &lt; 1 Then directions = directions or c_NORTH
+    If y+1 &gt;= m_y Then directions = directions or c_SOUTH
+
+       doRandomSelection = 0;
+    If Rand(0,99) &lt; m_randomness
+         'Choose a direction at random
+         doRandomSelection = 1
+       Else
+         'Otherwise move based on the direction Last chosen. Note that we're
+         'only allowing a straight stretch that is less than half as Long as the
+         'relevant dimension of the maze.
+        Select lastDirection
+           Case c_NORTH
+             If (straightStretch &lt; ( m_y Shr 1 )) and y &gt; 0
+          If m_maze(x,y-1) = 0 and RoomMask(x,y-1) = 0
+                   direction = lastDirection
+          Else
+                doRandomSelection = 1
+          End If
+             Else
+          doRandomSelection = 1
+        End If
+      Case c_SOUTH
+        If (straightStretch &lt; ( m_y Shr 1 )) and y+1 &lt; m_y
+          If m_maze(x,y+1) = 0 and RoomMask(x,y+1) = 0
+            direction = lastDirection
+          Else
+            doRandomSelection = 1
+          End If
+        Else
+          doRandomSelection = 1
+        End If
+      Case c_WEST
+        If (straightStretch &lt; ( m_x Shr 1 )) and x &gt; 0
+          If m_maze(x-1,y) = 0 and RoomMask(x-1,y) = 0
+            direction = lastDirection
+          Else
+            doRandomSelection = 1
+          End If
+        Else
+          doRandomSelection = 1
+        End If
+      Case c_EAST
+        If (straightStretch &lt; ( m_x Shr 1 )) and x+1 &lt; m_x
+          If m_maze(x+1,y) = 0 and RoomMask(x+1,y) = 0
+            direction = lastDirection
+          Else
+            doRandomSelection = 1
+          End If
+        Else
+          doRandomSelection = 1
+        End If
+        Default
+             doRandomSelection = 1
+      End Select
+      End If
+
+    If doRandomSelection
+          'Reset the straight stretch Count
+          straightStretch = 0;
+          direction = 0;
+
+      'Pick a random direction
+      While direction = 0 or ((directions and direction) &lt;&gt; 0)
+            tx = x
+            ty = y
+            Select Rand(0,3)
+            Case 0
+          If( y &gt; 0 ) Then
+            direction = c_NORTH 
+            ty = ty - 1
+          Else
+            directions = directions or c_NORTH
+          End If
+            Case 1
+          If( y+1 &lt; m_y ) Then
+            direction = c_SOUTH 
+            ty = ty + 1
+          Else
+            directions = directions or c_SOUTH
+          End If
+            Case 2
+          If( x &gt; 0 ) Then
+            direction = c_WEST 
+            tx = tx - 1
+          Else
+            directions = directions or c_WEST
+          End If
+            Case 3
+          If( x+1 &lt; m_x ) Then
+            direction = c_EAST 
+            tx = tx + 1
+          Else
+            directions = directions or c_EAST
+          End If
+        End Select
+
+        If m_maze(tx,ty) &lt;&gt; 0 or RoomMask(tx,ty) = 1
+          directions = directions or direction
+          If( directions = allDirections )
+                   GoTo bottomofloop
+          End If
+          direction = 0
+            End If
+      Wend
+      #bottomofloop
+    Else
+         straightStretch = straightStretch + 1
+       End If
+
+    If directions = allDirections
+      'If we've tested all directions, Then we are stuck.  Continue To the
+      'top of the Loop, where we will Select a New point To search from.
+      GoTo topofloop'Continue;
+      End If
+
+    'Set the given direction in the maze, both at the point of origin and
+    'the point of destination.
+
+    lastDirection = direction
+    m_maze(x,y) = m_maze(x,y) or direction
+
+    Select direction
+    Case c_NORTH
+     	y=y-1
+     	direction = c_SOUTH
+    Case c_SOUTH 
+    	y=y+1
+    	direction = c_NORTH
+    Case c_WEST
+    	 x=x-1
+    	 direction = c_EAST
+    Case c_EAST
+     x=x+1
+     direction = c_WEST
+    End Select
+
+      m_maze(x,y) = m_maze(x,y) or direction
+      directions = m_maze(x,y)
+
+    'Decrement the number of points remaining
+
+      remaining = remaining - 1;
+
+    #topofloop
+  Wend
+
+End Function 
+
+Function SparsifyMaze(Amount)
+
+  For i = 0 To Amount - 1
+    For x = 0 To m_x - 1
+      For y = 0 To m_y - 1
+              ' If the indicated position (x,y) is a deadend (ie, there is
+              ' only one direction out of it), Then we "erase" the passage
+              ' here and mark it as visited.
+
+              dir = m_maze(x,y)
+        If dir = c_NORTH or dir = c_SOUTH or dir = c_EAST or dir = c_WEST
+          m_maze(x,y) = 0
+          If (dir and c_NORTH) &lt;&gt; 0
+            m_maze(x,y - 1) = m_maze(x,y - 1) and ~c_SOUTH
+            m_maze(x,y - 1) = m_maze(x,y - 1) or c_MARK
+          Else If (dir and c_SOUTH) &lt;&gt; 0
+            m_maze(x,y + 1) = m_maze(x,y + 1) and ~c_NORTH
+            m_maze(x,y + 1) = m_maze(x,y + 1) or c_MARK
+          Else If (dir and c_WEST) &lt;&gt; 0
+            m_maze(x - 1,y) = m_maze(x - 1,y) and ~c_EAST
+            m_maze(x - 1,y) = m_maze(x - 1,y) or c_MARK
+          Else If (dir and c_EAST) &lt;&gt; 0
+            m_maze(x + 1,y) = m_maze(x + 1,y) and ~c_WEST
+            m_maze(x + 1,y) = m_maze(x + 1,y) or c_MARK
+          End If
+              End If
+      Next
+        Next
+    ' Clear the marks so we're ready to go for another pass!
+      For j = 0 To m_x - 1
+          For k = 0 To m_y - 1
+            m_maze(j,k) = m_maze(j,k) and ~c_MARK
+          Next
+      Next
+  Next
+End Function
+
+Function ClearDeadEnds(percentage)
+
+  For x = 0 To m_x - 1
+    For y = 0 To m_y - 1
+
+      dir = m_maze(x,y)
+      If dir = c_NORTH or dir = c_SOUTH or dir = c_WEST or dir = c_EAST
+             ' Do we Close this deadend or not?
+
+            If Rand(1,100) &gt; percentage
+                GoTo DeadEndSkip
+        End If
+
+            'If so, start at the dead End and randomly meander our way To
+             'another point, To eliminate the dead End.
+
+        cx = x
+        cy = y
+
+        Repeat
+          dir = 0
+          dirsTested = 0
+          Repeat
+            tx = cx
+            ty = cy
+            Select Rand(0,3)
+                    Case 0
+              If cy &gt; 0
+                dir = c_NORTH 
+                rdir = c_SOUTH 
+                ty = ty -1
+              Else
+                dirsTested = dirsTested or c_NORTH
+              End If
+                    Case 1
+              If cy+1 &lt; m_y
+                dir = c_SOUTH 
+                rdir = c_NORTH 
+                ty = ty +1
+                              Else
+                dirsTested = dirsTested or c_SOUTH
+              End If
+            Case 2
+              If cx &gt; 0
+                dir = c_WEST 
+                rdir = c_EAST 
+                tx = tx - 1
+              Else
+                dirsTested = dirsTested or c_WEST
+              End If
+            Case 3
+              If cx+1 &lt; m_x
+                dir = c_EAST 
+                rdir = c_WEST 
+                tx = tx + 1
+              Else
+                dirsTested = dirsTested or c_EAST
+              End If
+            End Select
+
+            If m_maze(cx,cy) = dir 'Cell already goes in that direction
+              dirsTested = dirsTested or dir
+              dir = 0
+            End If
+
+            If RoomMask(tx,ty) &gt; 0
+              dirsTested = dirsTested or dir
+              dir = 0
+            End If
+
+            If dirsTested = %1111
+              GoTo DeadEndSkip2
+            End If
+          Until dir &lt;&gt; 0
+          #DeadEndSkip2
+
+          If dirsTested = %1111
+            GoTo DeadEndSkip
+          End If
+
+          m_maze(cx,cy) = m_maze(cx,cy) or dir
+          m_maze(tx,ty) = m_maze(tx,ty) or rdir
+
+          cx = tx
+          cy = ty
+        Until m_maze(tx,ty) &lt;&gt; rdir
+      End If
+      #DeadEndSkip
+    Next
+  Next
+
+End Function
+
+Function Dungeonify()
+
+  For x = 0 To m_x -1
+    For y = 0 To m_y -1
+      m_dungeon(x*2,y*2) = c_Wall
+      m_dungeon(x*2,y*2+1) = c_Wall
+      m_dungeon(x*2+1,y*2) = c_Wall
+      m_dungeon(x*2+1,y*2+1) = c_Wall
+      If RoomMask(x,y) &gt; 0
+        If RoomMask(x-1,y) &gt; 0
+          m_dungeon(x*2,y*2+1) = c_Room
+        Else
+          If (m_maze(x-1,y) and c_EAST) &lt;&gt; 0
+            m_dungeon(x*2,y*2+1) = c_Door
+          End If
+        End If
+        If RoomMask(x,y-1) &gt; 0
+          m_dungeon(x*2+1,y*2) = c_Room
+        Else
+          If (m_maze(x,y-1) and c_SOUTH) &lt;&gt; 0
+            m_dungeon(x*2+1,y*2) = c_Door
+          End If
+        End If
+        If RoomMask(x-1,y) &gt; 0 and RoomMask(x,y-1) &gt; 0
+          m_dungeon(x*2,y*2) = c_Room
+        End If
+        m_dungeon(x*2+1,y*2+1) = c_Room
+      Else
+        dir = m_maze(x,y)
+        If dir &lt;&gt; 0
+          m_dungeon(x*2+1,y*2+1) = c_Passage
+        End If
+        If (dir and c_NORTH) &lt;&gt; 0
+          If RoomMask(x,y-1) &gt; 0
+            m_dungeon(x*2+1,y*2) = c_Door
+          Else
+            m_dungeon(x*2+1,y*2) = c_Passage
+          End If
+        End If
+        If (dir and c_WEST) &lt;&gt; 0
+          If RoomMask(x-1,y) &gt; 0
+            m_dungeon(x*2,y*2+1) = c_Door
+          Else
+            m_dungeon(x*2,y*2+1) = c_Passage
+          End If
+        End If
+      End If
+    Next
+    m_dungeon(x*2,m_y*2) = c_Wall
+    m_dungeon(x*2+1,m_y*2) = c_Wall
+  Next
+
+  For y = 0 To m_y * 2
+    m_dungeon(m_x * 2,y) = c_Wall
+  Next
+  Dim m_maze(1,1)
+  Dim RoomMask(1,1)
+
+End Function
+	
+Function MakeRooms()
+
+  For i = 0 To RoomCount - 1
+
+    R:RoomType = New RoomType
+    If FirstRoom = Null Then FirstRoom = R
+    LastRoom = R
+
+    If maxRoomX = minRoomX
+      R.w = maxRoomX
+    Else
+      R.w = Rand(minRoomX,maxRoomX)
+    End If
+
+    If maxRoomY = minRoomY
+      R.h = minRoomY
+    Else
+      R.h = Rand(minRoomY,maxRoomY)
+    End If
+
+    'Disallow extremely narrow rooms by requiring that a room never be
+    'thinner than half it's longest dimension.
+
+    If R.w &gt; ( R.h Shl 1 )
+      R.h = ( R.w Shr 1 ) + 1
+    End If
+    If R.h &gt; ( R.w Shl 1 )
+      R.w = ( R.h Shr 1 ) + 1
+    End If
+#tryagain
+    If PlaceRoom(R) = True
+      For j = 0 To R.w -1
+        For k = 0 To R.h -1
+          RoomMask(R.x + j,R.y + k) = 1
+        Next
+      Next
+    Else
+      'Couldn't fit room, so shrink it and see if it'll fit anywhere now.
+      If R.w &gt; minRoomX and R.h &gt; minRoomY
+        If R.w &gt; minRoomX Then R.w = R.w - 1
+        If R.h &gt; minRoomY Then R.h = R.h - 1
+        GoTo tryagain
+      Else
+        LostRoomCount = LostRoomCount + 1
+        If FirstRoom = R Then FirstRoom = Null
+        LastRoom = Null
+        R=Null
+      End If
+    End If
+  Next
+  RoomCount = RoomCount - LostRoomCount
+
+End Function  
+Function PlaceRoom(R:RoomType)
+
+  Local sdir[4]
+
+  If R.w &gt; m_x Then R.w = m_x
+  If R.h &gt; m_y Then R.h = m_y
+
+  'Work out the difference between the room width and Map width etc
+  spaceX = m_x - R.w
+  spaceY = m_y - R.h
+
+  'Choose a random position For the New room
+  newx = Rand(1,spacex - 1)
+  newy = Rand(1,spacey - 1)
+
+  If RoomOverlaps(newx,newy,R.w,R.h) = False
+    'Fine: Room can go here
+    R.x = newx 
+    R.y = newy
+    Return True
+  Else
+    'Otherwise, move out in a spiral from this point.
+    'Choose a random sequence of directions forming a spiral
+    sdir[1] = Rand(1,4)
+    Select sdir[1]
+    Case r_NORTH,r_SOUTH
+      sdir[2] = Rand(3,4)
+      If sdir[1] = r_NORTH Then sdir[3] = r_SOUTH Else sdir[3] = r_NORTH
+      If sdir[2] = r_EAST Then sdir[4] = r_WEST Else sdir[4] = r_EAST
+    Case r_EAST,r_WEST
+      sdir[2] = Rand(1,2)
+      If sdir[1] = r_EAST Then sdir[3] = r_WEST Else sdir[3] = r_EAST
+      If sdir[2] = r_NORTH Then sdir[4] = r_SOUTH Else sdir[4] = r_NORTH
+    End Select
+
+    Tally = 1
+    TurnMax = 1 'Number of blocks in this direction
+    TurnCount = TurnMax 'Number of blocks Left To go in this direction
+    TurnDir = 1
+
+    Repeat
+      'Move position
+      Select sdir[TurnDir]
+      Case r_NORTH
+        newy = newy - 1
+      Case r_SOUTH
+        newy = newy + 1
+      Case r_WEST
+        newx = newx - 1
+      Case r_EAST
+        newx = newx + 1
+      End Select
+      TurnCount = TurnCount - 1
+      If TurnCount = 0
+        'Change direction
+        Select TurnDir
+        Case 1,2,3
+          TurnDir = TurnDir + 1
+          If TurnDir = 3 Then TurnMax = TurnMax + 1
+        Case 4
+          TurnDir = 1
+          TurnMax = TurnMax + 1
+        End Select
+        TurnCount = TurnMax
+      End If
+
+      If newx =&gt; 1 and newx &lt;= spacex - 1 and newy &gt;= 1 and newy &lt;= spacey -1
+
+        If RoomOverlaps(newx,newy,R.w,R.h) = False
+          'Found room!
+          R.x = newx 
+          R.y = newy
+          Return True
+        Else
+          Tally = Tally + 1
+        End If
+
+      End If
+    Until Tally &gt;= (spacex - 1) * (spacey - 1)
+    'We just can't place the room anywhere. Give up
+    Return False
+  End If
+End Function
+
+Function RoomOverlaps(x,y,w,h)
+  'We want to check the cells directly outside the room as well, so that the room is not
+  'touching another room.
+  For j = -1 To w
+    For k = -1 To h
+      If RoomMask(x+j,y+k) &gt; 0 Then Return True
+    Next
+  Next
+
+  Return False
+
+End Function
+
+Function MakeRoomEntrances()
+
+  'What we do here is go through each room and add between 1 and 3 Entrances from the maze outside
+  For i = 1 To RoomCount
+
+    If i = 1 Then Room:RoomType = FirstRoom Else Room = After Room
+
+    Local Entrance[3]
+
+    Room.Entrances = Rand(1,4)
+    If Room.Entrances = 4 Then Room.Entrances = 1
+
+    For a = 1 To Room.Entrances
+
+      Repeat
+        t = Rand (1,(Room.w * 2) + (Room.h * 2))
+
+        TryAgain = False
+        If a &gt; 1 Then
+          For b = 1 To a - 1
+            If Entrance[b] = t
+              TryAgain = True
+            End If
+          Next
+        End If
+      Until TryAgain = False
+
+      Entrance[a] = t
+
+      If t &lt;= Room.w Then
+        'Entrance goes on the north wall
+        m_maze(Room.x + (t-1), Room.y - 1) = m_maze(Room.x + (t-1), Room.y - 1) or c_SOUTH
+      Else
+        If t &lt;= Room.w + Room.h
+          'Entrance goes on east wall
+          t = Entrance[a] - Room.w
+          m_maze(Room.x + Room.w, Room.y + (t-1)) = m_maze(Room.x + Room.w, Room.y + (t-1)) or c_WEST
+        Else
+          If t &lt;= Room.w *2 + Room.h
+            'Entrance goes on the south wall
+            t = Entrance[a] - Room.w - Room.h
+            m_maze(Room.x + (t-1), Room.y + Room.h) = m_maze(Room.x + (t-1), Room.y + Room.h) or c_NORTH
+          Else
+            t = Entrance[a] - (Room.w * 2) - Room.h
+            m_maze(Room.x -1, Room.y + (t-1)) = m_maze(Room.x -1, Room.y + (t-1)) or c_EAST
+            'Entrance goes on the west wall
+          End If
+        End If
+      End If
+    Next
+    For b = 1 To 3
+      Room.Entrance[b] = Entrance[b]
+    Next
+  Next
+
+End Function
+End Type
+	
+</textarea><br><br>Thanks in advance for any input. <br><br></td></tr></table><br>
+<a name="637022"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Haramanai</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I thing your problem is to understand the difernce bitween functions and Methods in types.<br>Check the &lt;User defined types&gt; in the tree Help under Languge.<br>What I can tell you in haste is that function does not recognise the fields of the objects and you may use them for the basic creation of the type.  But Method recognise them.<br>Check this out.<br><pre class=code>
+Type TLike
+	Field x:Int
+	Field y:Int
+	
+	Function create:TLike( x:Int , y:Int)
+		Local tmp:TLike = New TLike
+		tmp.x = x
+		tmp.y = y
+		Return tmp
+	End Function
+	
+	Method setXY( _x:Int , _y:Int )
+		x = _x
+		y = _y
+	End Method
+	
+End Type
+
+
+Local Like:TLike = TLike.create( 10 , 10 )
+
+Print Like.x
+Print Like.y
+
+Like.setXY( 14 , 25 )
+
+Print Like.x
+Print Like.y
+</pre><br>Run this and be sure to read the Help docs under the IDE. The Language part it's really good. <br><br></td></tr></table><br>
+<a name="637140"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Why0Why</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I see what you are saying.  I did read the docs, but it looked to me like either one could access the types.  I don't find the docs to be all that great personally.  I think there are a few that agree with me :) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

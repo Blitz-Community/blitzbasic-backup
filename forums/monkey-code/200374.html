@@ -1,0 +1,3973 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Simple Rogue-like Dungeon Generation</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Simple Rogue-like Dungeon Generation</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >Simple Rogue-like Dungeon Generation</a><br><br>
+<a name="2049036"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >impixi</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> HTML tested only.<br>Left-Click to generate a new dungeon.<br>Press D to toggle density.<br><br>EDIT (March 15, 2011): <br><br>* Fixed code so it compiles properly with Monkey V32.<br>* Restructured the dungeon class a little.<br>* Simplified the test code.<br>* Added barrier generation (walls, doors, rubble).<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+'-----------------------------------------------------------------------------
+'---------------------------- SIMPLE DUNGEON GENERATOR -----------------------
+'-----------------------------------------------------------------------------
+
+'PURPOSE: Generate simple dungeons for use in Rogue-like games.
+
+'DATE: MARCH 2011
+
+'LICENSE: Public Domain
+
+'-----------------------------------------------------------------------------
+
+
+'**** MOJO-BASED EXAMPLE *****
+
+Strict
+
+Import mojo
+
+
+Function Main:Int()
+
+	New DungeonTest()
+
+	Return 0
+
+End
+
+
+'----
+
+
+Class DungeonTest Extends App
+
+
+	Field dungeon:Dungeon		
+	
+	Field density:Int							'Relative 'room' density mode value.
+
+
+	Method OnCreate:Int()
+
+		Seed = Millisecs()					
+
+		dungeon = New Dungeon(80, 30)			'80 columns, 30 rows.
+				
+		density = DENSITY_LOW					
+		
+		Generate()								
+
+		SetUpdateRate 60
+	
+		Return 0
+	
+	End
+	
+	
+	Method OnUpdate:Int()
+	
+		If MouseHit(MOUSE_LEFT) Then Generate()
+		
+		If KeyHit(KEY_D)
+			density += 1
+			If (density &gt; DENSITY_HIGH) Then density = DENSITY_LOW
+			Generate()
+		Endif
+	
+		Return 0
+	
+	End
+	
+	
+	Method OnRender:Int()
+
+		RenderText()
+		
+		Local str:String
+		
+		Select density
+		
+			Case DENSITY_LOW
+				str = "Low"
+				
+			Case DENSITY_MEDIUM
+				str = "Medium"
+			
+			Case DENSITY_HIGH
+				str = "High"
+		
+		End
+		
+		Local dh:Int = DeviceHeight()
+		
+		DrawText "[D]: Density = " + str, 10, dh - 50
+		DrawText "LEFT-CLICK: Generate new dungeon.", 10, dh - 36
+		DrawText "(X) = perimeter, (#) = wall, (+) = door, (%) = locked door, (|) = rubble, (.) = void", 10, dh - 18
+	
+		Return 0
+	
+	End
+	
+	
+	Method Generate:Void()
+	
+		dungeon.ResetGrids()
+		dungeon.GenerateAreas density
+	
+	End
+	
+	
+	'Display a Rogue-like representation of the dungeon.
+	Method RenderText:Void()
+	
+		Cls 0, 0, 0
+
+		Local lines:String[] = dungeon.GetString().Split("~n")
+		Local x:= 10, y := 10
+		For Local line := Eachin lines
+			DrawText line, x, y
+			y += 14						
+		Next
+	
+	End
+
+
+End
+
+'*****************************************
+
+
+
+'----- DUNGEON CODE ----------------------------------------
+
+
+'Do NOT change the AREA_ID_ constant values.
+'Generated area ids will always be greater than zero.
+Const AREA_ID_PERIMETER:Int = -2
+Const AREA_ID_UNASSIGNED:Int = -1				
+Const AREA_ID_CORRIDOR:Int = 0					
+
+'Currently three density levels are available.
+Const DENSITY_LOW:Int = 0
+Const DENSITY_MEDIUM:Int = 1
+Const DENSITY_HIGH:Int = 2
+
+
+'Barrier ID values should be less than zero
+Const OBJ_ID_RUBBLE:Int = -5
+Const OBJ_ID_DOOR_LOCKED:Int = -4
+Const OBJ_ID_DOOR_CLOSED:Int = -3
+Const OBJ_ID_WALL_PERIMETER:Int = -2
+Const OBJ_ID_WALL:Int = -1
+
+'Non-barrier obj ID values should be greater than zero
+Const OBJ_ID_VOID:Int = 0
+Const OBJ_ID_DOOR_OPEN:Int = 1
+
+
+Class Dungeon
+
+	'The dimensions of the dungeon are represented by columns and rows.
+	Field sizeCols:Int, sizeRows:Int
+			
+	'See below...						
+	Field areaIDGrid:Int[]		
+	
+	'areaIDGrid stores the integer ID values of generated areas (&gt;0), generated connections (0)
+	'unassigned (-1) and perimeter (-2) coordinates.
+	'10x10 example with two areas joined by a single connection (of two corridors):
+	' -2 -2 -2 -2 -2 -2 -2 -2 -2 -2
+	' -2 -1 -1 01 01 01 01 -1 -1 -2
+	' -2 -1 -1 01 01 01 01 -1 -1 -2
+	' -2 -1 -1 01 01 01 01 -1 -1 -2
+	' -2 -1 -1 -1 -1 -1 00 -1 -1 -2
+	' -2 -1 -1 -1 -1 -1 00 -1 -1 -2
+	' -2 02 02 02 -1 -1 00 -1 -1 -2
+	' -2 02 02 02 00 00 00 -1 -1 -2
+	' -2 02 02 02 -1 -1 -1 -1 -1 -2
+	' -2 -2 -2 -2 -2 -2 -2 -2 -2 -2
+	
+	'See below...
+	Field objIDGrid:Int[]
+	
+	'objIDGrid stores the integer ID values of placed objects (eg doors, rubble, void, walls, etc.)
+	'The principle is the same as for areaIDGrid.
+	
+	
+	Method New(cols:Int, rows:Int)
+	
+		sizeCols = cols
+		sizeRows = rows
+		areaIDGrid = New Int[sizeCols * sizeRows]
+		objIDGrid = New Int[sizeCols * sizeRows]
+		ResetGrids
+
+	End
+	
+	
+	Method ResetGrids:Void()
+	
+		'Reset NON-perimeter coordinates
+		For Local r:Int = 1 Until sizeRows - 1
+			For Local c:Int = 1 Until sizeCols - 1
+				areaIDGrid[(r * sizeCols) + c] = AREA_ID_UNASSIGNED
+				objIDGrid[(r * sizeCols) + c] = OBJ_ID_WALL
+			Next
+		Next
+	
+		'Reset perimeter coordinates
+		For Local c:Int = 0 Until sizeCols
+			areaIDGrid[(0 * sizeCols) + c] = AREA_ID_PERIMETER
+			areaIDGrid[((sizeRows - 1) * sizeCols) + c] = AREA_ID_PERIMETER
+			objIDGrid[(0 * sizeCols) + c] = OBJ_ID_WALL_PERIMETER
+			objIDGrid[((sizeRows - 1) * sizeCols) + c] = OBJ_ID_WALL_PERIMETER
+		Next 
+	
+		For Local r:Int = 0 Until sizeRows
+			areaIDGrid[(r * sizeCols) + 0] = AREA_ID_PERIMETER
+			areaIDGrid[(r * sizeCols) + (sizeCols - 1)] = AREA_ID_PERIMETER
+			objIDGrid[(r * sizeCols) + 0] = OBJ_ID_WALL_PERIMETER
+			objIDGrid[(r * sizeCols) + (sizeCols - 1)] = OBJ_ID_WALL_PERIMETER
+		Next
+	
+	End
+	
+	
+	'Generate a number of areas (calculated from the 'density' parameter)
+	'and establish connections between them.
+	Method GenerateAreas:Void(density:Int)
+	
+		Local areas:Location[]
+		Local tryNumAreas:Int = 0
+		Local numAreas:Int = 0
+
+		Select density
+		
+			Case DENSITY_LOW
+				tryNumAreas = 1 + Floor(sizeCols * sizeRows * 0.0025)       
+			
+			Case DENSITY_MEDIUM
+				tryNumAreas = 1 + Floor(sizeCols * sizeRows * 0.005)
+			
+			Case DENSITY_HIGH
+				tryNumAreas = 1 + Floor(sizeCols * sizeRows * 0.01)
+					
+		End			
+				
+		'VVVV AREA GENERATION VVVV		
+					
+		areas = New Location[tryNumAreas]
+		
+		For Local id:Int = 1 To tryNumAreas		
+			
+			Local areaCols:Int
+			Local areaRows:Int
+			
+			Local c:Int, r:Int
+			
+			Local loopCount:Int = 0
+			Local overlap:Bool = False
+			
+			Repeat
+				'Generate a randomly-dimensioned area at a random coodinate.
+				'Check that it doesn't overlap an existing area.
+				'If it does overlap then discard it and try again
+				'until a non-overlapping area has been generated.
+				
+				areaCols = Floor(Rnd(2, Floor(sizeCols / 4)))
+				areaRows = Floor(Rnd(2, Floor(sizeRows / 4)))
+				c = Floor(Rnd(1, sizeCols - areaCols))
+				r = Floor(Rnd(1, sizeRows - areaRows))
+				
+				overlap = CheckAreaOverlap(c, r, areaCols, areaRows)
+				
+				'If a non-overlapping area hasn't been generated after a
+				'reasonable number of attempts then abandon this loop iteration.
+				loopCount += 1
+				If loopCount &gt; 1000 Then Exit		
+				
+			Until (Not overlap)
+		
+			If (Not overlap) 
+				numAreas += 1
+				MakeArea numAreas, c, r, areaCols, areaRows
+				areas[numAreas - 1] = New Location(numAreas, c, r, areaCols, areaRows)
+			Endif
+		
+		Next
+	
+		'numAreas is the actual number of generated areas, NOT tryNumAreas, 
+		'so resize the array accordingly.
+		areas = areas[..numAreas]
+		
+		'VVVV AREA CONNECTION GENERATION VVVV
+		
+		'Shuffle areas
+		For Local n:Int = 1 To numAreas
+			Local i:Int = Floor(Rnd(0, areas.Length))
+			Local j:Int = Floor(Rnd(0, areas.Length))
+			Local swap:Location = areas[i]
+			areas[i] = areas[j]
+			areas[j] = swap
+		Next
+	
+		'Create a connection between areas in shuffled sequence to ensure
+		'every area is reachable, either directly or indirectly.
+		For Local i:Int = 0 Until areas.Length - 1
+			MakeConnection(areas[i], areas[i + 1])
+		Next
+	
+	
+		'VVVV BARRIER GENERATION VVVV
+		
+		Local rubbleChance:Int = 2					'&lt;- Probably need to make this a parameter of this method or a field/property of this class.
+				
+		For Local r:Int = 1 Until sizeRows - 1
+			For Local c:Int = 1 Until sizeCols - 1
+			
+				'Check for an appropriate location along a row.
+				If (areaIDGrid[(r * sizeCols) + c] = AREA_ID_CORRIDOR) And
+				  (areaIDGrid[((r - 1) * sizeCols) + c] = AREA_ID_UNASSIGNED) And
+					(areaIDGrid[((r + 1) * sizeCols) + c] = AREA_ID_UNASSIGNED)
+					
+						'Closed doors beside an area.
+						If (areaIDGrid[(r * sizeCols) + (c - 1)] &gt; 0) Or (areaIDGrid[(r * sizeCols) + (c + 1)] &gt; 0)		
+							objIDGrid[(r * sizeCols) + c] = OBJ_ID_DOOR_CLOSED
+						Else 
+							'A percent chance to place Rubble in a corridor.
+							If Floor(Rnd(0, 100)) &lt;= rubbleChance Then objIDGrid[(r * sizeCols) + c] = OBJ_ID_RUBBLE
+			
+						Endif
+
+				Endif
+				
+				'Check for an appropriate location along a column.
+				If (areaIDGrid[(r * sizeCols) + c] = AREA_ID_CORRIDOR) And
+				  (areaIDGrid[(r * sizeCols) + (c - 1)] = AREA_ID_UNASSIGNED) And
+					(areaIDGrid[(r * sizeCols) + (c + 1)] = AREA_ID_UNASSIGNED)
+					
+						'Closed doors beside an area.
+						If (areaIDGrid[((r - 1) * sizeCols) + c] &gt; 0) Or (areaIDGrid[((r + 1) * sizeCols) + c] &gt; 0)		
+							objIDGrid[(r * sizeCols) + c] = OBJ_ID_DOOR_CLOSED
+						Else 
+							'A percent chance to place Rubble in a corridor.
+							If Floor(Rnd(0, 100)) &lt;= rubbleChance Then objIDGrid[(r * sizeCols) + c] = OBJ_ID_RUBBLE
+						Endif
+
+				Endif
+				
+			Next
+		Next
+		
+		
+		'Locked doors are placed near areas that only have a single entry.
+
+		For Local area := Eachin areas
+		
+			Local entry:Location = Null
+			Local entryCount:Int = 0
+			
+			Local c:Int, r:Int
+		
+			For c = (area.col - 1) Until (area.col + area.width)
+		
+				r = area.row - 1
+				If (areaIDGrid[(r * sizeCols) + c] = AREA_ID_CORRIDOR)
+					entryCount += 1
+					If (entry = Null) Then entry = New Location(area.id, c, r)
+				Endif
+				
+				r = area.row + area.height
+				If (areaIDGrid[(r * sizeCols) + c] = AREA_ID_CORRIDOR)
+					entryCount += 1
+					If (entry = Null) Then entry = New Location(area.id, c, r)
+				Endif
+				
+			Next
+		
+			For r = (area.row - 1) Until (area.row + area.height)
+			
+				c = area.col - 1
+			
+				If (areaIDGrid[(r * sizeCols) + c] = AREA_ID_CORRIDOR)
+					entryCount += 1
+					If (entry = Null) Then entry = New Location(area.id, c, r)
+				Endif
+				
+				c = area.col + area.width
+
+				If (areaIDGrid[(r * sizeCols) + c] = AREA_ID_CORRIDOR)
+					entryCount += 1
+					If (entry = Null) Then entry = New Location(area.id, c, r)
+				Endif
+				
+			Next
+	
+			If entryCount = 1 Then objIDGrid[(entry.row * sizeCols) + entry.col] = OBJ_ID_DOOR_LOCKED
+
+		Next
+	
+	End
+		
+		
+	'Check if a proposed area will overlap an existing area.
+	Method CheckAreaOverlap:Bool(c:Int, r:Int, cols:Int, rows:Int)
+	
+		For Local r1:Int = (r - 1) Until (r + rows + 1)
+			For Local c1:Int = (c - 1) Until (c + cols + 1)
+				If areaIDGrid[(r1 * sizeCols) + c1] &gt; 0 Then Return True		'Overlap.
+			Next
+		Next
+		
+		Return False	'No overlap.
+		
+	End
+		
+		
+	'Set all areaIDGrid coordinates to the new area's id value.
+	'Also set corresponding obj ids to void.
+	Method MakeArea:Void(id:Int, c:Int, r:Int, cols:Int, rows:Int)
+
+		For Local r1:Int = r Until (r + rows)
+			For Local c1:Int = c Until (c + cols)
+				areaIDGrid[(r1 * sizeCols) + c1] = id
+				objIDGrid[(r1 * sizeCols) + c1] = OBJ_ID_VOID
+			Next
+		Next
+
+	End
+	
+	
+	'Connect one area to another using either one or two 'corridors', as required.
+	Method MakeConnection:Void(areaA:Location, areaB:Location)
+	
+		'Select a random coordinate within each area.
+		Local c1:Int = Floor(Rnd(areaA.col, (areaA.col + areaA.width - 1)))
+		Local r1:Int = Floor(Rnd(areaA.row, (areaA.row + areaA.height - 1)))
+		Local c2:Int = Floor(Rnd(areaB.col, (areaB.col + areaB.width - 1)))
+		Local r2:Int = Floor(Rnd(areaB.row, (areaB.row + areaB.height - 1)))
+		
+		'Calculate the distances between the coordates.
+		Local cdist:Int = Abs(c1 - c2) + 1
+		Local rdist:Int = Abs(r1 - r2) + 1
+		
+		'Make west&lt;-&gt;east corridor if necessary.
+		If (c1 &lt; c2) 'areaA's random coordinate column is west of areaB's random coordinate column
+			MakeCorridor c1, r1, cdist, 1
+			c1 += cdist
+		Else 'areaA's random coordinate column is east of areaB's random coordinate column
+			MakeCorridor c2, r2, cdist, 1
+			c2 += cdist
+		Endif
+		
+		'Make north&lt;-&gt;south corridor if necessary.
+		If (r1 &lt; r2) Then MakeCorridor c1, r1, 1, rdist Else MakeCorridor c2, r2, 1, rdist
+
+	End
+				
+				
+	'Set areaIDGrid coordinates to AREA_ID_CORRIDOR value along a corridor, but only if they
+	'are not yet assigned an id &gt; 0.	(This allows area IDs to be fully preserved in the grid).
+	'Also set corresponding obj ids to void.
+	Method MakeCorridor:Void(c:Int, r:Int, cols:Int, rows:Int)
+
+		For Local r1:Int = r Until (r + rows)
+			For Local c1:Int = c Until (c + cols)
+				If (areaIDGrid[(r1 * sizeCols) + c1] &lt; 0) 
+					areaIDGrid[(r1 * sizeCols) + c1] = AREA_ID_CORRIDOR
+					objIDGrid[(r1 * sizeCols) + c1] = OBJ_ID_VOID
+				Endif
+			Next
+		Next
+
+	End				
+	
+			
+	'Return a 'Rogue-like' string representation of the dungeon.
+	Method GetString:String()
+	
+		Local str:String
+	
+		For Local r:Int = 0 Until sizeRows
+		
+			For Local c:Int = 0 Until sizeCols
+				
+				Select objIDGrid[(r * sizeCols) + c]
+				
+					Case OBJ_ID_VOID
+						str += "."
+			
+					Case OBJ_ID_WALL
+						str += "#"
+						
+					Case OBJ_ID_WALL_PERIMETER
+						str += "X"
+						
+					Case OBJ_ID_DOOR_CLOSED
+						str += "+"
+						
+					Case OBJ_ID_DOOR_OPEN
+						str += "'"
+			
+					Case OBJ_ID_DOOR_LOCKED
+						str += "%"
+		
+					Case OBJ_ID_RUBBLE
+						str += "|"
+					
+				End
+
+			Next
+			
+			str += "~n"
+			
+		Next
+	
+		Return str
+	
+	End
+
+
+End
+
+
+'---- COMPANION CLASS(ES)
+
+'Currently only used in the area generation methods of the Dungeon class.
+Class Location
+
+	'Location information - for a whole area or a single coordinate.
+
+	Field id:Int
+	Field col:Int, row:Int
+	Field width:Int, height:Int
+
+
+	Method New(i:Int, c:Int, r:Int, w:Int, h:Int)
+	
+		id = i
+		col = c
+		row = r
+		width = w
+		height = h
+	
+	End
+
+
+	Method New(i:Int, c:Int, r:Int)
+	
+		id = i
+		col = c
+		row = r
+		width = 1
+		height = 1
+	
+	End
+
+
+End
+
+</textarea><br><br><br>EDIT (17 Feb 2013):<br>See my latest post below for a different version. <br><br></td></tr></table><br>
+<a name="2002824"></a>
+
+<a name="2002823"></a>
+
+<a name="2002817"></a>
+
+<a name="2002816"></a>
+
+<a name="2002686"></a>
+
+<a name="2002689"></a>
+
+<a name="2002685"></a>
+
+<a name="2002825"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >impixi</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Updated - see EDIT notes for details. <br><br></td></tr></table><br>
+<a name="2003877"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >slenkar</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> cool dungeons :) <br><br></td></tr></table><br>
+<a name="2049039"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >impixi</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here is my latest dungeon generation code (there's a "perfect maze" generation function also included):<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+Import mojo
+Import monkey.random
+
+Function Main:Int()
+	New MyApp
+
+	Return 0
+End
+
+'---
+
+Class MyApp Extends App
+
+	Field map:Int[]
+
+	Field tlx:Int, tly:Int
+	Field curx:Int, cury:Int
+	
+	Field line:String
+	
+	Method OnCreate:Int()
+		SetUpdateRate 60
+		
+		tlx = 10
+		tly = 10
+		
+		map = CreateMap(39, 17)
+		GenerateMap(map)
+		
+		Return 0
+	End
+
+	Method OnUpdate:Int()
+			
+		If TouchHit(0) 
+			If (Floor(Rnd(0, 100)) &lt; 50)
+				GenerateMazeMap(map)
+			Else
+				GenerateMap(map)
+			Endif
+		Endif
+	
+		Return 0
+	End
+
+	Method OnRender:Int()
+	
+		Cls 0, 0, 0
+
+		Scale 2.0, 2.0
+
+		curx = tlx
+		cury = tly
+						
+		For Local r:Int = 0 Until map[map.Length - 1]
+		
+			line = ""
+		
+			For Local c:Int = 0 Until map[map.Length - 2]
+			
+				Local i:Int = (r * map[map.Length - 2]) + c
+			
+				Select map[i]
+								
+					Case BARRIER_NONE
+						line += "."
+					
+					Case BARRIER_WALL
+						line += "#"
+
+					Case BARRIER_DOOR_OPEN
+						line += "'"
+														
+					Case BARRIER_DOOR_CLOSED
+						line += "+"
+						
+					Case BARRIER_DOOR_LOCKED
+						line += "%"	
+
+				End
+				
+			Next
+		
+			DrawText line, curx, cury
+			cury += 12
+		
+		Next
+	
+		Return 0	
+
+	End
+
+End
+
+
+'%%%%%% CONSTANTS %%%%%%%%%%%
+
+'The minimum possible size of a map. 
+Const MAP_MIN_COLS:Int = 12
+Const MAP_MIN_ROWS:Int = 12
+
+'Barrier constants for use in the generation algorithms.
+Const BARRIER_NONE:Int = 0
+Const BARRIER_WALL:Int = 1
+Const BARRIER_DOOR_OPEN:Int = 2
+Const BARRIER_DOOR_CLOSED:Int = 3
+Const BARRIER_DOOR_LOCKED:Int = 4
+
+
+'****** CLASSES ************
+
+Class Coord
+
+	'Coodinate class used by various functions.
+
+	Field col:Int = 0
+	Field row:Int = 0
+	
+	Method New(col:Int, row:Int)
+	
+		Self.col = col
+		Self.row = row
+		
+	End
+	
+End
+
+Class Area
+
+	Field coords:Stack&lt;Coord&gt;
+
+	Method New(coords:Stack&lt;Coord&gt;)
+		Self.coords = coords
+	End
+
+End
+
+Class Cell
+
+	Field n:Bool = True
+	Field e:Bool = True
+	Field s:Bool = True
+	Field w:Bool = True
+	
+End
+
+'------ FUNCTIONS ---------
+
+Function AreaOverlap:Bool(a1:Area, a2:Area)
+
+	If ((Not a1.coords) Or (Not a2.coords)) Then Return True
+
+	For Local p1:Coord = Eachin a1.coords
+		For Local p2:Coord = Eachin a2.coords
+			If (p1.col = p2.col) And (p1.row = p2.row) Then Return True 'Overlap found
+		Next
+	Next
+
+	Return False 'No overlap
+
+End
+
+'----
+
+Function ClearArea:Void(map:Int[], a:Area)
+	
+	If (Not ValidMap(map)) Then Return
+
+	If (Not a) Then Return
+	If a.coords.IsEmpty() Then Return
+	
+	For Local p:Coord = Eachin a.coords
+		map[(p.row * map[map.Length - 2]) + p.col] = BARRIER_NONE
+	Next
+
+End
+
+'----
+
+Function SurroundArea:Void(map:Int[], a:Area, surType:Int = BARRIER_WALL, entryQty:Int = 0, entryType:Int = BARRIER_NONE, offset:Int = 1, cornerEntry:Bool = False)
+
+	If (Not ValidMap(map)) Then Return
+
+	If (Not a) Then Return
+	If a.coords.IsEmpty() Then Return
+	If (offset &lt; 0) Then Return
+
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+
+	Local minCol:Int = cols, maxCol:Int = -1
+	Local minRow:Int = rows, maxRow:Int = -1
+
+	For Local p:Coord = Eachin a.coords
+		If p.col &lt; minCol Then minCol = p.col
+		If p.col &gt; maxCol Then maxCol = p.col
+		If p.row &lt; minRow Then minRow = p.row
+		If p.row &gt; maxRow Then maxRow = p.row
+	Next
+	
+	If entryQty &lt;= 0 Then Return
+	
+	Local entryCoord:Stack&lt;Coord&gt; = New Stack&lt;Coord&gt;	'Coordsible entry positions
+	
+	For Local p:Coord = Eachin a.coords
+		If ((p.col = (minCol + offset)) Or (p.col = (maxCol - offset))) And ((p.row &gt;= (minRow + offset)) And (p.row &lt;= (maxRow - offset))) 
+			map[(p.row * cols) + p.col] = surType
+			If (Not entryCoord.Contains(p)) Then entryCoord.Push(p)
+		Endif
+		If ((p.row = (minRow + offset)) Or (p.row = (maxRow - offset))) And ((p.col &gt;= (minCol + offset)) And (p.col &lt;= (maxCol - offset))) 
+			map[(p.row * cols) + p.col] = surType
+			If (Not entryCoord.Contains(p)) Then entryCoord.Push(p)
+		Endif
+	Next
+	
+	If (Not cornerEntry)
+		'Remove corner coordinates from possible entry positions
+		For Local p:Coord = Eachin entryCoord
+			If ((p.col = (minCol + offset)) Or (p.col = (maxCol - offset))) And (p.row = (minRow + offset))
+				entryCoord.RemoveEach(p)
+				Continue
+			Endif
+			If ((p.col = (minCol + offset)) Or (p.col = (maxCol - offset))) And (p.row = (maxRow - offset))
+				entryCoord.RemoveEach(p)
+				Continue
+			Endif
+		Next
+	Endif
+	
+	Local entryCoordArr:Coord[] = entryCoord.ToArray()
+	
+	'Shuffle potential entries
+	For Local n:Int = 1 Until entryCoordArr.Length
+		Local i:Int = Floor(Rnd(0, entryCoordArr.Length))
+		Local j:Int = Floor(Rnd(0, entryCoordArr.Length))
+		Local temp:Coord = entryCoordArr[i]
+		entryCoordArr[i] = entryCoordArr[j]
+		entryCoordArr[j] = temp
+	Next
+	
+	'Entry placement
+	Local entryCount:Int = 0
+	For Local i:Int = 0 Until entryCoordArr.Length
+		map[(entryCoordArr[i].row * cols) + entryCoordArr[i].col] = entryType
+		entryCount += 1
+		If (entryCount &gt;= entryQty) Then Exit
+	Next
+	'---
+
+End
+
+'----
+
+Function FillAreaPerimeterGaps:Void(map:Int[], a:Area, gapFillType:Int = BARRIER_DOOR_CLOSED)
+
+	If (Not ValidMap(map)) Then Return
+
+	If (Not a) Then Return
+	If a.coords.IsEmpty() Then Return
+
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+
+	Local minCol:Int = cols, maxCol:Int = -1
+	Local minRow:Int = rows, maxRow:Int = -1
+
+	For Local p:Coord = Eachin a.coords
+		If p.col &lt; minCol Then minCol = p.col
+		If p.col &gt; maxCol Then maxCol = p.col
+		If p.row &lt; minRow Then minRow = p.row
+		If p.row &gt; maxRow Then maxRow = p.row
+	Next
+	
+	'Adjoining perimeter gaps (the size of single cells only).
+	
+	For Local p:Coord = Eachin a.coords
+
+		If ((p.col = minCol) And (p.row &gt;= minRow) And (p.row &lt;= maxRow))
+			If (map[(p.row * cols) + (p.col - 1)] = BARRIER_NONE) 
+				If (map[((p.row - 1) * cols) + (p.col - 1)] &lt;&gt; BARRIER_NONE) And (map[((p.row + 1) * cols) + (p.col - 1)] &lt;&gt; BARRIER_NONE)
+					map[(p.row * cols) + (p.col - 1)] = gapFillType
+				Endif
+			Endif
+		Else
+			If ((p.col = maxCol) And (p.row &gt;= minRow) And (p.row &lt;= maxRow))
+				If (map[(p.row * cols) + (p.col + 1)] = BARRIER_NONE) 
+					If (map[((p.row - 1) * cols) + (p.col + 1)] &lt;&gt; BARRIER_NONE) And (map[((p.row + 1) * cols) + (p.col + 1)] &lt;&gt; BARRIER_NONE)
+						map[(p.row * cols) + (p.col + 1)] = gapFillType
+					Endif
+				endif
+			Endif
+		Endif
+		
+		If ((p.row = minRow) And (p.col &gt;= minCol) And (p.col &lt;= maxCol)) 
+			If (map[((p.row - 1) * cols) + p.col] = BARRIER_NONE)
+				If (map[((p.row - 1) * cols) + (p.col - 1)] &lt;&gt; BARRIER_NONE) And (map[((p.row - 1) * cols) + (p.col + 1)] &lt;&gt; BARRIER_NONE)
+					map[((p.row - 1) * cols) + p.col] = gapFillType
+				Endif
+			Endif
+		Else
+			If ((p.row = maxRow) And (p.col &gt;= minCol) And (p.col &lt;= maxCol)) 
+				If (map[((p.row + 1) * cols) + p.col] = BARRIER_NONE)
+					If (map[((p.row + 1) * cols) + (p.col - 1)] &lt;&gt; BARRIER_NONE) And (map[((p.row + 1) * cols) + (p.col + 1)] &lt;&gt; BARRIER_NONE)
+						map[((p.row + 1) * cols) + p.col] = gapFillType
+					Endif
+				Endif
+			Endif
+		Endif
+	
+	Next
+	
+End
+
+'----
+
+Function CreateMap:Int[](cols:Int, rows:Int, fillVal:Int = BARRIER_WALL)
+
+	'Create and return an integer array to represent the map. Dimensions are cols * rows.
+	'The dimensions are included as map[map.Length - 2] = cols, map[map.Length - 1] = rows.
+	'fillVal should be 1 to fill completely with walls. 0 for void/nothing.
+	'Most generation algorthms will expect a map array completely filled with walls (1s).
+
+	If cols &lt; MAP_MIN_COLS Then cols = MAP_MIN_COLS
+	If rows &lt; MAP_MIN_ROWS Then rows = MAP_MIN_ROWS
+
+	Local map:Int[]
+
+	map = New Int[(cols * rows) + 2]
+	
+	map[map.Length - 2] = cols
+	map[map.Length - 1] = rows
+	
+	FillMap(map, fillVal)
+	
+	Return map
+
+End
+
+'----
+
+Function FillMap:Void(map:Int[], fillVal:Int)
+
+	If (Not ValidMap(map)) Then Return
+	
+	For Local i:Int = 0 Until map.Length - 2
+		map[i] = fillVal
+	Next
+
+End
+
+'----
+
+Function ValidMap:Bool(map:Int[])
+
+	'Validate map array.
+	'Return false if map array seems invalid, otherwise return true.
+	
+	If (Not map) Then Return False
+	
+	If (map.Length &lt; 2) Then Return False
+	If (map.Length &lt; ((map[map.Length - 2] * map[map.Length - 1]) + 2)) Then Return False
+		
+	Return True
+		
+End
+
+'----
+
+Function MapToString:String(map:Int[])
+
+	If (Not ValidMap(map)) Then Return ""
+
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+
+	Local str:String = ""
+	
+	For Local r:Int = 0 Until rows
+		For Local c:Int = 0 Until cols
+		
+			Local i:Int = (r * cols) + c
+			
+			Select map[i]
+								
+				Case BARRIER_NONE
+					str += "."
+					
+				Case BARRIER_WALL
+					str += "#"
+
+				Case BARRIER_DOOR_OPEN
+					str += "'"
+														
+				Case BARRIER_DOOR_CLOSED
+					str += "+"
+					
+				Case BARRIER_DOOR_LOCKED
+					str += "%"	
+
+			End
+			
+		Next
+		str += "~n"
+	Next
+
+	Return str
+
+End
+
+
+'MAZE MAP STYLE
+Function GenerateMazeMap:Void(map:Int[])
+
+	Seed = Millisecs()
+	FillMap(map, BARRIER_WALL)
+	
+	'--- Generate perfect maze ---
+	GenerateMaze(map)
+	
+	'--- Generate some potential areas ---
+	Local i:Int
+	
+	Local potentialAreas:Area[6]
+
+	For i = 0 Until potentialAreas.Length
+
+		Local aw:Int = Floor(Rnd(6, 8))
+		Local ah:Int = Floor(Rnd(6, 8))
+		Local ac:Int = Floor(Rnd(1, map[map.Length-2] - aw))
+		Local ar:Int = Floor(Rnd(1, map[map.Length-1] - ah))
+	
+		potentialAreas[i] = New Area(CreateCoords(map, ac, ar, aw, ah))
+		
+	Next
+
+	'--- Create actual areas from the non-overlapping potential areas ---
+	'--- Also, clear areas and surround with walls/doors ---
+	Local actualAreas:Stack&lt;Area&gt; = New Stack&lt;Area&gt;
+
+	For i = 0 Until potentialAreas.Length
+	
+		Local overlap:Bool = False
+	
+		For Local aarea:Area = Eachin actualAreas
+			If AreaOverlap(aarea, potentialAreas[i])
+				overlap = True
+				Exit
+			Endif
+		Next
+	
+		If (Not overlap)
+			Local aarea:Area = potentialAreas[i]
+			actualAreas.Push aarea
+			'--- Clear and surround areas ---
+			ClearArea(map, aarea)
+			SurroundArea(map, aarea, BARRIER_WALL, Floor(Rnd(1, 4)), BARRIER_DOOR_CLOSED, 1, False)
+		Endif
+		
+	Next
+
+end
+
+'----
+
+'CONNECTED ROOM STYLE
+Function GenerateMap:void(map:Int[])
+
+	Seed = Millisecs()
+	FillMap(map, BARRIER_WALL)
+	
+	Local i:Int
+
+	'--- Generate some potential areas ---
+	Local potentialAreas:Area[6]
+
+	For i = 0 Until potentialAreas.Length
+
+		Local aw:Int = Floor(Rnd(6, 8))
+		Local ah:Int = Floor(Rnd(6, 8))
+		Local ac:Int = Floor(Rnd(1, map[map.Length-2] - aw))
+		Local ar:Int = Floor(Rnd(1, map[map.Length-1] - ah))
+	
+		potentialAreas[i] = New Area(CreateCoords(map, ac, ar, aw, ah))
+		
+	Next
+
+	'--- Create actual areas from the non-overlapping potential areas. ---
+	Local actualAreas:Stack&lt;Area&gt; = New Stack&lt;Area&gt;
+
+	For i = 0 Until potentialAreas.Length
+	
+		Local overlap:Bool = False
+	
+		For Local aarea:Area = Eachin actualAreas
+			If AreaOverlap(aarea, potentialAreas[i])
+				overlap = True
+				Exit
+			Endif
+		Next
+	
+		If (Not overlap)
+			Local a:Area = potentialAreas[i]
+			actualAreas.Push a
+			'--- Clear area
+			ClearArea(map, a)
+		Endif
+		
+	Next
+
+	' ---- Establish corridors between actual areas, in sequence. ---
+	Local actualAreasArr:Area[] = actualAreas.ToArray()
+	For i = 0 Until actualAreasArr.Length - 1
+		
+		Local ci:Int = Floor(Rnd(0, actualAreasArr[i].coords.Length()))
+		Local cp1:Coord = actualAreasArr[i].coords.Get(ci)
+		
+		ci = Floor(Rnd(0, actualAreasArr[i+1].coords.Length()))
+		Local cp2:Coord = actualAreasArr[i+1].coords.Get(ci)
+		
+		ConnectCoords(map, cp1, cp2, BARRIER_NONE, False)
+		
+	Next
+
+	For Local aarea:Area = Eachin actualAreas
+		FillAreaPerimeterGaps(map, aarea)
+	Next
+
+End
+
+'---
+
+Function CreateCoords:Stack&lt;Coord&gt;(map:Int[], tlCol:Int, tlRow:Int, width:Int, height:Int)
+
+	If (Not ValidMap(map)) Then Return Null
+	
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+	
+	Local c:Int, r:Int
+	
+	If (width &lt;= 2) Or (width &gt;= (cols - 2)) Then Return Null
+	If (height &lt;= 2) Or (height &gt;= (rows - 2)) Then Return Null
+
+	If (tlCol &lt;= 0) Or (tlCol &gt;= (cols - 1)) Then Return Null
+	If (tlRow &lt;= 0) Or (tlRow &gt;= (rows - 1)) Then Return Null
+
+	Local coords:Stack&lt;Coord&gt; = New Stack&lt;Coord&gt;
+
+	Local endRow:Int = tlRow + height
+	If endRow &gt;= (rows - 1) Then endRow = rows - 1
+	
+	Local endCol:Int = tlCol + width
+	If endCol &gt;= (cols - 1) Then endCol = cols - 1
+
+	For r = tlRow Until endRow
+		For c = tlCol Until endCol	
+			coords.Push New Coord(c, r)
+		Next
+	Next
+	
+	Return coords
+	
+End
+
+'----
+
+Function CalcLine:Void(p1:Coord, p2:Coord, results:Stack&lt;Coord&gt;)
+
+	If (Not p1) Or (Not p2) Then Return
+	If (Not results) Then Return
+	
+	results.Clear()
+	
+	Local x1:Int = p1.col
+	Local x2:Int = p2.col
+	Local y1:Int = p1.row
+	Local y2:Int = p2.row
+	
+	Local steep:Bool = Abs(y2 - y1) &gt; Abs(x2 - x1)
+	Local rev:Bool = False
+	Local temp:int
+	
+	If steep
+		temp = x1
+		x1 = y1
+		y1 = temp
+				
+		temp = x2
+		x2 = y2
+		y2 = temp		
+	EndIf
+
+	If (x1 &gt; x2)
+		temp = x1
+		x1 = x2
+		x2 = temp
+
+		temp = y1
+		y1 = y2
+		y2 = temp
+    EndIf
+		
+    Local deltaX:Int = x2 - x1
+    Local deltaY:Int = Abs(y2 - y1)
+    
+    Local err:Int = deltaX / 2
+    
+    Local ystep:Int
+    Local y:Int = y1, x:Int
+        
+    If (y1 &lt; y2) Then ystep = 1 Else ystep = -1
+
+    For x = x1 To x2
+    	If (steep) Then results.Push(New Coord(y, x)) Else results.Push(New Coord(x, y))
+        err -= deltaY
+        If (err &lt; 0)
+			y += ystep
+			err += deltaX
+		Endif
+	Next
+    
+End
+
+'----
+
+Function CalcCorr:Void(p1:Coord, p2:Coord, results:Stack&lt;Coord&gt;)
+
+	If (Not p1) Or (Not p2) Then Return
+	If (Not results) Then Return
+	
+	results.Clear()
+	
+	Local c1:Int = p1.col, c2:Int = p2.col
+	Local r1:Int = p1.row, r2:Int = p2.row
+	
+	'Calculate the distances between the coordates.
+	Local cdist:Int = Abs(c1 - c2) + 1
+	Local rdist:Int = Abs(r1 - r2) + 1
+		
+	Local c:Int, r:Int
+		
+	If (c1 &lt; c2)
+		'p1's column is west p2's column
+		r = r1
+		For c = c1 Until (c1 + cdist)
+			results.Push(New Coord(c, r))
+		Next
+		
+		c1 += cdist - 1
+	Else 
+		'p1's column is east of p2's column
+		r = r2
+		For c = c2 Until (c2 + cdist)
+			results.Push(New Coord(c, r))
+		Next
+		
+		c2 += cdist - 1
+	Endif
+		
+	'North&lt;-&gt;south
+	If (r1 &lt; r2)
+		c = c1
+		For r = r1 Until (r1 + rdist)
+			results.Push(New Coord(c, r))
+		Next
+	Else
+		c = c2
+		For r = r2 Until (r2 + rdist)
+			results.Push(New Coord(c, r))
+		Next
+	Endif
+
+
+End
+
+'----
+
+Function ConnectCoords:Void(map:Int[], p1:Coord, p2:Coord, conType:Int = BARRIER_NONE, dirLine:Bool = false)
+
+	If (Not ValidMap(map)) Then Return
+	If (Not p1) Or (Not p2) Then Return
+
+	Local results:Stack&lt;Coord&gt; = New Stack&lt;Coord&gt;
+	
+	If dirLine
+		'Direct line (Bresenham)
+		CalcLine(p1, p2, results)
+	Else
+		'Right angled connecting corridor
+		CalcCorr(p1, p2, results)
+	Endif
+	
+	For Local p:Coord = Eachin results
+		map[p.row * map[map.Length - 2] + p.col] = conType
+	Next
+		
+End
+
+'---
+
+
+'Perfect Maze Generation
+'Reference: <a href="http://mysite.verizon.net/res148h4j/zenosamples/zs_mazes.html" target="_blank">http://mysite.verizon.net/res148h4j/zenosamples/zs_mazes.html</a>
+
+Function GenerateMaze:Void(map:Int[])
+	'Generate a perfect maze in a pre-initialised integer array: map.
+	'cols and rows will be set to the values stored in map[map.Length-2] and map[map.Length-1], respectively.
+
+	If (Not ValidMap(map)) Then Return
+
+	FillMap(map, BARRIER_WALL)
+	
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+	
+	'--- Create and initialize maze variables.
+	
+	'The maze's cols and rows will be less than the map's cols and rows 
+	'because maze cell walls correspond to actual map coordinates.
+	'Even dimensions will be reduced by one, otherwise the map perimeter 
+	'would correspond to the centre of maze cells (not typically desired).
+	Local cellCols:Int
+	If (cols Mod 2 &lt;&gt; 0) Then cellCols = Floor(cols / 2) Else cellCols = Floor((cols - 1) / 2)
+	
+	Local cellRows:Int
+	If (rows Mod 2 &lt;&gt; 0) Then cellRows = Floor(rows / 2) Else cellRows = Floor((rows - 1) / 2)
+	
+	Local totalCells:Int = cellRows * cellCols
+	Local maze:Cell[totalCells]
+	Local track:Coord[totalCells]
+	Local tri:Int = 0
+	Local dir:Coord[4], nextCoord:Coord[4]
+	Local curCoord:Coord = New Coord()
+	Local visited:Int, i:Int, mazei:Int, nbi:Int, r:Int, c:Int	
+		
+	'Every maze cell will initially have every wall up.	
+    For r = 0 Until cellRows 
+        For c = 0 Until cellCols
+        	i = (r * cellCols) + c
+        	maze[i] = New Cell()
+        	track[i] = New Coord()
+        Next
+    Next
+
+	For i = 0 Until dir.Length
+		dir[i] = New Coord()
+		nextCoord[i] = New Coord()
+	Next
+	
+    dir[0].row = -1	'north
+    dir[1].col = 1	'east
+    dir[2].row = 1	'south
+    dir[3].col = -1	'west
+	
+	curCoord.row = Floor(Rnd(0, cellRows))
+	curCoord.col = Floor(Rnd(0, cellCols))
+	
+	visited = 1
+	
+	'--- Traverse the maze cells until every one has been visited, walls removed if necessary.
+	
+	While (visited &lt; totalCells)
+	
+        'Find all neighbors of current cell with all walls intact.
+        nbi = 0
+        For i = 0 Until dir.Length
+            r = curCoord.row + dir[i].row
+            c = curCoord.col + dir[i].col
+            'Check for valid next cell.
+            If (r &gt;= 0) And (r &lt; cellRows) And (c &gt;= 0) And (c &lt; cellCols)
+            	mazei = (r * cellCols) + c
+                'Check if previously visited.
+                If (maze[mazei].n) And (maze[mazei].e) And (maze[mazei].s) And (maze[mazei].w)
+                    'Add to possible next cells.
+                    nextCoord[nbi].row = r
+                    nextCoord[nbi].col = c
+                    nbi += 1
+                Endif
+            Endif
+        Next
+        
+        if (nbi &gt;= 1) 
+            'Current cell has one or more unvisited neighbors
+            'so choose one at random.
+            i = Floor(Rnd(0, nbi))
+            
+            'Remove the walls between it and current cell.
+            If (nextCoord[i].row - curCoord.row) = 0 Then    
+                'Next on same row.
+                r = nextCoord[i].row
+                If nextCoord[i].col &gt; curCoord.col Then      
+                    'Move east.
+                    c = curCoord.col
+                    maze[(r * cellCols) + c].e = False
+                    c = nextCoord[i].col
+                    maze[(r * cellCols) + c].w = False
+                else                                
+                    'Move west.
+                    c = curCoord.col
+                    maze[(r * cellCols) + c].w = False
+                    c = nextCoord[i].col
+                    maze[(r * cellCols) + c].e = False
+                endif
+            else                                    
+                'Next on same column.
+                c = nextCoord[i].col
+                If nextCoord[i].row &gt; curCoord.row Then      
+                    'Move south.
+                    r = curCoord.row
+                    maze[(r * cellCols) + c].s = False
+                    r = nextCoord[i].row
+                    maze[(r * cellCols) + c].n = False
+                Else                                
+                    'Move north.
+                    r = curCoord.row
+                    maze[(r * cellCols) + c].n = False
+                    r = nextCoord[i].row
+                    maze[(r * cellCols) + c].s = false
+                endif
+            Endif
+            
+            'Add current cell location to the track.
+            tri += 1
+            track[tri].row = curCoord.row
+            track[tri].col = curCoord.col
+            
+           'Make the new cell the current cell.
+            curCoord.row = nextCoord[i].row
+            curCoord.col = nextCoord[i].col
+           
+            visited += 1
+        Else
+            'Reached dead end, backtrack.
+            'Remove the most recent cell from the cell track
+            'and make it the current cell.
+            curCoord.row = track[tri].row
+            curCoord.col = track[tri].col
+            tri -= 1
+        Endif 
+    Wend
+
+	'--- Remap maze cells to map array.
+	
+	Local mapr:Int, mapc:Int
+
+	For r = 0 Until cellRows
+		mapr = (r * 2) + 1
+		
+		For c = 0 Until cellCols
+			mapc = (c * 2) + 1
+			map[(mapr * cols) + mapc] = BARRIER_NONE
+			mazei = (r * cellCols) + c
+			
+			'Only need to check for presence of west and north walls.
+			If (Not maze[mazei].w) Then map[(mapr * cols) + (mapc - 1)] = BARRIER_NONE
+			If (Not maze[mazei].n) Then map[((mapr - 1) * cols) + mapc] = BARRIER_NONE
+			
+		Next
+	Next
+	
+End
+</textarea><br><br>It uses a less object-oriented/more structural approach in the code, that some people prefer.<br><br>Left-click to generate a new dungeon. <br><br></td></tr></table><br>
+<a name="2049038"></a>
+
+<a name="2049034"></a>
+
+<a name="2049033"></a>
+
+<a name="2049052"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >MikeHart</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for sharing! <br><br></td></tr></table><br>
+<a name="2049061"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Gerry Quinn</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Seven Day Roguelike Challenge starts March 9th this year, if anyone is interested!<br><br><a href="http://roguebasin.roguelikedevelopment.org/index.php?title=Seven_Day_Roguelike_Challenge" target="_blank">http://roguebasin.roguelikedevelopment.org/index.php?title=Seven_Day_Roguelike_Challenge</a> <br><br></td></tr></table><br>
+<a name="2049121"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >impixi</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> When evaluating a game-related language/RAD tool, my first project is usually a rogue-like RPG. It's a good measure of flexibility, especially regarding run-time content generation. This is where GUI-heavy tools like Unity and Construct usually fail... But I digress.<br><br>At the moment I'm coding a miniB3d-based 3D viewer for the above code. I have two preliminary versions up and running, one using free-form movement, the other using lock-step movement (like Dungeon Master, etc). I'll post code here if I can clean it up enough before I get distracted by other things. <br><br></td></tr></table><br>
+<a name="2049146"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >impixi</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here's a version incorporating an unoptimized 3d-viewer (free-form movement). Monkey V0.66b and miniB3d V0.33.2 required. Tested HTML5 only - Chrome browser on a high end PC. Performance is crap. <br><br>WASD keys - movement.<br>[TAB] - toggle Y lock.<br>[ENTER] - generate new dungeon.<br><br>** Run it in 'RELEASE' mode **<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+Import minib3d
+
+Function Main:Int()
+	New Game
+	Return 0
+End
+
+'-------------
+
+Class Game Extends App
+	
+	'Frame rate-related
+	Field oldMS:Int, renders:Int, fps:Int
+
+	'3d-related
+	Field camera:TCamera
+	Field text:TText
+	Field light:TLight
+
+	'Map 3d-related
+	Field cellSize:Float, cellHeight:Float
+
+	'3d collision-related
+	'Field enableCollisions:Bool
+
+	'Mouselook-related
+	Field xSpeed:Float, ySpeed:Float
+
+	'Movement-related
+	Field moveSpeed:Float
+	Field eyeY:Float, lockY:Bool
+
+	'Initialisation-related
+	Global reload:Bool = False
+	Global loaded:Int = False		
+	
+	Method Init:Int()
+		
+		If loaded Then Return True
+		
+		If (Not TPixmap.PreLoadPixmap(["mojo_font.png"])) Return False
+
+		'Initialise persistent variables
+		cellSize = 2.2
+		cellHeight = 2.2
+		moveSpeed = 0.3	
+		eyeY = (cellHeight * 0.66)			
+		lockY = True
+
+		'Generate an initial map
+		Generate()
+					
+		loaded = True
+	
+		Return True
+		
+	End
+	
+	Method Generate:Void()
+	
+		ClearWorld()
+	
+		'Create and setup the camera
+		camera = CreateCamera()
+		CameraRange camera, 0.1, 100.0
+		CameraFogMode camera, 1
+		CameraFogRange camera, 0.1, 4 * cellSize
+		CameraFogColor camera, 0, 0, 0
+		EntityRadius camera, 0.25, 0.25
+		
+		'enableCollisions = False
+		'camera.CollisionSetup(1, COLLISION_METHOD_BOX, 1.0)
+		
+		'Create and setup lighting
+		AmbientLight 0, 0, 0					
+		light = CreateLight(2, camera) 
+		LightRange light, 3 * cellSize
+		LightColor light, 255, 255, 255
+
+		'Create and generate map
+		Local map:Int[] = CreateMap(39, 21)
+		If (Floor(Rnd(0, 100)) &gt; 50) Then GenerateMazeMap(map) Else GenerateMap(map)
+		
+		'Create 3d world objects based on the generated map contents.
+		'Also set the camera's starting position to the first barrier-free cell encountered.
+		Local startCol:Int = -1
+		Local startRow:Int = -1
+		Local i:Int
+		Local mesh:TMesh
+		
+		For Local r:Int = 0 Until map[map.Length - 1]
+			For Local c:Int = 0 Until map[map.Length - 2]
+			
+				i = (r * map[map.Length - 2]) + c
+				
+				If (map[i] = BARRIER_WALL) 
+					mesh = CreateWallMesh(c, r, cellSize, cellHeight)
+					'EntityRadius mesh, cellSize, cellHeight
+					'mesh.CollisionSetup(1, COLLISION_METHOD_BOX, 1.0)
+				Else
+					mesh = CreateEmptyMesh(c, r, cellSize, cellHeight)
+				Endif
+				
+				If (map[i] = BARRIER_NONE) And (startCol&lt;=0)
+					startCol = c
+					startRow = r
+				Endif
+				
+			Next	
+		Next		
+
+		'Collisions(1, 1, COLLISION_METHOD_POLYGON, COLLISION_RESPONSE_SLIDEXZ)
+
+		PositionEntity camera, (startRow*cellSize) + (cellSize * 0.5), eyeY, (startCol*cellSize) + (cellSize * 0.5)
+				
+		text = TText.CreateText(camera)
+
+		'For debugging purposes:
+		Print MapToString(map)	
+		Print startCol + ", " + startRow
+
+		oldMS = Millisecs()
+	
+	End
+	
+	
+	Method OnCreate:Int()
+		
+		SetRender()
+		SetUpdateRate 30
+
+		Return 0
+	End
+
+	Method OnResume:Int()
+
+		reload = True
+		
+		Return 0
+	End
+
+	Method OnUpdate:Int()
+
+		If (Not Init()) Then Return 0
+		
+		If reload
+			Graphics3DInit()
+			ReloadAllSurfaces()
+			ReloadAllTextures()
+			reload = False
+		Endif
+
+		'Mouselook (simplistic).
+		xSpeed = (MouseX() - DeviceWidth() * 0.5) / 2
+		ySpeed = (MouseY() - DeviceHeight() * 0.5) / 2
+		RotateEntity camera, ySpeed, -xSpeed, 0.0
+
+		'WASD key movement.
+		If KeyDown(KEY_W) Then MoveEntity(camera, 0.0, 0.0, moveSpeed)
+		If KeyDown(KEY_S) Then MoveEntity(camera, 0.0, 0.0, -moveSpeed)
+		If KeyDown(KEY_D) Then MoveEntity(camera, moveSpeed, 0.0, 0.0)
+		If KeyDown(KEY_A) Then MoveEntity(camera, -moveSpeed, 0.0, 0.0)
+
+		'Force Y (eye-level) position.
+		If KeyHit(KEY_TAB) Then lockY = Not lockY
+		If lockY Then PositionEntity camera, EntityX(camera), eyeY, EntityZ(camera)
+
+		If KeyHit(KEY_ENTER) Then Generate()
+
+		text.SetText("WASD: movement. [TAB]: Y lock. [ENTER]: Generate. FPS: " + fps)
+		text.Draw(10, 10)
+		
+		'Collisions (performace will suck even more!)
+		'If KeyHit(KEY_C) Then enableCollisions = Not enableCollisions
+		'If enableCollisions Then UpdateWorld()
+		
+		Return 0
+	End
+	
+	Method OnRender:Int()
+				
+		If (Not Init()) Then Return 0
+		
+		RenderWorld
+		renders += 1
+
+		'Calculate FPS
+		If ((Millisecs() - oldMS) &gt;= 1000)
+			oldMS = Millisecs()
+			fps = renders
+			renders = 0
+		Endif
+		
+		Return 0
+	End
+	
+End
+
+
+'------
+
+'Create a mesh to represent a wall cell, at specified column and row position, calculated from cellSize.
+'The wall mesh has four surfaces - one for each side of a cube (but not top and bottom).
+'Each side is painted a different color (no texturing is used in this example).
+Function CreateWallMesh:TMesh(c:Int, r:Int, cellSize:Float, cellHeight:Float)
+	
+	Local mesh:TMesh = CreateMesh() 
+
+	Local surf:TSurface = CreateSurface(mesh)
+	Local v0:Int = AddVertex(surf, 0, 1, 0, 0, 0) 
+	Local v1:Int = AddVertex(surf, 1, 1, 0, 1, 0)  
+	Local v2:Int = AddVertex(surf, 0, 0, 0, 0, 1)
+	Local v3:Int = AddVertex(surf, 1, 0, 0, 1, 1)
+
+	surf.AddTriangle(v0, v1, v2)
+	surf.AddTriangle(v2, v1, v3)
+
+	Local brush:TBrush = CreateBrush(255, 0, 0)
+	PaintSurface surf, brush
+
+	'--
+
+	surf = CreateSurface(mesh)
+
+	v0 = AddVertex(surf, 1, 1, 0, 0, 0)
+	v1 = AddVertex(surf, 1, 0, 1, 1, 1)
+	v2 = AddVertex(surf, 1, 0, 0, 0, 1)
+	v3 = AddVertex(surf, 1, 1, 1, 1, 0)
+
+	surf.AddTriangle(v0, v1, v2) 
+	surf.AddTriangle(v0, v3, v1)
+
+	brush = CreateBrush(0, 255, 0)
+	PaintSurface surf, brush
+
+	'--
+
+	surf = CreateSurface(mesh)
+
+	v0 = AddVertex(surf, 0, 1, 1, 0, 0)
+	v1 = AddVertex(surf, 1, 1, 1, 1, 0)
+	v2 = AddVertex(surf, 1, 0, 1, 1, 1)
+	v3 = AddVertex(surf, 0, 0, 1, 0, 1)
+
+	surf.AddTriangle(v1, v0, v3) 
+	surf.AddTriangle(v3, v2, v1)
+
+	brush = CreateBrush(0, 0, 255)
+	PaintSurface surf, brush
+
+	'--
+
+	surf = CreateSurface(mesh)
+
+	v0 = AddVertex(surf, 0, 1, 0, 0, 0)
+	v1 = AddVertex(surf, 0, 1, 1, 1, 0)
+	v2 = AddVertex(surf, 0, 0, 1, 1, 1)
+	v3 = AddVertex(surf, 0, 0, 0, 0, 1)
+
+	surf.AddTriangle(v3, v1, v0) 
+	surf.AddTriangle(v3, v2, v1)
+
+	brush = CreateBrush(255, 255, 0)
+	PaintSurface surf, brush
+
+	'--
+
+	ScaleEntity mesh, cellSize, cellHeight, cellSize
+
+	EntityFX mesh, 1
+
+	UpdateNormals mesh
+	
+	PositionEntity mesh, (Float(r) * cellSize), 0.0, (Float(c) * cellSize) 	
+		
+	Return mesh
+
+End
+
+'Create a mesh to represent an empty cell, at specified column and row position, calculated from cellSize.
+'The mesh has two surfaces - one for ceiling and one for floor.
+'Each surface is painted a different color (no texturing is used in this example).	
+Function CreateEmptyMesh:TMesh(c:Int, r:Int, cellSize:Float, cellHeight:Float)
+
+	Local mesh:TMesh = CreateMesh() 
+
+	Local surf:TSurface = CreateSurface(mesh)
+	Local v0:Int = AddVertex(surf, 0, 0, 0, 0, 1) 
+	Local v1:Int = AddVertex(surf, 0, 0, 1, 0, 0)  
+	Local v2:Int = AddVertex(surf, 1, 0, 1, 1, 0)
+	Local v3:Int = AddVertex(surf, 1, 0, 0, 1, 1)
+
+	surf.AddTriangle(v0, v1, v2)
+	surf.AddTriangle(v2, v3, v0)
+
+	Local brush:TBrush = CreateBrush(128, 0, 128)
+	PaintSurface surf, brush
+
+	'--
+
+	surf = CreateSurface(mesh)
+
+	v0 = AddVertex(surf, 0, 1, 0, 0, 0)
+	v1 = AddVertex(surf, 0, 1, 1, 0, 1)
+	v2 = AddVertex(surf, 1, 1, 1, 1, 1)
+	v3 = AddVertex(surf, 1, 1, 0, 1, 0)
+
+	surf.AddTriangle(v3, v2, v1) 
+	surf.AddTriangle(v0, v3, v1)
+
+	brush = CreateBrush(0, 128, 128)
+	PaintSurface surf, brush
+
+	'--
+
+	ScaleEntity mesh, cellSize, cellHeight, cellSize
+
+	EntityFX mesh, 1
+
+	UpdateNormals mesh
+
+	PositionEntity mesh, (Float(r) * cellSize), 0.0, (Float(c) * cellSize)	
+
+	Return mesh
+
+End
+
+
+'===============================================================
+'DUNGEON GENERATION - RELATED CODE:
+'===============================================================
+
+'%%%%%% CONSTANTS %%%%%%%%%%%
+
+'The minimum possible size of a map. 
+Const MAP_MIN_COLS:Int = 12
+Const MAP_MIN_ROWS:Int = 12
+
+'Barrier constants for use in the generation algorithms.
+Const BARRIER_NONE:Int = 0
+Const BARRIER_WALL:Int = 1
+Const BARRIER_DOOR_OPEN:Int = 2
+Const BARRIER_DOOR_CLOSED:Int = 3
+Const BARRIER_DOOR_LOCKED:Int = 4
+
+
+'****** CLASSES ************
+
+Class Coord
+
+	'Coodinate class used by various functions.
+
+	Field col:Int = 0
+	Field row:Int = 0
+	
+	Method New(col:Int, row:Int)
+	
+		Self.col = col
+		Self.row = row
+		
+	End
+	
+End
+
+Class Area
+
+	Field coords:Stack&lt;Coord&gt;
+
+	Method New(coords:Stack&lt;Coord&gt;)
+		Self.coords = coords
+	End
+
+End
+
+Class Cell
+
+	Field n:Bool = True
+	Field e:Bool = True
+	Field s:Bool = True
+	Field w:Bool = True
+	
+End
+
+'------ FUNCTIONS ---------
+
+Function AreaOverlap:Bool(a1:Area, a2:Area)
+
+	If ((Not a1.coords) Or (Not a2.coords)) Then Return True
+
+	For Local p1:Coord = Eachin a1.coords
+		For Local p2:Coord = Eachin a2.coords
+			If (p1.col = p2.col) And (p1.row = p2.row) Then Return True 'Overlap found
+		Next
+	Next
+
+	Return False 'No overlap
+
+End
+
+'----
+
+Function ClearArea:Void(map:Int[], a:Area)
+	
+	If (Not ValidMap(map)) Then Return
+
+	If (Not a) Then Return
+	If a.coords.IsEmpty() Then Return
+	
+	For Local p:Coord = Eachin a.coords
+		map[(p.row * map[map.Length - 2]) + p.col] = BARRIER_NONE
+	Next
+
+End
+
+'----
+
+Function SurroundArea:Void(map:Int[], a:Area, surType:Int = BARRIER_WALL, entryQty:Int = 0, entryType:Int = BARRIER_NONE, offset:Int = 1, cornerEntry:Bool = False)
+
+	If (Not ValidMap(map)) Then Return
+
+	If (Not a) Then Return
+	If a.coords.IsEmpty() Then Return
+	If (offset &lt; 0) Then Return
+
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+
+	Local minCol:Int = cols, maxCol:Int = -1
+	Local minRow:Int = rows, maxRow:Int = -1
+
+	For Local p:Coord = Eachin a.coords
+		If p.col &lt; minCol Then minCol = p.col
+		If p.col &gt; maxCol Then maxCol = p.col
+		If p.row &lt; minRow Then minRow = p.row
+		If p.row &gt; maxRow Then maxRow = p.row
+	Next
+	
+	If entryQty &lt;= 0 Then Return
+	
+	Local entryCoord:Stack&lt;Coord&gt; = New Stack&lt;Coord&gt;	'Coordsible entry positions
+	
+	For Local p:Coord = Eachin a.coords
+		If ((p.col = (minCol + offset)) Or (p.col = (maxCol - offset))) And ((p.row &gt;= (minRow + offset)) And (p.row &lt;= (maxRow - offset))) 
+			map[(p.row * cols) + p.col] = surType
+			If (Not entryCoord.Contains(p)) Then entryCoord.Push(p)
+		Endif
+		If ((p.row = (minRow + offset)) Or (p.row = (maxRow - offset))) And ((p.col &gt;= (minCol + offset)) And (p.col &lt;= (maxCol - offset))) 
+			map[(p.row * cols) + p.col] = surType
+			If (Not entryCoord.Contains(p)) Then entryCoord.Push(p)
+		Endif
+	Next
+	
+	If (Not cornerEntry)
+		'Remove corner coordinates from possible entry positions
+		For Local p:Coord = Eachin entryCoord
+			If ((p.col = (minCol + offset)) Or (p.col = (maxCol - offset))) And (p.row = (minRow + offset))
+				entryCoord.RemoveEach(p)
+				Continue
+			Endif
+			If ((p.col = (minCol + offset)) Or (p.col = (maxCol - offset))) And (p.row = (maxRow - offset))
+				entryCoord.RemoveEach(p)
+				Continue
+			Endif
+		Next
+	Endif
+	
+	Local entryCoordArr:Coord[] = entryCoord.ToArray()
+	
+	'Shuffle potential entries
+	For Local n:Int = 1 Until entryCoordArr.Length
+		Local i:Int = Floor(Rnd(0, entryCoordArr.Length))
+		Local j:Int = Floor(Rnd(0, entryCoordArr.Length))
+		Local temp:Coord = entryCoordArr[i]
+		entryCoordArr[i] = entryCoordArr[j]
+		entryCoordArr[j] = temp
+	Next
+	
+	'Entry placement
+	Local entryCount:Int = 0
+	For Local i:Int = 0 Until entryCoordArr.Length
+		map[(entryCoordArr[i].row * cols) + entryCoordArr[i].col] = entryType
+		entryCount += 1
+		If (entryCount &gt;= entryQty) Then Exit
+	Next
+	'---
+
+End
+
+'----
+
+Function FillAreaPerimeterGaps:Void(map:Int[], a:Area, gapFillType:Int = BARRIER_DOOR_CLOSED)
+
+	If (Not ValidMap(map)) Then Return
+
+	If (Not a) Then Return
+	If a.coords.IsEmpty() Then Return
+
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+
+	Local minCol:Int = cols, maxCol:Int = -1
+	Local minRow:Int = rows, maxRow:Int = -1
+
+	For Local p:Coord = Eachin a.coords
+		If p.col &lt; minCol Then minCol = p.col
+		If p.col &gt; maxCol Then maxCol = p.col
+		If p.row &lt; minRow Then minRow = p.row
+		If p.row &gt; maxRow Then maxRow = p.row
+	Next
+	
+	'Adjoining perimeter gaps (the size of single cells only).
+	
+	For Local p:Coord = Eachin a.coords
+
+		If ((p.col = minCol) And (p.row &gt;= minRow) And (p.row &lt;= maxRow))
+			If (map[(p.row * cols) + (p.col - 1)] = BARRIER_NONE) 
+				If (map[((p.row - 1) * cols) + (p.col - 1)] &lt;&gt; BARRIER_NONE) And (map[((p.row + 1) * cols) + (p.col - 1)] &lt;&gt; BARRIER_NONE)
+					map[(p.row * cols) + (p.col - 1)] = gapFillType
+				Endif
+			Endif
+		Else
+			If ((p.col = maxCol) And (p.row &gt;= minRow) And (p.row &lt;= maxRow))
+				If (map[(p.row * cols) + (p.col + 1)] = BARRIER_NONE) 
+					If (map[((p.row - 1) * cols) + (p.col + 1)] &lt;&gt; BARRIER_NONE) And (map[((p.row + 1) * cols) + (p.col + 1)] &lt;&gt; BARRIER_NONE)
+						map[(p.row * cols) + (p.col + 1)] = gapFillType
+					Endif
+				endif
+			Endif
+		Endif
+		
+		If ((p.row = minRow) And (p.col &gt;= minCol) And (p.col &lt;= maxCol)) 
+			If (map[((p.row - 1) * cols) + p.col] = BARRIER_NONE)
+				If (map[((p.row - 1) * cols) + (p.col - 1)] &lt;&gt; BARRIER_NONE) And (map[((p.row - 1) * cols) + (p.col + 1)] &lt;&gt; BARRIER_NONE)
+					map[((p.row - 1) * cols) + p.col] = gapFillType
+				Endif
+			Endif
+		Else
+			If ((p.row = maxRow) And (p.col &gt;= minCol) And (p.col &lt;= maxCol)) 
+				If (map[((p.row + 1) * cols) + p.col] = BARRIER_NONE)
+					If (map[((p.row + 1) * cols) + (p.col - 1)] &lt;&gt; BARRIER_NONE) And (map[((p.row + 1) * cols) + (p.col + 1)] &lt;&gt; BARRIER_NONE)
+						map[((p.row + 1) * cols) + p.col] = gapFillType
+					Endif
+				Endif
+			Endif
+		Endif
+	
+	Next
+	
+End
+
+'----
+
+Function CreateMap:Int[](cols:Int, rows:Int, fillVal:Int = BARRIER_WALL)
+
+	'Create and return an integer array to represent the map. Dimensions are cols * rows.
+	'The dimensions are included as map[map.Length - 2] = cols, map[map.Length - 1] = rows.
+	'fillVal should be 1 to fill completely with walls. 0 for void/nothing.
+	'Most generation algorthms will expect a map array completely filled with walls (1s).
+
+	If cols &lt; MAP_MIN_COLS Then cols = MAP_MIN_COLS
+	If rows &lt; MAP_MIN_ROWS Then rows = MAP_MIN_ROWS
+
+	Local map:Int[]
+
+	map = New Int[(cols * rows) + 2]
+	
+	map[map.Length - 2] = cols
+	map[map.Length - 1] = rows
+	
+	FillMap(map, fillVal)
+	
+	Return map
+
+End
+
+'----
+
+Function FillMap:Void(map:Int[], fillVal:Int)
+
+	If (Not ValidMap(map)) Then Return
+	
+	For Local i:Int = 0 Until map.Length - 2
+		map[i] = fillVal
+	Next
+
+End
+
+'----
+
+Function ValidMap:Bool(map:Int[])
+
+	'Validate map array.
+	'Return false if map array seems invalid, otherwise return true.
+	
+	If (Not map) Then Return False
+	
+	If (map.Length &lt; 2) Then Return False
+	If (map.Length &lt; ((map[map.Length - 2] * map[map.Length - 1]) + 2)) Then Return False
+		
+	Return True
+		
+End
+
+'----
+
+Function MapToString:String(map:Int[])
+
+	If (Not ValidMap(map)) Then Return ""
+
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+
+	Local str:String = ""
+	
+	For Local r:Int = 0 Until rows
+		For Local c:Int = 0 Until cols
+		
+			Local i:Int = (r * cols) + c
+			
+			Select map[i]
+								
+				Case BARRIER_NONE
+					str += "."
+					
+				Case BARRIER_WALL
+					str += "#"
+
+				Case BARRIER_DOOR_OPEN
+					str += "'"
+														
+				Case BARRIER_DOOR_CLOSED
+					str += "+"
+					
+				Case BARRIER_DOOR_LOCKED
+					str += "%"	
+
+			End
+			
+		Next
+		str += "~n"
+	Next
+
+	Return str
+
+End
+
+
+'MAZE MAP STYLE
+Function GenerateMazeMap:Void(map:Int[])
+
+	Seed = Millisecs()
+	FillMap(map, BARRIER_WALL)
+	
+	'--- Generate perfect maze ---
+	GenerateMaze(map)
+	
+	'--- Generate some potential areas ---
+	Local i:Int
+	
+	Local potentialAreas:Area[6]
+
+	For i = 0 Until potentialAreas.Length
+
+		Local aw:Int = Floor(Rnd(6, 8))
+		Local ah:Int = Floor(Rnd(6, 8))
+		Local ac:Int = Floor(Rnd(1, map[map.Length-2] - aw))
+		Local ar:Int = Floor(Rnd(1, map[map.Length-1] - ah))
+	
+		potentialAreas[i] = New Area(CreateCoords(map, ac, ar, aw, ah))
+		
+	Next
+
+	'--- Create actual areas from the non-overlapping potential areas ---
+	'--- Also, clear areas and surround with walls/doors ---
+	Local actualAreas:Stack&lt;Area&gt; = New Stack&lt;Area&gt;
+
+	For i = 0 Until potentialAreas.Length
+	
+		Local overlap:Bool = False
+	
+		For Local aarea:Area = Eachin actualAreas
+			If AreaOverlap(aarea, potentialAreas[i])
+				overlap = True
+				Exit
+			Endif
+		Next
+	
+		If (Not overlap)
+			Local aarea:Area = potentialAreas[i]
+			actualAreas.Push aarea
+			'--- Clear and surround areas ---
+			ClearArea(map, aarea)
+			SurroundArea(map, aarea, BARRIER_WALL, Floor(Rnd(1, 4)), BARRIER_DOOR_CLOSED, 1, False)
+		Endif
+		
+	Next
+
+end
+
+'----
+
+'CONNECTED ROOM STYLE
+Function GenerateMap:void(map:Int[])
+
+	Seed = Millisecs()
+	FillMap(map, BARRIER_WALL)
+	
+	Local i:Int
+
+	'--- Generate some potential areas ---
+	Local potentialAreas:Area[6]
+
+	For i = 0 Until potentialAreas.Length
+
+		Local aw:Int = Floor(Rnd(6, 8))
+		Local ah:Int = Floor(Rnd(6, 8))
+		Local ac:Int = Floor(Rnd(1, map[map.Length-2] - aw))
+		Local ar:Int = Floor(Rnd(1, map[map.Length-1] - ah))
+	
+		potentialAreas[i] = New Area(CreateCoords(map, ac, ar, aw, ah))
+		
+	Next
+
+	'--- Create actual areas from the non-overlapping potential areas. ---
+	Local actualAreas:Stack&lt;Area&gt; = New Stack&lt;Area&gt;
+
+	For i = 0 Until potentialAreas.Length
+	
+		Local overlap:Bool = False
+	
+		For Local aarea:Area = Eachin actualAreas
+			If AreaOverlap(aarea, potentialAreas[i])
+				overlap = True
+				Exit
+			Endif
+		Next
+	
+		If (Not overlap)
+			Local a:Area = potentialAreas[i]
+			actualAreas.Push a
+			'--- Clear area
+			ClearArea(map, a)
+		Endif
+		
+	Next
+
+	' ---- Establish corridors between actual areas, in sequence. ---
+	Local actualAreasArr:Area[] = actualAreas.ToArray()
+	For i = 0 Until actualAreasArr.Length - 1
+		
+		Local ci:Int = Floor(Rnd(0, actualAreasArr[i].coords.Length()))
+		Local cp1:Coord = actualAreasArr[i].coords.Get(ci)
+		
+		ci = Floor(Rnd(0, actualAreasArr[i+1].coords.Length()))
+		Local cp2:Coord = actualAreasArr[i+1].coords.Get(ci)
+		
+		ConnectCoords(map, cp1, cp2, BARRIER_NONE, False)
+		
+	Next
+
+	For Local aarea:Area = Eachin actualAreas
+		FillAreaPerimeterGaps(map, aarea)
+	Next
+
+End
+
+'---
+
+Function CreateCoords:Stack&lt;Coord&gt;(map:Int[], tlCol:Int, tlRow:Int, width:Int, height:Int)
+
+	If (Not ValidMap(map)) Then Return Null
+	
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+	
+	Local c:Int, r:Int
+	
+	If (width &lt;= 2) Or (width &gt;= (cols - 2)) Then Return Null
+	If (height &lt;= 2) Or (height &gt;= (rows - 2)) Then Return Null
+
+	If (tlCol &lt;= 0) Or (tlCol &gt;= (cols - 1)) Then Return Null
+	If (tlRow &lt;= 0) Or (tlRow &gt;= (rows - 1)) Then Return Null
+
+	Local coords:Stack&lt;Coord&gt; = New Stack&lt;Coord&gt;
+
+	Local endRow:Int = tlRow + height
+	If endRow &gt;= (rows - 1) Then endRow = rows - 1
+	
+	Local endCol:Int = tlCol + width
+	If endCol &gt;= (cols - 1) Then endCol = cols - 1
+
+	For r = tlRow Until endRow
+		For c = tlCol Until endCol	
+			coords.Push New Coord(c, r)
+		Next
+	Next
+	
+	Return coords
+	
+End
+
+'----
+
+Function CalcLine:Void(p1:Coord, p2:Coord, results:Stack&lt;Coord&gt;)
+
+	If (Not p1) Or (Not p2) Then Return
+	If (Not results) Then Return
+	
+	results.Clear()
+	
+	Local x1:Int = p1.col
+	Local x2:Int = p2.col
+	Local y1:Int = p1.row
+	Local y2:Int = p2.row
+	
+	Local steep:Bool = Abs(y2 - y1) &gt; Abs(x2 - x1)
+	Local rev:Bool = False
+	Local temp:int
+	
+	If steep
+		temp = x1
+		x1 = y1
+		y1 = temp
+				
+		temp = x2
+		x2 = y2
+		y2 = temp		
+	EndIf
+
+	If (x1 &gt; x2)
+		temp = x1
+		x1 = x2
+		x2 = temp
+
+		temp = y1
+		y1 = y2
+		y2 = temp
+    EndIf
+		
+    Local deltaX:Int = x2 - x1
+    Local deltaY:Int = Abs(y2 - y1)
+    
+    Local err:Int = deltaX / 2
+    
+    Local ystep:Int
+    Local y:Int = y1, x:Int
+        
+    If (y1 &lt; y2) Then ystep = 1 Else ystep = -1
+
+    For x = x1 To x2
+    	If (steep) Then results.Push(New Coord(y, x)) Else results.Push(New Coord(x, y))
+        err -= deltaY
+        If (err &lt; 0)
+			y += ystep
+			err += deltaX
+		Endif
+	Next
+    
+End
+
+'----
+
+Function CalcCorr:Void(p1:Coord, p2:Coord, results:Stack&lt;Coord&gt;)
+
+	If (Not p1) Or (Not p2) Then Return
+	If (Not results) Then Return
+	
+	results.Clear()
+	
+	Local c1:Int = p1.col, c2:Int = p2.col
+	Local r1:Int = p1.row, r2:Int = p2.row
+	
+	'Calculate the distances between the coordates.
+	Local cdist:Int = Abs(c1 - c2) + 1
+	Local rdist:Int = Abs(r1 - r2) + 1
+		
+	Local c:Int, r:Int
+		
+	If (c1 &lt; c2)
+		'p1's column is west p2's column
+		r = r1
+		For c = c1 Until (c1 + cdist)
+			results.Push(New Coord(c, r))
+		Next
+		
+		c1 += cdist - 1
+	Else 
+		'p1's column is east of p2's column
+		r = r2
+		For c = c2 Until (c2 + cdist)
+			results.Push(New Coord(c, r))
+		Next
+		
+		c2 += cdist - 1
+	Endif
+		
+	'North&lt;-&gt;south
+	If (r1 &lt; r2)
+		c = c1
+		For r = r1 Until (r1 + rdist)
+			results.Push(New Coord(c, r))
+		Next
+	Else
+		c = c2
+		For r = r2 Until (r2 + rdist)
+			results.Push(New Coord(c, r))
+		Next
+	Endif
+
+
+End
+
+'----
+
+Function ConnectCoords:Void(map:Int[], p1:Coord, p2:Coord, conType:Int = BARRIER_NONE, dirLine:Bool = false)
+
+	If (Not ValidMap(map)) Then Return
+	If (Not p1) Or (Not p2) Then Return
+
+	Local results:Stack&lt;Coord&gt; = New Stack&lt;Coord&gt;
+	
+	If dirLine
+		'Direct line (Bresenham)
+		CalcLine(p1, p2, results)
+	Else
+		'Right angled connecting corridor
+		CalcCorr(p1, p2, results)
+	Endif
+	
+	For Local p:Coord = Eachin results
+		map[p.row * map[map.Length - 2] + p.col] = conType
+	Next
+		
+End
+
+'---
+
+
+'Perfect Maze Generation
+'Reference: &lt;a href="http://mysite.verizon.net/res148h4j/zenosamples/zs_mazes.html" target="_blank"&gt;http://mysite.verizon.net/res148h4j/zenosamples/zs_mazes.html&lt;/a&gt;
+
+Function GenerateMaze:Void(map:Int[])
+	'Generate a perfect maze in a pre-initialised integer array: map.
+	'cols and rows will be set to the values stored in map[map.Length-2] and map[map.Length-1], respectively.
+
+	If (Not ValidMap(map)) Then Return
+
+	FillMap(map, BARRIER_WALL)
+	
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+	
+	'--- Create and initialize maze variables.
+	
+	'The maze's cols and rows will be less than the map's cols and rows 
+	'because maze cell walls correspond to actual map coordinates.
+	'Even dimensions will be reduced by one, otherwise the map perimeter 
+	'would correspond to the centre of maze cells (not typically desired).
+	Local cellCols:Int
+	If (cols Mod 2 &lt;&gt; 0) Then cellCols = Floor(cols / 2) Else cellCols = Floor((cols - 1) / 2)
+	
+	Local cellRows:Int
+	If (rows Mod 2 &lt;&gt; 0) Then cellRows = Floor(rows / 2) Else cellRows = Floor((rows - 1) / 2)
+	
+	Local totalCells:Int = cellRows * cellCols
+	Local maze:Cell[totalCells]
+	Local track:Coord[totalCells]
+	Local tri:Int = 0
+	Local dir:Coord[4], nextCoord:Coord[4]
+	Local curCoord:Coord = New Coord()
+	Local visited:Int, i:Int, mazei:Int, nbi:Int, r:Int, c:Int	
+		
+	'Every maze cell will initially have every wall up.	
+    For r = 0 Until cellRows 
+        For c = 0 Until cellCols
+        	i = (r * cellCols) + c
+        	maze[i] = New Cell()
+        	track[i] = New Coord()
+        Next
+    Next
+
+	For i = 0 Until dir.Length
+		dir[i] = New Coord()
+		nextCoord[i] = New Coord()
+	Next
+	
+    dir[0].row = -1	'north
+    dir[1].col = 1	'east
+    dir[2].row = 1	'south
+    dir[3].col = -1	'west
+	
+	curCoord.row = Floor(Rnd(0, cellRows))
+	curCoord.col = Floor(Rnd(0, cellCols))
+	
+	visited = 1
+	
+	'--- Traverse the maze cells until every one has been visited, walls removed if necessary.
+	
+	While (visited &lt; totalCells)
+	
+        'Find all neighbors of current cell with all walls intact.
+        nbi = 0
+        For i = 0 Until dir.Length
+            r = curCoord.row + dir[i].row
+            c = curCoord.col + dir[i].col
+            'Check for valid next cell.
+            If (r &gt;= 0) And (r &lt; cellRows) And (c &gt;= 0) And (c &lt; cellCols)
+            	mazei = (r * cellCols) + c
+                'Check if previously visited.
+                If (maze[mazei].n) And (maze[mazei].e) And (maze[mazei].s) And (maze[mazei].w)
+                    'Add to possible next cells.
+                    nextCoord[nbi].row = r
+                    nextCoord[nbi].col = c
+                    nbi += 1
+                Endif
+            Endif
+        Next
+        
+        if (nbi &gt;= 1) 
+            'Current cell has one or more unvisited neighbors
+            'so choose one at random.
+            i = Floor(Rnd(0, nbi))
+            
+            'Remove the walls between it and current cell.
+            If (nextCoord[i].row - curCoord.row) = 0 Then    
+                'Next on same row.
+                r = nextCoord[i].row
+                If nextCoord[i].col &gt; curCoord.col Then      
+                    'Move east.
+                    c = curCoord.col
+                    maze[(r * cellCols) + c].e = False
+                    c = nextCoord[i].col
+                    maze[(r * cellCols) + c].w = False
+                else                                
+                    'Move west.
+                    c = curCoord.col
+                    maze[(r * cellCols) + c].w = False
+                    c = nextCoord[i].col
+                    maze[(r * cellCols) + c].e = False
+                endif
+            else                                    
+                'Next on same column.
+                c = nextCoord[i].col
+                If nextCoord[i].row &gt; curCoord.row Then      
+                    'Move south.
+                    r = curCoord.row
+                    maze[(r * cellCols) + c].s = False
+                    r = nextCoord[i].row
+                    maze[(r * cellCols) + c].n = False
+                Else                                
+                    'Move north.
+                    r = curCoord.row
+                    maze[(r * cellCols) + c].n = False
+                    r = nextCoord[i].row
+                    maze[(r * cellCols) + c].s = false
+                endif
+            Endif
+            
+            'Add current cell location to the track.
+            tri += 1
+            track[tri].row = curCoord.row
+            track[tri].col = curCoord.col
+            
+           'Make the new cell the current cell.
+            curCoord.row = nextCoord[i].row
+            curCoord.col = nextCoord[i].col
+           
+            visited += 1
+        Else
+            'Reached dead end, backtrack.
+            'Remove the most recent cell from the cell track
+            'and make it the current cell.
+            curCoord.row = track[tri].row
+            curCoord.col = track[tri].col
+            tri -= 1
+        Endif 
+    Wend
+
+	'--- Remap maze cells to map array.
+	
+	Local mapr:Int, mapc:Int
+
+	For r = 0 Until cellRows
+		mapr = (r * 2) + 1
+		
+		For c = 0 Until cellCols
+			mapc = (c * 2) + 1
+			map[(mapr * cols) + mapc] = BARRIER_NONE
+			mazei = (r * cellCols) + c
+			
+			'Only need to check for presence of west and north walls.
+			If (Not maze[mazei].w) Then map[(mapr * cols) + (mapc - 1)] = BARRIER_NONE
+			If (Not maze[mazei].n) Then map[((mapr - 1) * cols) + mapc] = BARRIER_NONE
+			
+		Next
+	Next
+	
+End
+
+</textarea><br><br>This is a partial port of my Blitzmax code from years ago that had texturing, collisions and performance optimizations. However, rather than optimize this version, I'm going to focus on a "lock-step" 3d viewer because that's more appropriate for a touch-screen environment, IMO. Plus, it should be easier to optimize because of an underlying grid-based architecture. <br><br></td></tr></table><br>
+<a name="2049167"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Gerry Quinn</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> You could even do it without 'real' 3D, like the old lock-step dungeon games. <br><br></td></tr></table><br>
+<a name="2049246"></a>
+
+<a name="2049247"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >impixi</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yeah, that's true, and I do have some relevant BlitzMax code I wrote years ago that I could port to Monkey. Unfortunately, that method requires a larger quantity of art assets, and it becomes finicky supporting multiple display resolutions. Lighting and camera effects are also far more difficult than when utilizing a 'proper' 3D engine... But maybe I'll post an example just for the sake of it, anyway... <br><br></td></tr></table><br>
+<a name="2087690"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >impixi</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> And here's the 3D lock-step viewer (requires Monkey X Pro and <a href="http://www.monkey-x.com/Community/posts.php?topic=6206&amp;page=first" target="_blank">MiniB3D</a>)<br><br>UPDATED: 20 May 2014<br><br>* Fixed minor positioning bug related to camera paths when strafing and turning.<br>* Restructured camera pathing data structures and associated logic code.<br><br># Tested "Desktop Game" target, Monkey X Pro V79B / MiniB3d V0.42.3<br><br>NOTE: "HTML 5" Target is "broken"?<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+Import minib3d
+
+Function Main:Int()
+	New Game
+	Return 0
+End
+
+'-------------
+
+Const DIR_NONE:Int = 0
+Const DIR_NORTH:Int = 1
+Const DIR_EAST:Int = 2
+Const DIR_SOUTH:Int = 3
+Const DIR_WEST:Int = 4
+
+Class Game Extends App
+	
+	'Frame rate-related
+	Field oldMS:Int, renders:Int, fps:Int
+
+	'3d-related
+	Field camera:TCamera
+	Field text:TText
+	Field light:TLight
+
+	'Map 3d-related
+	Field cellSize:Float, cellHeight:Float
+	Field cells3D:Cell3D[]
+	Field cameraCol:Int, cameraRow:Int
+	Field facingDir:Int
+	Field cols:Int, rows:Int
+	Field viewRange:int
+
+	'Movement-related
+	Field camPath:Vec3D[]
+	Field camPathIdx:Int
+	Field camMoving:Bool
+	Field camTurn:Float[]
+	Field camTurnIdx:Int
+	Field camTurning:Bool
+
+	'MiniB3d Initialisation-related
+	Global reload:Bool = False
+	Global loaded:Int = False		
+	
+	Method Init:Int()
+		
+		If loaded Then Return True
+		
+		If (Not TPixmap.PreLoadPixmap(["mojo_font.png"])) Return False
+
+		'Initialise persistent variables
+		cellSize = 2.2
+		cellHeight = 2.2		
+		viewRange = 4 		'Cells
+		
+		'Initilise an array for use in the camera's cell to cell movement 'scrolling' effect.
+		camPath = New Vec3D[8]
+		For Local i:Int = 0 Until camPath.Length
+			camPath[i] = New Vec3D
+		Next
+		camPathIdx = -1
+		camMoving = False
+		
+		'Initilise an array for use in the camera's turning 'scrolling' effect.
+		camTurn = New Float[camPath.Length]
+		camTurnIdx = -1
+		camTurning = False
+		
+		'Generate an initial map
+		Generate()
+					
+		loaded = True
+	
+		Return True
+		
+	End
+	
+	Method Generate:Void()
+	
+		ClearWorld()
+	
+		'Create and setup the camera
+		camera = CreateCamera()
+		CameraRange camera, 0.1, 100.0
+		CameraFogMode camera, 1
+		CameraFogRange camera, 0.1, 4 * cellSize
+		CameraFogColor camera, 0, 0, 0
+		
+		'Create and setup lighting
+		AmbientLight 0, 0, 0					
+		light = CreateLight(2, camera) 
+		LightRange light, 3 * cellSize
+		LightColor light, 255, 255, 255
+
+		'Create map
+		cols = 39
+		rows = 21
+		Local map:Int[] = CreateMap(cols, rows)
+		
+		'50% chance to generate maze-style, otherwise generate connected-room style.
+		If (Floor(Rnd(0, 100)) &gt; 50) Then GenerateMazeMap(map) Else GenerateMap(map)
+		
+		cells3D = New Cell3D[cols * rows]
+		
+		'Create 3d world objects based on the generated map contents.
+		'Also set the camera's starting position to the first barrier-free cell encountered.
+		cameraCol = -1
+		cameraRow = -1
+		Local i:Int
+
+		For Local r:Int = 0 Until rows
+			For Local c:Int = 0 Until cols
+			
+				i = (r * cols) + c
+
+				cells3D[i] = New Cell3D()
+				
+				Local cx:Float = (Float(r) * cellSize) + (cellSize * 0.5)
+				Local cy:Float = (cellHeight * 0.66)
+				Local cz:Float = (Float(c) * cellSize) + (cellSize * 0.5)
+				
+				cells3D[i].SetCentre(DIR_NONE, cx, cy, cz)
+				cells3D[i].SetCentre(DIR_NORTH, cx + (cellSize * 0.25), cy, cz)
+				cells3D[i].SetCentre(DIR_EAST, cx, cy, cz - (cellSize * 0.25))
+				cells3D[i].SetCentre(DIR_SOUTH, cx - (cellSize * 0.25), cy, cz)
+				cells3D[i].SetCentre(DIR_WEST, cx, cy, cz + (cellSize * 0.25))
+
+				If (map[i] = BARRIER_WALL) 
+					cells3D[i].blocked = True
+					cells3D[i].mesh = CreateWallMesh(c, r, cellSize, cellHeight)
+				Else
+					cells3D[i].blocked = False
+					cells3D[i].mesh = CreateEmptyMesh(c, r, cellSize, cellHeight)
+				Endif
+				
+				If (map[i] = BARRIER_NONE) And (cameraCol&lt;=0)
+					cameraCol = c
+					cameraRow = r
+				Endif
+
+			Next	
+		Next		
+
+		'Set camera's starting position
+		i = (cameraRow * cols) + cameraCol
+		facingDir = DIR_EAST
+		Local start:Vec3D = cells3D[i].GetCentre(facingDir)
+		PositionEntity camera, start.x, start.y, start.z
+		DoCameraMove(0, 0)
+			
+		'For performance reasons, hide cells outside a certain range.	
+		calcVisibleCells	
+				
+		'For instructions and FPS counter.		
+		text = TText.CreateText2D()
+
+		'For debugging purposes:
+		'Print MapToString(map)	
+
+		oldMS = Millisecs()
+		
+	End
+	
+	Method OnCreate:Int()
+		
+		SetRender()
+		SetUpdateRate 60
+
+		Return 0
+	End
+
+	Method OnResume:Int()
+
+		reload = True
+		
+		Return 0
+	End
+
+	Method OnUpdate:Int()
+
+		'Don't start updating until the initialization process has completed.
+		If (Not Init()) Then Return 0
+		
+		'Reload resources if necessary (eg after a 'resume' event).
+		If reload
+			Graphics3DInit()
+			ReloadAllSurfaces()
+			ReloadAllTextures()
+			reload = False
+		Endif
+
+		'Don't process input if camera is currently performing a move or turn operation.
+		If (Not camMoving) And (Not camTurning)
+
+			'Generate a new map
+			If KeyHit(KEY_ENTER) Then Generate()
+
+			'Turn left/right
+			If KeyHit(KEY_Q) Then DoCameraTurn(True)
+			If KeyHit(KEY_E) Then DoCameraTurn(False)
+
+			'WASD key movement
+			If KeyHit(KEY_W)	'Forward
+				Select facingDir
+					Case DIR_NORTH
+						DoCameraMove(0, -1)
+					Case DIR_EAST
+						DoCameraMove(1, 0)
+					Case DIR_SOUTH
+						DoCameraMove(0, 1)
+					Case DIR_WEST
+						DoCameraMove(-1, 0)
+				End
+			Endif
+		
+			If KeyHit(KEY_S)	'Backward
+				Select facingDir
+					Case DIR_NORTH
+						DoCameraMove(0, 1)
+					Case DIR_EAST
+						DoCameraMove(-1, 0)
+					Case DIR_SOUTH
+						DoCameraMove(0, -1)
+					Case DIR_WEST
+						DoCameraMove(1, 0)
+				End
+			Endif
+		
+			If KeyHit(KEY_D)	'Step/Strafe Right
+				Select facingDir
+					Case DIR_NORTH
+						DoCameraMove(1, 0)
+					Case DIR_EAST
+						DoCameraMove(0, 1)
+					Case DIR_SOUTH
+						DoCameraMove(-1, 0)
+					Case DIR_WEST
+						DoCameraMove(0, -1)
+				End
+			Endif
+		
+			If KeyHit(KEY_A)	'Step/Strafe Left
+				Select facingDir
+					Case DIR_NORTH
+						DoCameraMove(-1, 0)
+					Case DIR_EAST
+						DoCameraMove(0, -1)
+					Case DIR_SOUTH
+						DoCameraMove(1, 0)
+					Case DIR_WEST
+						DoCameraMove(0, 1)
+				End
+			Endif
+
+		Endif
+		
+		'Perform camera turning operation
+		If camTurning
+			TurnEntity camera, 0.0, camTurn[camTurnIdx], 0.0
+			camTurnIdx += 1
+
+			If camTurnIdx &gt;= camTurn.Length
+				camTurning = False
+			Endif
+		Endif
+
+		'Perform camera moving operation
+		If camMoving
+			PositionEntity camera, camPath[camPathIdx].x, camPath[camPathIdx].y, camPath[camPathIdx].z
+			camPathIdx += 1
+
+			If camPathIdx &gt;= camPath.Length 
+				camMoving = False
+				Local pos:Vec3D = cells3D[cameraRow * cols + cameraCol].GetCentre(facingDir)
+				PositionEntity camera, pos.x, pos.y, pos.z
+				calcVisibleCells
+			Endif
+		Endif
+
+		text.SetText("WASD: movement. QE: turn. [ENTER]: Generate new dungeon. FPS: " + fps)
+		text.Draw(0, 0)
+		
+		UpdateWorld()
+		
+		Return 0
+	End
+	
+	'Move camera to a new coordinate offset from current coordinate.
+	Method DoCameraMove:Void(c:Int, r:Int)
+	
+		Local i:Int = ((cameraRow + r) * cols) + cameraCol + c
+		
+		If Not(cells3D[i].blocked) 
+		
+			'If the cell is not blocked then move into it.
+			'A linear path is calculated for a 'scrolling' effect.
+		
+			Local camX:Float = EntityX(camera)
+			Local camZ:Float = EntityZ(camera)
+			
+			cameraRow += r
+			cameraCol += c
+
+		 	i = (cameraRow * cols) + cameraCol
+			
+			Local targ:Vec3D = cells3D[i].GetCentre(facingDir)
+
+			Local diffX:Float = camX - targ.x
+			Local diffZ:Float = camZ - targ.z
+						
+			For Local pathIdx:Int = 0 Until camPath.Length
+				camPath[pathIdx].x = camX - (pathIdx * (diffX / camPath.Length))
+				camPath[pathIdx].z = camZ - (pathIdx * (diffZ / camPath.Length))
+				camPath[pathIdx].y = (cellHeight * 0.66)	
+			Next
+			
+			camPathIdx = 0
+			camMoving = True
+
+		Endif
+
+	End
+	
+	'Turn camera, either left or right.
+	Method DoCameraTurn:Void(left:Bool)
+		
+		'Linear effect (could probably replace with a sine-wave-based effect)
+		For Local i:Int = 0 Until camTurn.Length
+			camTurn[i] = 90.0 / camTurn.Length
+		Next
+				
+		If left
+			facingDir -=1
+			If facingDir &lt;= 0 Then facingDir = DIR_WEST
+		Else
+			facingDir +=1
+			If facingDir &gt; DIR_WEST Then facingDir = DIR_NORTH
+			
+			'Right turn is negative values
+			For Local i:Int = 0 Until camTurn.Length
+				camTurn[i] = -camTurn[i]
+			Next
+		Endif
+
+		'Also need to 'tweak' the camera's x,z position, based on the new facing direction.
+		DoCameraMove(0, 0)
+	
+		camTurnIdx = 0
+		camTurning = True
+
+	End
+
+	'Hide all entities outside of the camera's viewRange. This improves performance significantly.
+	Method calcVisibleCells:void()
+	
+		Local startc:Int = cameraCol - viewRange
+		If startc &lt; 0 Then startc = 0
+				
+		Local endc:Int = cameraCol + viewRange
+		If endc &gt; cols - 1 Then endc = cols - 1
+				
+		Local startr:Int = cameraRow - viewRange
+		If startr &lt; 0 Then startr = 0
+			
+		Local endr:Int = cameraRow + viewRange
+		If endr &gt; rows - 1 Then endr = rows - 1
+				
+		For Local c:Int = startc To endc
+			For Local r:Int = startr To endr
+				ShowEntity cells3D[r * cols + c].mesh
+			Next
+		Next 	
+
+		startr = cameraRow - (viewRange + 1)
+		endr = cameraRow + (viewRange + 1)
+		
+		For Local r:Int = startr To endr
+			If r &gt;= 0 And r &lt;= rows - 1
+			
+				Local c:Int = cameraCol - (viewRange + 1)
+				If c &gt;= 0 Then HideEntity cells3D[r * cols + c].mesh
+				
+				c = cameraCol + (viewRange + 1)
+				If c &lt;= cols - 1 Then HideEntity cells3D[r * cols + c].mesh
+								
+			EndIf
+		Next
+			
+		startc = cameraCol - (viewRange + 1)
+		endc = cameraCol + (viewRange + 1)	
+			
+		For Local c:Int = startc To endc
+			If c &gt;= 0 And c &lt;= cols - 1
+			
+				Local r:Int = cameraRow - (viewRange + 1)
+				If r &gt;= 0 Then HideEntity cells3D[r * cols + c].mesh
+				
+				r = cameraRow + (viewRange + 1)
+				If r &lt;= rows - 1 Then HideEntity cells3D[r * cols + c].mesh
+								
+			EndIf
+		Next	
+	
+	End
+	
+	Method OnRender:Int()
+				
+		If (Not Init()) Then Return 0
+		
+		RenderWorld
+		renders += 1
+
+		'Calculate FPS
+		If ((Millisecs() - oldMS) &gt;= 1000)
+			oldMS = Millisecs()
+			fps = renders
+			renders = 0
+		Endif
+		
+		Return 0
+	End
+	
+End
+
+'-------------
+
+'Simple vector class to store and set an xyz coordinate in 3D space.
+Class Vec3D
+
+	Field x:Float, y:Float, z:Float
+
+	Method Set:void(x:Float, y:Float, z:Float)
+		Self.x = x
+		Self.y = y
+		Self.z = z
+	End
+
+End
+
+'Convenience class to assist with camera movement, viewRange and collision calculations.
+Class Cell3D
+
+	Field mesh:TMesh
+	Field blocked:bool
+
+	Field centres:Vec3D[]
+
+	Method New()
+		centres = New Vec3D[5]
+		For Local i:Int = 0 Until centres.Length
+			centres[i] = New Vec3D()
+		Next
+	End
+
+	Method SetCentre:Void(dir:Int, x:Float, y:Float, z:Float)
+	
+		If (dir &lt; 0) Or (dir &gt;= centres.Length) Then Return
+		
+		centres[dir].Set(x, y, z)
+		
+	End
+
+	Method GetCentre:Vec3D(dir:Int)
+	
+		If (dir &lt; 0) Or (dir &gt;= centres.Length) Then Return Null
+		
+		Return centres[dir]
+	
+	End
+	
+
+End
+
+'-------------
+
+'Create a mesh to represent a wall cell, at specified column and row position, calculated from cellSize.
+'The wall mesh has four surfaces - one for each side of a cube (but not top and bottom).
+'Each side is painted a different color (no texturing is used in this example).
+Function CreateWallMesh:TMesh(c:Int, r:Int, cellSize:Float, cellHeight:Float)
+	
+	Local mesh:TMesh = CreateMesh() 
+
+	Local surf:TSurface = CreateSurface(mesh)
+	Local v0:Int = AddVertex(surf, 0, 1, 0, 0, 0) 
+	Local v1:Int = AddVertex(surf, 1, 1, 0, 1, 0)  
+	Local v2:Int = AddVertex(surf, 0, 0, 0, 0, 1)
+	Local v3:Int = AddVertex(surf, 1, 0, 0, 1, 1)
+
+	surf.AddTriangle(v0, v1, v2)
+	surf.AddTriangle(v2, v1, v3)
+
+	Local brush:TBrush = CreateBrush(255, 0, 0)
+	PaintSurface surf, brush
+
+	'--
+
+	surf = CreateSurface(mesh)
+
+	v0 = AddVertex(surf, 1, 1, 0, 0, 0)
+	v1 = AddVertex(surf, 1, 0, 1, 1, 1)
+	v2 = AddVertex(surf, 1, 0, 0, 0, 1)
+	v3 = AddVertex(surf, 1, 1, 1, 1, 0)
+
+	surf.AddTriangle(v0, v1, v2) 
+	surf.AddTriangle(v0, v3, v1)
+
+	brush = CreateBrush(0, 255, 0)
+	PaintSurface surf, brush
+
+	'--
+
+	surf = CreateSurface(mesh)
+
+	v0 = AddVertex(surf, 0, 1, 1, 0, 0)
+	v1 = AddVertex(surf, 1, 1, 1, 1, 0)
+	v2 = AddVertex(surf, 1, 0, 1, 1, 1)
+	v3 = AddVertex(surf, 0, 0, 1, 0, 1)
+
+	surf.AddTriangle(v1, v0, v3) 
+	surf.AddTriangle(v3, v2, v1)
+
+	brush = CreateBrush(0, 0, 255)
+	PaintSurface surf, brush
+
+	'--
+
+	surf = CreateSurface(mesh)
+
+	v0 = AddVertex(surf, 0, 1, 0, 0, 0)
+	v1 = AddVertex(surf, 0, 1, 1, 1, 0)
+	v2 = AddVertex(surf, 0, 0, 1, 1, 1)
+	v3 = AddVertex(surf, 0, 0, 0, 0, 1)
+
+	surf.AddTriangle(v3, v1, v0) 
+	surf.AddTriangle(v3, v2, v1)
+
+	brush = CreateBrush(255, 255, 0)
+	PaintSurface surf, brush
+
+	'--
+
+	ScaleEntity mesh, cellSize, cellHeight, cellSize
+
+	EntityFX mesh, 1
+
+	UpdateNormals mesh
+	
+	PositionEntity mesh, (Float(r) * cellSize), 0.0, (Float(c) * cellSize) 	
+		
+	HideEntity mesh	
+		
+	Return mesh
+
+End
+
+'Create a mesh to represent an empty cell, at specified column and row position, calculated from cellSize.
+'The mesh has two surfaces - one for ceiling and one for floor.
+'Each surface is painted a different color (no texturing is used in this example).	
+Function CreateEmptyMesh:TMesh(c:Int, r:Int, cellSize:Float, cellHeight:Float)
+
+	Local mesh:TMesh = CreateMesh() 
+
+	Local surf:TSurface = CreateSurface(mesh)
+	Local v0:Int = AddVertex(surf, 0, 0, 0, 0, 1) 
+	Local v1:Int = AddVertex(surf, 0, 0, 1, 0, 0)  
+	Local v2:Int = AddVertex(surf, 1, 0, 1, 1, 0)
+	Local v3:Int = AddVertex(surf, 1, 0, 0, 1, 1)
+
+	surf.AddTriangle(v0, v1, v2)
+	surf.AddTriangle(v2, v3, v0)
+
+	Local brush:TBrush = CreateBrush(Floor(Rnd(0, 128)), 0, 128)
+	PaintSurface surf, brush
+
+	'--
+
+	surf = CreateSurface(mesh)
+
+	v0 = AddVertex(surf, 0, 1, 0, 0, 0)
+	v1 = AddVertex(surf, 0, 1, 1, 0, 1)
+	v2 = AddVertex(surf, 1, 1, 1, 1, 1)
+	v3 = AddVertex(surf, 1, 1, 0, 1, 0)
+
+	surf.AddTriangle(v3, v2, v1) 
+	surf.AddTriangle(v0, v3, v1)
+
+	brush = CreateBrush(0, 128, Floor(Rnd(0, 128)))
+	PaintSurface surf, brush
+
+	'--
+
+	ScaleEntity mesh, cellSize, cellHeight, cellSize
+
+	EntityFX mesh, 1
+
+	UpdateNormals mesh
+
+	PositionEntity mesh, (Float(r) * cellSize), 0.0, (Float(c) * cellSize)	
+
+	HideEntity mesh	
+
+	Return mesh
+
+End
+
+
+'===============================================================
+'DUNGEON GENERATION CODE:
+'===============================================================
+
+'%%%%%% CONSTANTS %%%%%%%%%%%
+
+'The minimum possible size of a map. 
+Const MAP_MIN_COLS:Int = 12
+Const MAP_MIN_ROWS:Int = 12
+
+'Barrier constants for use in the generation algorithms.
+Const BARRIER_NONE:Int = 0
+Const BARRIER_WALL:Int = 1
+Const BARRIER_DOOR_OPEN:Int = 2
+Const BARRIER_DOOR_CLOSED:Int = 3
+Const BARRIER_DOOR_LOCKED:Int = 4
+
+
+'****** CLASSES ************
+
+Class Coord
+
+	'Coodinate class used by various functions.
+
+	Field col:Int = 0
+	Field row:Int = 0
+	
+	Method New(col:Int, row:Int)
+	
+		Self.col = col
+		Self.row = row
+		
+	End
+	
+End
+
+Class Area
+
+	Field coords:Stack&lt;Coord&gt;
+
+	Method New(coords:Stack&lt;Coord&gt;)
+		Self.coords = coords
+	End
+
+End
+
+Class Cell
+
+	Field n:Bool = True
+	Field e:Bool = True
+	Field s:Bool = True
+	Field w:Bool = True
+	
+End
+
+'------ FUNCTIONS ---------
+
+Function AreaOverlap:Bool(a1:Area, a2:Area)
+
+	If ((Not a1.coords) Or (Not a2.coords)) Then Return True
+
+	For Local p1:Coord = Eachin a1.coords
+		For Local p2:Coord = Eachin a2.coords
+			If (p1.col = p2.col) And (p1.row = p2.row) Then Return True 'Overlap found
+		Next
+	Next
+
+	Return False 'No overlap
+
+End
+
+'----
+
+Function ClearArea:Void(map:Int[], a:Area)
+	
+	If (Not ValidMap(map)) Then Return
+
+	If (Not a) Then Return
+	If a.coords.IsEmpty() Then Return
+	
+	For Local p:Coord = Eachin a.coords
+		map[(p.row * map[map.Length - 2]) + p.col] = BARRIER_NONE
+	Next
+
+End
+
+'----
+
+Function SurroundArea:Void(map:Int[], a:Area, surType:Int = BARRIER_WALL, entryQty:Int = 0, entryType:Int = BARRIER_NONE, offset:Int = 1, cornerEntry:Bool = False)
+
+	If (Not ValidMap(map)) Then Return
+
+	If (Not a) Then Return
+	If a.coords.IsEmpty() Then Return
+	If (offset &lt; 0) Then Return
+
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+
+	Local minCol:Int = cols, maxCol:Int = -1
+	Local minRow:Int = rows, maxRow:Int = -1
+
+	For Local p:Coord = Eachin a.coords
+		If p.col &lt; minCol Then minCol = p.col
+		If p.col &gt; maxCol Then maxCol = p.col
+		If p.row &lt; minRow Then minRow = p.row
+		If p.row &gt; maxRow Then maxRow = p.row
+	Next
+	
+	If entryQty &lt;= 0 Then Return
+	
+	Local entryCoord:Stack&lt;Coord&gt; = New Stack&lt;Coord&gt;	'Coordsible entry positions
+	
+	For Local p:Coord = Eachin a.coords
+		If ((p.col = (minCol + offset)) Or (p.col = (maxCol - offset))) And ((p.row &gt;= (minRow + offset)) And (p.row &lt;= (maxRow - offset))) 
+			map[(p.row * cols) + p.col] = surType
+			If (Not entryCoord.Contains(p)) Then entryCoord.Push(p)
+		Endif
+		If ((p.row = (minRow + offset)) Or (p.row = (maxRow - offset))) And ((p.col &gt;= (minCol + offset)) And (p.col &lt;= (maxCol - offset))) 
+			map[(p.row * cols) + p.col] = surType
+			If (Not entryCoord.Contains(p)) Then entryCoord.Push(p)
+		Endif
+	Next
+	
+	If (Not cornerEntry)
+		'Remove corner coordinates from possible entry positions
+		For Local p:Coord = Eachin entryCoord
+			If ((p.col = (minCol + offset)) Or (p.col = (maxCol - offset))) And (p.row = (minRow + offset))
+				entryCoord.RemoveEach(p)
+				Continue
+			Endif
+			If ((p.col = (minCol + offset)) Or (p.col = (maxCol - offset))) And (p.row = (maxRow - offset))
+				entryCoord.RemoveEach(p)
+				Continue
+			Endif
+		Next
+	Endif
+	
+	Local entryCoordArr:Coord[] = entryCoord.ToArray()
+	
+	'Shuffle potential entries
+	For Local n:Int = 1 Until entryCoordArr.Length
+		Local i:Int = Floor(Rnd(0, entryCoordArr.Length))
+		Local j:Int = Floor(Rnd(0, entryCoordArr.Length))
+		Local temp:Coord = entryCoordArr[i]
+		entryCoordArr[i] = entryCoordArr[j]
+		entryCoordArr[j] = temp
+	Next
+	
+	'Entry placement
+	Local entryCount:Int = 0
+	For Local i:Int = 0 Until entryCoordArr.Length
+		map[(entryCoordArr[i].row * cols) + entryCoordArr[i].col] = entryType
+		entryCount += 1
+		If (entryCount &gt;= entryQty) Then Exit
+	Next
+	'---
+
+End
+
+'----
+
+Function FillAreaPerimeterGaps:Void(map:Int[], a:Area, gapFillType:Int = BARRIER_DOOR_CLOSED)
+
+	If (Not ValidMap(map)) Then Return
+
+	If (Not a) Then Return
+	If a.coords.IsEmpty() Then Return
+
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+
+	Local minCol:Int = cols, maxCol:Int = -1
+	Local minRow:Int = rows, maxRow:Int = -1
+
+	For Local p:Coord = Eachin a.coords
+		If p.col &lt; minCol Then minCol = p.col
+		If p.col &gt; maxCol Then maxCol = p.col
+		If p.row &lt; minRow Then minRow = p.row
+		If p.row &gt; maxRow Then maxRow = p.row
+	Next
+	
+	'Adjoining perimeter gaps (the size of single cells only).
+	
+	For Local p:Coord = Eachin a.coords
+
+		If ((p.col = minCol) And (p.row &gt;= minRow) And (p.row &lt;= maxRow))
+			If (map[(p.row * cols) + (p.col - 1)] = BARRIER_NONE) 
+				If (map[((p.row - 1) * cols) + (p.col - 1)] &lt;&gt; BARRIER_NONE) And (map[((p.row + 1) * cols) + (p.col - 1)] &lt;&gt; BARRIER_NONE)
+					map[(p.row * cols) + (p.col - 1)] = gapFillType
+				Endif
+			Endif
+		Else
+			If ((p.col = maxCol) And (p.row &gt;= minRow) And (p.row &lt;= maxRow))
+				If (map[(p.row * cols) + (p.col + 1)] = BARRIER_NONE) 
+					If (map[((p.row - 1) * cols) + (p.col + 1)] &lt;&gt; BARRIER_NONE) And (map[((p.row + 1) * cols) + (p.col + 1)] &lt;&gt; BARRIER_NONE)
+						map[(p.row * cols) + (p.col + 1)] = gapFillType
+					Endif
+				endif
+			Endif
+		Endif
+		
+		If ((p.row = minRow) And (p.col &gt;= minCol) And (p.col &lt;= maxCol)) 
+			If (map[((p.row - 1) * cols) + p.col] = BARRIER_NONE)
+				If (map[((p.row - 1) * cols) + (p.col - 1)] &lt;&gt; BARRIER_NONE) And (map[((p.row - 1) * cols) + (p.col + 1)] &lt;&gt; BARRIER_NONE)
+					map[((p.row - 1) * cols) + p.col] = gapFillType
+				Endif
+			Endif
+		Else
+			If ((p.row = maxRow) And (p.col &gt;= minCol) And (p.col &lt;= maxCol)) 
+				If (map[((p.row + 1) * cols) + p.col] = BARRIER_NONE)
+					If (map[((p.row + 1) * cols) + (p.col - 1)] &lt;&gt; BARRIER_NONE) And (map[((p.row + 1) * cols) + (p.col + 1)] &lt;&gt; BARRIER_NONE)
+						map[((p.row + 1) * cols) + p.col] = gapFillType
+					Endif
+				Endif
+			Endif
+		Endif
+	
+	Next
+	
+End
+
+'----
+
+Function CreateMap:Int[](cols:Int, rows:Int, fillVal:Int = BARRIER_WALL)
+
+	'Create and return an integer array to represent the map. Dimensions are cols * rows.
+	'The dimensions are included as map[map.Length - 2] = cols, map[map.Length - 1] = rows.
+	'fillVal should be 1 to fill completely with walls. 0 for void/nothing.
+	'Most generation algorthms will expect a map array completely filled with walls (1s).
+
+	If cols &lt; MAP_MIN_COLS Then cols = MAP_MIN_COLS
+	If rows &lt; MAP_MIN_ROWS Then rows = MAP_MIN_ROWS
+
+	Local map:Int[]
+
+	map = New Int[(cols * rows) + 2]
+	
+	map[map.Length - 2] = cols
+	map[map.Length - 1] = rows
+	
+	FillMap(map, fillVal)
+	
+	Return map
+
+End
+
+'----
+
+Function FillMap:Void(map:Int[], fillVal:Int)
+
+	If (Not ValidMap(map)) Then Return
+	
+	For Local i:Int = 0 Until map.Length - 2
+		map[i] = fillVal
+	Next
+
+End
+
+'----
+
+Function ValidMap:Bool(map:Int[])
+
+	'Validate map array.
+	'Return false if map array seems invalid, otherwise return true.
+	
+	If (Not map) Then Return False
+	
+	If (map.Length &lt; 2) Then Return False
+	If (map.Length &lt; ((map[map.Length - 2] * map[map.Length - 1]) + 2)) Then Return False
+		
+	Return True
+		
+End
+
+'----
+
+Function MapToString:String(map:Int[])
+
+	If (Not ValidMap(map)) Then Return ""
+
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+
+	Local str:String = ""
+	
+	For Local r:Int = 0 Until rows
+		For Local c:Int = 0 Until cols
+		
+			Local i:Int = (r * cols) + c
+			
+			Select map[i]
+								
+				Case BARRIER_NONE
+					str += "."
+					
+				Case BARRIER_WALL
+					str += "#"
+
+				Case BARRIER_DOOR_OPEN
+					str += "'"
+														
+				Case BARRIER_DOOR_CLOSED
+					str += "+"
+					
+				Case BARRIER_DOOR_LOCKED
+					str += "%"	
+
+			End
+			
+		Next
+		str += "~n"
+	Next
+
+	Return str
+
+End
+
+
+'MAZE MAP STYLE
+Function GenerateMazeMap:Void(map:Int[])
+
+	Seed = Millisecs()
+	FillMap(map, BARRIER_WALL)
+	
+	'--- Generate perfect maze ---
+	GenerateMaze(map)
+	
+	'--- Generate some potential areas ---
+	Local i:Int
+	
+	Local potentialAreas:Area[6]
+
+	For i = 0 Until potentialAreas.Length
+
+		Local aw:Int = Floor(Rnd(6, 8))
+		Local ah:Int = Floor(Rnd(6, 8))
+		Local ac:Int = Floor(Rnd(1, map[map.Length-2] - aw))
+		Local ar:Int = Floor(Rnd(1, map[map.Length-1] - ah))
+	
+		potentialAreas[i] = New Area(CreateCoords(map, ac, ar, aw, ah))
+		
+	Next
+
+	'--- Create actual areas from the non-overlapping potential areas ---
+	'--- Also, clear areas and surround with walls/doors ---
+	Local actualAreas:Stack&lt;Area&gt; = New Stack&lt;Area&gt;
+
+	For i = 0 Until potentialAreas.Length
+	
+		Local overlap:Bool = False
+	
+		For Local aarea:Area = Eachin actualAreas
+			If AreaOverlap(aarea, potentialAreas[i])
+				overlap = True
+				Exit
+			Endif
+		Next
+	
+		If (Not overlap)
+			Local aarea:Area = potentialAreas[i]
+			actualAreas.Push aarea
+			'--- Clear and surround areas ---
+			ClearArea(map, aarea)
+			SurroundArea(map, aarea, BARRIER_WALL, Floor(Rnd(1, 4)), BARRIER_DOOR_CLOSED, 1, False)
+		Endif
+		
+	Next
+
+end
+
+'----
+
+'CONNECTED ROOM STYLE
+Function GenerateMap:void(map:Int[])
+
+	Seed = Millisecs()
+	FillMap(map, BARRIER_WALL)
+	
+	Local i:Int
+
+	'--- Generate some potential areas ---
+	Local potentialAreas:Area[6]
+
+	For i = 0 Until potentialAreas.Length
+
+		Local aw:Int = Floor(Rnd(6, 8))
+		Local ah:Int = Floor(Rnd(6, 8))
+		Local ac:Int = Floor(Rnd(1, map[map.Length-2] - aw))
+		Local ar:Int = Floor(Rnd(1, map[map.Length-1] - ah))
+	
+		potentialAreas[i] = New Area(CreateCoords(map, ac, ar, aw, ah))
+		
+	Next
+
+	'--- Create actual areas from the non-overlapping potential areas. ---
+	Local actualAreas:Stack&lt;Area&gt; = New Stack&lt;Area&gt;
+
+	For i = 0 Until potentialAreas.Length
+	
+		Local overlap:Bool = False
+	
+		For Local aarea:Area = Eachin actualAreas
+			If AreaOverlap(aarea, potentialAreas[i])
+				overlap = True
+				Exit
+			Endif
+		Next
+	
+		If (Not overlap)
+			Local a:Area = potentialAreas[i]
+			actualAreas.Push a
+			'--- Clear area
+			ClearArea(map, a)
+		Endif
+		
+	Next
+
+	' ---- Establish corridors between actual areas, in sequence. ---
+	Local actualAreasArr:Area[] = actualAreas.ToArray()
+	For i = 0 Until actualAreasArr.Length - 1
+		
+		Local ci:Int = Floor(Rnd(0, actualAreasArr[i].coords.Length()))
+		Local cp1:Coord = actualAreasArr[i].coords.Get(ci)
+		
+		ci = Floor(Rnd(0, actualAreasArr[i+1].coords.Length()))
+		Local cp2:Coord = actualAreasArr[i+1].coords.Get(ci)
+		
+		ConnectCoords(map, cp1, cp2, BARRIER_NONE, False)
+		
+	Next
+
+	For Local aarea:Area = Eachin actualAreas
+		FillAreaPerimeterGaps(map, aarea)
+	Next
+
+End
+
+'---
+
+Function CreateCoords:Stack&lt;Coord&gt;(map:Int[], tlCol:Int, tlRow:Int, width:Int, height:Int)
+
+	If (Not ValidMap(map)) Then Return Null
+	
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+	
+	Local c:Int, r:Int
+	
+	If (width &lt;= 2) Or (width &gt;= (cols - 2)) Then Return Null
+	If (height &lt;= 2) Or (height &gt;= (rows - 2)) Then Return Null
+
+	If (tlCol &lt;= 0) Or (tlCol &gt;= (cols - 1)) Then Return Null
+	If (tlRow &lt;= 0) Or (tlRow &gt;= (rows - 1)) Then Return Null
+
+	Local coords:Stack&lt;Coord&gt; = New Stack&lt;Coord&gt;
+
+	Local endRow:Int = tlRow + height
+	If endRow &gt;= (rows - 1) Then endRow = rows - 1
+	
+	Local endCol:Int = tlCol + width
+	If endCol &gt;= (cols - 1) Then endCol = cols - 1
+
+	For r = tlRow Until endRow
+		For c = tlCol Until endCol	
+			coords.Push New Coord(c, r)
+		Next
+	Next
+	
+	Return coords
+	
+End
+
+'----
+
+Function CalcLine:Void(p1:Coord, p2:Coord, results:Stack&lt;Coord&gt;)
+
+	If (Not p1) Or (Not p2) Then Return
+	If (Not results) Then Return
+	
+	results.Clear()
+	
+	Local x1:Int = p1.col
+	Local x2:Int = p2.col
+	Local y1:Int = p1.row
+	Local y2:Int = p2.row
+	
+	Local steep:Bool = Abs(y2 - y1) &gt; Abs(x2 - x1)
+	Local rev:Bool = False
+	Local temp:int
+	
+	If steep
+		temp = x1
+		x1 = y1
+		y1 = temp
+				
+		temp = x2
+		x2 = y2
+		y2 = temp		
+	EndIf
+
+	If (x1 &gt; x2)
+		temp = x1
+		x1 = x2
+		x2 = temp
+
+		temp = y1
+		y1 = y2
+		y2 = temp
+    EndIf
+		
+    Local deltaX:Int = x2 - x1
+    Local deltaY:Int = Abs(y2 - y1)
+    
+    Local err:Int = deltaX / 2
+    
+    Local ystep:Int
+    Local y:Int = y1, x:Int
+        
+    If (y1 &lt; y2) Then ystep = 1 Else ystep = -1
+
+    For x = x1 To x2
+    	If (steep) Then results.Push(New Coord(y, x)) Else results.Push(New Coord(x, y))
+        err -= deltaY
+        If (err &lt; 0)
+			y += ystep
+			err += deltaX
+		Endif
+	Next
+    
+End
+
+'----
+
+Function CalcCorr:Void(p1:Coord, p2:Coord, results:Stack&lt;Coord&gt;)
+
+	If (Not p1) Or (Not p2) Then Return
+	If (Not results) Then Return
+	
+	results.Clear()
+	
+	Local c1:Int = p1.col, c2:Int = p2.col
+	Local r1:Int = p1.row, r2:Int = p2.row
+	
+	'Calculate the distances between the coordates.
+	Local cdist:Int = Abs(c1 - c2) + 1
+	Local rdist:Int = Abs(r1 - r2) + 1
+		
+	Local c:Int, r:Int
+		
+	If (c1 &lt; c2)
+		'p1's column is west p2's column
+		r = r1
+		For c = c1 Until (c1 + cdist)
+			results.Push(New Coord(c, r))
+		Next
+		
+		c1 += cdist - 1
+	Else 
+		'p1's column is east of p2's column
+		r = r2
+		For c = c2 Until (c2 + cdist)
+			results.Push(New Coord(c, r))
+		Next
+		
+		c2 += cdist - 1
+	Endif
+		
+	'North&lt;-&gt;south
+	If (r1 &lt; r2)
+		c = c1
+		For r = r1 Until (r1 + rdist)
+			results.Push(New Coord(c, r))
+		Next
+	Else
+		c = c2
+		For r = r2 Until (r2 + rdist)
+			results.Push(New Coord(c, r))
+		Next
+	Endif
+
+
+End
+
+'----
+
+Function ConnectCoords:Void(map:Int[], p1:Coord, p2:Coord, conType:Int = BARRIER_NONE, dirLine:Bool = false)
+
+	If (Not ValidMap(map)) Then Return
+	If (Not p1) Or (Not p2) Then Return
+
+	Local results:Stack&lt;Coord&gt; = New Stack&lt;Coord&gt;
+	
+	If dirLine
+		'Direct line (Bresenham)
+		CalcLine(p1, p2, results)
+	Else
+		'Right angled connecting corridor
+		CalcCorr(p1, p2, results)
+	Endif
+	
+	For Local p:Coord = Eachin results
+		map[p.row * map[map.Length - 2] + p.col] = conType
+	Next
+		
+End
+
+'---
+
+
+'Perfect Maze Generation
+'Reference: &lt;a href="http://mysite.verizon.net/res148h4j/zenosamples/zs_mazes.html" target="_blank"&gt;http://mysite.verizon.net/res148h4j/zenosamples/zs_mazes.html&lt;/a&gt;
+
+Function GenerateMaze:Void(map:Int[])
+	'Generate a perfect maze in a pre-initialised integer array: map.
+	'cols and rows will be set to the values stored in map[map.Length-2] and map[map.Length-1], respectively.
+
+	If (Not ValidMap(map)) Then Return
+
+	FillMap(map, BARRIER_WALL)
+	
+	Local cols:Int = map[map.Length - 2]
+	Local rows:Int = map[map.Length - 1]
+	
+	'--- Create and initialize maze variables.
+	
+	'The maze's cols and rows will be less than the map's cols and rows 
+	'because maze cell walls correspond to actual map coordinates.
+	'Even dimensions will be reduced by one, otherwise the map perimeter 
+	'would correspond to the centre of maze cells (not typically desired).
+	Local cellCols:Int
+	If (cols Mod 2 &lt;&gt; 0) Then cellCols = Floor(cols / 2) Else cellCols = Floor((cols - 1) / 2)
+	
+	Local cellRows:Int
+	If (rows Mod 2 &lt;&gt; 0) Then cellRows = Floor(rows / 2) Else cellRows = Floor((rows - 1) / 2)
+	
+	Local totalCells:Int = cellRows * cellCols
+	Local maze:Cell[totalCells]
+	Local track:Coord[totalCells]
+	Local tri:Int = 0
+	Local dir:Coord[4], nextCoord:Coord[4]
+	Local curCoord:Coord = New Coord()
+	Local visited:Int, i:Int, mazei:Int, nbi:Int, r:Int, c:Int	
+		
+	'Every maze cell will initially have every wall up.	
+    For r = 0 Until cellRows 
+        For c = 0 Until cellCols
+        	i = (r * cellCols) + c
+        	maze[i] = New Cell()
+        	track[i] = New Coord()
+        Next
+    Next
+
+	For i = 0 Until dir.Length
+		dir[i] = New Coord()
+		nextCoord[i] = New Coord()
+	Next
+	
+    dir[0].row = -1	'north
+    dir[1].col = 1	'east
+    dir[2].row = 1	'south
+    dir[3].col = -1	'west
+	
+	curCoord.row = Floor(Rnd(0, cellRows))
+	curCoord.col = Floor(Rnd(0, cellCols))
+	
+	visited = 1
+	
+	'--- Traverse the maze cells until every one has been visited, walls removed if necessary.
+	
+	While (visited &lt; totalCells)
+	
+        'Find all neighbors of current cell with all walls intact.
+        nbi = 0
+        For i = 0 Until dir.Length
+            r = curCoord.row + dir[i].row
+            c = curCoord.col + dir[i].col
+            'Check for valid next cell.
+            If (r &gt;= 0) And (r &lt; cellRows) And (c &gt;= 0) And (c &lt; cellCols)
+            	mazei = (r * cellCols) + c
+                'Check if previously visited.
+                If (maze[mazei].n) And (maze[mazei].e) And (maze[mazei].s) And (maze[mazei].w)
+                    'Add to possible next cells.
+                    nextCoord[nbi].row = r
+                    nextCoord[nbi].col = c
+                    nbi += 1
+                Endif
+            Endif
+        Next
+        
+        if (nbi &gt;= 1) 
+            'Current cell has one or more unvisited neighbors
+            'so choose one at random.
+            i = Floor(Rnd(0, nbi))
+            
+            'Remove the walls between it and current cell.
+            If (nextCoord[i].row - curCoord.row) = 0 Then    
+                'Next on same row.
+                r = nextCoord[i].row
+                If nextCoord[i].col &gt; curCoord.col Then      
+                    'Move east.
+                    c = curCoord.col
+                    maze[(r * cellCols) + c].e = False
+                    c = nextCoord[i].col
+                    maze[(r * cellCols) + c].w = False
+                else                                
+                    'Move west.
+                    c = curCoord.col
+                    maze[(r * cellCols) + c].w = False
+                    c = nextCoord[i].col
+                    maze[(r * cellCols) + c].e = False
+                endif
+            else                                    
+                'Next on same column.
+                c = nextCoord[i].col
+                If nextCoord[i].row &gt; curCoord.row Then      
+                    'Move south.
+                    r = curCoord.row
+                    maze[(r * cellCols) + c].s = False
+                    r = nextCoord[i].row
+                    maze[(r * cellCols) + c].n = False
+                Else                                
+                    'Move north.
+                    r = curCoord.row
+                    maze[(r * cellCols) + c].n = False
+                    r = nextCoord[i].row
+                    maze[(r * cellCols) + c].s = false
+                endif
+            Endif
+            
+            'Add current cell location to the track.
+            tri += 1
+            track[tri].row = curCoord.row
+            track[tri].col = curCoord.col
+            
+           'Make the new cell the current cell.
+            curCoord.row = nextCoord[i].row
+            curCoord.col = nextCoord[i].col
+           
+            visited += 1
+        Else
+            'Reached dead end, backtrack.
+            'Remove the most recent cell from the cell track
+            'and make it the current cell.
+            curCoord.row = track[tri].row
+            curCoord.col = track[tri].col
+            tri -= 1
+        Endif 
+    Wend
+
+	'--- Remap maze cells to map array.
+	
+	Local mapr:Int, mapc:Int
+
+	For r = 0 Until cellRows
+		mapr = (r * 2) + 1
+		
+		For c = 0 Until cellCols
+			mapc = (c * 2) + 1
+			map[(mapr * cols) + mapc] = BARRIER_NONE
+			mazei = (r * cellCols) + c
+			
+			'Only need to check for presence of west and north walls.
+			If (Not maze[mazei].w) Then map[(mapr * cols) + (mapc - 1)] = BARRIER_NONE
+			If (Not maze[mazei].n) Then map[((mapr - 1) * cols) + mapc] = BARRIER_NONE
+			
+		Next
+	Next
+	
+End
+</textarea> <br><br></td></tr></table><br>
+<a name="2049360"></a>
+
+<a name="2061952"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >slenkar</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> When I try to run in GLFW (in release or debug) it crashes cos it cant load mojo_font.png<br>dunno why<br>I cant run it in HMTL5 cos I dont have the shader hardwarez <br><br></td></tr></table><br>
+<a name="2061956"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raul</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> rename "mojo_font: file to "mojofont" :)<br><br>do the same in the code.. <br><br></td></tr></table><br>
+<a name="2061984"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >impixi</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> I can't help with the GLFW platform, as I don't have the necessary tools installed at the moment. But I just tried the "3D lockstep" code compiled with Monkey V072a and MiniB3d V038.1 and it runs nicely in HTML5 (Chrome browser). Although the little bit of text seems to be fixed in 3D space now, whereas before it was attached in front of the camera... <br><br></td></tr></table><br>
+<a name="2061983"></a>
+
+<a name="2070450"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DiabloV</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> hello<br><br>how to install minib3d ? <br><br></td></tr></table><br>
+<a name="2070451"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Midimaster</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> There is a minib3d beginners tutorial here:<br><br><a href="http://www.monkeycoder.co.nz/Community/posts.php?topic=5070" target="_blank">http://www.monkeycoder.co.nz/Community/posts.php?topic=5070</a><br><br>The firstchapter descripes how to download it. If you don not understand or have problems, let me know. In this case I would update the tutorial. <br><br></td></tr></table><br>
+<a name="2087692"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >impixi</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> Updated the 3D lock-step viewer, above. <a href="http://www.monkey-x.com/Community/posts.php?topic=374&amp;post=87690" target="_blank">http://www.monkey-x.com/Community/posts.php?topic=374&amp;post=87690</a> <br><br></td></tr></table><br>
+<a name="2087691"></a>
+
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

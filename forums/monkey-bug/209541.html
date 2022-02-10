@@ -1,0 +1,68 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Compiler crash</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Compiler crash</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=501" >Monkey Bug Reports</a>/<a href="#bottom" >Compiler crash</a><br><br>
+<a name="2099602"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Peeling</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> The following crashes the compiler with a memory violation:<br><br>Class A<br>End<br><br>Class B Extends A<br>	Field x:String = "Hello"<br>End<br><br>Local b:B = New B()<br>Local a:A = b<br>B(a).x += "Goodbye"<br><br>It seems to be the "+=" that causes the problem. B(a).x = "Goodbye" compiles fine.<br>It's easy enough to work around:<br><br>Local ba:B = B(a)<br>ba.x += "Goodbye"<br><br><br>I don't know how reproducible you'll find this. In the game class that originally generated the error, it would also happen if x was an int, but when I wrote the code above to see if it was specific to my classes, it happened with x as a string but not as an int. <br><br></td></tr></table><br>
+<a name="2099641"></a>
+
+<a name="2099642"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skid</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice! To reproduce the crash, I put your example code in a main function:<br><br><pre class=code>
+Class A
+End
+
+Class B Extends A
+Field x:String = "Hello"
+End
+
+
+Function Main()
+	Local b:B = New B()
+	Local a:A = b
+
+	B(a).x += "Goodbye"
+End
+	
+</pre> <br><br></td></tr></table><br>
+<a name="2099694"></a>
+
+<a name="2099695"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImmutableOctet(SKNG)</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Okay, so I debugged this real quick, apparently the compiler is having problems deducing the type of 'x' ('String') from 'B'. This doesn't happen when you create a new local variable with the cast. To be fair, you should generally be doing that, but this is still a bug with 'trans'.<br><br>To be more specific, it's <a href="https://github.com/blitz-research/monkey/blob/323030c72bd176ab030cd0989f3a4083ebc2be71/modules/trans/stmt.monkey#L159" target="_blank">this line</a> using <a href="https://github.com/blitz-research/monkey/blob/323030c72bd176ab030cd0989f3a4083ebc2be71/modules/trans/expr.monkey#L70" target="_blank">'Cast'</a>, and therefore <a href="https://github.com/blitz-research/monkey/blob/323030c72bd176ab030cd0989f3a4083ebc2be71/modules/trans/expr.monkey#L546" target="_blank">'CastExpr'</a> ('Semant' is used on an instance of 'ConstExpr'), which is causing the error.<br><br><b>Funny enough, I'm not sure how this worked, but I separated <a href="https://github.com/blitz-research/monkey/blob/323030c72bd176ab030cd0989f3a4083ebc2be71/modules/trans/stmt.monkey#L159" target="_blank">the code on line 159</a> (Into local variables), and I think I fixed it.</b> I'll be honest, I'm not quite sure how this happened. Maybe it was some kind of bug when compiling the compiler that caused this in the first place?<br><br>Well, whatever I just did, here's what apparently fixed it:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Local Math:= New BinaryMathExpr(op[..-1], lhs, rhs)
+Local Expression:= Math.Semant()
+
+rhs = Expression.Cast(lhs.exprType)
+</textarea><br><br>No idea if that'll actually fix it, or I did something else without knowing. I haven't really messed with the files since the last time I poked around with 'trans', but it was causing an error before I changed that. And now it magically fixed itself?<br><br>I think we might have found a bootstrapping can of worms. Mark, if you're reading this, I suggest looking into this yourself. The debugger will stop at the right place, so you can look at it yourself. <br><br></td></tr></table><br>
+<a name="2099691"></a>
+
+<a name="2099692"></a>
+
+<a name="2099693"></a>
+
+<a name="2099690"></a>
+
+<a name="2099688"></a>
+
+<a name="2099689"></a>
+
+<a name="2099742"></a>
+
+<a name="2099744"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Weird, it's not crashing here with glf3/html5 targets on Mac.<br><br>Added a Print to skidracer's code and it's doing what you'd expect - generated code looks alright too.<br><br>Could be a 'meta' bug I guess, something's that causing the compiler to crash even through the compiler logic is correct. <br><br></td></tr></table><br>
+<a name="2099741"></a>
+
+<a name="2099739"></a>
+
+<a name="2099760"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImmutableOctet(SKNG)</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> It's got to be something with the code the previous compiler generated for the compiler we use to compile the example(s). Also, maybe I need to update Monkey, but this is a compiler problem. The examples don't even compile for me. As-in, the compiler crashes trying to compile them. And since the code is correct, and somehow changing the structure of said code makes it work (Despite no logical difference), I can assume 'trans' has some kind of bug. But thinking about it further, this might be a GC bug for the C++ targets.<br><br>I have rebuilt 'transcc' (On Windows) with GLFW2, GLFW3, and STDCPP, and they all have the same problem. So, our option at this point is debugging. Also, Mark, the only way that example would work is if you're commenting out the '+=' line (Or it's some kind of Windows-related bug). That's why it hits the line that causes the error. But of course, if you "restructure" the line into multiple variables, it somehow works.<br><br>So, basically, my conclusion is that it's some kind of weird code generation bug. Either that, or some kind of bug with the C++ GC. It's also possible this is some weird hybrid of the two potential problems. The weird thing is, I think we might have two problems. Because, the compiler is able to be compiled, but the example is not. But then, if you modify the compiler to do what I did, somehow they both work. And if you're not getting this problem on your Mac, this could be even weirder. Either way, I'm baffled. <br><br></td></tr></table><br>
+<a name="2099759"></a>
+
+<a name="2099769"></a>
+
+<a name="2099770"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skid</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Testing with MonkeyXPro83b, HTML5 target Windows host crashes, Mac does not. <br><br></td></tr></table><br>
+<a name="2099779"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImmutableOctet(SKNG)</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> @skid: Just to confirm, it's the compiler that's crashing, right? Not the program you're compiling. In other words, the example doesn't compile on Windows, right? To tell if this is the case, the output in the console shouldn't get to the "Building..." segment (On Windows that is). What's really strange is that you're having no problems on your Mac, as opposed to the Windows builds. <br><br></td></tr></table><br>
+<a name="2099778"></a>
+
+<a name="2099785"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dawlane</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> I can confirm that this also is happening with the Linux builds of C++,GLFW2/3,HTML5, but MonkeyXPro83b (Trans 1.82) also crashes Ted if you kill the crashed compile. Trans 1.80 does not. Are any of the other targets affected? <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

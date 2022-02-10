@@ -1,0 +1,69 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Update gui during libcurl?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Update gui during libcurl?</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=124" >Brucey's Modules</a>/<a href="#bottom" >Update gui during libcurl?</a><br><br>
+<a name="907506"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Blueapples</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I am using the TEasyCurl class to do some FTP uploads. Is there a way for me to update the GUI of my program when I get the progress callback? This is what I have:<br><br><pre class=code>
+Function curlProgress:Int(data:Object, dltotal:Double, dlnow:Double, ultotal:Double, ulnow:Double)
+	If ulnow &lt;&gt; 0 Then
+		UpdateProgBar(TMainWindow.progPublish, ultotal / ulnow)
+		RedrawGadget(TMainWindow.MainWindow)
+		RedrawGadget(TMainWindow.progPublish)
+	EndIf
+EndFunction
+</pre><br><br>The window isn't redrawn and the progress bar appears full after the upload finishes - i.e. when I get back to my main loop that calls WaitEvent(). Adding PollEvent() to this not only didn't help (same behavior - no redrawing) but it actually seemed to cause random events to fire elsewhere in my code. Very strange.<br><br>Anyway, RedrawGadget seems to have no immediate effect - the documentation says it might not redraw the gadget immediately and I'm afraid that's the case at least on Linux. Is there a way to force a redraw? I guess this might be more appropriate in the GUI programming area... but it is a specific problem with libcurl because it makes it sort of hard to use in a GUI program if it isn't possible. Any ideas? <br><br></td></tr></table><br>
+<a name="907513"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I would say some kind of "system" refresh is what you need there - SystemWait() ?<br><br>However, TEasyCurl is synchronous, so you are going to have issues like this. How's about using the A-synchronous TCurlMulti instead? Rather than waiting until the transfer is finished, it kicks *them* off in the background and relies on you to keep an eye on how they are doing, rather than the other way around.<br><br>From the ex_05 example, the main loop looks a bit like this :<br><pre class=code>
+Local status:Int = multi.multiPerform(running)
+
+While status = CURLM_CALL_MULTI_PERFORM 
+	status = multi.multiPerform(running)
+Wend
+
+While running And status = CURLM_OK
+	' wait for network 
+	If multi.multiSelect() &lt;&gt; -1 Then
+		' pull in any new data, or at least handle timeouts 
+		status = multi.multiPerform(running)
+		While status = CURLM_CALL_MULTI_PERFORM 
+			status = multi.multiPerform(running)
+		Wend
+	End If
+Wend
+</pre><br>You could stick this on a quick-firing timer, which would mean that your "main" event loop could happily update the UI like normal. <br><br></td></tr></table><br>
+<a name="907961"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Blueapples</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is what I came up with - does this seem right? TProject.Perform() is called by a timer set to 1000 hertz. <br><br><pre class=code>
+
+Type TProject
+' ...Snip...
+	Global curlMulti:TCurlMulti = TCurlMulti.Create()
+	Global curlStatus:Int
+	Global curlTimer:TTimer
+	Global curlRunning:Int
+	
+	Function Perform()
+		If Not curlRunning Then
+			Print "No transfers running, stop curl timer"
+			SetStatusText(TMainWindow.MainWindow, "Publish complete")
+			StopTimer(curlTimer)
+			curlTimer = Null
+		Else
+			If curlStatus = CURLM_OK Then
+				' wait for network 
+				If curlMulti.multiSelect(1) &lt;&gt; -1 Then
+					curlStatus = curlMulti.multiPerform(curlRunning)
+				EndIf
+			ElseIf curlStatus = CURLM_CALL_MULTI_PERFORM
+				curlStatus = curlMulti.multiPerform(curlRunning)
+			End If
+		EndIf
+	EndFunction
+
+' ...Snip...
+EndType
+</pre><br><br>It doesn't seem to use hardly any CPU really, even when doing an upload. I have a method of the TProject class (a project is a local dir and a remote location that we want to publish local files to - much like how Coda handles projects) that turns the timer on and adds a new TCurlEasy to the multi. Seems to be pretty slick really. Had a bit of trouble with larger files, it seemed that multiSelect would fail often. A 1 second max timeout for multiSelect seems to work so far, at least with my current network connection and with the files I've tested.<br><br>Thanks for your help and for the module! Really awesome that I could put this together just using BM modules :) Now if only I had a cross platform file-change notification...... <br><br></td></tr></table><br>
+<a name="907967"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looks fine :-)<br><br><div class="quote"> Now if only I had a cross platform file-change notification <br></div><br>I use it in wxCodeGen, but it's all tied into the wxMax framework... works well, and means I can have wxCodeGen running in the background while I edit wxFormBuilder projects, and as soon as I save it, wxCodeGen re-generates the files. It's like magic ;-) <br><br></td></tr></table><br>
+<a name="907973"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Blueapples</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>
+It's like magic ;-) 
+</pre><br>Best kind of code ;) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

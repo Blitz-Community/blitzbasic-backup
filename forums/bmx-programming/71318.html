@@ -1,0 +1,246 @@
+<!DOCTYPE html><html lang="en" ><head ><title >defgen - Generate .def files for dll compilation</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >defgen - Generate .def files for dll compilation</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >defgen - Generate .def files for dll compilation</a><br><br>
+<a name="797136"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is a modified version of my BriskVM bcs generator, so it is a little bloated, but it works.  It will automatically skip Private sections of sections commented like this:<br><br>'-dll<br>Function MyFunc()<br>EndFunction<br>'+dll<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">For n=1 To appargs.length-1
+	infile$:+AppArgs[n]
+Next
+outfile$=StripExt(infile)+".def"
+
+Global LineCount
+
+Type BVMType
+	Global list:TList=New TList
+	
+	Method New()
+		list.addfirst(Self)
+	EndMethod
+	
+	Field name$
+	Field methods:TList=New TList
+	Field fields:TList=New TList
+EndType
+
+Global functions:TList=New TList
+Global globals:TList=New TList
+Global constants:TList=New TList
+Global types:TList=New TList
+
+commandset:TStream=WriteFile(outfile$)
+If Not commandset
+	Notify "Failed to write file "+Chr(34)+outfile+Chr(34)+"."
+EndIf
+
+ExtractCommandSet(infile)
+
+
+For func$=EachIn functions
+	
+	'Unsupported parameters
+	ok=True
+	'If Instr(Lower(func),":byte ptr") ok=False
+	'If Instr(Lower(func),":int ptr") ok=False
+	'If Instr(Lower(func),":float ptr") ok=False
+	'If Instr(Lower(func),"]") ok=False
+	'If Instr(Lower(func),"[") ok=False
+	'If Instr(Lower(func)," var,") ok=False
+	'If Instr(Lower(func)," var ") ok=False
+	'If Instr(Lower(func)," var)") ok=False
+	'If Instr(Lower(func),"callback") ok=False
+	
+	If Not ok
+		functions.remove func
+		Continue
+	EndIf
+
+	Rem
+	For c$=EachIn constants
+		constname$=Piece(c,2)
+		constname$=Trim(Piece(constname,1,"="))
+		If Instr(func,"="+constname)
+			constval$=Trim(Piece(c,2,"="))
+			functions.remove func
+			functions.addlast Replace(func,"="+constname,"="+constval)
+			Exit
+		EndIf
+	Next
+	EndRem
+		
+Next
+
+SortList functions
+
+commandset.writeline "EXPORTS"
+commandset.writeline ""
+
+For s$=EachIn functions
+	s=Replace(s,"%",":Int")
+	s=Replace(s,"$",":String")
+	s=Replace(s,"#",":Float")
+	s=Piece(s,1,"(")
+	s=Piece(s,1,":")
+	commandset.writeline s+"=bb_"+s
+Next
+
+commandset.close
+
+Print ""
+Print LineCount+" lines"
+
+End
+
+Function ExtractCommandSet:Int(file$)
+	in:TStream=ReadStream(file)
+	If Not in
+		Notify "Failed to load file "+Chr(34)+file+Chr(34)+"."
+		Return False
+	EndIf
+	
+	Global bvmskip
+	
+	incdir$=ExtractDir(RealPath(file))
+	
+	While Not in.Eof()
+		LineCount:+1
+		s$=in.readline()
+		s=Replace(s,"'",";")
+		s=Trim(s)
+		'If Left(s,1)="'" Continue
+
+
+		If Lower(Trim(s))=";-dll"
+			bvmskip=bvmskip+1
+		EndIf
+
+		If Lower(Trim(s))=";+dll"
+			bvmskip=bvmskip-1
+		EndIf		
+
+		If Not bvmskip
+	
+			If Lower(Piece(s,1))="rem"
+				comment=True
+			EndIf
+	
+			If Lower(Piece(s,1))="endrem" Or (Lower(Piece(s,1))="end" And Lower(Piece(s,2))="rem")
+				comment=False
+			EndIf
+			
+			If Not comment
+	
+				If Lower(Piece(s,1))="private"
+					InPriv=True
+				EndIf
+				
+				If Lower(Piece(s,1))="public"
+					InPriv=False
+				EndIf
+				
+				If Not inPriv
+					
+					
+					If Lower(Piece(s,1))="type"
+						bvmt:BVMType=New BVMType
+						bvmt.name=Trim(s)
+						types.addlast(Trim(s))
+						InType=True
+					EndIf
+			
+					If Lower(Piece(s,1))="endtype" Or (Lower(Piece(s,1))="end" And Lower(Piece(s,2))="type")
+						InType=False
+						expose=False
+					EndIf
+	
+					If Not InType
+	
+						If Lower(Piece(s,1))="function"
+							's$=Replace(s,"=Null","")
+							s=Replace(s,"Function","")
+							functions.addfirst Trim(s)
+							infunction:+1
+						EndIf
+				
+						If Lower(Piece(s,1))="endfunction" Or (Lower(Piece(s,1))="end" And Lower(Piece(s,2))="function")
+							infunction:-1
+							If infunction&lt;0 Notify "Error parsing file."
+						EndIf
+						
+						If Not infunction
+	
+							If Lower(Piece(s,1))="global"
+								globals.addfirst Trim(s)
+							EndIf
+							
+							If Lower(Piece(s,1))="const"
+								constants.addfirst(Trim(s))
+							EndIf
+						
+						EndIf
+					
+					Else
+						
+						If expose
+							
+							If Lower(s)=";endexpose" expose=False
+							
+							If Lower(Piece(s,1))="field"
+								bvmt.fields.addlast(Trim(Piece(s,1,"=")))
+							EndIf
+						
+							If Lower(Piece(s,1))="method"
+								bvmt.methods.addlast(Trim(s))
+								InMethod=True
+							EndIf
+							
+							If Lower(Piece(s,1))="endmethod" Or (Lower(Piece(s,1))="end" And Lower(Piece(s,2))="method")
+								InMethod=False
+							EndIf
+						
+						Else
+						
+							If Lower(s)=";expose" expose=True
+						
+						EndIf
+						
+					EndIf
+						
+				EndIf
+							
+				If Lower(Piece(s,1))="include"
+					text$=Trim(Right(s,s.length-8))
+					text=Replace(text,Chr(34),"")
+					Print "Loading include file "+Chr(34)+incdir+"/"+text+Chr(34)+"..."
+					ExtractCommandSet incdir+"/"+text		
+				EndIf
+				
+			EndIf
+		EndIf
+	Wend
+	in.close()
+	Return True
+EndFunction
+
+Function Piece$(s$,entry,char$=" ")
+	Local n
+	Local p
+	Local a$
+	While Instr(s,char+char)
+		s=Replace(s,char+char,char)
+	Wend
+	For n=1 To entry-1
+		p=Instr(s,char)
+		s=Right(s,Len(s)-p)
+		If Not p
+			If entry=n Exit Else Return
+		EndIf
+	Next
+	p=Instr(s,char)
+	If p&lt;1
+		a$=s
+	Else
+		a=Left(s,p-1)
+	EndIf
+	Return a
+End Function</textarea><br><br>You should also have a COMPILE_DLL constant, and add this to the start of each function:<br><br>If COMPILE_DLL GCEnter() <br><br></td></tr></table><br>
+<a name="798088"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ninjarat</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> O_o .... This is awesome. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

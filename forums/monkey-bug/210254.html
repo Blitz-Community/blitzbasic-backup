@@ -1,0 +1,179 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Mojo2 SetViewport()</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Mojo2 SetViewport()</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=501" >Monkey Bug Reports</a>/<a href="#bottom" >Mojo2 SetViewport()</a><br><br>
+<a name="2113870"></a>
+
+<a name="2113871"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Richard Betson</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>I am getting a memory leak when using (a renderer instance) 'renderer.SetViewport()' recursively. Eventually the compiled application will fail with an 'Incomplete framebuffer' runtime error. Bug?<br><br>Below is a modified renderer demo with the following added in the Render() method. <br><pre class=code>
+Local offset:Int=Sin(Millisecs())*20
+renderer.SetViewport( 0,0,DeviceWidth-offset,DeviceHeight )
+</pre><br>Tested with 86a and on Linux Mint 17.2 (Ubuntu 14.04Lts). Target GLFW.<br>.<br><br>Modified renderer demo.<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+'very simple demo of using Renderer for &gt;4 lights + shadows.
+
+Import mojo2
+
+Const NUM_LIGHTS:=5
+
+'create an orthographics projection matrix
+Function Mat4Ortho:Float[]( left:Float,right:Float,bottom:Float,top:Float,znear:Float,zfar:Float )
+
+	Local w:=right-left,h:=top-bottom,d:=zfar-znear
+	
+	Return [ 2.0/w,0,0,0, 0,2.0/h,0,0, 0,0,2.0/d,0, -(right+left)/w,-(top+bottom)/h,-(zfar+znear)/d,1 ]
+End
+
+Class MyLight Implements ILight
+
+	'note: x,y,z,w go in last 4 components of matrix...
+	Field matrix:=[1.0,0.0,0.0,0.0, 0.0,1.0,0.0,0.0, 0.0,0.0,1.0,0.0, 0.0,0.0,-100.0,1.0]
+	Field color:=[0.2,0.2,0.2,1.0]
+	Field range:=400.0
+
+	'implement ILight interface...
+	'
+	Method LightMatrix:Float[]()
+		Return matrix
+	End
+	
+	Method LightType:Int()
+		Return 1
+	End
+	
+	Method LightColor:Float[]()
+		Return color
+	End
+	
+	Method LightRange:Float()
+		Return range
+	End
+	
+	Method LightImage:Image()
+		Return Null
+	End
+
+End
+
+Class MyLayer Extends DrawList Implements ILayer
+
+	Field lights:=New Stack&lt;MyLight&gt;
+	Field layerMatrix:=[1.0,0.0,0.0,0.0, 0.0,1.0,0.0,0.0, 0.0,0.0,1.0,0.0, 0.0,0.0,0.0,1.0]
+	Field layerFogColor:=[0.0,0.0,0.0,0.0]
+
+	'implement ILayer interface...
+	'
+	Method LayerMatrix:Float[]()
+		Return layerMatrix
+	End
+	
+	Method LayerFogColor:Float[]()
+		Return layerFogColor
+	End
+	
+	Method LayerLightMaskImage:Image()
+		Return Null
+	End
+	
+	Method EnumLayerLights:Void( lights:Stack&lt;ILight&gt; )
+		For Local light:=Eachin Self.lights
+			lights.Push light
+		Next
+	End
+
+	Method OnRenderLayer:Void( drawLists:Stack&lt;DrawList&gt; )
+		drawLists.Push Self
+	End
+
+End
+
+Class MyApp Extends App
+
+	Field tile:Image
+	Field shadowCaster:ShadowCaster
+	Field renderer:Renderer
+	Field layer0:MyLayer
+	Field rimage:Image
+	Field weird:=New DrawList
+	
+	Method OnCreate()
+	
+		'create renderer
+		renderer=New Renderer
+		renderer.SetViewport( 0,0,DeviceWidth,DeviceHeight )
+		renderer.SetProjectionMatrix( Mat4Ortho( 0,640,0,480,-1,1 ) )
+		renderer.SetAmbientLight( [0.1,0.1,0.1,1.0] )
+		
+		'load some gfx
+		tile=Image.Load( "t3.png",0,0 )
+		
+		'create layer 0
+		layer0=New MyLayer
+		
+		'add some lights to layer
+		For Local i:=0 Until NUM_LIGHTS
+			layer0.lights.Push New MyLight
+		Next
+
+		For Local x:=0 Until 640 Step 128
+			For Local y:=0 Until 480 Step 128	
+				layer0.DrawImage tile,x,y
+			Next
+		Next
+		
+		'create simple rect shadow caster
+		shadowCaster=New ShadowCaster
+		shadowCaster.SetVertices( [0.0,0.0, 32.0,0.0, 32.0,32.0, 0.0,32.0] )
+		
+		'draw some shadow casters
+		For Local x:=100 Until 640 Step 220
+		
+			For Local y:=60 Until 480 Step 180
+			
+				layer0.SetColor 1,1,0
+				layer0.DrawRect x-16,y-16,32,32
+				layer0.SetColor 1,1,1
+				
+				layer0.AddShadowCaster shadowCaster,x-16,y-16
+			Next
+		Next
+
+		'add layer to renderer		
+		renderer.Layers.Push layer0
+	End
+	
+	Method OnRender()
+
+'	    --------------------------
+'		** Added to test bug **
+'		Memory Leak SetViewport().
+'	    --------------------------
+		Local offset:Int=Sin(Millisecs())*20
+		renderer.SetViewport( 0,0,DeviceWidth-offset,DeviceHeight )
+
+	
+		'move lights around a bit
+		For Local i:=0 Until NUM_LIGHTS
+			Local light:=layer0.lights.Get(i)
+			Local radius:=120.0
+			Local an:=(i*360.0/NUM_LIGHTS)+(Millisecs/50.0)
+			light.matrix[12]=Cos( an )*radius+320
+			light.matrix[13]=Sin( an )*radius+240
+		Next
+
+		'render scene
+		renderer.Render
+		
+	End
+End
+
+Function Main()
+
+	New MyApp
+
+End
+
+</textarea> <br><br></td></tr></table><br>
+<a name="2113895"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes, that's a big ugly leak!<br><br>Fixed in v86b - now available. <br><br></td></tr></table><br>
+<a name="2113918"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Richard Betson</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Fixed in v86b - now available. <br></div><br>Seems to be working great now (Faaast fix). :) Thanks! <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

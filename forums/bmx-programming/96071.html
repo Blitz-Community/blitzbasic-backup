@@ -1,0 +1,186 @@
+<!DOCTYPE html><html lang="en" ><head ><title >dont use blitz eventqueue for your internal events</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >dont use blitz eventqueue for your internal events</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >dont use blitz eventqueue for your internal events</a><br><br>
+<a name="1110250"></a>
+
+<a name="1110251"></a>
+
+<a name="1110252"></a>
+
+<a name="1110398"></a>
+
+<a name="1110399"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I am writing a maxgui app ( objecty <a href="http://www.skn3.com/apps/objecty" target="_blank">http://www.skn3.com/apps/objecty</a> ) using the blitz event queue for maxgui events, timer events and also my own app events. I knew this would be a performance hit but it didn't know how much until today. I totally replaced all internal event code to work on a callback system and things have dramatically increased in performance. The callback system is not the solution for gui, the brl event queue is brilliant for that. For anything else where you need to hook into inter-application communications then try this:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Module skn3.callback
+
+SuperStrict
+Import brl.linkedlist
+
+'constants
+Const CALLBACK_CONTINUE:Int = 0
+Const CALLBACK_STOP:Int = 1
+
+
+'globals
+Global callbackLists:TList[]
+Global callbackIdCount:Int = 0
+Global callbackData:skn3CallbackData[0]
+Global callbackDepth:Int = 0
+
+
+'classes
+Type skn3CallbackData
+	Field int1:Int
+	Field int2:Int
+	Field float1:Float
+	Field float2:Float
+	Field string1:String
+	Field string2:String
+	Field object1:Object
+	Field object2:Object
+	
+	Method reset()
+		' --- reset the data ---
+		int1 = 0
+		int2 = 0
+		float1 = 0.0
+		float2 = 0.0
+		string1 = ""
+		string2 = ""
+		object1 = Null
+		object2 = Null
+	End Method
+End Type
+
+Type Skn3CallbackFunctionCall
+	Field func:Int(id:Int,reciever:Object,data:skn3CallbackData)
+	Field reciever:Object
+End Type
+
+
+'functions
+Function CallbackDataObject:skn3CallbackData()
+	' --- get/create a data object ---
+	'look if we need to resize the callback data stack
+	If callbackDepth &gt;= callbackData.length
+		'resize
+		Local index:Int = callbackData.length
+		callbackData = callbackData[..callbackDepth+1]
+		
+		'build objects
+		For index = index Until callbackData.length
+			callbackData[index] = New skn3CallbackData
+		Next
+	EndIf
+	
+	'now return the data object at a particular depth
+	Return callbackData[callbackDepth]
+End Function
+
+Function AllocCallbackId:Int(name:String)
+	' --- assig na new callback id ---
+	'the name is in here for future proofing.. but cant be assed to do it at the mo
+	
+	'get new id
+	Local newId:Int = callbackIdCount
+	callbackIdCount :+ 1
+	
+	'resize the calls array
+	callbackLists = callbackLists[..callbackIdCount]
+	
+	'create new list
+	callbackLists[newId] = CreateList()
+	
+	'return the id
+	Return newId
+End Function
+
+Function AddCallback:TLink(id:Int,func:Int(id:Int,reciever:Object,data:skn3CallbackData),reciever:Object)
+	' --- add a function call ---
+	If id &gt;= 0 And id &lt; callbackIdCount
+		'create a new function call
+		Local functionCall:Skn3CallbackFunctionCall = New Skn3CallbackFunctionCall
+		functionCall.func = func
+		functionCall.reciever = reciever
+		
+		'add call to apropriate list
+		Return callbackLists[id].AddLast(functionCall)
+	EndIf
+End Function
+
+Function HasCallbacks:Int(id:Int)
+	' --- return if a particular id has callbacks ---
+	Return id &gt;= 0 And id &lt; callbackIdCount And callbackLists[id].isEmpty() = False
+End Function
+
+Function FireCallback(id:Int,data:skn3CallbackData=Null)
+	' --- this will fire a callback ---
+	'check to see if there are any function calls
+	If id &gt;= 0 And id &lt; callbackIdCount And callbackLists[id].isEmpty() = False
+		'increase the call depth
+		callbackDepth :+ 1
+		
+		'loop through all function calls
+		Local link:TLink = callbackLists[id].FirstLink()
+		Local functionCall:Skn3CallbackFunctionCall
+		While link
+			'get the function call
+			functionCall = Skn3CallbackFunctionCall(link.value())
+			
+			'call it!
+			'also check to see if a callback is stopping further calls (hopefully not)
+			If functionCall.func(id,functionCall.reciever,data) = CALLBACK_STOP Exit
+				
+			'next link
+			link = link.NextLink()
+		Wend
+		
+		'decrease the call depth
+		callbackDepth :- 1
+		
+		'reset the data (so we dont hold on to anything GC)
+		if data data.reset()
+	EndIf
+End Function</textarea><br><br>An example of using:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">'callback hook function
+Function CallbackHook:Int(id:Int,reciever:Object,data:skn3CallbackData)
+	Select id
+		Case myCallback
+			Print "myCallback was called: "+data.string1
+	End Select
+End Function
+
+'create new callback id
+Global myCallback:Int = AllocCallbackId("myCallback")
+
+'add a callback function to myCallback id
+AddCallback(myCallback,CallbackHook,Null)
+
+'fire callback
+If HasCallbacks(myCallback)
+	Local data:skn3CallbackData = CallbackDataObject()
+	data.string1 = "hello world"
+	FireCallback(myCallback,data)
+EndIf</textarea><br><br>[update]Now data objects are allocated on a stack so tons of objects don't have to be allocated/deallocated. The firecallback function will reset the data object so each data object should be treated as a one time only operation.<br><br><font class="tiny">Last edited 2011</font><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1110253"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> If you are constantly emitting events, all that dynamic memory allocation will have a cost. <br><br></td></tr></table><br>
+<a name="1110258"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm maybe I should add in pre created data objects... One for each depth of callback (eg calling a callback from a callback)... Will update when go back to pc. <br><br></td></tr></table><br>
+<a name="1110272"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jsp</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Interesting approach.<br><div class="quote"> ...didn't know how much until today. <br></div><br>So how much was it?<br>How many events did you emit, that you encounter performance problems? <br><br></td></tr></table><br>
+<a name="1110340"></a>
+
+<a name="1110341"></a>
+
+<a name="1110342"></a>
+
+<a name="1110344"></a>
+
+<a name="1110351"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Double post<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1110352"></a>
+
+<a name="1110353"></a>
+
+<a name="1110355"></a>
+
+<a name="1110407"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well I had communication every time a node (node being an object in the editor) to tell that object was being locked, objected was being edited and then object unlocked. A few more but that was the basics. If multiple nodes were being edited at once it slowed down even after say 20 or so objects. Imagine selecting a node and moving it would generate many updating messages as position changed. Now imagine 100 objects at once.<br><br>The reason it was all going over events was so editors, dialogues and other things could react to nodes being altered. The editors, nodes and dialogues are all oop so I can't really optimise by hard coding stuff, all needs to be generic.<br><br>The callbacks rectified things and seems to have sped up some of the maxgui stuff as it isn't getting flooded in the event queue!<br><br>I don't have an exact number of performance but it went from sluggish 1-5 fps moving 1000 nodes in the editor to silky smooth no lag/delay!<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

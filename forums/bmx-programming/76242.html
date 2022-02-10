@@ -1,0 +1,259 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Gnet.Sync() problem with Flip(0)</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Gnet.Sync() problem with Flip(0)</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Gnet.Sync() problem with Flip(0)</a><br><br>
+<a name="852362"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Scaremonger</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've been messing around trying to interface GNET to my own game framework. I was getting a problem where GNET_CREATED messages were not being received, and therefore objects were not getting co-ordinated.<br><br>In the end I wrote a small game to test GNET and I didn't get the same problem. I've spent days cross referencing it, and now I've identified the source of the error.<br><br>My Game framework uses FLIP(0), and the game used FLIP().<br><br>Take a look at this code:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">'GNET TEST
+SuperStrict
+Import BRL.GNet
+
+Graphics 640,480
+SeedRnd( MilliSecs() ) 
+
+Global hasQuit% = False
+Global host		:TGNetHost	 = CreateGNetHost()
+Global player	:TPlayer	 = New TPlayer.Create( Rand(0 , GraphicsWidth() ) , Rand(0 , GraphicsHeight() ) , Rand(0 , 360), $00, $ff, $00 )
+
+Const SLOT_TYPE		:Int = 1
+Const SLOT_X		:Int = 2
+Const SLOT_Y		:Int = 3
+Const SLOT_ROTATE	:Int = 4
+
+Const CLASS_PLAYER	:Int = 1
+Const CLASS_BULLET	:Int = 2
+
+'##########
+Const SPEED_MOVE	:Float	 = 0.10
+Const SPEED_ROTATE	:Float	 = 1.00
+Const SPEED_BULLET	:Float	 = 0.20
+Const FLIPMODE		:Int	 = 0
+'##########
+
+Select Proceed( "Do you want to Host a Game? (No will join a game)" ) 
+Case 0	' No to Host (Join)
+	GNetConnect( host, "127.0.0.1", 4000 )
+Case 1	'#Yes to host
+	GNetListen( host, 4000 )
+Default
+	End
+End Select
+
+Local sprite	:TSprite
+Local obj		:TGnetObject
+While Not(hasquit) 
+	Cls
+	'#
+	GNetSync( host ) 
+	For obj = EachIn GNetObjects(host) 
+		Select obj.state() 
+		Case GNET_CREATED
+DebugLog "Create -&gt; " + GetGNetInt(obj,SLOT_TYPE) 
+			onCreate( obj ) 
+		Case GNET_CLOSED
+DebugLog "Closed -&gt; " + GetGNetInt(obj,SLOT_TYPE)
+			onClose( obj )
+		Case GNET_MODIFIED
+'DebugLog "  Modify -&gt; " + getGnetint(obj,SLOT_TYPE) 
+'			onModify( obj ) 
+		Default
+			'# Ignore other states
+		End Select
+	Next
+	'#
+	For sprite = EachIn TSprite.list
+		sprite.update() 
+	Next
+	'#
+	For sprite = EachIn TSprite.list
+		sprite.draw() 
+	Next
+	'#
+	SetColor(255 , 255 , 255) 
+	SetRotation(0)
+	DrawText( TSprite.list.count() + " sprites",10,10 )
+	'#
+	If KeyHit(KEY_ESCAPE) Or AppTerminate() Then hasQuit = True
+	Flip( FLIPMODE )	
+Wend
+
+CloseGNetHost( host ) 
+End
+
+Function onCreate( obj:TGnetObject ) 
+Local x# , y# , r%
+	x = GetGNetFloat( obj , SLOT_X) 
+	y = GetGNetFloat( obj , SLOT_Y) 
+	r = GetGNetInt( obj , SLOT_ROTATE) 
+	'#
+	Select GetGNetInt( obj , SLOT_TYPE ) 
+	Case CLASS_PLAYER
+		New Tplayer.Create( x , y , r , $00,$00,$ff, obj ) 
+	Case CLASS_BULLET
+		New Tbullet.Create( x , y , r , obj )
+	Default
+DebugLog "UNKNOWN CLASS OF OBJECT " + GetGNetInt( obj , SLOT_TYPE )
+	End Select
+End Function
+
+Function onClose( obj:TGnetObject ) 
+Local found% = False
+	'# Loop through list and find this object
+	For Local sprite:TSprite = EachIn TSprite.list
+		If sprite.netobj = obj Then	'# Found
+			sprite.remove()
+			found = True
+			Exit
+		End If
+	Next
+	'#
+	If Not found Then DebugLog "CANNOT FIND OBJECT " + GetGNetInt( obj,SLOT_TYPE )
+End Function
+
+Type TSprite
+	Global list:TList = CreateList() 
+	'#
+	Field x# , y# , w# , h#
+	Field r% , g% , b%
+	Field rotation%
+	Field netobj:TGnetObject
+	'#
+	Method _create( class%, x# , y# , rot% , w# , h# , r% , g% , b%, obj:TGnetObject = Null )
+		Self.x = x
+		Self.y = y
+		Self.rotation = rot
+		Self.w = w
+		Self.h = h
+		Self.r = r
+		Self.g = g
+		Self.b = b
+		'#
+		If obj Then
+			netObj = obj
+		Else
+			netobj = CreateGNetObject( host ) 
+		End If
+		'#
+		SetGNetInt( netobj , SLOT_TYPE , class ) 
+		SetGNetFloat( netobj , SLOT_X , x ) 
+		SetGNetFloat( netobj , SLOT_Y , y ) 
+		SetGNetInt( netobj , SLOT_ROTATE , rotation ) 
+		'#
+		ListAddLast( list,Self )
+	End Method
+	'#
+	Method update()
+	End Method
+	'#
+	Method draw()
+		SetHandle( w/2 , h/2 ) 
+		SetRotation( rotation ) 
+		SetColor( r , g , b) 
+		DrawOval(x,y,w,h)
+	End Method
+	'#
+	Method offscreen%()
+		If x-w &gt; GraphicsWidth() Then Return True
+		If x+w &lt;0 Then Return True
+		If y-h &gt; GraphicsHeight() Then Return True
+		If y-h &lt;0 Then Return True
+	Return False
+	End Method
+	'#
+	Method remove() 
+		If isLocal() Then CloseGNetObject( netobj )
+		list.remove( Self )
+DebugLog "Object removed"
+	End Method
+	'#
+	Method isLocal%()
+		Return GNetObjectLocal( netobj )
+	End Method
+	'#
+	Method isRemote%()
+		Return GNetObjectRemote( netobj )
+	End Method
+	'#
+	Method netUpdate() 
+		x = GetGNetFloat( netobj, SLOT_X )
+		y = GetGNetFloat( netobj, SLOT_Y )
+		rotation = GetGNetInt( netobj, SLOT_ROTATE )
+	End Method
+End Type
+
+Type TPlayer Extends TSprite
+	Method Create:TPlayer( x# , y# , rot%, r% , g% , b% , obj:TgnetObject = Null )
+		_create( CLASS_PLAYER, x , y , rot , 15 , 15 , r , g , b, obj ) 
+	Return Self
+	End Method
+	'#
+	Method update() 
+		If isLocal() Then
+			If KeyDown( KEY_LEFT ) Then
+				rotation = rotation - SPEED_ROTATE
+				If rotation &lt;0 Then rotation:+360
+				SetGNetInt( netobj, SLOT_ROTATE, rotation )
+			End If
+			If KeyDown( KEY_RIGHT ) Then
+				rotation = rotation + SPEED_ROTATE
+				If rotation &gt; 360 Then rotation:- 360
+				SetGNetInt( netobj, SLOT_ROTATE, rotation )
+			End If
+			If KeyDown( KEY_UP ) Then
+				x:+ ( SPEED_MOVE * Cos( rotation + 180 ) )
+				y:+ ( SPEED_MOVE * Sin( rotation + 180 ) )
+				If x &gt; GraphicsWidth() - 15 Then x = GraphicsWidth() - 15
+				If x &lt; 15 Then x = 15
+				If y &gt; GraphicsWidth() - 15 Then y = GraphicsHeight() - 15
+				If y &lt; 15 Then y = 15
+				'#
+				SetGNetFloat( netobj, SLOT_X, x )
+				SetGNetFloat( netobj, SLOT_Y, y )
+			End If
+			If KeyHit( KEY_TAB ) Then
+				New TBullet.Create( x,y,rotation )
+			End If
+		Else
+			netUpdate()
+		End If
+	End Method
+	'#
+	Method draw() 
+		Super.draw()
+		SetHandle(0 , 0) 
+		SetColor($ff,$00,$00)
+		SetLineWidth(3)
+		DrawLine(x,y,x-9,y)
+		SetLineWidth(1)
+	End Method
+End Type
+
+Type TBullet Extends TSprite
+	Method Create:TBullet( x# , y# , rot%, obj:TgnetObject = Null )
+		_create( CLASS_BULLET , x , y , rot , 3 , 3 , $ff , $00 , $00 , obj )
+DebugLog "Bullet created"
+	Return Self
+	End Method
+	'#
+	Method update()
+		If isLocal() Then
+			x:+ ( SPEED_BULLET * Cos( rotation + 180 ) )
+			y:+ ( SPEED_BULLET * Sin( rotation + 180 ) )	
+			SetGNetFloat( netobj, SLOT_X, x )
+			SetGNetFloat( netobj, SLOT_Y, y )
+			If offscreen() Then remove()		
+		Else
+			netUpdate()
+		End If
+	End Method
+End Type
+</textarea><br><br>Run it twice on your PC, and host the first. Now watch both windows carefully. Press tab repeatedly (to create bullets), and you will see that some of them do not get created on the other window... (THE BUG).<br><br>Now change the code in "Listing1", replacing the speed constants (cos flip(0) is faster) and Flipmode variable. Repeat the same again...<br><br><pre class=code>
+'##########
+Const SPEED_MOVE	:Float	 = 1.00
+Const SPEED_ROTATE	:Float	 = 5.00
+Const SPEED_BULLET	:Float	 = 1.20
+Const FLIPMODE		:Int	 = -1		'# DEFAULT
+'##########
+</pre><br><br>Any idea why this happens? Have I simply missed something? <br><br></td></tr></table><br>
+<a name="852406"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dreamora</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> yupp.<br>you forgot regular latency assumptions. you can surely not push the network each frame!<br>As well, gnet is not realtime targeted, use Pub.ENet if you need realtime.<br>GNet is targeted at a slower pace due to the massive amount of data (32slots on the gnet objects) it will syncronize <br><br></td></tr></table><br>
+<a name="852422"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Scaremonger</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cheers Dremora, Obvious now you've said it... <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

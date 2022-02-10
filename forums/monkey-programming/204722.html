@@ -1,0 +1,184 @@
+<!DOCTYPE html><html lang="en" ><head ><title >OnUpdate, OnRender and nesting loop</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >OnUpdate, OnRender and nesting loop</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=507" >Monkey Programming</a>/<a href="#bottom" >OnUpdate, OnRender and nesting loop</a><br><br>
+<a name="2051136"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I need a way to be able to call the app OnRender from the OnUpdate.<br>Let me explain:<br>In the GUI engine I'm writing with Monkey, I want to add a MsBox (notify) window system, and that would require that, when the code has a Notify("Whatever"), the engine can enter a sort of nested update/render loop while the modal window is shown. Any ideas?<br><br>Pseudocode:<br><pre class=code>
+...
+Method DoSomethingImportant()
+   If license.Expired Then
+      'That would require the App to process a secondary event loop:
+      Notify("Your license is expired.") 
+      Return
+   End
+End
+</pre><br><br>I don't know if the problem is understandable but when a modal form has to be shown, we need the GUI system to be able to render it, show it on screen process the user input, detect when the window has been closed, and continue execution where it was. As far as I know, there's no way to call a "ProcessEvents" or the like into the Mojo App, isn't it? <br><br></td></tr></table><br>
+<a name="2051139"></a>
+
+<a name="2051140"></a>
+
+<a name="2051141"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Rushino</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> To me that would be better that Notify set some kind of a flag that you can handle in update/render main loop. Why it couldnt be like this ?<br><br>Notify:<br><br>Method Notify(msg:String)<br>   ..Create window..<br>   ..Add window to notify list..<br>End<br><br>OnRender:<br><br>..See if there any notification in the list and if yes call the Render() of it..<br><br>OnUpdate:<br><br>..Same.. <br><br></td></tr></table><br>
+<a name="2051161"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Why it couldnt be like this ? <br></div><br>because you can't get the result of the dialog on the program flow. Another example: (Ask is a function that shows a Yes/No modal dialog<br><br><pre class=code>
+Method ClosingForm()
+   If Ask("Do you want to save changes?") = DialogResult.Yes Then
+      SaveChanges()
+   End
+   self.Close()
+End
+</pre><br>If "Ask" only sets a flag or does anything how can you wait for the result while the function does process its render and update, so user can see the dialog and click/select the desired option? <br><br></td></tr></table><br>
+<a name="2051163"></a>
+
+<a name="2051168"></a>
+
+<a name="2051169"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Midimaster</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> It is never a good idea to combine waiting on events/updating an rendering.<br><br>A GUI is diveded in two parts: the logical part which "knows", what is visible or "on top" or "behind the fingers" and receives user inputs...<br><br>...and a graphic part, which knows, which elements are visible and paints the state of the GUI.<br><br>So the lifetime of a notify-Box is:<br><br>-mainloop<br><br>-create and open it and set all properties like "text", "wating", "Visible", etc... in OnUpdate()<br><br>-back to main loop<br><br>-waiting for a user reaction in OnUpdate()<br>-paint the box in OnRender()<br><br>-back to main loop<br><br>-recognizing the user, set the box "visible" and "waiting" to FALSE and react on the users decision in OnUpdate()<br><br>-back to main loop<br><br><pre class=code>Strict
+Import mojo
+
+Class Game Extends App
+
+	Field Notify%
+
+	Method OnCreate%()
+		SetUpdateRate 5
+		Return 0
+	End	
+
+	Method OnUpdate%()
+		If KeyHit(KEY_ESCAPE) Then Error ""
+		If TouchHit()
+			If Notify=0
+				' mouse action starts notify box:
+				Notify=-1
+			Else
+				' mouse action goes to notify buttons:
+				If TouchX()&lt;320
+					Notify=1
+				Else
+					Notify=2
+				Endif
+			Endif
+		Endif
+
+		' proceed notify results:
+		If Notify&gt;0 
+			If Notify=1
+				Print "YES"
+			Else
+				Print "NO"
+			Endif
+			Notify=0
+		Endif
+		Return 0
+	End	
+
+	Method OnRender%()
+		Cls 0,255,0
+		' paint regular screen
+			SetColor 255,255,255
+			DrawText "PRESS MOUSE",150,250
+		If Notify=-1
+			' paint notfy box over the screen:
+			SetColor 111,0,111
+			DrawRect 50,200,200,100
+			DrawRect 350,200,200,100
+			SetColor 255,255,255
+			DrawText "YES",150,250
+			DrawText "NO",450,250			
+		Endif
+		' main loop is still running:
+		Print "Render" +Millisecs()
+		Return 0
+	End	
+
+End
+
+Function Main%()
+	New Game
+	Return 0
+End
+</pre> <br><br></td></tr></table><br>
+<a name="2051197"></a>
+
+<a name="2051219"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> It is never a good idea to combine waiting on events/updating an rendering. <br></div>I could not disagree more on that. <br>It may be <b>usually</b> a bad- idea, but the good option is always the most balanced one. Having to rely on flags, callbaks, events or interfaces just to be able to show a notify window is going by too far. In this particular scenario for easy and small dialogs, it's not worth it.<br><br>All notify dialogs are designed to do exactly this. A folder selection dialog, and any modal one.<br><br>If it's not done like this, you're forced to over complicate program flow. Do you know of any GUI system where you can't launch a SelectFolder function, or AskYesNo function, etc that have the form of a GUI dialog on screen, in a way that program flow can wait for the response to act accordingly?<br><br>If you think on program flow diagrams, you know that rhombus with a yes/no that is the result of user interaction, in this case, as the result of a dialog. That's something even the more basic and simple GUI system provides. Monkey current lag of nested event-poll processing disallows this.<br><br>We had Notify, SelectFolder and the like functions on BlitzMax, and it happens to be impossible to do the same with a mojo-based GUI system. That's my request.<br><br>I know how to code a work-around, but if it can't be encapsulated on a function, it's quite unusable.<br><br>Should I have to build a status diagram, set flags, etc, just to ask for a folder selection, open file, etc? That's a very disgusting limitation of current schema, and forces a over-engineering of very simple and common tasks, to the point that they become sort of unusable. It could be solved by a simple "doevents" function that can be used internaly on modal windows processing. That's what I'm requesting. Most of event-driven system like Mojo does provide this for exactly the same reason (also to allow rendering updating while processing complex loops to avoid the program to be shown as irresponsive, but that's another problem...)<br><br>Edit: the only reason I see to not having this "ProcessEvents" or "pullEvents" or "DoEvents" function on Mojo is the current implementation of the c++ garbage collector (again). As it requires those event to be processed outside any Mojo function or method. <br><br></td></tr></table><br>
+<a name="2051177"></a>
+
+<a name="2051178"></a>
+
+<a name="2051179"></a>
+
+<a name="2051180"></a>
+
+<a name="2051181"></a>
+
+<a name="2051182"></a>
+
+<a name="2051186"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Difference</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> That's a very disgusting limitation of current schema, and forces a over-engineering of very simple and common tasks, to the point that they become sort of unusable. <br></div><br><br>Consider your blood pressure - it's friday after all , and there are after all, more than one way to skin a cat.<br><br>I completely agree with MidiMaster, I have total separation of rendering, timing and input, in my own framework, and have found no limitations. What you call workarounds, I call design.<br><br>PS: I always found the need for "DoEvents" a pain.<br><br>totally asynchronous greetings, Diff. <br><br></td></tr></table><br>
+<a name="2051187"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Midimaster</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh yes, now I understand... You would need something like a program counter, which can be put on a stack to find back to the same code line later....<br><br>Reaching a "Notify"-command the program flow jumps into a MY_GUI function, which stores the PG, sets a flag, and continue to leave the OnUpdate(). Later on closing the Notify-Gadget the MY_GUI remembers the PG and can continue the game... <br><br></td></tr></table><br>
+<a name="2051191"></a>
+
+<a name="2051192"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Other than telling me how I should do it asyncronously, which is something I aready know how to do, and other than telling me what should I like or dislike. Is there any other reason for not providing a way to make syncronious operations if I want? Other than not having a more versatile garbage collector?<br>If I have to add a callback or the like anytime I want a dialog to perform a modal action, this is so contrary to any of the GUI designed systems that I've been using such as WinForms, GTK#...<br>winForms:<br>DoEvents<br><br>GTK:<br>while (GLib.MainContext.Iteration ())<br><br>wxWidgets:<br>wxYield and FlushActive<br><br>and so on...<br><br>Mojo... ?? no way AFAIK<br><br>As Monkey allows recursion... why not allow us to use it if we want to do it carefully? <br><br></td></tr></table><br>
+<a name="2051193"></a>
+
+<a name="2051195"></a>
+
+<a name="2051196"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Gerry Quinn</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> [Deleted, thought I had a solution but it does not really deliver what the OP wants] <br><br></td></tr></table><br>
+<a name="2051199"></a>
+
+<a name="2051200"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> You would need something like a program counter, which can be put on a stack to find back to the same code line later <br></div>Yes, that's called a call stack :D I want to be able to use it also to commit render/udpate operations if I want to.<br>In the case of writing a GUI that can provide modal dialogs for simple tasks, it is really woth it. I mean dialogs like a simple log-in form, a folder selector, a notify window, a simple yes/no question dialog, etc. Having to rely on async checks/callbacks etc for this ultra simple tasks that could be provided to the GUI users as a simple function, is very counter productive.<br>I know this is a very specific need. But happens to be the one I'm facing right now. <br><br></td></tr></table><br>
+<a name="2051280"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is just the way some 'modern' OSs/Guis work - ie: your app cannot 'halt' progress, or you break the whole system.<br><br>If this were not the case, I wouldn't have bothered with all the OnUpdate/OnRender nonsense, and you guys would have been able to use...<br><br><pre class=code>
+Repeat
+   ...do cool stuff...
+   Flip
+Forever
+</pre><br><br>...instead. If only...<br><br>The same goes for native coding - eg: in Android, you don't just call 'MessageBox' and it blocks until 'OK' is clicked. Instead, the function returns immediately and will *eventually* call a 'close clicked' handler or something.<br><br>Perhaps something tricky could be done with threads on some targets, but I'm not going there for a while yet (if ever) so for now you're stuck with having to 'fake' synchronous ops in a 'continuously running' environment. <br><br></td></tr></table><br>
+<a name="2051248"></a>
+
+<a name="2051253"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok. Thanks for the info. I'll redesign my original approach. <br><br></td></tr></table><br>
+<a name="2051360"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Fred</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> I believe everybody's right here. To make it safe and clean or if you want to be cross platform you don't have the choice. <br>But when you are prototyping, making some quick and dirty runs, it a pain to have to implement a gui system for an input(even with an already made module) it could lead to more code just to implement it than the one you need to test.<br>In that case, in html5 only, you can do that with javascript.<br><br><pre class=code>
+#if TARGET = "html5"
+Import "webfuncs.js"
+Extern
+function 	WebAlert:void( message:String ) = "WebAlert"
+function 	WebConfirm:Int( message:String ) = "WebConfirm"
+function 	WebPrompt:String( message:String, textfield:String ) = "WebPrompt"
+Public
+#endif
+
+webfuncs.js
+
+function WebAlert( message )
+{
+	alert( message ) ;
+}
+
+function WebConfirm( message )
+{
+	return confirm( message ) ;
+}
+
+function WebPrompt( message, textfield )
+{
+	var		dispmess = message ;
+	do
+	{
+		str = prompt( dispmess, textfield ) ;
+		if( !str )
+		{
+			return "_cancel" ;				
+		}	
+		dispmess = message + "\r20 characters only !" ;
+	} 
+	while( str.length &gt; 20 ) ;
+	return str ;
+}
+</pre><br><br>Then you can use in your code:<br>local input:String = WebPrompt( "Enter a name", "default name"  )<br><br>it halts the code without any issue. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

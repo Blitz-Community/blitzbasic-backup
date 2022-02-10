@@ -1,0 +1,372 @@
+<!DOCTYPE html><html lang="en" ><head ><title >acidstub</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Builds external interface for a Blitz project using .dll callback mechanism, language=bb, category=Miscellaneous'><meta name='author' content='skidracer'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=9>Miscellaneous</a>/acidstub</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="1009.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >acidstub by skidracer</td><td align="right">2004 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> C++ programmers wishing to extend their Blitz projects may find this tool useful.<br><br>Thanks to VERFUM for the original idea. </td></tr><tr ><td class="cell"><pre class="code">; acidstub.bb
+; by simon@nitrologic.net
+
+; builds external interface for a Blitz project using .dll callback mechanism
+; creates both the bootstrap.bb and the acidstub.h header file For use by external project
+; link to your own blitz functions by publishing a .decls file for your blitz routines
+
+; inputs:	a valid blitzpath 
+; outputs:	bootstrap.bb and acidstub.h file 
+
+; build instructions
+; 1. run acidstub
+; 2. build mygame.dll from mygame.cpp 
+; 3. run bootstrap.bb
+
+; example dll project source
+;
+;	//acidstub.cpp
+;
+;	#define WIN32_LEAN_AND_MEAN
+;	#include &lt;windows.h&gt;
+;
+;	DWORD WINAPI StubMain(void *);
+;
+;	#include "acidstub.h"
+;
+;	DWORD WINAPI StubMain(void *)
+;	{
+;		Graphics(640,480,0,2);
+;		MouseWait();
+;		End();
+;		return 0;
+;	}
+
+Const dllname$="acidstub"
+Const blitzpath$="c:\blitz\blitz3d\"
+
+; dump keywords
+
+blitzcc$=Chr$(34)+blitzpath+"bin\blitzcc"+Chr$(34)
+f=WriteFile("stublist.bat")
+WriteLine f,"set blitzpath="+blitzpath$
+WriteLine f,blitzcc+" +k "+"&gt;"+"commands.txt"
+CloseFile f
+ExecFile "stublist"
+Delay (500)
+
+; process dump
+
+Const NULLTYPE=0
+Const INTTYPE=1
+Const FLOATTYPE=2
+Const STRINGTYPE=3
+
+Type command
+	Field	name$,help$
+	Field	args
+	Field	arg[10]
+End Type
+
+Function CommandInvoke$(c.command)
+	Local	a$,b$,v$
+	a$=""
+	For i=1 To c\args
+		Select c\arg[i]
+			Case INTTYPE:v$="v"+Chr$(96+i):a$=a$+v$+"=argint():"
+			Case FLOATTYPE:v$="f"+Chr$(96+i)+"#":a$=a$+v$+"=argfloat():"
+			Case STRINGTYPE:v$="s"+Chr$(96+i)+"$":a$=a$+v$+"=argstring():"
+		End Select
+		b$=b$+v$
+		If i&lt;c\args b$=b$+","
+	Next
+	Select c\arg[0]
+		Case NULLTYPE:a$=a$+c\name+" "+b$
+		Case INTTYPE::a$=a$+"PokeInt(out,0,"+c\name+"("+b$+"))"
+		Case FLOATTYPE:a$=a$+"PokeFloat(out,0,"+c\name+"("+b$+"))"
+		Case STRINGTYPE:a$=a$+"PokeString(out,0,"+c\name+"("+b$+"))"
+	End Select
+	Return a$
+End Function
+
+Function CommandDef$(c.command,id)
+	Local	a$,d$,v$,r$,dd$,vv$
+	Select c\arg[0]
+		Case NULLTYPE:a$="void "
+		Case INTTYPE::a$="int ":r$="return *(int*)result;"
+		Case FLOATTYPE:a$="float ":r$="return *(float*)result;"
+		Case STRINGTYPE:a$="char *":r$="return (char*)result;"
+	End Select
+	vv$=id
+	For i=1 To c\args
+		Select c\arg[i]
+			Case INTTYPE:v$="v"+Chr$(96+i):d$="int "+v$
+			Case FLOATTYPE:v$="f"+Chr$(96+i):d$="float "+v$
+			Case STRINGTYPE:v$="s"+Chr$(96+i):d$="char *"+v$	
+		End Select
+		vv$=vv$+","+v$
+		dd$=dd$+d$
+		If i&lt;c\args dd$=dd$+","
+	Next
+	a$=a$+c\name+"("+dd$+") {invoke("+vv$+");"
+	a$=a$+r$
+	a$=a$+"}"
+	Return a$
+End Function
+
+Function CreateCommand.command(d$)
+	c.command=New command
+	c\help=d$	
+	p=Instr(d$,"(")
+	If p&gt;2
+		q=p-1
+		r$=Mid$(d$,p-2,1)
+		t=INTTYPE
+		If r$="#" t=FLOATTYPE:q=p-2
+		If r$="$" t=STRINGTYPE:q=p-2
+		c\arg[0]=t
+		c\name=Mid$(d$,1,q-1)
+		p=p+1
+	Else
+		p=Instr(d$," ")
+		If p=0 c\name=d$:Return c		;c\arg[0]=INTTYPE:Return c
+		c\name=Mid$(d$,1,p-1)
+	EndIf
+
+	p=Instr(d$," ")
+	If (p) d$=Mid$(d$,p)
+	d$=Replace$(d$,"(","")
+	d$=Replace$(d$,")","")
+	d$=Replace$(d$,"[","")
+	d$=Replace$(d$,"]","")
+	d$=Replace$(d$," ","")
+	p=1
+	If d$="" Return c
+
+	While True
+		q=Instr(d$,",",p)
+		If q=0 q=Len(d$)+1
+		If q=0 Return c
+		r$=Mid$(d$,q-1,1)
+		t=INTTYPE
+		If r$="#" t=FLOATTYPE
+		If r$="$" t=STRINGTYPE
+		c\args=c\args+1
+		c\arg[c\args]=t
+		p=q+1
+		If p&gt;Len(d$) Or c\args=10 Return c
+	Wend
+End Function
+
+f=ReadFile("commands.txt")
+If f=0 Input("blitzcc command dump failure"):End
+
+i=0
+While Not Eof(f)
+	cmd$=ReadLine(f)
+	If i&gt;58 c.command=CreateCommand(cmd$)
+	i=i+1
+Wend
+CloseFile f
+
+; create bootstrap.bb file
+
+f=WriteFile("bootstrap.bb")
+If f=0 Input("failed create bootstrap.bb file"):End
+While True
+	Read a$
+	a$=Replace$(a$,"'",Chr$(34))
+	If a$="" Exit
+	WriteLine f,a$
+Wend
+i=0
+For c.command=Each command
+	a$="Case "+i+":"+CommandInvoke(c)
+	WriteLine f,Chr$(9)+a$
+	i=i+1
+Next
+WriteLine f,"End Select"
+WriteLine f,"Wend"
+CloseFile f
+
+; create blitzstub.h file
+
+f=WriteFile("acidstub.h")
+If f=0 Input("failed to create acidstub.h file"):End
+While True
+	Read a$
+	a$=Replace$(a$,"'",Chr$(34))
+	If a$="" Exit
+	WriteLine f,a$
+Wend
+i=0
+For c.command=Each command
+	a$=CommandDef(c,i)
+	WriteLine f,a$
+	i=i+1
+Next
+CloseFile f
+
+Input "CreateStub Complete"
+End
+
+
+; bootstrap.bb core
+
+Data "; bootstrap.bb"
+Data "; launchpad for "+dllname$+".dll"
+Data " "
+Data "Function PokeString(bank,offset,a$)"
+Data "	l=Len(a$)"
+Data "	If (l&gt;4000) l=4000"
+Data "	PokeInt bank,offset,l"
+Data "	For i=1 To l"
+Data "		PokeByte bank,offset+3+i,Asc(Mid$(a$,i,1))"
+Data "	Next"
+Data "End Function"
+Data " "
+Data "Function argstring$()"
+Data "	l=PeekInt(in,arg)"
+Data "	arg=arg+4"
+Data "	If (l&gt;4000) l=4000"
+Data "	For i=1 To l"
+Data "		a$=a$+Chr$(PeekByte(in,arg))"
+Data "		arg=arg+1"
+Data "	Next"
+Data "	Return a$"
+Data "End Function"
+Data " "
+Data "Function argint()"
+Data "	arg=arg+4"
+Data "	Return PeekInt(in,arg-4)"
+Data "End Function"
+Data " "
+Data "Function argfloat()"
+Data "	arg=arg+4"
+Data "	Return PeekFloat(in,arg-4)"
+Data "End Function"
+Data " "
+Data "Global in=CreateBank(4096)"
+Data "Global out=CreateBank(4096)"
+Data "Global arg"
+Data " "
+Data "While True"
+Data "	res=CallDLL('"+dllname$+"','call',in,out)"
+Data "	arg=0"
+Data "	Select res"
+Data ""
+
+; acidstub.h core
+
+Data "// acidstub.h"
+Data " "
+Data "DWORD WINAPI StubMain(void *);"
+Data "const void	*result;"
+Data "char		*argptr;"
+Data "int			stubcmd;"
+Data "void arg(char *a);"
+Data "void arg(int a) {*(int*)argptr=a;argptr+=4;}"
+Data "void arg(float a) {*(float*)argptr=a;argptr+=4;}"
+Data "void invoke(int cmd);"
+Data "void invoke(int cmd,int i0) {arg(i0);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1) {arg(i0);arg(i1);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,int i2) {arg(i0);arg(i1);arg(i2);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,int i2,int i3) {arg(i0);arg(i1);arg(i2);arg(i3);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,int i2,int i3,int i4) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,int i2,int i3,int i4,int i5) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,int i2,int i3,int i4,int i5,int i6) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);arg(i6);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,int i2,int i3,int i4,int i5,int i6,int i7) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);arg(i6);arg(i7);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,float i2,int i3,int i4,int i5) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,float i2,float i3,int i4,int i5) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,float i2,float i3,float i4) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,float i2,int i3,float i4) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,int i2,float i3,float i4,float i5) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,float i2) {arg(i0);arg(i1);arg(i2);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,int i2,float i3,int i4) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,float i2,float i3,float i4,int i5) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);arg(i5);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,char *c1) {arg(i0);arg(c1);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,char *c1,int i2) {arg(i0);arg(c1);arg(i2);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,char *i1,int i2,int i3) {arg(i0);arg(i1);arg(i2);arg(i3);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,char *i1,int i2,int i3,int i4) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,char *i2,int i3,int i4) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1) {arg(i0);arg(i1);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,float i2) {arg(i0);arg(i1);arg(i2);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,int i2) {arg(i0);arg(i1);arg(i2);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,float i2,float i3) {arg(i0);arg(i1);arg(i2);arg(i3);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,float i2,float i3,float i4) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,float i2,float i3,float i4,float i5) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,float i2,float i3,float i4,float i5,float i6) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);arg(i6);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,float i2,int i3,int i4) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,float i2,float i3,int i4,int i5) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,float i2,int i3,int i4,int i5,int i6,int i7) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);arg(i6);arg(i7);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,float i2,int i3,int i4,int i5,int i6) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);arg(i6);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,float i2,float i3,float i4,float i5,int i6,int i7) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);arg(i6);arg(i7);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,float i2,float i3,int i4,float i5) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,float i2,float i3,int i4) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,float i2,int i3,int i4,float i5) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,int i1,float i2,float i3,float i4,float i5) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,float i2,float i3,float i4,float i5,float i6,float i7) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);arg(i6);arg(i7);invoke(cmd);}"
+Data "void invoke(int cmd,int i0,float i1,float i2,float i3,float i4,float i5,float i6,int i7) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);arg(i6);arg(i7);invoke(cmd);}"
+Data "void invoke(int cmd,float i0) {arg(i0);invoke(cmd);}"
+Data "void invoke(int cmd,float i0,float i1) {arg(i0);arg(i1);invoke(cmd);}"
+Data "void invoke(int cmd,float i0,float i1,float i2) {arg(i0);arg(i1);arg(i2);invoke(cmd);}"
+Data "void invoke(int cmd,float i0,float i1,float i2,int i3,int i4) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);invoke(cmd);}"
+Data "void invoke(int cmd,float i0,float i1,float i2,float i3,float i4,int i5,int i6) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);arg(i6);invoke(cmd);}"
+Data "void invoke(int cmd,float i0,float i1,float i2,float i3,float i4,float i5,float i6) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);arg(i6);invoke(cmd);}"
+Data "void invoke(int cmd,char *c0) {arg(c0);invoke(cmd);}"
+Data "void invoke(int cmd,char *c0,char *c1) {arg(c0);arg(c1);invoke(cmd);}"
+Data "void invoke(int cmd,char *i0,int i1,int i2,int i3,int i4,int i5) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);invoke(cmd);}"
+Data "void invoke(int cmd,char *i0,float i1,float i2,float i3,float i4,float i5,float i6,float i7) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);arg(i6);arg(i7);invoke(cmd);}"
+Data "void invoke(int cmd,char *i0,float i1,float i2,float i3,float i4,float i5,float i6,float i7,float i8,float i9) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);arg(i5);arg(i6);arg(i7);arg(i8);arg(i9);invoke(cmd);}"
+Data "void invoke(int cmd,char *i0,int i1) {arg(i0);arg(i1);invoke(cmd);}"
+Data "void invoke(int cmd,char *i0,int i1,int i2) {arg(i0);arg(i1);arg(i2);invoke(cmd);}"
+Data "void invoke(int cmd,char *i0,int i1,int i2,int i3) {arg(i0);arg(i1);arg(i2);arg(i3);invoke(cmd);}"
+Data "void invoke(int cmd,char *i0,int i1,int i2,int i3,int i4) {arg(i0);arg(i1);arg(i2);arg(i3);arg(i4);invoke(cmd);}"
+Data "void invoke(int cmd,char *i0,char *i1,char *i2) {arg(i0);arg(i1);arg(i2);invoke(cmd);}"
+Data "void invoke(int cmd,char *i0,float i1,int i2) {arg(i0);arg(i1);arg(i2);invoke(cmd);}"
+Data "void invoke(int cmd,char *i0,char *i1,int i2) {arg(i0);arg(i1);arg(i2);invoke(cmd);}"
+Data "void invoke(int cmd,char *i0,char *i1,int i2,int i3) {arg(i0);arg(i1);arg(i2);arg(i3);invoke(cmd);}"
+Data "void invoke(int cmd,char *i0,int i1,float i2,float i3) {arg(i0);arg(i1);arg(i2);arg(i3);invoke(cmd);}"
+Data "DWORD		threadid=0;"
+Data "HANDLE		thread,callevent,resevent;"
+Data "int __stdcall DllMain(int,int,void *)"
+Data "{"
+Data "	return 1;"
+Data "}"
+Data "extern 'C' _declspec(dllexport) int _cdecl call(const void *in,int ibytes,void *out,int outbytes)"
+Data "{"
+Data "	DWORD		res;"
+Data "	result=out;"
+Data "	argptr=(char*)in;"
+Data "	if (threadid==0)"
+Data "	{"
+Data "		callevent=CreateEvent(0,0,0,0);"
+Data "		resevent=CreateEvent(0,0,0,0);"
+Data "		thread=CreateThread(0,0,StubMain,0,0,&amp;threadid);"
+Data "	}"
+Data "	else"
+Data "	{"
+Data "		SetEvent(resevent);"
+Data "	}"
+Data "	while (true)"
+Data "	{"
+Data "		res=WaitForSingleObject(callevent,INFINITE);"
+Data "		if (res==WAIT_OBJECT_0) break;"
+Data "	}"
+Data "	return stubcmd;"
+Data "}"
+Data "void invoke(int cmd)"
+Data "{"
+Data "	DWORD	res;"
+Data "	stubcmd=cmd;"
+Data "	SetEvent(callevent);"
+Data "	while (true)"
+Data "	{"
+Data "		res=WaitForSingleObject(resevent,INFINITE);"
+Data "		if (res==WAIT_OBJECT_0) break;"
+Data "	}"
+Data "}"
+Data "void arg(char *a)"
+Data "{"
+Data "	int		n;"
+Data "	char	*p;"
+Data "	p=argptr+4;n=0;"
+Data "	while (*p++=*a++)"
+Data "	{"
+Data "		n++;"
+Data "		if (n==4000) {*p++=0;break;}"
+Data "	}"
+Data "	*(int*)argptr=n-1;"
+Data "	argptr=p;"
+Data "}"
+Data ""</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pepsi</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> This is very very interesting... and I was just thinking that my current project needed C/C++ power( for me algorithms )! It would also be nice to be programming in my native programming language more often with the luxury of blitz functionality. I'll definetly give it a whirl as soon as I can. Thanks for sharing this! 8] <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Rook Zimbabwe</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> Fantastic! Now I can try this to use some of the C++ functions I already had programmed for games working. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> I was wondering about adding support for C# etc but don't know if it's possible to build standard win32 .dll file with dotnet tools. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AntonyWells</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> Wow, I've never been more confused :)<br><br>Can you give us a quick one liner, as to what this does Skid? <br><br>I mean you call graphics() in C++. How is that possible? are you linking to the blitz run time from within C++ somehow? I can't get my head around this, but it does sound interesting. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> As the first comment line says, it builds an external interface for a Blitz project using .dll callback mechanism.<br><br>You build your project as a c++ dll.<br><br>The blitz stub launches a separate thread for your native project and then uses a couple of win32 events to pass back and forth blitz parameter lists that have been serialized in bank memory. <br><br>The real nice thing is if you build a game engine in Blitz then you should be able to publish it's main function interface as a decl which frees you to implement the higher level game design in your native language (bmx,cpp etc.). <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AntonyWells</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> Oh, so I could use this to say let people use my gl engine in C++, even without a copy of blitz(half is coded in blitz, half C++)<br><br>Very nice, if so. Just gave me a lot more customers :) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Rob</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> I'd think that you'd need a licensed copy of blitz though! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AntonyWells</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> Aye, just noticed the bit that links to the BlitzCC.<br><br>Really hope Mark gives C++ code to the blitz .dlls for bmax, if only in lib form so we can link to/not change it's internal features in C++. Please mark! :) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >syncmaster3</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> but how do you compile the DLL? In yout example acidstub.cpp the functions Graphics, Waitmouse and End aren't declared. If I declare them as void, then I get an link error.<br>Please explain more detailed the steps involved in setting up your application.<br>It is a fantastic achievement you have here. All the classes and pointers and all... Good job! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> The functions are declared in acidstub.h which is generated by the above code. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >verfum</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> Nice!<br><br>I'm gonna try this tonight.<br>Which of my posts gave you the idea? <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >syncmaster3</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> Still can't get it running. Can u specify step by step what do I have to do to run this simple examle of yours? What bb files to create, what decls, etc.<br>Do I have to write something to commands.txt?<br>I am still getting an undefined idetifier on the 3 functions, even I include acidstub.h. I looked in acidstub.h and there are no definitions of the above funtions.<br><br>Thank you! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> Hmm could be a few things, I haven't tested to make sure it handles blitzpath's with spaces so you might want to try the following patch (you have modified the Const blitzpath$="c:\blitz\blitz3d\" line yes?):<br><br>blitzcc$=Chr$(34)+blitzpath+"bin\blitzcc"+Chr$(34)<br>f=WriteFile("stublist.bat")<br>WriteLine f,"set blitzpath="+Chr$(34)+blitzpath$+Chr$(34)<br><br>If you use the commandline, try running the stublist.bat file from where it creates it.<br><br>You may also want to try temporarily removing any userlibs.decls you have installed, just in case on of them is tripping up the parsing of commands.txt (created by stublist.bat and includes list of entire blitz keyword set). <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AntonyWells</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> Doesn't work for me either. <br><br>I run it, it creates the files(AcidSTub.BB etc) but they're all just feed from the initial file up above. Nothing is added(i.e in the C++ headers) nor anything else.<br><br>Seriously suggest writing a working example package/lib..Confusion is not funny. Well, this one time in band camp..never mind. it involved a flute and duck tape. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >verfum</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> Try writing your own comms interface.<br><br>Your C++/Java app wrties what Blitz function call it wants to run into the shared memory of a DLL (say, by calling the function Set().<br><br>Call a function in the same Dll from Blitz (say, Get()) that looks in the shared memory for functions. Run whatever function it found in Blitz.<br><br>In this way you can either just run Blitz native functions or your own routines from your C++/C#/Java app.<br><br>It's a great way of controlling a game. Performance-critical graphics routines must be written in Blitz as the Dll interface will not be fast enough, but collision systems, optimisation routines, network comms etc. that do not rely on Blitz calls can be written in C++.<br><br>I'm currently writing a system that does all this. I'll post it somewhere when it's done. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,120 @@
+<!DOCTYPE html><html lang="en" ><head ><title >JSON RPC Module: Strange gc-problems</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >JSON RPC Module: Strange gc-problems</h1><a href="forums.php" >Monkey Targets Forums</a>/<a href="topics.php?forum=505" >iOS</a>/<a href="#bottom" >JSON RPC Module: Strange gc-problems</a><br><br>
+<a name="2019065"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >maverick69</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey monks ;)<br><br>I'm currently playing around and trying to build a JSON RPC Client Module for Monkey that wraps <a href="https://github.com/samuraisam/DeferredKit" target="_blank">https://github.com/samuraisam/DeferredKit</a><br><br>Here is my code so far (please note that you have manually add the Classes-Directory to your xcodeproject):<br><pre class=code>
+
+#import "Classes/JSONRPCService.h"
+
+class JSONServiceWrapper : public gxtkObject {
+public:
+    void call(String endpoint, String method, Array&lt;String&gt; params = NULL);
+    virtual void onDataLoaded(String response);
+    virtual void onDataFailed(String err);
+};
+
+@interface JSONService : NSObject &lt;JSONRPCServiceDelegate&gt;
+{
+@public
+    void (JSONServiceWrapper::*callbackOnSuccess) (String);
+    void (JSONServiceWrapper::*callbackOnFail) (String);
+    JSONServiceWrapper *jInstance;
+    
+    NSString *response;
+	JSONRPCService* svc;
+}
+
+-(void) call:(String)endpoint withMethod:(String) method andParams:(NSArray*) params;
+-(void) onDataLoaded:(String) data;
+-(void) onFailed:(String) err;
+
+@end
+
+void JSONServiceWrapper::call(String endpoint, String method, Array&lt;String&gt; params) {
+    JSONService *s = [[JSONService alloc] init];
+    s-&gt;callbackOnSuccess = &amp;JSONServiceWrapper::onDataLoaded;
+    s-&gt;callbackOnFail = &amp;JSONServiceWrapper::onDataFailed;
+    s-&gt;jInstance = this;
+    [s call:endpoint.ToNSString() withMethod:method.ToNSString() andParams:nil];
+
+}
+
+void JSONServiceWrapper::onDataLoaded(String response) {  
+}
+
+void JSONServiceWrapper::onDataFailed(String response) {    
+}
+
+@implementation JSONService
+
+#pragma mark -
+#pragma mark JSONRPCServiceDelegate
+
+-(void) dataLoaded:(NSData*)data {   
+    response = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
+    if (callbackOnSuccess &amp;&amp; jInstance)
+        (jInstance-&gt;*callbackOnSuccess)(String(response));
+}
+
+-(void) loadingFailed:(NSString*) errMsg {
+    if (callbackOnFail &amp;&amp; jInstance)
+        (jInstance-&gt;*callbackOnFail)(String(response));
+}
+
+-(void) call:(String)endpoint withMethod:(String) method andParams:(NSArray*) params {
+	jInstance-&gt;onDataLoaded("Start Call");
+    [svc release];
+    svc = [[JSONRPCService alloc] initWithURL:[NSURL URLWithString:endpoint.ToNSString()]];
+    svc.delegate = self;
+
+    if (!params)
+        params = [NSArray array];
+    
+    [svc execMethod:method.ToNSString() andParams:[NSArray array] withID:@"1"];    
+}
+@end
+</pre><br><br>Now here is a small example program that works:<br><br><pre class=code>
+Import horizon.application
+Import horizon.faderbrightness
+Import horizon.scenesplashscreen
+Import horizon.zone
+Import horizon.util
+Import horizon.arrayhelper
+Import horizon.collision
+Import horizon.touchcontroller
+Import horizon.zone
+Import soundmanager
+Import scenegame
+Import scenemarket
+Import jsonservice.jsonservice
+
+Class JSONW Extends JSONServiceWrapper
+		Method onDataLoaded:Void(response$)
+			Print response
+		End
+		
+		Method onDataFailed:Void(response$)
+			Print response
+		End
+End
+
+Global j:JSONW
+
+Function Main:Int()
+	Local app:Application = Application.GetInstance()
+	app.Init()
+	app.SetSize(960, 640)	
+	app.AddFader(New FaderBrightness)
+'	app.AddScene("title", New SceneSplashScreen("gfx/title.png", 3000, "main"))
+	app.AddScene("main", New SceneGame)	
+	app.AddScene("market", New SceneMarket)
+	
+	j = New JSONW
+	j.call("http://xxxxxxxxxxx", "ping", [""])
+	
+	app.Run()
+	Return 0
+End
+</pre><br><br>When I move the j-Object from global scope to local the app crashes, when it receives the callback:<br><pre class=code>
+       (jInstance-&gt;*callbackOnSuccess)(String(response));
+</pre><br><br>Do you see anything strange in my code which I shouldn't do? <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

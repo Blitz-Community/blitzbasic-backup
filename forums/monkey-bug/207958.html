@@ -1,0 +1,124 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Inherited interface corrupts mem from DataBuffer</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Inherited interface corrupts mem from DataBuffer</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=501" >Monkey Bug Reports</a>/<a href="#bottom" >Inherited interface corrupts mem from DataBuffer</a><br><br>
+<a name="2078959"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> This only occurs when compiling with MinGW, and not msbuild.  A large chunk of this code was lifted directly from skn3's Spine implementation.  Tested with v76d and v77f on Windows XP 32-bit.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import mojo
+Import brl.databuffer
+
+Global thing:= New SpineDefaultFileLoader
+
+Function Main()
+	Local fileStream:= thing.LoadFile("test.json")
+	'Between the above line and the below line, memory gets corrupted
+	Print fileStream.ReadAll()
+End Function
+
+
+Interface SpineFileLoader
+	Method LoadFile:SpineFileStream(path:String)
+End
+
+Interface SpineFileStream
+	Method GetPath:String()
+	Method Load:Bool(path:String)
+	Method ReadLine:String()
+	Method ReadAll:String()
+	Method Eof:Bool()
+End
+
+'Default file implementation
+Class SpineDefaultFileLoader Implements SpineFileLoader
+	Global instance:= New SpineDefaultFileLoader
+	
+	'callbacks
+	Method LoadFile:SpineFileStream(path:String)
+		' --- load a new stream object ---
+		Local stream:= New SpineDefaultFileStream()
+		stream.Load(path)
+		Return stream
+	End
+End
+
+
+Class SpineDefaultFileStream Implements SpineFileStream
+	Field path:String
+	Field buffer:DataBuffer
+	Field index:Int
+	Field total:Int
+	Field start:Int
+	
+	Method Load:Bool(path:String)
+		'convert string into buffer
+		Self.path = path
+		index = 0
+		start = 0
+		
+		'create buffer
+		Local data:String = LoadString(path)
+		total = data.Length
+		buffer = New DataBuffer(total)
+		buffer.PokeString(0, data)
+
+		Print "data read.  Start: " + start + ".  Total: " + total		
+				
+		'return success
+		Return True
+	End
+	
+	Method GetPath:String()
+		Return path
+	End
+	
+	Method ReadLine:String()
+		If buffer = Null or index &gt;= total Return ""
+		
+		For index = index Until total
+			'check for end of line
+			If buffer.PeekByte(index) = 10
+				Local result:String = buffer.PeekString(start, (index - start))
+				index = index + 1
+				start = index
+				Return result
+			EndIf
+		Next
+		
+		Return ""
+	End
+	
+	Method ReadAll:String()
+		'just return the entire contents in a string
+		Print start + "," + total
+		Local result:= buffer.PeekString(start)
+		start = total
+		Return result
+	End
+	
+	Method Eof:Bool()
+		Return index &gt;= total
+	End
+End
+</textarea><br><br>Again, this builds fine under msbuild, but crashes with "Memory Access Violation" under gcc.  The call stack has problems with line 88, "start=total" after peeking the result string.  <i>start</i> and <i>total</i> are both overwritten with the value -36 after being loaded (late-bound?) into Local <i>fileStream</i> when compiling with gcc.  Furthermore, the results from attempting to peek from the string is garbage, but that would make sense if it's trying to start from an out-of-bounds position.  The value is getting smashed sometime before the method is called.  I'm guessing what's going on here that there's something gcc doesn't like with how the interface inheritance works, but I can't be certain.<br><br>The contents of test.json can be anything. For example,   {"testKey" : "testValue"} <br><br></td></tr></table><br>
+<a name="2078955"></a>
+
+<a name="2078956"></a>
+
+<a name="2078953"></a>
+
+<a name="2078954"></a>
+
+<a name="2078962"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> What version of gcc are you using? It could be this bug...<br><br><a href="http://gcc.gnu.org/bugzilla/show_bug.cgi?id=55453" target="_blank">http://gcc.gnu.org/bugzilla/show_bug.cgi?id=55453</a><br><br>It was fixed in gcc 4.8.something I think.<br><br>I'm on 4.8.1 here, and the above code runs without crashing. <br><br></td></tr></table><br>
+<a name="2078970"></a>
+
+<a name="2078971"></a>
+
+<a name="2078972"></a>
+
+<a name="2078973"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> The official installer for MinGW is stuck at gcc 4.7.2  :(<br><br>I'll try getting a dev build later and let you know if that fixes it.... <br><br></td></tr></table><br>
+<a name="2079045"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Update:   Confirmed resolved in gcc 4.8.1.  For those of you on Windows who are encountering this bug (it <i>will</i> happen if you use Spine!), you have to upgrade MinGW from the commandline.  Go to your MinGW/bin directory and type the following commands:<br><br><pre class=code>
+mingw-get update
+mingw-get upgrade
+</pre><br><br>and wait a bit.  This should update you to gcc 4.8.1.  Why they chose not to include it with the official installer, I have no idea. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

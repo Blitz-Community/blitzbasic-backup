@@ -1,0 +1,710 @@
+<!DOCTYPE html><html lang="en" ><head ><title >File System</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >File System</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >File System</a><br><br>
+<a name="2014840"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GfK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here's a basic pseudo file system for Monkey; tested and working on Android devices (LG Optimus One), iOS emulator, HTML5 and Flash targets.<br><br>Self explanatory for the most part and I've only added the features I need for myself right now.  Basically all the Write&lt;whatever&gt; functions add data into a string corresponding to the filename opened with WriteFile.  <b>Data is not persistent until you call filesystem.SaveAll()</b>.<br><br>[edit 13-Sep-11]<br><br>Updated to fix a couple of issues as well as now avoiding having ASCII 0 in the string (which caused a load of problems) - Thanks muddy_shoes for the String/Int conversion.<br><br>Also I've added in Little Endian string/int conversion code in the conversion class.  These are useful if you've converted something from Blitzmax to Monkey, as you can load your level data with LoadString, and give the conversion method a four-byte string which it will then convert to an integer.<br><br><b>test.monkey</b><br><pre class=code>Strict
+
+Import filesystem
+
+Function Main:Int()
+	New testApp
+	Return 0	
+End Function
+
+Class testApp Extends App
+	Field fileHandler:FileSystem
+
+		Method OnCreate:Int()
+			Self.fileHandler = New FileSystem
+			
+			Local stream:FileStream
+			Local n:int
+			stream = Self.fileHandler.WriteFile("test/test.bin")
+			stream.WriteString("Hello")
+			stream.WriteInt(1234536343)
+			stream.WriteString("Bye!")
+			
+			Self.fileHandler.SaveAll()
+			Self.fileHandler.ListDir()
+			
+			stream = Self.fileHandler.ReadFile("test/test.bin")
+			if stream
+				Print stream.ReadString()
+				Print stream.ReadInt()
+				Print stream.ReadString()
+			EndIf
+			Return 0
+		End Method
+End Class</pre><br><br><b>filesystem.monkey</b><br><pre class=code>Strict
+Import mojo
+
+Class FileSystem Extends DataConversion
+Private
+	Field _header:String = "MKYDATA"
+	Field fileData:String
+	Field index:StringMap&lt;FileStream&gt;
+Public
+	
+	Method New()
+		Self.LoadAll()
+	End
+	
+	Method WriteFile:FileStream(filename:String)
+		Local f:FileStream = new FileStream
+		f.filename = filename.ToLower()
+		f.fileptr = 0
+		Self.index.Insert(f.filename.ToLower(),f)
+		Return f	
+	End
+	
+	Method ReadFile:FileStream(filename:String)
+		filename = filename.ToLower()
+		Local f:FileStream
+		f = Self.index.ValueForKey(filename)
+		f.fileptr = 0
+		Return f
+	End
+	
+	Method FileExists:Bool(filename:String)
+		filename = filename.ToLower()
+		if Self.index.Contains(filename)
+			Return True
+		Else
+			Return False
+		End
+		Return False
+	End
+	
+	Method ListDir:Void()
+		Local filename:String
+		Local stream:FileStream
+		Print "Directory Listing:"
+		For filename = EachIn Self.index.Keys()
+			stream = Self.index.ValueForKey(filename)
+			Print filename + "   " + stream.data.Length()+" byte(s)."
+		Next
+	End
+	
+	Method DeleteFile:Void(filename:String)
+		filename = filename.ToLower()
+		if Self.index.Contains(filename)
+			Self.index.Remove(filename)
+		End
+	End
+	
+	Method SaveAll:Void()
+		Local f:FileStream
+		Self.fileData = Self._header'header
+		self.fileData+= Self.IntToString(Self.index.Count())'number of files in index
+		if Self.index.Count() &gt; 0
+			For f = EachIn Self.index.Values()
+				'store filename
+				Self.fileData+= Self.IntToString(f.filename.Length())
+				if f.filename.Length() &gt; 0
+					Self.fileData+= f.filename
+				End
+				'store data
+				Self.fileData+= Self.IntToString(f.data.Length())
+				if f.data.Length() &gt; 0
+					Self.fileData+= f.data
+				End
+			Next
+		End
+		SaveState(Self.fileData)
+	End
+	
+	Method LoadAll:Void()
+		Local numFiles:Int
+		Local stream:FileStream
+		Local len:Int
+		Local ptr:Int
+		Self.fileData = LoadState()
+		self.index = New StringMap&lt;FileStream&gt;
+		if Self.fileData.Length() &gt; 0
+			if Self.fileData.StartsWith(Self._header)
+				Self.index.Clear()
+				ptr+=Self._header.Length()
+				numFiles = Self.StringToInt(Self.fileData[ptr..ptr+3])
+				ptr+=3
+				if numFiles &gt; 0				
+					For Local n:Int = 1 to numFiles
+						stream = New FileStream
+						'filename
+						len = Self.StringToInt(Self.fileData[ptr..ptr+3])
+						ptr+=3
+						if len &gt; 0
+							stream.filename = Self.fileData[ptr..ptr+len]
+							ptr+=len
+						End
+						'data
+						len = Self.StringToInt(Self.fileData[ptr..ptr+3])
+						ptr+=3
+						if len &gt; 0
+							stream.data = Self.fileData[ptr..ptr+len]
+							ptr+=len
+						End
+						Self.index.Insert(stream.filename,stream)
+					Next
+				End
+			End
+		Else
+			SaveState("")'save empty file and indicate no files stored
+		End
+	End
+End
+
+
+
+Class FileStream Extends DataConversion
+	Field filename:String
+	Field fileptr:Int
+Private
+	Field data:String
+Public
+	
+	Method ReadInt:Int()
+		Local result:string
+		result = Self.data[Self.fileptr..self.fileptr+3]
+		Self.fileptr+=3
+		Return Self.StringToInt(result)
+	End
+	
+	Method WriteInt:Void(val:Int)
+		Self.data+=Self.IntToString(val)
+	End
+	
+	Method ReadString:String()
+		Local result:String
+		Local strLen:Int = self.StringToInt(self.data[self.fileptr..self.fileptr+3])
+		Self.fileptr+=3
+		if strLen &gt; 0
+			result = Self.data[Self.fileptr..self.fileptr+strLen]
+			Self.fileptr+=strLen
+		End
+		Return result
+	End
+	
+	Method WriteString:Void(val:String)
+		Self.data+=Self.IntToString(val.Length())
+		if val.Length() &gt; 0
+			Self.data+=val
+		End
+	End
+	
+	Method ReadFloat:Float()
+		Local result:float
+		Local s:String
+		Local strLen:Int = self.StringToInt(self.data[self.fileptr..self.fileptr+3])
+		Self.fileptr+=3
+		s = Self.data[Self.fileptr..self.fileptr+strLen]
+		result = Self.StringToFloat(s)
+		Self.fileptr+=strLen
+		Return result
+	End
+	
+	Method WriteFloat:Void(val:Float)
+		Local s:String = self.FloatToString(val)
+		Self.data+=Self.IntToString(s.Length())
+		Self.data+=s
+	End
+	
+	Method ReadBool:Bool()
+		Local result:Bool
+		result = Bool(Self.data[Self.fileptr])
+		Self.fileptr+=1
+		Return result
+	End Method
+	
+	Method WriteBool:Void(val:Bool)
+		Self.data+=String.FromChar(val)
+	End Method	
+End
+
+Class DataConversion
+	Method LittleEndianIntToString:String(val:Int)
+		Local result:String
+		result = String.FromChar((val) &amp; $FF)
+		result+= String.FromChar((val Shr 8) &amp; $FF)
+		result+= String.FromChar((val Shr 16) &amp; $FF)
+		result+= String.FromChar((val Shr 24) &amp; $FF)
+		Return result
+	End
+
+	Method StringToLittleEndianInt:Int(val:String)
+		Local result:Int
+		result = (val[0])
+		result|= (val[1] Shl 8)
+		result|= (val[2] Shl 16)
+		result|= (val[3] Shl 24)
+		Return result
+	End	
+	
+    Method IntToString:String(val:Int)
+        Local result:String
+        result = String.FromChar($F000 | ((val Shr 20) &amp; $0FFF) )
+        result += String.FromChar($F000 | ((val Shr 8) &amp; $0FFF))
+        result += String.FromChar($F000 | (val &amp; $00FF))
+        Return result
+    End
+        
+    Method StringToInt:Int(val:String)
+        Return ((val[0]&amp;$0FFF) Shl 20) | ((val[1]&amp;$0FFF) Shl 8) |(val[2]&amp;$00FF)
+    End
+
+
+	Method FloatToString:String(val:Float)
+		Return String(val)
+	End		
+	
+	Method StringToFloat:Float(val:String)
+		Return Float(val)
+	End		
+End</pre> <br><br></td></tr></table><br>
+<a name="2014839"></a>
+
+<a name="2012627"></a>
+
+<a name="2012637"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >c.k.</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Awesome! Somebody owes you a beverage of your choice! :) <br><br></td></tr></table><br>
+<a name="2012638"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Qcat</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Fantastic! i think we all owe you a beverage :) <br><br></td></tr></table><br>
+<a name="2012646"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >therevills</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cool... can I make one suggestion though, stick to a standard in your coding, you've sometimes got PascalCase methods and sometimes camelCase methods - and since Monkey is case-sensitive it makes sense to keep everything the same.<br><br>For the docs:<br><br><div class="quote"> <br>Monkey naming convention<br><br>The standard Monkey modules use a simple naming convention:<br><br>All-caps case (eg: 'ALLCAPS' ):<br>* Constants<br><br>Pascal case (eg: 'PascalCase' ):<br>* Classes<br>* Globals<br>* Functions, methods and properties.<br><br>Camel case (eg: 'camelCase' ):<br>* Fields<br>* Locals and function parameters<br> <br></div><br><br>Also would mind if I stick this in Diddy? ;) <br><br></td></tr></table><br>
+<a name="2012645"></a>
+
+<a name="2012647"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> As I pointed out in your other thread, your int conversion is using twice as many characters as necessary. More efficient versions are at the bottom of the float conversion code I posted. <br><br></td></tr></table><br>
+<a name="2012666"></a>
+
+<a name="2012667"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GfK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Cool... can I make one suggestion though, stick to a standard in your coding, you've sometimes got PascalCase methods and sometimes camelCase  <br></div> I normally use camelCase!  For this, though, I used the PascalCase for the duplicates of the Blitzmax commands (because that's how they are in Blitzmax!) so I guess I did it that way for familiarity.  Admittedly there are a couple of rogue ones in there though.<br><br><div class="quote"> Also would mind if I stick this in Diddy? ;)  <br></div>Don't mind at all. <br><br></td></tr></table><br>
+<a name="2012674"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >therevills</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ta, just committed it to Diddy (after a quick tidy up):<br><br><a href="http://code.google.com/p/diddy/source/browse/trunk/src/diddy/filesystem.monkey" target="_blank">http://code.google.com/p/diddy/source/browse/trunk/src/diddy/filesystem.monkey</a><br><br>Have you tested muddy_shoes suggestions? <br><br></td></tr></table><br>
+<a name="2012678"></a>
+
+<a name="2012679"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GfK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Not yet but feel free.<br><br>[Edit] it says its 4 or 5 times slower so i think I'll pass. up to you for diddy tho. <br><br></td></tr></table><br>
+<a name="2012681"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >therevills</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cheers for testing it Dave... 4 or 5 times slower is a hugh amount... think Diddy will stay with your version.. <br><br></td></tr></table><br>
+<a name="2012685"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Cheers for testing it Dave <br></div><br><br>I don't get the impression any testing was done. He's just noting what I wrote about my testing and seems to have misinterpreted. The float conversion is "up to" 4-5 times slower. In other words, it's the worst case from my tests, the average case is not that bad as shown by the Android figures that I gave. The trade off is the reduction in string size which seemed to be the concern being voiced about using SaveState.<br><br>The integer conversion is no slower, in fact I'd expect it to be faster as well as more space efficient as there are fewer operations involved in the packing and unpacking. <br><br></td></tr></table><br>
+<a name="2012688"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GfK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> No I didn't test it - I was just going on what you said.<br><br>I won't get around to it for a few hours tho, if at all today, cos I'm busy on something right now.<br><br>If anybody wants to update and test the code in the meantime with something they think might be more efficient, knock yourselves out.  That's what I put it here for! <br><br></td></tr></table><br>
+<a name="2012689"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Okay, so here are some test results using the Diddy module as a base. The numbers after the operation descriptions are in ms. Note that the byte values are what the module prints out based on the assumption that 1 char = 1 byte. That assumption is actually incorrect but the number is okay for comparing storage requirements.<br><br>Starting with writing and reading 20,000 floats and 20,000 ints on Flash, which appears to have the worst performance of the PC-based targets for me.<br><br>Current code:<br><br>Write floats: 165<br>Directory Listing:<br>test.bin   464780 byte(s).<br>Read floats: 32<br>Write ints: 30<br>Directory Listing:<br>test.bin   80000 byte(s).<br>Read ints: 7<br><br>Alternative:<br><br>Write floats: 204<br>Directory Listing:<br>test.bin   141565 byte(s).<br>Read floats: 89<br>Write ints: 18<br>Directory Listing:<br>test.bin   40000 byte(s).<br>Read ints: 1<br><br>My conversion code is slightly slower when writing floats and 3-4 times as slow when reading. However, the actual difference that the user would experience when reading a level or similar would be unnoticeable and the storage requirements are about a third of the current implementation. As I expected, the integer read and write times are about halved along with the storage used.<br><br>Now on Android, using 1000 floats and ints. Current code:<br><br>Write floats: 14914<br>Directory Listing:<br>test.bin   14544 byte(s).<br>Read floats: 149<br>Write ints: 1803<br>Directory Listing:<br>test.bin   4000 byte(s).<br>Read ints: 66<br><br>Alternative code:<br><br>Write floats: 4945<br>Directory Listing:<br>test.bin   5011 byte(s).<br>Read floats: 491<br>Write ints: 917<br>Directory Listing:<br>test.bin   2000 byte(s).<br>Read ints: 3<br><br>The reduction in overall string length means that writing is much faster with the alternative methods. As with Flash the read cost for floats is 3-4 times higher. <br><br>My altered version of the Diddy file is below. There are still a number of tweaks that could improve matters further and I'm also wondering if a Monkey StringBuilder/StringBuffer type class backed by native implementations would make a big difference.<br> <br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+Import mojo
+
+Class FileSystem Extends DataConversion
+Private
+	Field _header:String = "MKYDATA"
+	Field fileData:String
+	Field index:StringMap&lt;FileStream&gt;
+Public
+	
+	Method New()
+		Self.LoadAll()
+	End
+	
+	Method WriteFile:FileStream(filename:String)
+		Local f:FileStream = new FileStream
+		f.filename = filename
+		f.fileptr = 0
+		Self.index.Set(f.filename.ToLower(),f)
+		Return f	
+	End
+	
+	Method ReadFile:FileStream(filename:String)
+		filename = filename.ToLower()
+		Local f:FileStream
+		f = Self.index.ValueForKey(filename)
+		f.fileptr = 0
+		Return f
+	End
+	
+	Method FileExists:Bool(filename:String)
+		filename = filename.ToLower()
+		if Self.index.Contains(filename)
+			Return True
+		Else
+			Return False
+		End
+	End
+	
+	Method ListDir:Void()
+		Local filename:String
+		Local stream:FileStream
+		Print "Directory Listing:"
+		For filename = EachIn Self.index.Keys()
+			stream = Self.index.ValueForKey(filename)
+			Print filename + "   " + stream.data.Length()+" byte(s)."
+		Next
+	End
+	
+	Method DeleteFile:Void(filename:String)
+		filename = filename.ToLower()
+		if Self.index.Contains(filename)
+			Self.index.Remove(filename)
+		End
+	End
+    
+    Method DeleteAll:Void()
+        For Local filename := EachIn Self.index.Keys()
+			Self.index.Remove(filename)
+		Next
+    End
+	
+	Method SaveAll:Void()
+		Local f:FileStream
+		Self.fileData = Self._header'header
+		self.fileData+= Self.IntToString(Self.index.Count())'number of files in index
+		if Self.index.Count() &gt; 0
+			For f = EachIn Self.index.Values()
+				'store filename
+				Self.fileData+= Self.IntToString(f.filename.Length())
+				if f.filename.Length() &gt; 0
+					Self.fileData+= f.filename
+				End
+				'store data
+				Self.fileData+= Self.IntToString(f.data.Length())
+				if f.data.Length() &gt; 0
+					Self.fileData+= f.data
+				End
+			Next
+		End
+		SaveState(Self.fileData)
+	End
+	
+	Method LoadAll:Void()
+		Local numFiles:Int
+		Local stream:FileStream
+		Local len:Int
+		Local ptr:Int
+		Self.fileData = LoadState()
+		self.index = New StringMap&lt;FileStream&gt;
+		if Self.fileData.Length() &gt; 0
+			if Self.fileData.StartsWith(Self._header)
+				Self.index.Clear()
+				ptr+=Self._header.Length()
+				numFiles = Self.StringToInt(Self.fileData,ptr)
+				ptr+=CharsPerInt
+				if numFiles &gt; 0
+					For Local n:Int = 1 to numFiles
+						stream = New FileStream
+						'filename
+						len = Self.StringToInt(Self.fileData,ptr)
+						ptr+=CharsPerInt
+						if len &gt; 0
+							stream.filename = Self.fileData[ptr..ptr+len]
+							ptr+=len
+						End
+						'data
+						len = Self.StringToInt(Self.fileData,ptr)
+						ptr+=CharsPerInt
+						if len &gt; 0
+							stream.data = Self.fileData[ptr..ptr+len]
+							ptr+=len
+						End
+						Self.index.Set(stream.filename,stream)
+					Next
+				End
+			End
+		Else
+			SaveState(Self._header+Self.IntToString(0))'save empty file and indicate no files stored
+		End
+	End
+End
+
+
+
+Class FileStream Extends DataConversion
+	Field filename:String
+	Field fileptr:Int
+Private
+	Field data:String
+Public
+	
+	Method ReadInt:Int()
+	    Self.fileptr+=CharsPerInt
+        Return StringToInt(Self.data,Self.fileptr-CharsPerInt)
+	End
+	
+	Method WriteInt:Void(val:Int)
+		Self.data+=Self.IntToString(val)
+	End
+	
+	Method ReadString:String()
+		Local result:String
+		Local strLen:Int = self.StringToInt(Self.data,Self.fileptr)
+		Self.fileptr+=CharsPerInt
+		if strLen &gt; 0
+			result = Self.data[Self.fileptr..self.fileptr+strLen]
+			Self.fileptr+=strLen
+			Return result
+		End
+	End
+	
+	Method WriteString:Void(val:String)
+		Self.data+=Self.IntToString(val.Length())
+		if val.Length() &gt; 0
+			Self.data+=val
+		End
+	End
+	
+	Method ReadFloat:Float()
+		Local result:float
+		Local strLen:Int = self.StringToInt(Self.data,Self.fileptr)
+		Self.fileptr+=CharsPerInt
+		
+        'swap these two calls along with the DataConversion implementations
+        result = Self.StringToFloat(Self.data,Self.fileptr,strLen)
+        'result = Self.StringToFloat(Self.data[Self.fileptr..Self.fileptr+strLen])
+		
+        Self.fileptr+=strLen
+		Return result
+	End
+	
+	Method WriteFloat:Void(val:Float)
+		Local s:String = self.FloatToString(val)
+		Self.data+=Self.IntToString(s.Length())
+		Self.data+=s
+	End
+End
+'#rem
+Class DataConversion
+    Global floatChars := ["","0","1","2","3","4","5","6","7","8","9","-",".","e"] '4-bit
+    Const CharsPerInt:Int = 2
+    
+    Method FloatToString:String(val:Float)
+        Local fString:String = String(val)
+        Local output:String = ""
+        Local currChar:Int = 0
+        Local currShift:Int = 0 
+        Local i:Int = fString.Length
+        
+        While i &gt; 0
+            i -= 1
+            Local ch := fString[i]
+            If ch &gt;47 And ch&lt;58
+                currChar |= (ch-47) Shl currShift
+            ElseIf ch = 45
+                currChar |= 11 Shl currShift
+            ElseIf ch = 46
+                currChar |= 12 Shl currShift
+            ElseIf ch = 69 Or ch = 101
+                currChar |= 13 Shl currShift
+            End
+            
+            currShift += 4
+            If currShift = 16
+                currShift = 0
+                output = String.FromChar(currChar) + output
+                currChar = 0
+            End
+        End
+        
+        If currShift &lt;&gt; 0
+            output = String.FromChar(currChar) + output
+        End
+        
+        Return output
+    End		
+        
+    Method StringToFloat:Float(val:String,ind:Int,len:Int)
+        Local fString:String = ""
+        Local i:Int = ind
+        While i &lt; ind+len 
+            Local charCode := val[i]
+            For Local shift:Int = 12 To 0 Step -4
+                Local index:Int = (charCode Shr shift) &amp; $F 
+                If index &gt; 0
+                    fString += floatChars[index]
+                End
+            End
+            i += 1
+        End
+        
+        Return Float(fString)
+    End
+    
+    Method IntToString:String(val:Int)
+        Local result:String
+        result = String.FromChar((val Shr 16) &amp; $FFFF )
+        result+= String.FromChar(val &amp; $FFFF)
+        Return result
+    End
+        
+    Method StringToInt:Int(val:String,ind:Int)
+        Return (val[ind] Shl 16)|val[ind+1]
+    End
+End
+'#end
+#rem
+
+Class DataConversion
+    Const CharsPerInt:Int = 4
+    
+    Method IntToString:String(val:Int)
+		Local result:String
+		result = String.FromChar((val Shr 24) &amp; $FF)
+		result+= String.FromChar((val Shr 16) &amp; $FF)
+		result+= String.FromChar((val Shr 8) &amp; $FF)
+		result+= String.FromChar(val &amp; $FF)
+		Return result
+	End
+
+	Method FloatToString:String(val:Float)
+		Return String(val)
+	End		
+	
+	Method StringToInt:Int(val:String,ind:Int)
+		Local result:Int
+		result = (val[ind] Shl 24)
+		result|= (val[ind+1] Shl 16)
+		result|= (val[ind+2] Shl 8)
+		result|= val[ind+3]
+		Return result
+	End
+
+	Method StringToFloat:Float(val:String)
+		Return Float(val)
+	End		
+End
+#end
+</textarea> <br><br></td></tr></table><br>
+<a name="2012694"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GfK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well... finished what I was doing but its Sunday and I've been on the sauce so I'm not quite sure what planet I'm on right now... I'll have to check this stuff out tomorrow when I arrive back on Earth. <br><br></td></tr></table><br>
+<a name="2012709"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >therevills</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sorry I misread what Dave put...<br><br>Can you post your test app muddy? <br><br></td></tr></table><br>
+<a name="2012711"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sure. It's probably been changed a little from the runs above, but it was pretty much this:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+Import diddy
+
+Function Main:Int()
+	New TestApp
+End Function
+
+Class TestApp Extends App
+	Field fileHandler:FileSystem
+
+	Method OnCreate:Int()
+		Self.fileHandler = New FileSystem
+        Self.fileHandler.DeleteAll()
+		Local stream:FileStream
+        Const TESTS:Int = 20000
+        Local floats:= New Float[TESTS]
+        Local ints:= New Int[TESTS]
+        
+        For Local i:Int = 0 Until TESTS
+            floats[i] = (Rnd(2.0)-1.0) * Rnd(100000000.0)
+            ints[i] = Int((Rnd(1000)-500) * Rnd(100000))
+        End
+    
+        
+		stream = Self.fileHandler.WriteFile("test.bin")
+        Local t := app.Millisecs()
+        For Local i:Int = 0 Until TESTS
+            stream.WriteFloat(floats[i])
+        End
+        t = app.Millisecs() - t
+        Print "Write floats: " + t
+        
+        t = app.Millisecs()
+        Self.fileHandler.SaveAll()
+		t = app.Millisecs() - t
+        Print "Save floats: " + t
+        Self.fileHandler.ListDir()
+		
+		stream = Self.fileHandler.ReadFile("test.bin")
+        
+        t = app.Millisecs()
+        For Local i:Int = 0 Until TESTS
+            Local f := stream.ReadFloat()
+'accuracy check
+'            Local diff:Float = f - floats[i]
+'            If diff &lt; -0.00000001 Or diff &gt; 0.00000001
+'                Print "Fail: " + f + " - " + floats[i]
+'            End
+        End
+        t = app.Millisecs() - t
+        Print "Read floats: " + t
+        
+        Self.fileHandler.DeleteFile("test.bin")
+        Self.fileHandler.SaveAll()
+		stream = Self.fileHandler.WriteFile("test.bin")
+		
+        t = app.Millisecs()
+        For Local i:Int = 0 Until TESTS
+            stream.WriteInt(ints[i])
+        End
+        t = app.Millisecs() - t
+        Print "Write ints: " + t
+        
+        t = app.Millisecs()
+        Self.fileHandler.SaveAll()
+		t = app.Millisecs() - t
+        Print "Save ints: " + t
+        
+        Self.fileHandler.ListDir()
+		
+		stream = Self.fileHandler.ReadFile("test.bin")
+        
+        t = app.Millisecs()
+        For Local i:Int = 0 Until TESTS
+            Local f := stream.ReadInt()
+            If f &lt;&gt; ints[i]
+                Print "Fail: " + f
+            End
+        End
+        t = app.Millisecs() - t
+        Print "Read ints: " + t
+        ExitApp
+	End
+End
+</textarea> <br><br></td></tr></table><br>
+<a name="2012766"></a>
+
+<a name="2012767"></a>
+
+<a name="2012768"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GfK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just having a look at your int/string conversion code and I'm not sure it will work all the time.  When I was doing my code I did some test or other and could not get FromChar() to return anything higher than 60599 - potentially you'd want anything up to 65535 to be returned.  This is why I ended up doing single byte conversions.<br><br>Maybe I got it wrong though.  Is your code tested to the maximum range? <br><br></td></tr></table><br>
+<a name="2012775"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GfK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> Added Boolean support.  Add this code into the FileStream class:<br><pre class=code>	Method ReadBool:Bool()
+		Local result:Bool
+		result = Bool(Self.data[Self.fileptr])
+		Self.fileptr+=1
+		Return result
+	End Method
+	
+	Method WriteBool:Void(val:Bool)
+		Self.data+=String.FromChar(val)
+	End Method</pre> <br><br></td></tr></table><br>
+<a name="2012774"></a>
+
+<a name="2012777"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> It's rather difficult to define "maximum range" for a Monkey Integer or Float as the eventual type varies across the targets. All the tests I ran showed that charcodes are 16-bit values and the methods I posted work for 32-bit signed integer ranges. <br><br>I don't have any iOS or MacOS devices, so they are untested. It's certainly possible that some environments could have smaller chars, but it would be a little odd considering the need to support unicode. <br><br></td></tr></table><br>
+<a name="2012776"></a>
+
+<a name="2032401"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >maverick69</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> I think this doesn't work on iOS Devices.<br><br>I have a file created with BlitzMax, when I try to load the Ressource with LoadString I always get an empty result.<br><br>I think it's because as it's a binary file the following line doesn't work:<br><br><pre class=code>
+NSString *str=[NSString stringWithContentsOfURL:url usedEncoding:&amp;enc  error:nil];
+</pre><br><br>Do you have any suggestions on how I get this working without converting the binary file into a text-based format?<br><br>When I read out the error message it links to the following error code:<br><br><pre class=code>
+NSFileReadUnknownStringEncodingError = 264,         // Read error (string encoding of file contents could not be determined)
+</pre> <br><br></td></tr></table><br>
+<a name="2032396"></a>
+
+<a name="2032407"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >maverick69</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, here is a small fix to make everything work on ios devices. Instead of LoadString, use the following function:<br><br><pre class=code>
+String LoadBinaryString(String fpath) {
+	NSString *rpath=pathForResource( fpath );
+	if( !rpath ) return "";
+
+    const char *filename = [rpath UTF8String];
+    FILE *fp = fopen(filename, "r");    
+    String ret = String::Load(fp);
+    fclose(fp);
+    return ret;
+}
+</pre> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

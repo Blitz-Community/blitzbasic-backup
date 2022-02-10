@@ -1,0 +1,271 @@
+<!DOCTYPE html><html lang="en" ><head ><title >ClusterizeMesh</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Divide a huge Mesh into a 3D Grid of clusters (Updated), language=bb, category=3D Graphics - Mesh'><meta name='author' content='jfk EO-11110'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=12>3D Graphics - Mesh</a>/ClusterizeMesh</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="1244.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >ClusterizeMesh by jfk EO-11110</td><td align="right">2004 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This Function will allow to automaticly divide a huge Mesh into a number of smaller parts. This will help to occlude parts dynamicly using a lower camera range and/or fog. It creates copies of the Triangles and adds them to space cluster meshes, depending on their 3D location.<br><br>EDIT:<br>This is an updated version. DJWoodgate made me realize that the normals also have to be cloned, thanks for that. So you should not use UpdateNormals with the clones.<br><br>EDIT 2: Updated again, see below. </td></tr><tr ><td class="cell"><pre class="code">;The following Code will take one huge Mesh with multiple surfaces and split it up
+;into several space clusters. This method will give you more surfaces to render, but it
+;allows the camera to skip things that are part of the initial mesh and may be 
+;out of the camera range or view angle. Especially useful with huge Meshes and a small camera
+;range. 
+;When you run this example, TrisRendered will be less after Clusterizing the Mesh because
+;some Clusters will be out of the camera FOV after Clusterisation.
+
+;Written by jfk (Executive Order 11110) of CSP games
+
+; Updated July 2005: added support for VertexAlpha and VertexColor, fixed a fundamental Bug
+; (in the prev. verison i accidentally omited the W (from UVW) parameter prior the TextureSet vector flag)
+; This version is now fully tested with a lightmapped gile[s] exported Map and shoud support 
+; most features of a B3D map.
+; It will now also determine the maps total size and automaticly clusterize the required space.
+; all you have to do is to define the cluster size in blitz units (clustersize#).
+
+Graphics3D 640,480,32,2
+SetBuffer BackBuffer()
+
+
+; some Gobals that are required:
+Global vis_minx#,vis_miny#,vis_minz#,vis_maxx#,vis_maxy#,vis_maxz#
+; wanted clustersize in Blitz Untis: Reccomended: about 10% to 30% of the full width or lenght:
+Global clustersize#=10.0
+Global n_xvis#,n_yvis#,n_zvis#
+Global world_xvis#,world_yvis#,world_zvis#
+
+
+
+camera=CreateCamera()
+CameraRange camera,1,150
+TranslateEntity camera,0,22,-50
+
+; this mesh will be clusterized:
+mesh=LoadMesh("building\crypto3slim9test2k.b3d")
+;ScaleMesh mesh,10,10,10 ; scalemesh works, scaleentity not yet
+
+;----------------- show single mesh
+RenderWorld()
+Color 255,255,255
+Text 0,0,"Tris Rendered: "+TrisRendered()
+Text 0,16,"Will now clusterize the mesh, press a key"
+Flip
+WaitKey()
+
+
+;---------------- Init Clusterisation
+find_vis_minmax(mesh) ; find max world space
+world_xvis=(max(Abs(vis_maxx),Abs(vis_minx))*2.0)+clustersize#
+world_yvis=(max(Abs(vis_maxy),Abs(vis_miny))*2.0)+clustersize#
+world_zvis=(max(Abs(vis_maxz),Abs(vis_minz))*2.0)+clustersize#
+; calc number of clusters
+n_xvis=Floor(max(2,world_xvis/clustersize#))
+n_yvis=Floor(max(2,world_yvis/clustersize#))
+n_zvis=Floor(max(2,world_zvis/clustersize#))
+Dim cluster      (n_xvis,n_yvis,n_zvis)
+Dim cluster_mflag(n_xvis,n_yvis,n_zvis)
+Dim cluster_sflag(n_xvis,n_yvis,n_zvis)
+
+;Finally make clusters
+ClusterizeMesh(mesh,n_xvis,n_yvis,n_zvis,world_xvis,world_yvis,world_zvis)
+
+
+; a little flytrough code, so you can test it
+While KeyDown(1)=0
+ mxs#=-MouseXSpeed()/4.0
+ mys#=MouseYSpeed()/4.0
+ mxsa#=mxsa#+mxs#
+ mysa#=mysa#+mys#
+ If mxsa#&lt;0 Then mxsa#=mxsa#+360.0
+ If mxsa#&gt;360.0 Then mxsa#=mxsa#-360.0
+ If mysa#&lt;0 Then mysa#=mysa#+360.0
+ If mysa#&gt;360.0 Then mysa#=mysa#-360.0
+ MoveMouse GraphicsWidth()/2,GraphicsHeight()/2
+ RotateEntity camera,mysa#,mxsa#,0
+ If KeyDown(200) Then MoveEntity camera,0,0,1
+ If KeyDown(208) Then MoveEntity camera,0,0,-1
+ If KeyDown(205) Then MoveEntity camera,1,0,0
+ If KeyDown(203) Then MoveEntity camera,-1,0,0
+ RenderWorld()
+ Text 0,0,"Tris Rendered: "+TrisRendered()
+ Text 0,16,"Clusterisation complete"
+ Text 0,32,""+Int(n_xvis+1)+" * "+Int(n_yvis+1)+" * "+Int(n_zvis+1)+" Clusters"
+ Flip
+Wend
+
+
+End
+
+
+
+
+; cx, cy and cz is the dimension of clusterisation, sx, sy and sz is the size of the scene,
+; (the function expects the scene to fit inside -(sx/2) and +(sx/2) etc.
+
+Function ClusterizeMesh(mesh,cx#,cy#,cz#,sx#,sy#,sz#)
+ Local surf,s,mybrush,x,y,z,t,x_c#,y_c#,z_c#,v0,v1,v2,nope
+ Local x0#,y0#,z0#,u0a#,v0a#,u0b#,v0b#,nx0#,ny0#,nz0#,v0_r#,v0_g#,v0_b#,v0_a#
+ Local x1#,y1#,z1#,u1a#,v1a#,u1b#,v1b#,nx1#,ny1#,nz1#,v1_r#,v1_g#,v1_b#,v1_a#
+ Local x2#,y2#,z2#,u2a#,v2a#,u2b#,v2b#,nx2#,ny2#,nz2#,v2_r#,v2_g#,v2_b#,v2_a#
+ For s=1 To CountSurfaces(mesh)
+  surf=GetSurface(mesh,s)
+  mybrush=GetSurfaceBrush(surf)
+  For z=0 To cz ; clear all clusters current surface holder variable
+   For y=0 To cy
+    For x=0 To cx
+     cluster_sflag(x,y,z)=0
+    Next
+   Next
+  Next
+  ;probably need to TFormPoint if you want to use ScaleEntity etc.
+  For t=0 To CountTriangles(surf)-1 ; store all neccessary triangle data
+   x0#=VertexX(surf,TriangleVertex(surf,t,0))
+   y0#=VertexY(surf,TriangleVertex(surf,t,0))
+   z0#=VertexZ(surf,TriangleVertex(surf,t,0))
+   u0a#=VertexU(surf,TriangleVertex(surf,t,0),0)
+   v0a#=VertexV(surf,TriangleVertex(surf,t,0),0)
+   u0b#=VertexU(surf,TriangleVertex(surf,t,0),1)
+   v0b#=VertexV(surf,TriangleVertex(surf,t,0),1)
+   nx0#=VertexNX(surf,TriangleVertex(surf,t,0))
+   ny0#=VertexNY(surf,TriangleVertex(surf,t,0))
+   nz0#=VertexNZ(surf,TriangleVertex(surf,t,0))
+   v0_r#=VertexRed(surf,TriangleVertex(surf,t,0))
+   v0_g#=VertexGreen(surf,TriangleVertex(surf,t,0))
+   v0_b#=VertexBlue(surf,TriangleVertex(surf,t,0))
+   v0_a#=VertexAlpha(surf,TriangleVertex(surf,t,0))
+
+
+   x1#=VertexX(surf,TriangleVertex(surf,t,1))
+   y1#=VertexY(surf,TriangleVertex(surf,t,1))
+   z1#=VertexZ(surf,TriangleVertex(surf,t,1))
+   u1a#=VertexU(surf,TriangleVertex(surf,t,1),0)
+   v1a#=VertexV(surf,TriangleVertex(surf,t,1),0)
+   u1b#=VertexU(surf,TriangleVertex(surf,t,1),1)
+   v1b#=VertexV(surf,TriangleVertex(surf,t,1),1)
+   nx1#=VertexNX(surf,TriangleVertex(surf,t,1))
+   ny1#=VertexNY(surf,TriangleVertex(surf,t,1))
+   nz1#=VertexNZ(surf,TriangleVertex(surf,t,1))
+   v1_r#=VertexRed(surf,TriangleVertex(surf,t,1))
+   v1_g#=VertexGreen(surf,TriangleVertex(surf,t,1))
+   v1_b#=VertexBlue(surf,TriangleVertex(surf,t,1))
+   v1_a#=VertexAlpha(surf,TriangleVertex(surf,t,1))
+
+   x2#=VertexX(surf,TriangleVertex(surf,t,2))
+   y2#=VertexY(surf,TriangleVertex(surf,t,2))
+   z2#=VertexZ(surf,TriangleVertex(surf,t,2))
+   u2a#=VertexU(surf,TriangleVertex(surf,t,2),0)
+   v2a#=VertexV(surf,TriangleVertex(surf,t,2),0)
+   u2b#=VertexU(surf,TriangleVertex(surf,t,2),1)
+   v2b#=VertexV(surf,TriangleVertex(surf,t,2),1)
+   nx2#=VertexNX(surf,TriangleVertex(surf,t,2))
+   ny2#=VertexNY(surf,TriangleVertex(surf,t,2))
+   nz2#=VertexNZ(surf,TriangleVertex(surf,t,2))
+   v2_r#=VertexRed(surf,TriangleVertex(surf,t,2))
+   v2_g#=VertexGreen(surf,TriangleVertex(surf,t,2))
+   v2_b#=VertexBlue(surf,TriangleVertex(surf,t,2))
+   v2_a#=VertexAlpha(surf,TriangleVertex(surf,t,2))
+
+   ; find corresponding space cluster (checking Vertex 0 only )
+   x_c#=(VertexX(surf,TriangleVertex(surf,t,0))+(sx/2.0))/(sx/cx)
+   y_c#=(VertexY(surf,TriangleVertex(surf,t,0))+(sy/2.0))/(sy/cy)
+   z_c#=(VertexZ(surf,TriangleVertex(surf,t,0))+(sz/2.0))/(sz/cz)
+
+   ; create a cluster mesh if it's used the first time
+   If cluster_mflag(x_c,y_c,z_c)=0 
+    cluster_mflag(x_c,y_c,z_c)=1   ; and set it's flag to 1 (= already created)
+    cluster(x_c,y_c,z_c)=CreateMesh()
+   EndIf
+   ; create a cluster surface if it's used the first time (used as a flag too: &lt;&gt;0 = already existing)
+   If cluster_sflag(x_c,y_c,z_c)=0
+    cluster_sflag(x_c,y_c,z_c)=CreateSurface(cluster(x_c,y_c,z_c))
+    PaintSurface cluster_sflag(x_c,y_c,z_c),mybrush
+   EndIf
+
+   ; and finally recreate the triangle for the cluster
+   v0=AddVertex(cluster_sflag(x_c,y_c,z_c),x0,y0,z0)
+   VertexTexCoords cluster_sflag(x_c,y_c,z_c),v0,u0a,v0a,0,0
+   VertexTexCoords cluster_sflag(x_c,y_c,z_c),v0,u0b,v0b,0,1
+   VertexColor cluster_sflag(x_c,y_c,z_c),v0,v0_r,v0_g,v0_b,v0_a
+   VertexNormal cluster_sflag(x_c,y_c,z_c),v0,nx0,ny0,nz0
+
+   v1=AddVertex(cluster_sflag(x_c,y_c,z_c),x1,y1,z1)
+   VertexTexCoords cluster_sflag(x_c,y_c,z_c),v1,u1a,v1a,0,0
+   VertexTexCoords cluster_sflag(x_c,y_c,z_c),v1,u1b,v1b,0,1
+   VertexColor cluster_sflag(x_c,y_c,z_c),v1,v1_r,v1_g,v1_b,v1_a
+   VertexNormal cluster_sflag(x_c,y_c,z_c),v1,nx1,ny1,nz1
+
+   v2=AddVertex(cluster_sflag(x_c,y_c,z_c),x2,y2,z2)
+   VertexTexCoords cluster_sflag(x_c,y_c,z_c),v2,u2a,v2a,0,0
+   VertexTexCoords cluster_sflag(x_c,y_c,z_c),v2,u2b,v2b,0,1
+   VertexColor cluster_sflag(x_c,y_c,z_c),v2,v2_r,v2_g,v2_b,v2_a
+   VertexNormal cluster_sflag(x_c,y_c,z_c),v2,nx2,ny2,nz2
+
+   nope=AddTriangle(cluster_sflag(x_c,y_c,z_c),v0,v1,v2)
+
+  Next
+ Next
+
+ For z=0 To cz
+  For y=0 To cy
+   For x=0 To cx
+    If cluster_mflag(x,y,z)&lt;&gt;0 ; does cluster contain a mesh at all?
+     ; here you can also set the required attributes, like collision, FX etc.
+     ; EG:
+     ; EntityFX cluster(x,y,z),1
+    EndIf
+   Next
+  Next
+ Next
+ FreeEntity mesh ; orginal mesh not used anymore
+End Function
+
+
+
+Function find_vis_minmax(lmesh) 
+ ; this will find the min and max xyz of the mesh. This space will be clusterized.
+ Local lmin_x#,lmin_y#,lmin_z#,lmax_x#,lmax_y#,lmax_z#,s,i,v,i2,lx#,ly#,lz#
+ lmin_x#=1000000
+ lmin_y#=1000000
+ lmin_z#=1000000
+ lmax_x#=-1000000
+ lmax_y#=-1000000
+ lmax_z#=-1000000
+
+ s=CountSurfaces(lmesh)
+ For i=1 To s
+  ls=GetSurface(lmesh,i)
+  v=CountVertices(ls)
+  For i2=0 To v-1
+   lx#=VertexX(ls,i2)
+   ly#=VertexY(ls,i2)
+   lz#=VertexZ(ls,i2)
+   If lx&gt;lmax_x Then lmax_x=lx
+   If ly&gt;lmax_y Then lmax_y=ly
+   If lz&gt;lmax_z Then lmax_z=lz
+
+   If lx&lt;lmin_x Then lmin_x=lx
+   If ly&lt;lmin_y Then lmin_y=ly
+   If lz&lt;lmin_z Then lmin_z=lz
+  Next
+ Next
+ vis_minx=lmin_x ; store results in globals!
+ vis_miny=lmin_y
+ vis_minz=lmin_z
+
+ vis_maxx=lmax_x
+ vis_maxy=lmax_y
+ vis_maxz=lmax_z
+End Function
+
+; misc stuff...
+Function min#(a#,b#)
+  If a&lt;b Then Return a
+ Return b
+End Function
+
+Function max#(a#,b#)
+  If a&gt;b Then Return a
+ Return b
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >wizzlefish</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> What does "Executive Order-11110" mean? <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> yahoo will tell you, search for "EO 11110 kennedy". <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> BTW the function expects the mesh to fit inside -500 and 500, and if it won't, there may be a MAV. If you don't know how big the mesh is, you could use an additional function that will parse all vertices and use TFormPoint to determine their real world coodinates, then determine the max coordinate (no matter if negative or positive) and then multiply this by 2, this value(s) should work nicely with the function.<br><br>You can also ignore Triangles that are outside the "scene-space" by asking if the cluster index is a legal one at all, in this example it would be<br>if c_x&gt;=0 and c_x &lt;=cx then<br>  add the triangle etc... <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Damien Sturdy</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> Why not use meshwidth/height/length and universally scale the mesh down to fit? ;) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> you could do that, but some people may wanna leave the mesh unscaled. Anyway, make sure the mesh fit's in the space that will be clusterized. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>2005</font></td></tr></table></td></tr><tr ><td class="posttext"> Just an additional Sidenote: The function does not use any Tris twice. All it does is checking for the position of Vertex 1 of each Triangle. Depending on this vertexes position the triangle will be added to only ONE space cluster.  So you should not use very large triangles if you plan to use this function in a VIS occlusion system. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >WildStorm</td><td align="right"><font class=tiny>2005</font></td></tr></table></td></tr><tr ><td class="posttext"> with some meshs i get an "vertex index out of range" here: <br>x0#=VertexX(surf,TriangleVertex(surf,t,0)) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>2005</font></td></tr></table></td></tr><tr ><td class="posttext"> yes, thanks for pointing me to this, that code wasn't very correct. I just fixed it now. (0 to counttriangles(m)<b>-1</b>) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RifRaf</td><td align="right"><font class=tiny>2005</font></td></tr></table></td></tr><tr ><td class="posttext"> nice routine jkf, i made some changes and posted again <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >WildStorm</td><td align="right"><font class=tiny>2005</font></td></tr></table></td></tr><tr ><td class="posttext"> changing<br><pre class=code>
+  For z=0 To cz ; clear all clusters current surface holder variable
+   For y=0 To cy
+    For x=0 To cx
+     cluster_sflag(x,y,z)=0
+    Next
+   Next
+  Next
+</pre><br><br>into<br><br><pre class=code>
+ dim cluster_sflag(cx,cy,cz)
+</pre><br><br>makes the thing faster (in debugmode, maybe release too) <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

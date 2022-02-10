@@ -1,0 +1,246 @@
+<!DOCTYPE html><html lang="en" ><head ><title >C programming question</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >C programming question</h1><a href="forums.php" >Community Forums</a>/<a href="topics.php?forum=125" >General Help</a>/<a href="#bottom" >C programming question</a><br><br>
+<a name="1007912"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> To anyone who is fluent with C or the details of assembly -<br><br>I had the idea that it might be fun to show off a bit, and implement a GC in an assignment for my C programming course. I have a reasonably clear idea of how I would like to go about this, but it involves tracing through the stack to see if references to an object exist.<br><br>Question: is it permissible/possible to get the address of a variable on the bottom of the stack, and then count down from it (stack always grows downwards?) to the current position in a linear fashion? Can I rely on the stack to be linear? Is accessing this memory permissible? (it works on simple tests on my computer, but I haven't been able to find an answer online as to whether I can rely on this behaviour on other systems - within reasonable limits eg. x86 only.) I know this wouldn't cover global variables or registers, but don't much care as I'll be happy with a simple implementation.<br><br>Answer constraints: please don't post any source code, as this is for an academic assignment (this is the reason I haven't tried simply obtaining a third-party GC and looking through it - I looked at the documentation for the Boehm GC but didn't find anything that looked informative).<br><br>Thanks for reading! <br><br></td></tr></table><br>
+<a name="1008010"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Otus</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> The stack specifics depend both on architecture and on compiler - even with x86 and GCC there may in principle be differences depending on how the system was set up. You should also check compiler alignment options to make sure whether memory pointers can only appear at aligned positions. <br><br></td></tr></table><br>
+<a name="1008147"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for the tip. Sadly, I didn't get it done in time to add it to my project. On the offchance that anyone's interested, and would be able to give further suggestions (solely as a matter of curiosity), this is as far as I got (it's really quite pathetic):<br><br>GC.c:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include "GC.h"
+
+/*
+ * A very simple conservative garbage collector inspired by the Boehm GC
+ *
+ * Included for reference only as I can't get the damn thing to work
+ */
+
+int main(int argc, char** argv) {
+
+    GC_Init(10000);
+    
+    void * n; void * m;
+    int i;
+    m = GC_Malloc(1965, 0);
+    for ( i = 0 ; i &lt; 16 ; i++ ) {
+        n = GC_Malloc(2048, 1);
+    }
+    m = NULL;
+    GC_Collect();
+    printf("%d\n", GC_MemAlloced());
+
+   // getchar();
+
+    return (EXIT_SUCCESS);
+}
+
+
+static GC_Object gc_First;
+static GC_Object gc_Last;
+static int gc_AllocedSize;
+static int gc_AllocThreshold;
+static void * gc_StackTop;
+static void * gc_StackBottom;
+static void scanGCObject(GC_Object obj);
+static void GC_listRemove(GC_Object obj);
+static void GC_listAddLast(GC_Object obj);
+
+void * GC_Malloc(int size, int containsPtr)
+{
+    void * dummyAddress = 0;
+    GC_Object newObject = NULL;
+    void * allocObject = NULL;
+    
+    if (gc_AllocedSize &gt; gc_AllocThreshold) {
+        gc_StackTop = &amp;dummyAddress;
+        GC_Collect();
+    }
+
+    if ((allocObject = malloc(size)) == NULL) return NULL;
+    if ((newObject = malloc(sizeof(struct allocatedobj_s))) == NULL) {
+        free(allocObject);
+        return NULL;
+    }
+
+    gc_AllocedSize += size; printf("%d\n", gc_AllocedSize);
+    newObject-&gt;address = allocObject;
+    newObject-&gt;size = size;
+    newObject-&gt;live = 1;
+    newObject-&gt;containsPtr = containsPtr;
+
+    GC_listAddLast(newObject);
+
+    return allocObject;
+}
+
+int GC_MemAlloced(void)
+{
+    return gc_AllocedSize;
+}
+
+void GC_SetThreshold(int newThreshold)
+{
+    gc_AllocThreshold = newThreshold;
+}
+
+void GC_Collect(void)
+{
+    void * dummyAddress;
+    void ** stackTracer;
+    GC_Object currentObject, nextCurrentObject;
+
+    if (gc_StackTop == NULL) gc_StackTop = &amp;dummyAddress;
+
+    /* Mark all unlocked objects as dead */
+    currentObject = gc_First;
+    while (currentObject != NULL) {
+        if (currentObject-&gt;live &gt; 0) {
+            currentObject-&gt;live = 0;
+        }
+        currentObject = currentObject-&gt;next;
+    }
+
+    /* Mark live objects */
+    currentObject = gc_First;
+    while (currentObject != NULL) {
+        if (currentObject-&gt;live == 0) {
+            stackTracer = gc_StackBottom;
+            while (stackTracer != gc_StackTop) {
+                if (*stackTracer == currentObject-&gt;address) {
+                    currentObject-&gt;live = 1;
+                    if (currentObject-&gt;containsPtr) {
+                        scanGCObject(currentObject);
+                    }
+                    break;
+                }
+                stackTracer --;
+            }
+        } else if (currentObject-&gt;live == 2) { /* Indirectly alive */
+            if (currentObject-&gt;containsPtr) scanGCObject(currentObject);
+            currentObject-&gt;live = 1;
+        }
+        currentObject = currentObject-&gt;next;
+    }
+
+    /* Free dead objects */
+    currentObject = gc_First;
+    while (currentObject != NULL) {
+        if (currentObject-&gt;live == 0) {
+            nextCurrentObject = currentObject-&gt;next;
+            /* Remove it from the list of allocations */
+            GC_listRemove(currentObject);
+            /* Then free both the object itself and its list entry */
+            free(currentObject);
+            printf("%d %d\n", gc_AllocedSize, currentObject-&gt;size);
+            gc_AllocedSize -= currentObject-&gt;size;
+            free(currentObject-&gt;address);
+
+            currentObject = nextCurrentObject;
+        } else {
+            /* Just get the next object */
+            currentObject = currentObject-&gt;next;
+        }
+    }
+    
+    gc_StackTop = NULL;
+}
+
+/* Not supposed to be public but unavoidable really */
+void _GC_SetBottom(void * stackBottom)
+{
+    gc_StackBottom = stackBottom;
+}
+
+static void scanGCObject(GC_Object obj)
+{
+    GC_Object currentObject;
+    void ** objTracer;
+    void ** objTarget;
+
+    currentObject = gc_First;
+    while (currentObject != NULL) {
+        if (currentObject-&gt;live == 0) {
+            objTracer = obj-&gt;address;
+            objTarget = objTracer - obj-&gt;size;
+            while (objTracer != objTarget) {
+                if (*objTracer == currentObject-&gt;address) {
+                    currentObject-&gt;live = 2;
+                    GC_listRemove(currentObject);
+                    GC_listAddLast(currentObject);
+                    break;
+                }
+                objTracer --;
+            }
+        }
+        currentObject = currentObject-&gt;next;
+    }
+}
+
+static void GC_listRemove(GC_Object obj)
+{
+    if (obj-&gt;prev != NULL) {
+        obj-&gt;prev-&gt;next = obj-&gt;next;
+    } else {
+        gc_First = obj-&gt;next;
+        gc_First-&gt;prev = NULL;
+    }
+    if (obj-&gt;next != NULL) {
+        obj-&gt;next-&gt;prev = obj-&gt;prev;
+    } else {
+        gc_Last = obj-&gt;next;
+        gc_Last-&gt;next = NULL;
+    }
+}
+
+static void GC_listAddLast(GC_Object obj)
+{
+    if (gc_First == NULL) {
+        gc_First = obj;
+        gc_Last = obj;
+        obj-&gt;next = NULL;
+        obj-&gt;prev = NULL;
+    } else {
+        gc_Last-&gt;next = obj;
+        obj-&gt;prev = gc_Last;
+        gc_Last = obj;
+        obj-&gt;next = NULL;
+    }
+}
+</textarea><br><br>GC.h:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+/* 
+ * File:   GC.h
+ * Author: person
+ *
+ * Created on 26 January 2010, 23:06
+ */
+
+#ifndef _GC_H
+#define	_GC_H
+
+
+struct allocatedobj_s {
+    void * address;
+    int size, live;
+    int containsPtr;
+    struct allocatedobj_s * next;
+    struct allocatedobj_s * prev;
+};
+typedef struct allocatedobj_s * GC_Object;
+
+void _GC_SetBottom(void * stackBottom);
+void * GC_Malloc(int size, int containsPtr);
+void GC_Collect(void);
+int GC_MemAlloced(void);
+void GC_SetThreshold(int newThreshold);
+
+#define GC_Init(X) { void * gc_StackBottom_dummy; \
+                    _GC_SetBottom(&amp;gc_StackBottom_dummy); \
+                    GC_SetThreshold(X); }
+
+
+#endif	/* _GC_H */
+</textarea><br><br>I think the moral of this story is that I have no idea what I'm doing here... isn't that always the fun way? In future I'll definitely be using the one Boehm, Demers and Weiser have very kindly put together in advance. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

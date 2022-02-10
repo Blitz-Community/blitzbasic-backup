@@ -1,0 +1,1217 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Proposed AddGadgetItems API (batch add items)</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Proposed AddGadgetItems API (batch add items)</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=117" >MaxGUI Module</a>/<a href="#bottom" >Proposed AddGadgetItems API (batch add items)</a><br><br>
+<a name="1101506"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I have been playing around with maxgui recently and discovered that it really doesn't perform very well with adding moderatly high amounts of data to gadgets.<br><br>I have a standard list adding 1000 items and the delay is pretty bad!<br><br>I had a poke around and boiled it down to a maxgui issue. If you look at the win32maxguiex.bmx file you will see:<br><pre class=code>	Method InsertListItem(index,Text$,tip$,icon,tag:Object)
+		
+		Local it:LVITEMW
+		it=New LVITEMW
+		it.mask=LVIF_TEXT|LVIF_DI_SETITEM
+		it.iItem=index
+		it.pszText=Text.toWString()
+		
+		'If icon&gt;=0 Then
+			it.mask:|LVIF_IMAGE
+			it.iImage=icon
+		'EndIf
+		
+		DeSensitize()
+		SendMessageW _hwnd,LVM_INSERTITEMW,0,Int Byte Ptr(it)
+		SendMessageW _hwnd,LVM_SETCOLUMNWIDTH,0,-2
+		If Not IsSingleSelect() Then SelectionChanged()
+		Sensitize()
+		MemFree it.pszText
+		
+	EndMethod</pre><br><br>Simply by commenting out the lines:<pre class=code>		'DeSensitize()
+		SendMessageW _hwnd,LVM_INSERTITEMW,0,Int Byte Ptr(it)
+		'SendMessageW _hwnd,LVM_SETCOLUMNWIDTH,0,-2
+		'If Not IsSingleSelect() Then SelectionChanged()
+		'Sensitize()</pre><br><br>It was possible to drastically increase the speed of the list manipulation. Obviously maxgui needs to do its own bits and call those functions which is why I am suggesting that maybe a AddGadgetItems API could be added.<br><br>AddGadgetItems would prepare the gadget once; add <i>all</i> of the items in a batch; finalise the gadget. This would avoid all those repeated calls to system/driver that have been commented out above. <br><br></td></tr></table><br>
+<a name="1101512"></a>
+
+<a name="1101513"></a>
+
+<a name="1101514"></a>
+
+<a name="1112434"></a>
+
+<a name="1112438"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I have written a stand alone function that seems to work on windows:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Type AddListItemsBatch
+	Field items:TList = CreateList()
+	Field total:Int
+	
+	'api
+	Method Go(gadget_:TGadget)
+		' --- dump all of the items into the gadget ---
+		Local link:TLink
+		Local Item:TGadgetItem
+		
+		'do os speciffic bits to setup the operation and confirm we have a valid gadget
+		?Win32
+			Local it:LVITEMW = New LVITEMW
+			
+			'convert to windows list box
+			Local gadget:TWindowsListBox = TWindowsListBox(gadget_)
+			If gadget = Null Return
+			
+			'get a hwnd
+			Local hwnd:Int = QueryGadget(gadget,QUERY_HWND)
+		?Not Win32
+			'fall back to maxgui behaviour by adding each object individually
+			For Item = EachIn items
+				AddGadgetItem(gadget_,Item.text,Item.Flags,Item.icon,Item.tip,Item.extra)
+			Next
+			total = 0
+			items.Clear()
+			Return
+		?
+		
+		'only proceed if it was infact a valid gadget
+		'resize the items array
+		Local index:Int = gadget.items.Length
+		gadget.items = gadget.items[..index+total]
+		
+		'do os speciffic gadget preperation
+		?Win32
+			gadget.DeSensitize()
+			SendMessageW(hwnd,WM_SETREDRAW,False,0)
+		?
+		
+		'insert the items into the gadgets items array
+		link = items.FirstLink()
+		While link
+			'move to next link
+			Item = TGadgetItem(link.value())
+			link = link.NextLink()
+			
+			'add item to maxgui gadget
+			gadget.items[index] = Item
+			
+			'add item to os
+			?Win32
+				it.Mask = LVIF_TEXT|LVIF_DI_SETITEM
+				it.iItem = index
+				it.pszText = Item.text.toWString()
+				
+				'If item.icon&gt;=0 Then
+					it.mask:|LVIF_IMAGE
+					it.iImage = Item.icon
+				'EndIf
+				
+				SendMessageW hwnd,LVM_INSERTITEMW,0,Int Byte Ptr(it)
+				MemFree it.pszText
+			?
+			
+			'increase index for next item
+			index :+ 1
+		Wend
+		
+		'do os speciffic finalisation
+		?Win32
+			SendMessageW hwnd,LVM_SETCOLUMNWIDTH,0,-2
+			SendMessageW(hwnd,WM_SETREDRAW,True,0)
+			If Not gadget.IsSingleSelect() Then gadget.SelectionChanged()
+			gadget.Sensitize()
+		?
+		
+		'reset the batch
+		items.Clear()
+		total = 0
+	End Method
+	
+	Method Add(text:String,Flags:Int=0,icon:Int=-1,tip:String="",extra:Object=Null)
+		' --- create a gadget item so we use it to add later ---
+		'create the new item
+		Local Item:TGadgetItem = New TGadgetItem
+		Item.Set(text,tip,icon,extra,Flags)
+		
+		'add it to the batch list
+		items.AddLast(Item)
+		
+		'increase the count
+		total :+ 1
+	End Method
+End Type</textarea><br><br>I dunno if this breaks anything but it all seems to work fine on my tests. To use it you do:<br><pre class=code>Local batch:AddListItemsBatch = New AddListItemsBatch
+batch.Add("item 1")
+batch.Add("item 2")
+batch.Add("item 3")
+batch.Add("item 4")
+batch.Go(listbox)</pre><br><br>It only supports the listbox at the moment as I don't need anything else but as a test case here is a comparison.<br><br>Maxgui adding 10000 items: took 23.8309994 sec<br>Batch adding 10000 items: 1.70700002 sec<br><br>Obviously there is the argument that your design is broken if your adding 10000 items, but that is just to highlight the drastic difference.<br><br><font class="tiny">Last edited 2011</font><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1101553"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi, thanks for sharing this code.<br><br>Can't one just program some sort of "Locklistbox()" function in order to speed up the progress? - From my experience the constant redrawing is what slows the listbox down. <br><br></td></tr></table><br>
+<a name="1101586"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SebHoll</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Love it! :-) <br><br></td></tr></table><br>
+<a name="1101597"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> I always thought there was a lockgadget up until few days ago, b+?? hmm<br><br>LockGadget() would be ideal! <br><br></td></tr></table><br>
+<a name="1101701"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Seb: Is it possible to do this multi-platform (gui enhancement)?<br><br>@skn3: I'm poking for such a function for over 5 years now. :O<br><br>Quote myself: <a href="http://www.blitzbasic.com/Community/posts.php?topic=60869#679298" target="_blank">http://www.blitzbasic.com/Community/posts.php?topic=60869#679298</a> <br><br></td></tr></table><br>
+<a name="1107105"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well, I have been using these functions in my little radio player for some weeks now. All works fine so far (Win7 64Bit). <br><br>I also see a visual speed benefit while using ~1.200 items: <a href="http://188.165.211.46/~knot/prp/prp_win32.zip" target="_blank">http://188.165.211.46/~knot/prp/prp_win32.zip</a> <br><br></td></tr></table><br>
+<a name="1107217"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Excellent news! Can also confirm things working on daily development/usage for past weeks! Hurrah for batch :) <br><br></td></tr></table><br>
+<a name="1107313"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Has anyone tested this under Linux / Mac yet? <br><br></td></tr></table><br>
+<a name="1108769"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> The code should work fine with mac / linux but if you look in the pre conditional compiling, it is just reverting to the default behaviour...<br><br>If you/anyone do a mac one please let me know and i'll update the thread. <br><br></td></tr></table><br>
+<a name="1111180"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> I found a tiny "glitch" under Windows:<br>The listbox the items are added to displays a horizontal slider for a second when the gadget is updated. Even if the items don't need one (= item length is fine). - I remember Seb had that glitch in the original MaxGui as well. Not sure how he fixed this. <br><br></td></tr></table><br>
+<a name="1111377"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmmmm I havnt noticed this? I'll have a look tomorrow when back on pc. What version of windows? <br><br></td></tr></table><br>
+<a name="1112013"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> System Windows 7 (64Bit) and XP (32Bit)<br><br>I have put up a simple example program:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict 
+Import MaxGui.Drivers
+
+Const MAINWINDOW_W:Int = 278 
+Const MAINWINDOW_H:Int = 154
+Const MAXITEMS:Int=2000
+Global window:TGadget=CreateWindow("My Lisboxwindow",30,20,MAINWINDOW_W,MAINWINDOW_H+100,Null,WINDOW_TITLEBAR|WINDOW_CENTER)
+Global listbox:TGadget=CreateListBox(2,2,MAINWINDOW_W-6,MAINWINDOW_H,window)
+Global Button1:TGadget=CreateButton("Normal Add Items "+MAXITEMS,2,MAINWINDOW_H+2,MAINWINDOW_W-6,20,window,BUTTON_OK)
+Global Button2:TGadget=CreateButton("Batch Add Items "+MAXITEMS,2,MAINWINDOW_H+25,MAINWINDOW_W-6,20,window,BUTTON_OK)
+Global ListboxStrip:TIconStrip  = LoadIconStrip(LoadPixmapPNG("temp.png")) 
+
+While WaitEvent()
+	Select EventID()
+		Case EVENT_WINDOWCLOSE
+			End
+		Case EVENT_GADGETACTION
+   	 	      Select EventSource() 
+                 Case BUTTON1
+			          Add_Listboxitems()
+                 Case BUTTON2
+			          Add_Listboxitems_Batch()
+                 End Select 
+	End Select
+Wend
+
+Function Add_Listboxitems_Batch()
+Local batch:AddListItemsBatch = New AddListItemsBatch
+Local i:Int    
+ 
+ClearGadgetItems (listbox)
+
+For i:Int=0 To MAXITEMS 
+batch.Add "item "+i,GADGETITEM_NORMAL
+Next 
+batch.Go(listbox)
+
+End Function 
+
+
+Function Add_Listboxitems()
+Local i:Int     
+ClearGadgetItems (listbox)
+SetGadgetIconStrip(listbox, Null)
+For i:Int=0 To MAXITEMS
+ AddGadgetItem listbox,"item "+i,GADGETITEM_NORMAL,-1
+Next 
+End Function 
+
+' New AddListItem type too speed up the process! EXPERIMENTAL!
+Type AddListItemsBatch
+	Field items:TList = CreateList()
+	Field total:Int
+	
+	'api
+	Method Go(gadget_:TGadget)
+		' --- dump all of the items into the gadget ---
+		Local link:TLink
+		Local Item:TGadgetItem
+		
+		'do os speciffic bits to setup the operation and confirm we have a valid gadget
+		?Win32
+			Local it:LVITEMW = New LVITEMW
+			
+			'convert to windows list box
+			Local gadget:TWindowsListBox = TWindowsListBox(gadget_)
+			If gadget = Null Return
+			
+			'get a hwnd
+			Local hwnd:Int = QueryGadget(gadget,QUERY_HWND)
+		?Not Win32
+			'fall back to maxgui behaviour by adding each object individually
+			For Item = EachIn items
+				AddGadgetItem(gadget_,Item.text,Item.Flags,Item.icon,Item.tip,Item.extra)
+			Next
+			total = 0
+			items.Clear()
+			Return
+		?
+		
+		'only proceed if it was infact a valid gadget
+		'resize the items array
+		Local index:Int = gadget.items.Length
+		gadget.items = gadget.items[..index+total]
+		
+		'do os speciffic gadget preperation
+		?Win32
+			gadget.DeSensitize()
+		?
+		
+		'insert the items into the gadgets items array
+		link = items.FirstLink()
+		While link
+			'move to next link
+			Item = TGadgetItem(link.value())
+			link = link.NextLink()
+			
+			'add item to maxgui gadget
+			gadget.items[index] = Item
+			
+			'add item to os
+			?Win32
+				it.Mask = LVIF_TEXT|LVIF_DI_SETITEM
+				it.iItem = index
+				it.pszText = Item.text.toWString()
+				
+				'If item.icon&gt;=0 Then
+					it.mask:|LVIF_IMAGE
+					it.iImage = Item.icon
+				'EndIf
+				
+				SendMessageW hwnd,LVM_INSERTITEMW,0,Int Byte Ptr(it)
+				MemFree it.pszText
+			?
+			
+			'increase index for next item
+			index :+ 1
+		Wend
+		
+		'do os speciffic finalisation
+		?Win32
+			SendMessageW hwnd,LVM_SETCOLUMNWIDTH,0,-2
+			If Not gadget.IsSingleSelect() Then gadget.SelectionChanged()
+			gadget.Sensitize()
+		?
+		
+		'reset the batch
+		items.Clear()
+		total = 0
+	End Method
+	
+	Method Add(text:String,Flags:Int=0,icon:Int=-1,tip:String="",extra:Object=Null)
+		' --- create a gadget item so we use it to add later ---
+		'create the new item
+		Local Item:TGadgetItem = New TGadgetItem
+		Item.Set(text,tip,icon,extra,Flags)
+		
+		'add it to the batch list
+		items.AddLast(Item)
+		
+		'increase the count
+		total :+ 1
+	End Method
+End Type
+</textarea><br><br>1, Run Program<br>2. When you press the button add batch items you should see the issue.<br>But only the first time! After that it works fine. At least in this example.<br><br>Thanks for your help! <br><br></td></tr></table><br>
+<a name="1112433"></a>
+
+<a name="1112435"></a>
+
+<a name="1112436"></a>
+
+<a name="1112439"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> OH AWESOME! After years of using win api calls I never knew windows had a built in ability to disable redraw for a hwnd!<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict 
+Import MaxGui.Drivers
+
+Const MAINWINDOW_W:Int = 278 
+Const MAINWINDOW_H:Int = 154
+Const MAXITEMS:Int=2000
+Global window:TGadget=CreateWindow("My Lisboxwindow",30,20,MAINWINDOW_W,MAINWINDOW_H+100,Null,WINDOW_TITLEBAR|WINDOW_CENTER)
+Global listbox:TGadget=CreateListBox(2,2,MAINWINDOW_W-6,MAINWINDOW_H,window)
+Global Button1:TGadget=CreateButton("Normal Add Items "+MAXITEMS,2,MAINWINDOW_H+2,MAINWINDOW_W-6,20,window,BUTTON_OK)
+Global Button2:TGadget=CreateButton("Batch Add Items "+MAXITEMS,2,MAINWINDOW_H+25,MAINWINDOW_W-6,20,window,BUTTON_OK)
+Global ListboxStrip:TIconStrip  = LoadIconStrip(LoadPixmapPNG("temp.png")) 
+
+While WaitEvent()
+	Select EventID()
+		Case EVENT_WINDOWCLOSE
+			End
+		Case EVENT_GADGETACTION
+   	 	      Select EventSource() 
+                 Case BUTTON1
+			          Add_Listboxitems()
+                 Case BUTTON2
+			          Add_Listboxitems_Batch()
+                 End Select 
+	End Select
+Wend
+
+Function Add_Listboxitems_Batch()
+Local batch:AddListItemsBatch = New AddListItemsBatch
+Local i:Int    
+ 
+ClearGadgetItems (listbox)
+
+For i:Int=0 To MAXITEMS 
+batch.Add "item "+i,GADGETITEM_NORMAL
+Next 
+batch.Go(listbox)
+
+End Function 
+
+
+Function Add_Listboxitems()
+Local i:Int     
+ClearGadgetItems (listbox)
+SetGadgetIconStrip(listbox, Null)
+For i:Int=0 To MAXITEMS
+ AddGadgetItem listbox,"item "+i,GADGETITEM_NORMAL,-1
+Next 
+End Function 
+
+' New AddListItem type too speed up the process! EXPERIMENTAL!
+Type AddListItemsBatch
+	Field items:TList = CreateList()
+	Field total:Int
+	
+	'api
+	Method Go(gadget_:TGadget)
+		' --- dump all of the items into the gadget ---
+		Local link:TLink
+		Local Item:TGadgetItem
+		
+		'do os speciffic bits to setup the operation and confirm we have a valid gadget
+		?Win32
+			Local it:LVITEMW = New LVITEMW
+			
+			'convert to windows list box
+			Local gadget:TWindowsListBox = TWindowsListBox(gadget_)
+			If gadget = Null Return
+			
+			'get a hwnd
+			Local hwnd:Int = QueryGadget(gadget,QUERY_HWND)
+		?Not Win32
+			'fall back to maxgui behaviour by adding each object individually
+			For Item = EachIn items
+				AddGadgetItem(gadget_,Item.text,Item.Flags,Item.icon,Item.tip,Item.extra)
+			Next
+			total = 0
+			items.Clear()
+			Return
+		?
+		
+		'only proceed if it was infact a valid gadget
+		'resize the items array
+		Local index:Int = gadget.items.Length
+		gadget.items = gadget.items[..index+total]
+		
+		'do os speciffic gadget preperation
+		?Win32
+			gadget.DeSensitize()
+			SendMessageW(hwnd,WM_SETREDRAW,False,0)
+		?
+		
+		'insert the items into the gadgets items array
+		link = items.FirstLink()
+		While link
+			'move to next link
+			Item = TGadgetItem(link.value())
+			link = link.NextLink()
+			
+			'add item to maxgui gadget
+			gadget.items[index] = Item
+			
+			'add item to os
+			?Win32
+				it.Mask = LVIF_TEXT|LVIF_DI_SETITEM
+				it.iItem = index
+				it.pszText = Item.text.toWString()
+				
+				'If item.icon&gt;=0 Then
+					it.mask:|LVIF_IMAGE
+					it.iImage = Item.icon
+				'EndIf
+				
+				SendMessageW hwnd,LVM_INSERTITEMW,0,Int Byte Ptr(it)
+				MemFree it.pszText
+			?
+			
+			'increase index for next item
+			index :+ 1
+		Wend
+		
+		'do os speciffic finalisation
+		?Win32
+			SendMessageW hwnd,LVM_SETCOLUMNWIDTH,0,-2
+			SendMessageW(hwnd,WM_SETREDRAW,True,0)
+			If Not gadget.IsSingleSelect() Then gadget.SelectionChanged()
+			gadget.Sensitize()
+		?
+		
+		'reset the batch
+		items.Clear()
+		total = 0
+	End Method
+	
+	Method Add(text:String,Flags:Int=0,icon:Int=-1,tip:String="",extra:Object=Null)
+		' --- create a gadget item so we use it to add later ---
+		'create the new item
+		Local Item:TGadgetItem = New TGadgetItem
+		Item.Set(text,tip,icon,extra,Flags)
+		
+		'add it to the batch list
+		items.AddLast(Item)
+		
+		'increase the count
+		total :+ 1
+	End Method
+End Type</textarea><br><br>See lines 89 and 124 for the changes. That should solve it, I will update the original post at the top too.<br><br><font class="tiny">Last edited 2011</font><br><br><font class="tiny">Last edited 2011</font><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1112635"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> Works fine under xp and win7 now.<br><br>Great job! <br><br>P.S. Is Seb still working on "MaxGui2"? <br><br></td></tr></table><br>
+<a name="1112683"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> No idea about the maxgui2 thing! It would be cool if he was but Id imagine his time is fairly limited! <br><br></td></tr></table><br>
+<a name="1120535"></a>
+
+<a name="1120536"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >NoOdle</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> great work, your modifications from this post and others should be added to the MaxGUI release. Very handy!<br><br>[edit] couldn't find anything else on Mac OSX disable redrawing, only your question on Stackoverflow<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1120672"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> "only your question on Stackoverflow" haha yes indeed ;) <br><br></td></tr></table><br>
+<a name="1227103"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> <b>Warning!!! Zombie thread approaching... :)</b><br><br>I modified the code add bit, so I can create a list with the items sorted "upwards" or "downwards":<br><br><pre class=code>
+	Method AddLast(text:String,Flags:Int=0,icon:Int=-1,tip:String="",extra:Object=Null)
+		' --- create a gadget item so we use it to add later ---
+		'create the new item
+		Local Item:TGadgetItem = New TGadgetItem
+		Item.Set(text,tip,icon,extra,Flags)
+		
+		'add it to the batch at the very end 
+		items.AddFirst(Item)
+		
+		'increase the count
+		total :+ 1
+	End Method
+
+	Method AddFirst(text:String,Flags:Int=0,icon:Int=-1,tip:String="",extra:Object=Null)
+		' --- create a gadget item so we use it to add later ---
+		'create the new item
+		Local Item:TGadgetItem = New TGadgetItem
+		Item.Set(text,tip,icon,extra,Flags)
+		
+		'add it to the batch list at the very start
+		items.AddFirst(Item)
+		
+		'increase the count
+		total :+ 1
+	End Method
+</pre><br><br>I'm looking for a fast way to generate a random list of items. I.e. each item that is added will be placed at a random spot of list.<br><br>I could use Modifygadgetitem() after the list has been created and switching each item of the list afterwards (= ugly and slow). <br><br>Does someone know how to do this while the list is generated and using the functions above? I need it to work with larger lists (2.000+ items with icons and tooltips). <br><br></td></tr></table><br>
+<a name="1227190"></a>
+
+<a name="1227226"></a>
+
+<a name="1227227"></a>
+
+<a name="1227228"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Henri</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hello Grisu,<br><br>here is a one way of doing it:<br><pre class=code>SuperStrict
+
+Rem
+Random list insertation (almost)
+EndRem
+
+Global list:TList = New TList
+
+SeedRnd MilliSecs()
+
+'Simulate x number of insertations to listbox
+For Local i:Int = 1 To 100
+	Addrandom(String(i))
+Next
+
+'Main function
+Function AddRandom(obj:Object)
+
+	Local link:TLink = list.firstlink()
+	If Not link Then
+		list.addlast(obj)
+		Return
+	EndIf
+	
+	Local count:Int = Rand(0,list.count())
+	Local notEven:Int = count Mod 3
+	For Local i:Int = 0 Until count
+		If link.nextlink() Then
+			link = link.nextlink()
+		Else
+			Exit
+		EndIf
+	Next
+	
+	If Not notEven Then
+		list.insertbeforelink(obj,link)
+	Else
+		list.insertafterlink(obj,link)
+	EndIf
+EndFunction
+
+' Display results
+For Local s:String = EachIn list
+	Print s
+Next
+</pre><br><br>EDIT:  Or more in context (not tested):<br><br>EDIT2: NOTE: Need to randomize seed before first entry ( SeedRnd MilliSecs() )<br><pre class=code>
+Method AddRandom(text:String,Flags:Int=0,icon:Int=-1,tip:String="",extra:Object=Null)
+	' --- create a gadget item so we use it to add later ---
+	'create the new item
+	Local Item:TGadgetItem = New TGadgetItem
+	Item.Set(text,tip,icon,extra,Flags)
+	
+	'add it to the batch list
+	Local link:TLink = items.firstlink()
+	If Not link Then
+		items.addlast(item)
+		total :+ 1
+		Return
+	EndIf
+	Local count:Int = Rand(0,items.count())
+	Local notEven:Int = count Mod 3
+	For Local i:Int = 0 Until count
+		If link.nextlink() Then
+			link = link.nextlink()
+		Else
+			Exit
+		EndIf
+	Next
+	If Not notEven Then
+		items.insertbeforelink(item,link)
+	Else
+		items.insertafterlink(item,link)
+	EndIf
+	
+	'increase the count
+	total :+ 1
+End Method
+</pre><br>-Henri <br><br></td></tr></table><br>
+<a name="1227308"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey,<br>thanks for that demonstration code.<br><br>As I needed to get this to work with Skn3's batch functions above, I chose a different approach in the end:<br><br>1. I create a temporary TList and add all items into it.<br>2. I pick a random item from that list and remove it afterwards.<br>3. I look up the random item from my database and add it to the listbox.<br>4. I repeat steps 2 + 3 until all items have been randomized.<br>5. I call GoBatch() to make the new listbox visible to the user.<br><br>Ideas to speed the process up are welcome.<br><br>Here comes my ugly example code: (from the main app)<br><pre class=code>
+ 	     Local Random_list:TList=CreateList()
+ 	     Local it:trecord
+	     Local tmp_str:String
+	     Local counter:Int
+	
+		 ' Create a temp list with all station filenames present, so we can select a random one out of it later
+         For it:trecord=EachIn MapValues(trecord.map_Station)
+             ListAddLast Random_list, Upper(it.filename)
+         Next  
+
+         Local Max_items:Int=CountList(Random_list)
+         Local Rnd_item:Int
+
+         While Max_items&gt;0 
+ 
+         Rnd_item:Int=Rand(1,Max_items)
+		 counter:Int=1
+
+  		For tmp_str:String = EachIn Random_list
+            If counter=Rnd_item Then 
+             ListRemove( Random_list:TList, tmp_str ) 
+	         Max_items:Int=Max_items-1
+             'Print Tmp_str+" found! "+counter+" Max: "+Max_items
+             Exit 
+            EndIf                         
+			counter=counter+1          
+    	Next
+                 
+		it:trecord=trecord(MapValueForKey(trecord.map_Station,tmp_str)) ' Grab Record according to filename
+            If it Then
+?Not Linux	     
+          		If it.fav=0 Then batch.Add it.name,GADGETITEM_NORMAL,it.rating,ConvertGenreToString(it.genre), it.filename Else batch.Add it.name,GADGETITEM_NORMAL,(it.rating+6),ConvertGenreToString(it.genre), it.filename
+?
+?Linux	     
+          		If it.fav=0 Then batch.Add it.name,GADGETITEM_NORMAL,it.rating,ConvertGenreToString(it.genre)+" ("+Get_Rating_text(it.rating)+")", it.filename Else batch.Add it.name,GADGETITEM_NORMAL,(it.rating+6),ConvertGenreToString(it.genre)+" ("+Get_Rating_text(it.rating)+")", it.filename
+?
+		      it=Null
+
+            EndIf
+
+        Wend ' Until no items left in random_list
+</pre> <br><br></td></tr></table><br>
+<a name="1227361"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Henri</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#22">[#22]</a></td></tr></table></td></tr><tr ><td class="posttext"> Does your solution work at satisfactory speed ? It's hard to test when you are relying on other things not visible here.<br><br>-Henri <br><br></td></tr></table><br>
+<a name="1227602"></a>
+
+<a name="1227603"></a>
+
+<a name="1227635"></a>
+
+<a name="1227639"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#23">[#23]</a></td></tr></table></td></tr><tr ><td class="posttext"> It works, but for me it's quite slow (~30ms) and I'm on a high end PC. I have no idea how it will run on lower end systems. So I'm worried users may be disappointed.<br><br>I created a standalone app. So the results can be checked. Please select "Randomise List" to generate a new list and post your results (non-debugmode).<br><br>Download Source: <a href="http://www.mediafire.com/download/lsr5n28rsbb20yg/RandomTestV3.zip" target="_blank">http://www.mediafire.com/download/lsr5n28rsbb20yg/RandomTestV3.zip</a><br><br><b>|Edit| Degac's changes from below are now included!</b> <br><br></td></tr></table><br>
+<a name="1227625"></a>
+
+<a name="1227628"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#24">[#24]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just tested your source code on my computer (AMD PhenomII X4 955)<br>At startup<br>debug on: 38-54ms <br>debug off: 13ms<br><br>When clicked on random mode<br><br>debug off: 132ms - 190ms <br><br></td></tr></table><br>
+<a name="1227626"></a>
+
+<a name="1227627"></a>
+
+<a name="1227629"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#25">[#25]</a></td></tr></table></td></tr><tr ><td class="posttext"> Some questions about your source code.<br><br>1. why do you use ReadFile? It seems useless as you use LoadText(). If you want to check if file is present, just use FileType()<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Local k:String[] = LoadText("prp.dat").split("~n")
+</textarea><br><br>2. your record is already 'fixed size'... just replace with this<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+	If l&lt;&gt;""
+	cols=L.split("|")
+	cols=cols[..5]
+	trecord.Add(cols[0],cols[1],Byte(cols[2]),Byte(cols[3]),Byte(cols[4]))
+		
+	End If
+</textarea><br>in release mode now I get 11 ms (min was 8ms!) (at loading!)<br><br>Same in function <b>ConvertGenreToString</b>: just use an array string... the Select..Case statement is not needed here (and no call to a function also if Index are bounded at loading time.<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+genre:String[]=["","50s, 60s &amp; 70s","80s &amp; 90s","Alternative","Ambient &amp; Chill","Anime &amp; Asian"
+</textarea> <br><br></td></tr></table><br>
+<a name="1227630"></a>
+
+<a name="1227631"></a>
+
+<a name="1227633"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#26">[#26]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi Christian,<br><br>thanks a lot for the input! Will test the changes.<br><br>Please select "Randomised List" from the Combobox. This creates the random list and should be slower. I get ~10ms for the "Normal list" generation.<br><br>P.S. Ahm, for the readfile, don't I need this or Openfile() in order to use LoadText()? <br><br></td></tr></table><br>
+<a name="1227632"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#27">[#27]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looking at your source code I think it's better to use LINK.Remove() instead of ListRemove()<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+ Local Max_items:Int=CountList(Random_list)
+ Local Rnd_item:Int
+ local link_item:TLink=Random_list.FirstLink() 
+
+ While Max_items&gt;0 
+    Rnd_item:Int=Rand(1,Max_items)
+    counter:Int=1
+       For tmp_str:String = EachIn Random_list
+     	 If counter=Rnd_item Then 
+         If link_item=Null link_item=random_list.lastlink()
+	 'ListRemove( Random_list:TList, tmp_str ) 
+	 link_item.remove()
+	 Max_items:Int=Max_items-1
+         Exit 
+        EndIf                         
+	counter=counter+1          
+    Next
+</textarea><br><br>Now (in release) I got 107-109ms every 'random' call <br><br></td></tr></table><br>
+<a name="1227634"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#28">[#28]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi<br>yes I posted and then edited my results! Sorry.<br>I realized that you mean the 'reload time' when you choose 'randomised list' afted I posted!<br><br>About LoadText()<br><br>If you look at the source code you'll see that LoadText 'open' a stream... so it's a double work. <br><br></td></tr></table><br>
+<a name="1227641"></a>
+
+<a name="1227642"></a>
+
+<a name="1227643"></a>
+
+<a name="1227644"></a>
+
+<a name="1227645"></a>
+
+<a name="1227646"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#29">[#29]</a></td></tr></table></td></tr><tr ><td class="posttext"> Added all your changes and reuploaded the source code (see initial post).<br><br>The Link.remove is much faster than the old code! My delay dropped from ~30ms to ~20ms.<br><br>Btw: Is "(Casuale)" the right translation for "(Random)" in Italian?. I need this new phrase for the selection box. :) <br><br></td></tr></table><br>
+<a name="1227649"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#30">[#30]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes, the translation is correct. <br><br></td></tr></table><br>
+<a name="1227655"></a>
+
+<a name="1227656"></a>
+
+<a name="1227657"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#31">[#31]</a></td></tr></table></td></tr><tr ><td class="posttext"> Is there a way to access the temporary item index of the listbox before it's passed to the station ListBox itself via BatchGo()?<br><br>I think it would be faster to:<br>1. Go through the whole station map item by item and...<br>- Count the temorary list batch of items<br>- Insert the new item to a random place (1..max present)<br>3. Call BatchGo() to move the item array to the station list. <br><br>This way there is no need for the additional temporary TList (overhead). <br><br></td></tr></table><br>
+<a name="1227659"></a>
+
+<a name="1227661"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#32">[#32]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, well, the code creates double entries when the list gets randomised... :/<br><br>Still trying to figure out why... <br><br></td></tr></table><br>
+<a name="1227663"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#33">[#33]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just found this <a href="http://www.blitzbasic.com/Community/posts.php?topic=69137" target="_blank">http://www.blitzbasic.com/Community/posts.php?topic=69137</a> about scrambling an array... this is source code changed<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict 
+' Little TestApp to measure the time taken to randomise a list. 
+
+Framework Maxgui.Drivers
+	Import maxgui.xpmanifest
+	Import Maxgui.ProxyGadgets
+    Import BRL.Filesystem
+	Import Brl.EventQueue
+	Import Brl.Timer     
+	Import Brl.Pixmap  
+	Import BRL.Retro
+	Import BRL.Random
+	Import BRL.D3D9Max2D
+	Import BRL.GLGraphics
+	Import BRL.GLMax2D
+
+	
+Const MAINWINDOW_W:Int = 278 
+Const MAINWINDOW_H:Int = 254
+Const Buttonsize: Int = 32
+Const BUTTON_ACTION:Int = EVENT_GADGETACTION
+
+Global batch:AddListItemsBatch = New AddListItemsBatch ' for newAddgadgetitems functions
+
+Global genre:String[]=["","50s, 60s &amp; 70s","80s &amp; 90s","Alternative","Ambient &amp; Chill","Anime &amp; Asian","Black, Rap &amp; HipHop","Blues &amp; Love","Classical","Club","Children","Country","Dance &amp; Pop", "Electronic","Folk &amp; Latino","Gothic","Hits","Jazz &amp; Soul","Reggae","Retro","Rock &amp; Metal","Talk","Schlager","Soundtrack","Season"]
+
+Local Style:Int = WINDOW_TITLEBAR | WINDOW_CLIENTCOORDS | WINDOW_CENTER | WINDOW_ACCEPTFILES | WINDOW_RESIZABLE | WINDOW_HIDDEN
+
+Global MainWindow:TGadget  = CreateWindow("Radomise TestApp V3" , 0 , 0 , MAINWINDOW_W , MAINWINDOW_H , Null , Style)
+SetMinWindowSize(MainWindow,MAINWINDOW_W,MAINWINDOW_H)
+SetMaxWindowSize(MainWindow,MAINWINDOW_W,DesktopHeight())
+
+Global StationPanel:TGadget = CreatePanel(0, 0, MAINWINDOW_W, MAINWINDOW_H, MainWindow, PANEL_ACTIVE)', PANEL_ACTIVE)
+SetGadgetLayout StationPanel, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED
+
+Global StationListbox:TGadget  = CreateListBox(-1,-1,MAINWINDOW_W+2, MAINWINDOW_H-BUTTONSIZE-3, StationPanel) 
+SetGadgetLayout StationListbox, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED
+
+Global Station_Filterbox:TGadget=CreateComboBox(MAINWINDOW_W-1-BUTTONSIZE*8-4,MAINWINDOW_H-30,118+30+4,28, StationPanel,COMBOBOX_EDITABLE) 
+SetGadgetLayout Station_Filterbox, Null, Null, Null, EDGE_ALIGNED
+
+AddGadgetItem station_filterbox,"Normal List", GADGETITEM_NORMAL, 0
+AddGadgetItem station_filterbox,"Randomised List", GADGETITEM_NORMAL, 0
+AddGadgetItem station_filterbox,"Randomised 2", GADGETITEM_NORMAL, 0
+
+
+Global station_genre_filter:Int=0 'select all
+SelectGadgetItem station_filterbox,0
+
+Global StationListbox_Genre:Int=0
+
+' load data
+Load_DB_Indexfile()
+Local cnt:Int
+For Local k:String=EachIn MapKeys(trecord.map_station)
+	cnt:+1
+Next
+
+Print "Items: "+trecord.array_station.length+" K: "+cnt
+
+
+' fill default list
+PopulateList(StationListbox_Genre)
+
+SeedRnd MilliSecs() ' get a random seed...
+
+ShowGadget (StationPanel)
+ShowGadget (MainWindow)
+
+Repeat ' Main Loop
+	Select WaitEvent()
+	Case EVENT_WINDOWCLOSE, EVENT_APPTERMINATE
+			End
+
+	
+	Case EVENT_GADGETSELECT
+					Select EventSource()
+						Case stationlistbox
+							Print "ListBox: "+EventData()
+							If EventData()&gt;-1
+								
+								Local sx:String=String(GadgetItemExtra(StationListBox,EventData()))
+								
+								Print "SX: "+sx
+							
+							
+							End If
+					
+					
+					End Select
+
+
+
+     End Select 
+ 
+
+
+
+	Select EventSource()
+    Case Station_Filterbox 
+	 Select EventID()
+ 	            Case EVENT_GADGETACTION
+                  StationListbox_Genre:Int=SelectedGadgetItem(station_filterbox)
+                  If EventData() &gt; -1 Then ' Genre has been selected from list
+                      PopulateList(StationListbox_Genre)
+                  EndIf 
+
+       End Select
+     End Select 
+
+Forever
+End ' of the world ;)
+
+
+' New AddListItem type too speed up the process! EXPERIMENTAL!
+Type AddListItemsBatch
+	Field items:TList = CreateList()
+	Field total:Int
+	'api
+	Method Go(gadget_:TGadget)
+		' --- dump all of the items into the gadget ---
+		Local link:TLink
+		Local Item:TGadgetItem
+		
+		'do os speciffic bits to setup the operation and confirm we have a valid gadget
+		?Not Win32
+			'fall back to maxgui behaviour by adding each object individually
+			For Item = EachIn items
+				AddGadgetItem(gadget_,Item.text,Item.Flags,Item.icon,Item.tip,Item.extra)
+			Next
+			total = 0
+			items.Clear()
+			Return
+		?
+		?Win32
+			Local it:LVITEMW = New LVITEMW
+			
+			'convert to windows list box
+			Local gadget:TWindowsListBox = TWindowsListBox(gadget_)
+			If gadget = Null Return
+			
+			'get a hwnd
+			Local hwnd:Int = QueryGadget(gadget,QUERY_HWND)
+		?
+				
+		'do os speciffic gadget preperation
+		?Win32
+			'only proceed if it was infact a valid gadget
+			'resize the items array
+			Local index:Int = gadget.items.Length
+			gadget.items = gadget.items[..index+total]
+
+			gadget.DeSensitize()
+			SendMessageW(hwnd,WM_SETREDRAW,False,0)
+
+
+
+			'insert the items into the gadgets items array
+			link = items.FirstLink()
+			While link
+				'move to next link
+				Item = TGadgetItem(link.value())
+				link = link.NextLink()
+				
+				'add item to maxgui gadget
+				gadget.items[index] = Item
+				
+				'add item to os
+'				?Win32
+					it.Mask = LVIF_TEXT|LVIF_DI_SETITEM
+					it.iItem = index
+					it.pszText = Item.text.toWString()
+					
+					'If item.icon&gt;=0 Then
+						it.mask:|LVIF_IMAGE
+						it.iImage = Item.icon
+					'EndIf
+					
+					SendMessageW hwnd,LVM_INSERTITEMW,0,Int Byte Ptr(it)
+					MemFree it.pszText
+'				?
+				
+				'increase index for next item
+				index :+ 1
+			Wend
+
+		?
+
+		
+		'do os speciffic finalisation
+		?Win32
+			SendMessageW hwnd,LVM_SETCOLUMNWIDTH,0,-2
+			SendMessageW(hwnd,WM_SETREDRAW,True,0)
+			If Not gadget.IsSingleSelect() Then gadget.SelectionChanged()
+			gadget.Sensitize()
+			
+		'reset the batch
+		items.Clear()
+		total = 0		
+		?
+	
+	End Method
+	
+	Method Add(text:String,Flags:Int=0,icon:Int=-1,tip:String="",extra:Object=Null)
+		' --- create a gadget item so we use it to add later ---
+		'create the new item
+		Local Item:TGadgetItem = New TGadgetItem
+		Item.Set(text,tip,icon,extra,Flags)
+		
+		'add it to the batch list
+		items.AddLast(Item)
+		'items.AddFirst(Item)
+		
+		'increase the count
+		total :+ 1
+	End Method
+
+End Type
+
+Function Load_DB_Indexfile()
+Local starttime:Int=MilliSecs()
+Local Endtime:Int
+
+Local pos:Int
+'Local file:TStream=OpenFile("prp.dat")
+Local l:String
+
+Local n:String 
+Local sta:String
+Local g:Int
+Local r:Int
+Local fav:Int 
+
+	Print "Loading in Indexfile..."
+	Local line_counter:Int=0
+	Local k:String[] = LoadText("prp.dat").split("~n")
+    Local cols:String[] 
+  
+	For l:String = EachIn k
+      If l &lt;&gt; "" Then
+  
+		cols=L.split("|")
+		cols=cols[..5]
+		trecord.Add(cols[0],cols[1],Byte(cols[2]),Byte(cols[3]),Byte(cols[4]))
+	
+     'Print n$ + "|" + sta$ + "|" + g + "|" + r + "|" + fav
+     'trecord.Add(n$ , sta$ , g , r , fav)
+
+   EndIf 
+     
+Next 
+
+Endtime:Int = MilliSecs()
+'Print "Start = " + Starttime
+'Print "End   = " + Endtime 
+Print "Delta at Start= " + (Endtime - Starttime)+ " ms"
+
+End Function
+
+Type trecord
+	Global map_station:tmap=CreateMap() 'it store each station information -&gt; search by name
+
+
+'	Field name$,filename$,genre:Int,rating:Int,fav:Int,recent:Int,url:String,max_server:Int,logo:TRamstream,server_list:String[]
+	Field name$,filename$,genre:Byte,rating:Byte,fav:Byte', url:String,max_server:Int',server_list:String[]
+	
+	Global array_Station:Trecord[]
+	Global ID_counter:Int
+	
+	
+	Function Add:trecord(_na$,_fna$,_ge:Byte=0,_ra:Byte=0,_fav:Byte=0)
+'	Function Add:trecord(_na$,_fna$,_ge:Int=0,_ra:Int=0,_fav:Int=0,_rec:Int=0,_url:String="",_max_server:Int,_server_list:String[])
+'	Function Add:trecord(_na$,_fna$,_ge:Int=0,_ra:Int=0,_fav:Int=0,_rec:Int=0,_url:String="",_max_server:Int,_logo:TRamstream,_server_list:String[])
+          ' genre (one of 24 so far) 
+	      ' rating (0-5) -&gt; |||||
+	      ' tag (0 or 1) -&gt; fav or not	
+	      ' recent station?                
+		Local st:trecord,st1:Trecord
+		If _fna="" Return Null 'No name, no station to store	
+		
+  	    st=trecord(MapValueForKey(map_Station,Upper(_fna)))'the key is the Station's filename! no duplicates allowed
+		If st=Null'create a new one
+			st=New trecord
+			st.name=_na
+            st.filename=_fna
+			st.genre=_ge
+			st.rating=_ra
+			st.fav=_fav
+			'st.recent=_rec
+ 			'st.url=_url
+			'st.max_server=_max_server
+                 'st.logo=_logo
+			'st.server_list=_server_list			
+			MapInsert map_Station,Upper(_fna),st
+
+			array_station=array_station[..ID_counter+1]
+			array_station[ID_counter]=st
+			ID_counter:+1
+			
+			Return st			
+		End If
+		
+	End Function
+	
+	Function Clear:trecord()
+		If Not MapIsEmpty( map_Station:TMap ) Then ClearMap (map_Station)
+	End Function    
+
+End Type
+
+
+Function PopulateList(mode:Int=0)
+Local EndTime:Int 
+Local StartTime:Int=MilliSecs() 
+Print "--------------------------------------"
+Print "Start: "+starttime 
+
+ClearGadgetItems (StationListbox)
+
+Select mode  
+
+	Case 0 ' All Genre      
+        For Local it:trecord=EachIn MapValues(trecord.map_Station)
+?Not Linux
+          If it.fav=0 Then batch.Add it.name,GADGETITEM_NORMAL,it.rating,Genre[it.genre], it.filename Else batch.Add it.name,GADGETITEM_NORMAL,(it.rating+6),Genre[it.genre], it.filename
+?
+?Linux
+          If it.fav=0 Then batch.Add it.name,GADGETITEM_NORMAL,it.rating,Genre[it.genre]+" ("+Get_Rating_text(it.rating)+")", it.filename Else batch.Add it.name,GADGETITEM_NORMAL,(it.rating+6),Genre[it.genre]+" ("+Get_Rating_text(it.rating)+")", it.filename
+?
+        Next 
+
+	Case 2	'random with array
+
+		Shuffle(trecord.array_station)
+		
+		For Local it:Trecord=EachIn trecord.array_station
+			If it
+?Not Linux	     
+          		If it.fav=0 Then batch.Add it.name,GADGETITEM_NORMAL,it.rating,Genre[it.genre], it.filename Else batch.Add it.name,GADGETITEM_NORMAL,(it.rating+6),Genre[it.genre], it.filename
+?
+?Linux	     
+          		If it.fav=0 Then batch.Add it.name,GADGETITEM_NORMAL,it.rating,Genre[it.genre]+" ("+Get_Rating_text(it.rating)+")", it.filename Else batch.Add it.name,GADGETITEM_NORMAL,(it.rating+6),Genre[it.genre]+" ("+Get_Rating_text(it.rating)+")", it.filename
+?
+
+			End If
+		Next
+		
+
+		
+		
+
+	Case 1 ' by Random *NEW*
+
+ 	     Local Random_list:TList=CreateList()
+ 	     Local it:trecord
+	     Local tmp_str:String
+	     Local counter:Int
+	
+		 ' Create a temp list with all station filenames present, so we can select a random one out of it later
+         For it:trecord=EachIn MapValues(trecord.map_Station)
+             ListAddLast Random_list, Upper(it.filename)
+         Next  
+
+ Local Max_items:Int=CountList(Random_list)
+ Local Rnd_item:Int
+ Local link_item:TLink=Random_list.FirstLink() 
+
+ While Max_items&gt;0 
+    Rnd_item:Int=Rand(1,Max_items)
+    counter:Int=1
+       For tmp_str:String = EachIn Random_list
+     	 If counter=Rnd_item Then 
+         If link_item=Null link_item=random_list.lastlink()
+		 'ListRemove( Random_list:TList, tmp_str ) 
+	 	link_item.remove()
+		 Max_items:Int=Max_items-1
+         Exit 
+        EndIf                         
+	counter=counter+1          
+    Next
+                 
+		it:trecord=trecord(MapValueForKey(trecord.map_Station,tmp_str)) ' Grab Record according to filename
+            If it Then
+?Not Linux	     
+          		If it.fav=0 Then batch.Add it.name,GADGETITEM_NORMAL,it.rating,Genre[it.genre], it.filename Else batch.Add it.name,GADGETITEM_NORMAL,(it.rating+6),Genre[it.genre], it.filename
+?
+?Linux	     
+          		If it.fav=0 Then batch.Add it.name,GADGETITEM_NORMAL,it.rating,Genre[it.genre]+" ("+Get_Rating_text(it.rating)+")", it.filename Else batch.Add it.name,GADGETITEM_NORMAL,(it.rating+6),Genre[it.genre]+" ("+Get_Rating_text(it.rating)+")", it.filename
+?
+		      it=Null
+
+            EndIf
+
+        Wend ' Until no items left in random_list
+'        Print Max_items         
+
+End Select ' = mode
+
+batch.Go(StationListbox)
+
+ShowGadget (StationListbox)
+ActivateGadget StationListbox
+
+EndTime:Int=MilliSecs() 
+Print "End: "+starttime 
+Print "Time Taken: "+(EndTime-starttime)+" ms" 
+Print "--------------------------------------"
+
+End Function
+
+
+
+Function Shuffle(arr:Object[] Var, topindex:Int = -1, fragmentation:Float = 1.0)
+
+	SeedRnd MilliSecs()
+
+	If (topindex &lt; 0) Or (topindex &gt; arr.length - 1) Then topindex = arr.length - 1
+		
+	For Local n:Int = 1 To Int(topindex * fragmentation)
+		
+		Local i1:Int = Rand(0, topindex)
+		Local i2:Int = Rand(0, topindex)
+		
+		Local temp:Object = arr[i1]
+		arr[i1] = arr[i2]
+		arr[i2] = temp
+	
+	Next
+	
+EndFunction
+
+
+
+</textarea><br><br>The 'core' is that function <br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Function Shuffle(arr:Object[] Var, topindex:Int = -1, fragmentation:Float = 1.0)
+
+	SeedRnd MilliSecs()
+
+	If (topindex &lt; 0) Or (topindex &gt; arr.length - 1) Then topindex = arr.length - 1
+		
+	For Local n:Int = 1 To Int(topindex * fragmentation)
+		
+		Local i1:Int = Rand(0, topindex)
+		Local i2:Int = Rand(0, topindex)
+		
+		Local temp:Object = arr[i1]
+		arr[i1] = arr[i2]
+		arr[i2] = temp
+	
+	Next
+	
+EndFunction
+
+
+</textarea><br><br>It's damned faster! <br><br></td></tr></table><br>
+<a name="1227668"></a>
+
+<a name="1227669"></a>
+
+<a name="1227741"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#34">[#34]</a></td></tr></table></td></tr><tr ><td class="posttext"> I searched the forums for code before posting here, but I never used the term "shuffle". ;)<br><br>Apart from the little overhead, this is nearly as fast as the normal list creation for me.<br><br>To test the code under real-life conditions, I created a PRP Build: (deleted)<br><br>Works fine so far. Let me know, if you see any screen tearing. Grazie! <br><br></td></tr></table><br>
+<a name="1227672"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#35">[#35]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well... on my dad's computer (PhenomX6  WinXP) debug off, original random 27ms, new one 6ms. To me seems quite fast :P<br><br>Just downloaded your latest PRP. Everything seems to work perfectly.<br>No tearing, no interruptions of sort. <br><br></td></tr></table><br>
+<a name="1227720"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#36">[#36]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for the feedback.<br><br>After using the test version for several hours. I found a bug. :)<br><br>1. Extract the zip to a fresh folder.<br>2. Start the app and select the favourite station list.<br>3. Select "Random" list.<br>4. Delete one station from this station list. -&gt; "Right mouse click" -&gt; "Delete station".<br>5. Select the "Random" list again.<br>6. There will be more (double) items inside the station list then before.<br><br>Will get some sleep and start fresh tomorrow. <br><br></td></tr></table><br>
+<a name="1227735"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#37">[#37]</a></td></tr></table></td></tr><tr ><td class="posttext"> If you are using my latest code with array I suppose I found the problem.<br>When you delete a station you need to<br>. delete the array station<br>. rebuild it again <br><br>Otherwise that station will be present.<br>And putting the array entry to null I don't know what other problems can raise <br><br></td></tr></table><br>
+<a name="1227743"></a>
+
+<a name="1227744"></a>
+
+<a name="1227773"></a>
+
+<a name="1227828"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#38">[#38]</a></td></tr></table></td></tr><tr ><td class="posttext"> This "should" work now... (deleted)<br><br>I was think, instead of rebuilding the array station, can't I just remove the one item that got deleted? This should be much faster. Can I shrink the array by the one item that was deleted?<br><br>Example:<br><pre class=code>			
+' Remove a station
+MapRemove map_Station,Upper(_fna),st
+			
+'Not sure how to delete an item here
+array_station=array_station[..ID_counter-1 
+array_station[ID_counter]=st
+
+ID_counter:-1
+</pre><br><pre class=code>			
+' Add a station
+MapInsert map_Station,Upper(_fna),st
+			
+array_station=array_station[..ID_counter+1]
+array_station[ID_counter]=st
+ID_counter:+1
+</pre> <br><br></td></tr></table><br>
+<a name="1227780"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#39">[#39]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sure... but 1st example I think is wrong. You should do something like this<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Local arr:String[20]
+For Local k:Int=0 Until 20
+	arr[k]="Item "+k
+Next
+'remove 10th item (it's 'Item 9')
+arr=arr[..9]+arr[10..]
+For Local k:Int=0 Until arr.length
+	Print arr[k]
+Next
+</textarea> <br><br></td></tr></table><br>
+<a name="1227814"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grisu</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#40">[#40]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks again!<br><br>I found another method. At least it should be a bit faster than the old code. <br><br>Last update for the weekend: <a href="http://www.mediafire.com/download/v8w91drqm96h53f/PRP_Test4.zip" target="_blank">http://www.mediafire.com/download/v8w91drqm96h53f/PRP_Test4.zip</a> - I'm going to stress test the new build more next week. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

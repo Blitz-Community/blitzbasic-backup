@@ -1,0 +1,91 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Memory leak in iOS/OS X with String::ToCString</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Memory leak in iOS/OS X with String::ToCString</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=501" >Monkey Bug Reports</a>/<a href="#bottom" >Memory leak in iOS/OS X with String::ToCString</a><br><br>
+<a name="2061957"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jjsonick</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Part of the Monkey-generated C/Objective-C code is causing a memory leak in iOS and OS X, specifically when a String needs to be converted and the ToCString template is called.  This is called everytime a String needs to be converted to an Int, for example.<br><br>See this code:<br><br><pre class=code>
+Import mojo
+
+Class MyApp Extends App
+	
+	Field xpos:Int [256]
+	Field ypos:Int [256]
+	Field speed:Int [256]
+	Field xpos2:Int [256]
+	Field ypos2:Int [256]
+	Field speed2:Int [256]
+	
+	Method OnCreate()
+	
+		SetUpdateRate 30
+		
+    End
+		
+	Method OnUpdate()
+	
+		If TouchDown( 0 )
+			ConvertSomeStrings("10,1,1,15,0,62,290")
+			ConvertSomeStrings("20,1,0,16,0,92,240")
+			ConvertSomeStrings("224,2,0,16,0,32,290")
+			ConvertSomeStrings("225,10,0,20,0,22,230")
+			ConvertSomeStrings("226,15,0,16,0,12,290")
+			ConvertSomeStrings("227,19,0,30,0,92,290")
+			ConvertSomeStrings("228,30,0,46,32,32,210")
+			ConvertSomeStrings("229,40,0,16,19,92,290")
+			ConvertSomeStrings("230,55,0,56,69,92,200")
+		Endif
+					
+	End
+	
+	Method OnRender()
+		Cls
+		DrawText "Click or touch screen to do a string to int conversion",0,12
+	
+	End
+		
+	Method ConvertSomeStrings(s:String)
+					
+		Print "String to be converted is " + s
+		
+		Local p:String [] = s.Split (",")
+			
+		xpos [ Int (p [0]) ] = Int (p [1])
+		ypos [ Int (p [0]) ] = Int (p [2])			
+		speed [ Int (p [0]) ] = Int (p [3])
+		
+		
+		xpos2 [ Int (p [0]) ] = Int (p [4])
+		ypos2 [ Int (p [0]) ] = Int (p [5])			
+		speed2 [ Int (p [0]) ] = Int (p [6])
+		
+		Print "speed [" + Int (p [0]) + "] is " + speed[Int (p [0])]
+		Print "ypos2 [" + Int (p [0]) + "] is " + ypos2[Int (p [0])]
+						
+	End
+
+End		
+
+Function Main()
+
+	New MyApp
+	
+End
+</pre><br><br>Using the XCode Memory Leak tracer instrument, in the Allocations view you can see Live Bytes increase with each click or touchscreen touch.  And in Leaks view, you see multiple Malloc leaks listed, all pointing to char* String::ToCString&lt;char&gt; in the "Responsible Frame" column -- the red vertical bars in the graph show the times of the clicks/leaks:<br><br><img src="https://dl.dropboxusercontent.com/u/3847822/monkey-cstring-leak.png"><br><br>Here's that monkey-generated ToCString code:<br><br><pre class=code>
+	template&lt;class C&gt; C *ToCString()const{
+
+		C *p=(C*)malloc( (rep-&gt;length+1)*sizeof(C) );	//&amp;Array&lt;C&gt;( rep-&gt;length+1 )[0];
+		
+		for( int i=0;i&lt;rep-&gt;length;++i ) p[i]=rep-&gt;data[i];
+		p[rep-&gt;length]=0;
+		return p;
+	}
+</pre><br><br>From my VERY rudimentary C knowledge, it seems that the array p is being malloced here, and has no corresponding free called on it -- after it has been returned to the calling function, the p pointer has been discarded (since it is local to this template), so the malloced memory can not be referenced to be freed. <br><br></td></tr></table><br>
+<a name="2061960"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> It shouldn't be released, as far as my knowledge goes. See the return of the function - it's a pointer to a memory area. The area that is created/reserved with malloc.<br><br>Have you run the program for a while to see if memory keeps going up forever? GC may kick in sometime and if you're not using that 'malloced' memory area, it should be freed. <br><br></td></tr></table><br>
+<a name="2061970"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jjsonick</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> The memory does keep going up, increasing as many times as you run the conversion routine.  GC does not kick in.  If you try the above program, you will see this - the memory added by tapping never gets released.  With 5 mins of tapping, I added 7.5 MB to the memory used (live bytes), and that added memory never went down (after leaving it to run for an extra 20 mins with no additional interaction, for example).  With a routine looping through strings from a long text file, unreleased/unreleasable memory would grow at a much faster rate.<br><br>It seems that the memory not being released is memory used for the *intermediary* step of doing the String to Int conversion.  That should be temp memory, and it should be released immediately after the conversion, or at least be eventually GC, but it is not. <br><br>This is a problem for bitmap font routines that use conversions from string to ints to do their work, for use of Save/Load String/State that need before or after int conversions, and for frameworks like Ignition that use string to int conversions for some of its loading and object handling routines *and* bitmap fonts.<br><br>To see the memory use grow without needing to tap, just comment out the If TouchDown(0) and its corresponding EndIf in Update().  Monitoring an iPad3, that gets me 17.5MB usage at 5 mins,  36 MB at 15 mins, with this relatively modest program. <br><br></td></tr></table><br>
+<a name="2061963"></a>
+
+<a name="2061961"></a>
+
+<a name="2061972"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Definitely a leak! <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

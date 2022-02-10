@@ -1,0 +1,540 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Data buffer system for loading/saving data files</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='This library allows you to create buffers to simplify write and read operations for data files., language=bb, category=File Utilities'><meta name='author' content='Zethrax'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=8>File Utilities</a>/Data buffer system for loading/saving data files</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="3186.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Data buffer system for loading/saving data files by Zethrax</td><td align="right">2015 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> *** Blitz3D Code ***<br><br>This library allows you to create buffers to simplify write and read operations for data files.<br><br>Check the function descriptions and usage example for more info on how to use this library.<br><br><br>NOTES:-<br><br> The pointer to the current data buffer is stored in the 'G_current_data_buffer' global.<br><br>;-<br><br>You can have multiple data buffers in use at the same time, but you need to switch between them as they will all use the 'G_current_data_buffer' global to store a pointer to the current buffer.<br><br>As an example, to switch between already created buffers named 'data_buffer_1' and 'data_buffer_2' (both need to be 'T_data_buffer' types) use:-<br>data_buffer_1 = G_current_data_buffer : G_current_data_buffer = data_buffer_2<br><br>This can be handy where you need to read header data from one DB, use that header data to load a second DB, and then switch back to reading from the first DB to grab the data you need to configure the results of the second DB (eg. Using header data from a save file to load a map file, and then using the remaining data in the save file to configure the world created with the map file.).<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+; This library allows you to create buffers to simplify write and read operations for data files.
+
+; Check the function descriptions and usage example for more info on how to use this library.
+
+
+; NOTES:-
+
+; The pointer to the current data buffer is stored in the 'G_current_data_buffer' global.
+
+;-
+
+; You can have multiple data buffers in use at the same time, but you need to switch between them as they will all use the 'G_current_data_buffer' global to store a pointer to the current buffer.
+
+; As an example, to switch between already created buffers named 'data_buffer_1' and 'data_buffer_2' (both need to be 'T_data_buffer' types) use:-
+; data_buffer_1 = G_current_data_buffer : G_current_data_buffer = data_buffer_2
+
+; This can be handy where you need to read header data from one DB, use that header data to load a second DB, and then switch back to reading from the first DB to grab the data you need to configure the results of the second DB (eg. Using header data from a save file to load a map file, and then using the remaining data in the save file to configure the world created with the map file.).
+
+;-
+
+
+
+
+; -- Data buffer declarations.
+Type T_data_buffer
+	Field bank
+	Field pos
+	Field bank_size
+	Field data_size
+	Field checksum_present
+End Type
+
+Global G_current_data_buffer.T_data_buffer ; Holds the pointer to the current data buffer object. Can be used to obtain the current buffer pointer before switching to a different buffer.
+
+Global G_data_buffer_error ; This is used to flag that an error occurred when reading from the buffer. 0 = No error. Error code constants are below.
+
+; Error code constants.
+; &gt; These are returned in the 'G_data_buffer_error' global.
+Const C_DATA_BUFFER_OVERFLOW_ERROR = 1 ; Returned by the 'ReadDataBuffer' functions to indicate that an attempt was made to read beyond the end of the available data in the data buffer.
+Const C_DATA_BUFFER_UNABLE_TO_OPEN_FILE_ERROR = 2 ; Returned by 'LoadDataBuffer' to indicate that an attempt to load a data buffer from a file was unsuccessful (file not found, etc).
+Const C_DATA_BUFFER_NO_FILE_CONTENTS_TO_LOAD_ERROR = 3 ; Returned by 'LoadDataBuffer' to indicate that a data buffer loaded from a file had no contents.
+Const C_DATA_BUFFER_CHECKSUM_ERROR = 4 ; Returned by 'LoadDataBuffer' to indicate that a data buffer loaded from a file had a checksum mismatch that indicated that the file was corrupted.
+
+; Buffer size/resize constants.
+Const C_DATA_BUFFER_DEFAULT_SIZE = 8192 ; The default size (in bytes) set for the data buffer if no size is specified.
+Const C_DATA_BUFFER_RESIZE_INC = 8192 ; The amount the data buffer is increased in size when it needs to be resized.
+;^^^^^^
+
+
+
+Function CreateDataBuffer( size = 0 )
+; NOTES:
+
+	G_current_data_buffer = New T_data_buffer
+
+	If G_current_data_buffer\bank Then FreeCurrentDataBuffer() ; Free any existing data buffer.
+
+	If size &gt; 0
+		G_current_data_buffer\data_size = size
+		G_current_data_buffer\bank_size = size
+	Else
+		G_current_data_buffer\data_size = 0
+		G_current_data_buffer\bank_size = C_DATA_BUFFER_DEFAULT_SIZE ; Capable of storing 64 kilobytes of data before needing to be resized.
+	EndIf
+	G_current_data_buffer\bank = CreateBank ( G_current_data_buffer\bank_size )
+	G_current_data_buffer\pos = 0
+	G_data_buffer_error = False
+End Function
+
+
+
+Function LoadDataBuffer( filepath$, checksum_present_flag = True )
+	; This will create a new data buffer and load its contents from the specified filepath.
+	; The function calls 'CreateDataBuffer', so there's no need to call that separately.
+	; If 'checksum_present_flag' is set to True then the first four bytes of the loaded file will be assumed to hold a checksum value which will be read into the buffer with the other data. A checksum of the loaded data (excluding the checksum stored in the file) will be generated and compared with the stored checksum. If the checksums don't match then a 'C_DATA_BUFFER_CHECKSUM_ERROR' code will be returned via 'G_data_buffer_error'.	
+	; This function will return a 'true' result if no errors were encountered, and a 'false' result if errors were encountered. The error code is available in the 'G_data_buffer_error' global.	
+	; This routine doesn't depend upon or make any changes to 'G_current_data_buffer\pos' which is used to store the read/write position.
+	; If an error occurs the function will free the data buffer it created. You don't need to do that manually.
+	
+	Local checksum, file_size, file, max_pos, byte
+
+	file_size = FileSize( filepath$ )
+
+	If file_size
+
+		file = ReadFile ( filepath$ )
+
+		If file ; The file was successfully opened for reading.
+
+			CreateDataBuffer( file_size )
+
+			G_current_data_buffer\checksum_present = checksum_present_flag
+
+			ReadBytes G_current_data_buffer\bank, file, 0, file_size ; Load the data bytes from the file into the buffer bank.
+
+			CloseFile file
+
+			If checksum_present_flag
+
+				 ; -- Calculate a checksum for the loaded file data, excluding the first four bytes which should hold the stored checksum to compare with.
+				max_pos = file_size - 1
+				For i = 4 To max_pos
+					checksum = checksum + PeekByte ( G_current_data_buffer\bank, i )
+				Next
+				;^^^^^^
+
+			EndIf
+
+		Else ; The file could not be opened for reading.
+
+			G_data_buffer_error = C_DATA_BUFFER_UNABLE_TO_OPEN_FILE_ERROR
+			FreeCurrentDataBuffer
+
+		EndIf
+
+	Else ; The file has no contents to load.
+
+		G_data_buffer_error = C_DATA_BUFFER_NO_FILE_CONTENTS_TO_LOAD_ERROR
+		FreeCurrentDataBuffer
+
+	EndIf
+
+	If checksum_present_flag
+		If checksum &lt;&gt; ReadDataBufferInt()
+			G_data_buffer_error = C_DATA_BUFFER_CHECKSUM_ERROR
+			FreeCurrentDataBuffer
+		EndIf
+	EndIf
+	
+	Return G_data_buffer_error = 0
+End Function
+
+
+
+Function SaveDataBuffer( filepath$, checksum_present_flag = True )
+	; Saves the contents of the current data buffer to a file.
+	; If 'checksum_present_flag' = 'True', then the file is saved with a 4 byte integer checksum at the start.
+	; Returns a True result if the file was successfully saved, and a False result if the file could not be saved.
+	; This routine doesn't depend upon, or make any changes to, the 'G_current_data_buffer\pos' global used to store the read/write position.
+
+	Local checksum, file, max_pos, byte, file_saved_ok
+
+	file = WriteFile ( filepath$ )
+
+	If file ; The file was successfully opened for writing.
+
+		max_pos = G_current_data_buffer\data_size - 1
+
+		If checksum_present_flag
+
+			; -- Calculate the checksum for the buffer data.
+			For i = 0 To max_pos
+				byte = PeekByte ( G_current_data_buffer\bank, i )
+				checksum = checksum + byte
+			Next
+			;^^^^^^
+
+		EndIf
+
+		; -- Save the buffer data.
+		If checksum_present_flag Then WriteInt ( file, checksum ) ; Save the buffer checksum.
+		WriteBytes G_current_data_buffer\bank, file, 0, G_current_data_buffer\data_size
+		;^^^^^^
+
+		CloseFile file
+
+		file_saved_ok = True
+
+	EndIf
+
+	Return file_saved_ok ; Return a True result if the file was successfully saved, and a False result if the file could not be saved.
+End Function
+
+
+
+Function FreeDataBuffer( data_buffer.T_data_buffer )
+	; Frees the specified data buffer.
+
+	If data_buffer = Null Then Return
+	If data_buffer = G_current_data_buffer Then G_current_data_buffer = Null
+	FreeBank data_buffer\bank
+	Delete data_buffer
+End Function
+
+
+
+Function FreeCurrentDataBuffer()
+	; Frees the current data buffer (the buffer pointed to by the global 'G_current_data_buffer').
+
+	If G_current_data_buffer = Null Then Return
+	FreeBank G_current_data_buffer\bank
+	Delete G_current_data_buffer
+	G_current_data_buffer = Null
+End Function
+
+
+
+Function FreeAllDataBuffers()
+	; Frees all the data buffers.
+
+	For data_buffer.T_data_buffer = Each T_data_buffer
+		FreeBank data_buffer\bank
+		Delete data_buffer
+	Next
+	G_current_data_buffer = Null
+End Function
+
+
+
+Function WriteDataBufferInt( value )
+	; Writes the specified integer value to the current data buffer.
+	; If the data buffer is too small to accomodate the new value then it will be upsized by 'C_DATA_BUFFER_RESIZE_INC' bytes.
+
+	If G_current_data_buffer = Null Then CreateDataBuffer()
+
+	If ( G_current_data_buffer\pos + 4 ) &gt; G_current_data_buffer\bank_size Then UpsizeDataBuffer( Null )
+
+	PokeInt G_current_data_buffer\bank, G_current_data_buffer\pos, value
+	G_current_data_buffer\pos = G_current_data_buffer\pos + 4
+	G_current_data_buffer\data_size = G_current_data_buffer\pos
+End Function
+
+
+
+Function WriteDataBufferFloat( value# )
+	; Writes the specified float value to the current data buffer.
+	; If the data buffer is too small to accomodate the new value then it will be upsized by 'C_DATA_BUFFER_RESIZE_INC' bytes.
+
+	If G_current_data_buffer = Null Then CreateDataBuffer()
+
+	If ( G_current_data_buffer\pos + 4 ) &gt; G_current_data_buffer\bank_size Then UpsizeDataBuffer( Null )
+
+	PokeFloat G_current_data_buffer\bank, G_current_data_buffer\pos, value#
+	G_current_data_buffer\pos = G_current_data_buffer\pos + 4
+	G_current_data_buffer\data_size = G_current_data_buffer\pos
+End Function
+
+
+
+Function WriteDataBufferString( value$ )
+	; Writes the specified string value to the current data buffer.
+	; If the data buffer is too small to accomodate the new value then it will be upsized by 'C_DATA_BUFFER_RESIZE_INC' bytes.
+
+	Local string_length, endpos, string_pos
+	
+	string_length = Len( value$ )
+
+	If G_current_data_buffer = Null Then CreateDataBuffer()
+
+	If ( G_current_data_buffer\pos + 4 + string_length ) &gt; G_current_data_buffer\bank_size Then UpsizeDataBuffer( Null )
+
+	PokeInt G_current_data_buffer\bank, G_current_data_buffer\pos, string_length
+
+	G_current_data_buffer\pos = G_current_data_buffer\pos + 4
+
+	endpos = G_current_data_buffer\pos + string_length - 1
+
+	For i = G_current_data_buffer\pos To endpos
+		string_pos = string_pos + 1
+		PokeByte G_current_data_buffer\bank, i, Asc ( Mid$ ( value$, string_pos, 1 ) )
+	Next
+
+	G_current_data_buffer\pos = G_current_data_buffer\pos + string_length
+	G_current_data_buffer\data_size = G_current_data_buffer\pos
+
+End Function
+
+
+
+Function ReadDataBufferInt()
+	; Reads an integer value from the data buffer and returns it.
+	; If an attempt is made to read beyond the boundries of the data buffer then a 'C_DATA_BUFFER_OVERFLOW_ERROR' error will be returned in 'G_data_buffer_error'.
+
+	Local value
+
+	If ( G_current_data_buffer\pos + 4 ) &lt;= G_current_data_buffer\data_size
+		value = PeekInt ( G_current_data_buffer\bank, G_current_data_buffer\pos )
+		G_current_data_buffer\pos = G_current_data_buffer\pos + 4
+	Else
+		G_data_buffer_error = C_DATA_BUFFER_OVERFLOW_ERROR
+	EndIf
+	Return value
+End Function
+
+
+
+Function ReadDataBufferFloat#()
+	; Reads a float value from the data buffer and returns it.
+	; If an attempt is made to read beyond the boundries of the data buffer then a 'C_DATA_BUFFER_OVERFLOW_ERROR' error will be returned in 'G_data_buffer_error'.
+
+	Local value#
+
+	If ( G_current_data_buffer\pos + 4 ) &lt;= G_current_data_buffer\data_size
+		value# = PeekFloat# ( G_current_data_buffer\bank, G_current_data_buffer\pos )
+		G_current_data_buffer\pos = G_current_data_buffer\pos + 4
+	Else
+		G_data_buffer_error = C_DATA_BUFFER_OVERFLOW_ERROR
+	EndIf
+	Return value#
+End Function
+
+
+
+Function ReadDataBufferString$()
+	; Reads a string value from the data buffer and returns it.
+	; If an attempt is made to read beyond the boundries of the data buffer then a 'C_DATA_BUFFER_OVERFLOW_ERROR' error will be returned in 'G_data_buffer_error'.
+	; The string being parsed from the bank will start with an integer value which indicates the string length (not including the string length header).
+	
+	Local value$
+	
+	If ( G_current_data_buffer\pos + 4 ) &lt;= G_current_data_buffer\data_size
+	
+		string_length = PeekInt( G_current_data_buffer\bank, G_current_data_buffer\pos )
+	
+		G_current_data_buffer\pos = G_current_data_buffer\pos + 4
+	
+		If ( G_current_data_buffer\pos + string_length ) &lt;= G_current_data_buffer\data_size
+	
+			endpos = G_current_data_buffer\pos + string_length - 1
+	
+			For i = G_current_data_buffer\pos To endpos
+				value$ = value$ + Chr$ ( PeekByte( G_current_data_buffer\bank, i ) )
+			Next
+	
+			G_current_data_buffer\pos = G_current_data_buffer\pos + string_length
+	
+		Else
+	
+			G_data_buffer_error = C_DATA_BUFFER_OVERFLOW_ERROR
+	
+		EndIf
+	
+	Else
+	
+		G_data_buffer_error = C_DATA_BUFFER_OVERFLOW_ERROR
+	
+	EndIf
+	
+	Return value$	
+End Function
+
+
+
+Function CheckForEndOfDataBuffer()
+	; Returns True if the end of the data in the data buffer has been reached or if an error is flagged. False otherwise.
+
+	Return ( G_current_data_buffer\pos &gt;= G_current_data_buffer\data_size ) Or ( G_data_buffer_error &lt;&gt; 0 )
+End Function
+
+
+
+Function ResetDataBufferPos( data_buffer.T_data_buffer )
+	; Resets the read/write position in the data buffer.
+	; The parameter can be a specific data buffer or a Null. If Null then the current data buffer will be the one reset.
+
+	If data_buffer = Null Then data_buffer = G_current_data_buffer
+
+	If G_current_data_buffer\checksum_present
+		data_buffer\pos = 4
+	Else
+		data_buffer\pos = 0
+	EndIf
+End Function
+
+
+
+Function UpsizeDataBuffer( data_buffer.T_data_buffer )
+	; Resizes the data buffer by its current size plus C_DATA_BUFFER_RESIZE_INC.
+	; The parameter can be a specific data buffer or a Null. If Null then the current data buffer will be the one reset.
+
+	If data_buffer = Null Then data_buffer = G_current_data_buffer
+
+	data_buffer\bank_size = data_buffer\bank_size + C_DATA_BUFFER_RESIZE_INC
+	ResizeBank data_buffer\bank, data_buffer\bank_size
+End Function
+
+
+
+
+; === USAGE EXAMPLE ===
+
+
+
+
+; *** This example will create 'dbtest1.dat' and 'dbtest2.dat' files in whatever folder you run it in, so you'll need to delete those.
+
+
+; - Create the first DB file -
+
+CreateDataBuffer( 100 ) ; Creates a data buffer with a buffer size of 100 bytes.
+
+WriteDataBufferInt( 1 )
+WriteDataBufferFloat( 2.22222 )
+WriteDataBufferString( "Three" )
+
+If Not SaveDataBuffer( "dbtest1.dat" ) ; Save the DB to a file with a checksum (by default).
+	FreeCurrentDataBuffer
+	RuntimeError "Unable to save DB file."
+EndIf
+FreeCurrentDataBuffer ; Free the current data buffer.
+
+; - Create the second DB file -
+
+CreateDataBuffer( 100 ) ; Creates a data buffer.
+
+WriteDataBufferInt( 4 )
+WriteDataBufferFloat( 5.55555 )
+WriteDataBufferString( "Six" )
+
+If Not SaveDataBuffer( "dbtest2.dat" ) ; Save the DB to a file with a checksum (by default).
+	FreeCurrentDataBuffer
+	RuntimeError "Unable to save DB file."
+EndIf
+FreeCurrentDataBuffer ; Free the current data buffer.
+
+; - Load the first data buffer file -
+
+If Not LoadDataBuffer( "dbtest1.dat" ) ; Creates a data buffer and loads its contents from a file. The file will include a checksum.
+	; The data buffer will be freed automatically if an error occurs.
+	Select G_data_buffer_error ; Process errors returned in the 'G_data_buffer_error' global.
+		Case C_DATA_BUFFER_UNABLE_TO_OPEN_FILE_ERROR
+			RuntimeError "Unable to load DB file."
+		Case C_DATA_BUFFER_NO_FILE_CONTENTS_TO_LOAD_ERROR
+			RuntimeError "Loaded DB file had no contents."
+		Case C_DATA_BUFFER_CHECKSUM_ERROR
+			RuntimeError "Checksum error with loaded DB file."
+	End Select
+EndIf
+
+Print "Contents of first DB file:-"
+Print ReadDataBufferInt()
+Print ReadDataBufferFloat#()
+Print ReadDataBufferString$()
+
+data_buffer_1.T_data_buffer = G_current_data_buffer ; Store the current data buffer pointer value set when the DB was created/loaded.
+
+; - Load the second data buffer file -
+
+If Not LoadDataBuffer( "dbtest2.dat" ) ; Creates a data buffer and loads its contents from a file. The file will include a checksum.
+	; The data buffer will be freed automatically if an error occurs.
+	Select G_data_buffer_error ; Process errors returned in the 'G_data_buffer_error' global.
+		Case C_DATA_BUFFER_UNABLE_TO_OPEN_FILE_ERROR
+			RuntimeError "Unable to load DB file."
+		Case C_DATA_BUFFER_NO_FILE_CONTENTS_TO_LOAD_ERROR
+			RuntimeError "Loaded DB file had no contents."
+		Case C_DATA_BUFFER_CHECKSUM_ERROR
+			RuntimeError "Checksum error with loaded DB file."
+	End Select
+EndIf
+
+Print
+Print "Contents of second DB file:-"
+Print ReadDataBufferInt()
+Print ReadDataBufferFloat#()
+Print ReadDataBufferString$()
+
+data_buffer_2.T_data_buffer = G_current_data_buffer ; Store the current data buffer pointer value set when the DB was created/loaded.
+
+ResetDataBufferPos( data_buffer_1 )
+ResetDataBufferPos( data_buffer_2 )
+
+;G_current_data_buffer = data_buffer_1
+;
+;Print
+;Print "Contents of first DB file:-"
+;Print ReadDataBufferInt()
+;Print ReadDataBufferFloat#()
+;Print ReadDataBufferString$()
+;
+;G_current_data_buffer = data_buffer_2
+;
+;Print
+;Print "Contents of second DB file:-"
+;Print ReadDataBufferInt()
+;Print ReadDataBufferFloat#()
+;Print ReadDataBufferString$()
+
+Print
+Print "Staggered contents of both files:-"
+G_current_data_buffer = data_buffer_1
+Print ReadDataBufferInt()
+G_current_data_buffer = data_buffer_2
+Print ReadDataBufferInt()
+G_current_data_buffer = data_buffer_1
+Print ReadDataBufferFloat#()
+G_current_data_buffer = data_buffer_2
+Print ReadDataBufferFloat#()
+G_current_data_buffer = data_buffer_1
+Print ReadDataBufferString$()
+G_current_data_buffer = data_buffer_2
+Print ReadDataBufferString$()
+
+FreeAllDataBuffers ; Free all the data buffers.
+
+; Free individual buffers.
+;FreeDataBuffer data_buffer_1
+;FreeDataBuffer data_buffer_2
+
+WaitKey : End
+
+</textarea> </td></tr><tr ><td class="cell"><pre class="code">The code can be found at: http://www.blitzbasic.com/codearcs/codearcs.php?code=3186</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >virtlands</td><td align="right"><font class=tiny>2015</font></td></tr></table></td></tr><tr ><td class="posttext"> That''s interesting code you've got there, <img src="http://i37.photobucket.com/albums/e73/VirtLands/emoticons/Yahoo%20emoticons/28.gif"><br><br>.. " <i>Data buffer system for loading/saving data files</i> " is  similar to some <b>FreeImage</b> functions<br><br>such as these : <br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;; Reads data from a file, and saves to a bank...
+Function FiBankFromFile(filename$, size = 0, pos = 0)
+ ;Creates and reads a bank from filename$
+ ;size -&gt; file size, pos -&gt; file position
+ ;Returns a bank
+
+ Local bank, file
+ If size = 0 Then size = FileSize(filename$)
+ bank = CreateBank(size)
+ file = ReadFile(filename$)
+ If file
+  SeekFile(file, pos)
+  ReadBytes(bank, file, 0, size)
+  CloseFile(file)
+ EndIf
+ Return bank
+End Function
+
+;; Reads data from a bank, and saves to a file...
+Function FiBankToFile(bank, filename$, size = 0, pos = 0)
+ ;Appends a bank to filename$
+ ;size -&gt; file size, pos -&gt; file position
+ ;Returns True if succeeds or False if fails
+
+ Local file
+ If bank = 0 Then Return 0 ;No bank
+ If size = 0 Then size = FileSize(filename$)
+ file = OpenFile(filename$) ;Existing file
+ If file = 0 Then file = WriteFile(filename$) ;New file
+ If file
+  SeekFile(file, pos)
+  WriteBytes(bank, file, 0, size)
+  CloseFile(file)
+  file = 1
+ EndIf
+ Return file
+End Function </textarea><br><br>;;------------------<br>Some FreeImage Code *(ver 3131) :: <br><font class="tiny"> <a href="http://uploadingit.com/file/ooo85ksrythyh6nk/freeimage3131_BLOB.rar" target="_blank">http://uploadingit.com/file/ooo85ksrythyh6nk/freeimage3131_BLOB.rar</a> </font><br><br>;; ...related topic :: <br><b>FreeImage Module for B3D/B+</b> <font class="tiny"><br><a href="http://www.blitzbasic.com/codearcs/codearcs.php?code=1732" target="_blank">http://www.blitzbasic.com/codearcs/codearcs.php?code=1732</a> </font> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>2015</font></td></tr></table></td></tr><tr ><td class="posttext"> Cool code! =D Hi, Virtlands! :D <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>2015</font></td></tr></table></td></tr><tr ><td class="posttext"> Does this allow for one to store entire files inside a memory bank?! That would be SO awesome! =D <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

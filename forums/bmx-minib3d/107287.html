@@ -1,0 +1,156 @@
+<!DOCTYPE html><html lang="en" ><head ><title >OpenB3D - CubeMap</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >OpenB3D - CubeMap</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=119" >MiniB3D Module</a>/<a href="#bottom" >OpenB3D - CubeMap</a><br><br>
+<a name="1327598"></a>
+
+<a name="1327599"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >icebeararmy</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hay :)<br><br>I am working on some kind of PBR-Shader with GLSL. It works good so far, but now I want to add specularity with the help of a radiance and an irradiance map. Therefor the shader needs a cubemap. <br>The cubemap-demo (https://github.com/markcwm/openb3d.mod/blob/b9bffe0dd2766728c85faede570202eaf410ae04/examples/extended/sl_cubemap.bmx) renders the whole scene into the texture and the shader mostly ignores the other textures, so I need something like a "ShaderCube" in OpenB3D instead of "ShaderTexture". Is that possible maybe?<br><br>Here is my fragment-Shader:<br><pre class=code>uniform samplerCube uRadianceMap;			//skybox
+uniform samplerCube uIrradianceMap;			//blurry skybox
+
+uniform sampler2D 	uNormalMap;
+uniform sampler2D 	uRoughnessMap;
+uniform sampler2D 	uMetallicMap;
+uniform sampler2D 	uSpecularMap;
+uniform sampler2D 	uColorMap;
+
+const float			uExposure=20.0;
+const float			uGamma=2.2;
+
+varying vec3        vNormal;
+varying vec3        vPosition;
+varying vec3		vEyePosition;
+varying vec3		vWsNormal;
+
+#define saturate(x) clamp(x, 0.0, 1.0)
+#define PI 3.1415926535897932384626433832795
+
+const float A = 0.15;
+const float B = 0.50;
+const float C = 0.10;
+const float D = 0.20;
+const float E = 0.02;
+const float F = 0.30;
+
+vec3 Uncharted2Tonemap( vec3 x )
+{
+	return ((x*(A*x+C*B)+D*E)/(x*(A*x+B)+D*F))-E/F;
+}
+
+vec3 EnvBRDFApprox( vec3 SpecularColor, float Roughness, float NoV )
+{
+	const vec4 c0 = vec4( -1, -0.0275, -0.572, 0.022 );
+	const vec4 c1 = vec4( 1, 0.0425, 1.04, -0.04 );
+	vec4 r = Roughness * c0 + c1;
+	float a004 = min( r.x * r.x, exp2( -9.28 * NoV ) ) * r.x + r.y;
+	vec2 AB = vec2( -1.04, 1.04 ) * a004 + r.zw;
+	return SpecularColor * AB.x + AB.y;
+}
+
+vec3 fix_cube_lookup( vec3 v, float cube_size, float lod ) {
+	float M = max(max(abs(v.x), abs(v.y)), abs(v.z));
+	float scale = 1 - exp2(lod) / cube_size;
+	if (abs(v.x) != M) v.x *= scale;
+	if (abs(v.y) != M) v.y *= scale;
+	if (abs(v.z) != M) v.z *= scale;
+	return v;
+}
+
+vec3 blendNormalsUnity( vec3 baseNormal, vec3 detailsNormal )
+{
+    vec3 n1 = baseNormal;
+    vec3 n2 = detailsNormal;
+    mat3 nBasis = mat3(
+                       vec3(n1.z, n1.y, -n1.x), // +90 degree rotation around y axis
+                       vec3(n1.x, n1.z, -n1.y), // -90 degree rotation around x axis
+                       vec3(n1.x, n1.y,  n1.z));
+    return normalize(n2.x*nBasis[0] + n2.y*nBasis[1] + n2.z*nBasis[2]);
+}
+vec3 blendNormals( vec3 n1, vec3 n2 )
+{
+    return blendNormalsUnity( n1, n2 );
+}
+
+void main() {
+    const float range       = 0.75;
+    
+    vec3 baseColor      = texture2D( uColorMap, gl_TexCoord[0]).rgb;
+    //vec3 ao             = texture( uAOMap, gl_TexCoord[0]).rgb;
+    float roughness     = texture2D( uRoughnessMap, gl_TexCoord[0]).r;
+    float roughness4    = pow(roughness, 4.0);
+    float metallic      = texture2D( uMetallicMap, gl_TexCoord[0]).r;
+    float _specular 	= texture2D( uSpecularMap, gl_TexCoord[0]).r;			//_specular im Original
+   
+	
+	vec3 N 				= normalize( vWsNormal );
+    vec3 newN 		    = blendNormals( N, texture( uNormalMap, gl_TexCoord[0] ).xyz );
+//    N                   = mix(N, newN, uNormalMapScale);
+//    vec3 N              = vWsNormal + texture( uNormalMap, gl_TexCoord[0] ).xyz * uNormalMapScale * .5;
+//    N                   = normalize(N);
+    
+	vec3 V 				= normalize( vEyePosition );
+    
+	vec3 diffuseColor	= baseColor - baseColor * metallic;
+	vec3 specularColor	= mix( vec3( 0.08 * _specular ), baseColor, metallic );
+	
+	vec3 color;
+
+	int numMips			= 6;
+    
+	float mip			= numMips - 1 + log2(roughness);
+	vec3 lookup			= -reflect( V, N );
+	lookup				= fix_cube_lookup( lookup, 512, mip );
+	vec3 radiance		= pow( textureLod( uRadianceMap, lookup, mip ).rgb, vec3( 2.2 ) );
+	vec3 irradiance		= pow( texture( uIrradianceMap, N ).rgb, vec3( 2.2 ) );
+
+	float NoV			= saturate( dot( N, V ) );
+	vec3 reflectance	= EnvBRDFApprox( specularColor, roughness4, NoV );
+
+    vec3 diffuse  		= diffuseColor * irradiance;
+    vec3 specular 		= radiance * reflectance;
+	color				= diffuse + specular;
+
+	color				= Uncharted2Tonemap( color * uExposure );
+	color				= color * ( 1.0 / Uncharted2Tonemap( vec3( 50.0 ) ) );
+	color				= pow( color, vec3( 1.0 / uGamma ) );
+	
+	gl_FragColor.rgb=color; //texture2D( uColorMap, gl_TexCoord[0]).rgb;
+	gl_FragColor.a=1.0;
+}</pre><br><br>I tried to give the shader the texture I used for the skybox, but somehow it still uses the whole rendered scene. Not sure why. So these two codes produce the same output:<br><pre class=code>Map_SkyTex=LoadTexture("sky1.png")
+Map_SkyTex2=LoadTexture("sky1blurry.png")
+
+ShaderTexture Shader,Map_SkyTex,"uRadianceMap",0
+ShaderTexture Shader,Map_SkyTex2,"uIrradianceMap",1</pre><br>and<br><br><pre class=code>ShaderTexture Shader,t,"uRadianceMap",0
+ShaderTexture Shader,t,"uIrradianceMap",1
+
+cube_cam=CreateCamera()
+CameraToTex t,cube_cam
+
+Do
+    UpdateCubemap(t,cube_cam,entity)
+Loop</pre> <br><br></td></tr></table><br>
+<a name="1327700"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >angros47</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> In OpenB3D a cubemap texture is loaded with LoadAnimTexture (to load all the faces, in different frames), and has the flag 128. Those textures can be used in shaders, too, using the command ShaderTexture (OpenB3D will know, by the flag, that it's a cubemap, so a command like ShaderCube is not needed) <br><br></td></tr></table><br>
+<a name="1327701"></a>
+
+<a name="1327702"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >icebeararmy</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ah I see.<br>But how does it know what texture belongs to what side of the cube?<br><br>It also doesn't work for me. This code makes my shader black:<br><pre class=code>RadMap=LoadAnimTexture("skytiled.png",128,683,341,0,5)
+ShaderTexture Shader,Radmap,"uRadianceMap",0</pre> <br><br></td></tr></table><br>
+<a name="1327705"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >angros47</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Is each frame of the file "skytiled.png" of 683x341 pixels? <br><br></td></tr></table><br>
+<a name="1327797"></a>
+
+<a name="1327798"></a>
+
+<a name="1327799"></a>
+
+<a name="1327800"></a>
+
+<a name="1327801"></a>
+
+<a name="1327802"></a>
+
+<a name="1327803"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >icebeararmy</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> yes<br><br>I also tried a map with square tiles, doesn't work either:<br><img src="http://fs5.directupload.net/images/161204/temp/7bhrufh3.png"><br><br>I also can't texture entities the old way with that texture:<br><pre class=code>RadMap=LoadAnimTexture("skytiled512.png",1+128,512,512,0,5)
+EntityTexture Sky,RadMap,3</pre><br><br>EDIT: However, it works when I don't use LoadAnimTexture:<br><pre class=code>RadMap=LoadTexture("skytiled512.png",1+128)</pre> <br><br></td></tr></table><br>
+<a name="1327809"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >angros47</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Whoops, my mistake <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,723 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Simple Expression Compiler</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Compile basic expressions to x86 assembly, language=bmx, category=Miscellaneous'><meta name='author' content='GW'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=9>Miscellaneous</a>/Simple Expression Compiler</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="3103.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Simple Expression Compiler by GW</td><td align="right">2014 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> I knocked this up yesterday and thought I would share.<br>The code parses basic style expressions and translates to x86 assembly.<br>I'm not sure if the generated asm is correct or not.<br><br><br><br>The Lexer<br><pre class=code>
+Rem
+	Simple Expression compiler v0.1 by Aaron Woodard, Jan 2014 [admin@...]
+	TODO: 
+		Add 'else' clause to 'if'
+		Check if the generated asm is even remotely correct..
+		better error msgs
+EndRem
+Const TOK_NUMBER%=1
+Const TOK_FLOAT%=2
+Const TOK_PLUS%=3
+Const TOK_MINUS%=4
+Const TOK_MUL%=5
+Const TOK_DIV%=6
+Const TOK_IDENT%=7
+Const TOK_EQUALS%=8
+Const TOK_DBLEQUALS%=9
+Const TOK_LPAREN%=10
+Const TOK_RPAREN%=11
+Const TOK_LBRAC%=12
+Const TOK_RBRAC%=13
+Const TOK_STRING%=14
+Const TOK_VAR%=15
+Const TOK_SEMICOL%=16
+Const TOK_IF%=17
+Const TOK_ELSE%=18
+Const TOK_ENDIF%=19
+Const TOK_LT%=20
+Const TOK_GT%=21
+Const TOK_LTE%=22
+Const TOK_GTE%=23
+Const TOK_NE%=24
+Const TOK_THEN%=25 '!
+
+
+Const TOK_EOF%=100
+
+
+'------------------------------------------------------------------------------------------------------------------------------
+Type tToken
+	Field Typ%
+	Field Value$
+	
+	Method dump()
+		DebugLog("Typ:"+typ+ " &gt; '" + Value + "'")
+	End Method
+	
+	Function Create:tToken(_typ%,_value$)
+		Local t:tToken = New tToken
+		t.typ=_typ
+		t.value=_value
+		Return t
+	End Function
+End Type
+'------------------------------------------------------------------------------------------------------------------------------
+
+Global CurrIdx%=0
+Global CurrToke:tToken
+Global NextToke:ttoken
+
+'------------------------------------------------------------------------------------------------------------------------------
+Function Consume()
+	currToke = NextToke
+	NextToke= Toke()
+	If currToke Then DebugLog("CT='"+currtoke.value+"'")
+End Function
+'------------------------------------------------------------------------------------------------------------------------------
+Function Toke:tToken()
+	Local t:tToken=New tToken
+	Local tmp$
+	
+	If CurrIdx+1 &gt; codestring.length Then 
+		t.typ = TOK_EOF 
+		Return t
+	EndIf
+	
+	tmp = codestring[CurrIdx..CurrIdx+1]
+	While "~t~r~n ".contains(tmp)
+		CurrIdx :+ 1		
+		tmp = codestring[CurrIdx..CurrIdx+1]
+		If CurrIdx+1 &gt; codestring.length Then 
+			t.typ = TOK_EOF
+			Return t
+		EndIf 
+	Wend
+	
+	'  NUMBER
+	If "1234567890.".contains(tmp) Then
+		t = LexNumber()
+		If Not t Then RuntimeError("null token!")
+		Return t
+	EndIf
+	
+	' +
+	If tmp = "+" Then
+		CurrIdx :+ 1
+		Return tToken.Create(TOK_PLUS,tmp)
+	EndIf
+	
+	' -
+	If tmp = "-" Then
+		CurrIdx :+ 1
+		Return tToken.Create(TOK_MINUS,tmp)
+	EndIf
+	
+	' *
+	If tmp = "*" Then
+		CurrIdx :+ 1
+		Return tToken.Create(TOK_MUL,tmp)
+	EndIf
+	
+	' /
+	If tmp = "/" Then
+		CurrIdx :+ 1
+		Return tToken.Create(TOK_DIV,tmp)
+	EndIf
+	
+	' WORD
+	
+	If "abcdefghijklmnopqrstuvwxyz_".contains(tmp) Then
+		t = LexWord()
+		Select t.Value
+			Case "var"
+				Return tToken.Create(TOK_VAR,"var")
+			Case "if"
+				Return tToken.Create(TOK_IF,"if")
+			Case "then"
+				Return tToken.Create(TOK_THEN,"then")
+			Case "else"
+				Return tToken.Create(TOK_ELSE,"else")
+			Case "endif"
+				Return tToken.Create(TOK_ENDIF,"endif")
+			Default
+				Return t
+				'Error("Unkown token '" + t.value + "'" )
+		End Select
+	EndIf
+	
+	' == or =
+	If tmp = "=" Then		
+		If codestring[CurrIdx..CurrIdx+2] = "==" Then
+			CurrIdx :+ 2
+			Return tToken.Create(TOK_DBLEQUALS,"==")
+		Else
+			CurrIdx :+ 1
+			Return tToken.Create(TOK_EQUALS,tmp)
+		EndIf
+	EndIf
+	
+	' (
+	If tmp = "(" Then
+		CurrIdx :+ 1
+		Return tToken.Create(TOK_LPAREN,tmp)
+	EndIf
+	
+	' )
+	If tmp = ")" Then
+		CurrIdx :+ 1
+		Return tToken.Create(TOK_RPAREN,tmp)
+	EndIf
+	
+	' ;
+	If tmp = ";" Then
+		CurrIdx :+ 1
+		Return tToken.Create(TOK_SEMICOL,tmp)
+	EndIf
+	
+	
+	' [
+	If tmp = "[" Then
+		CurrIdx :+ 1
+		Return tToken.Create(TOK_LBRAC,tmp)
+	EndIf
+	
+	' ]
+	If tmp = "]" Then
+		CurrIdx :+ 1
+		Return tToken.Create(TOK_RBRAC,tmp)
+	EndIf
+	
+	If tmp = "&lt;" Then
+		If codestring[CurrIdx..CurrIdx+2] = "&lt;=" Then
+			CurrIdx :+ 2
+			Return tToken.Create(TOK_LTE,"&lt;=")
+		ElseIf codestring[CurrIdx..CurrIdx+2] = "&lt;&gt;" Then
+			CurrIdx :+ 2
+			Return tToken.Create(TOK_NE,"&lt;&gt;")
+		Else
+			CurrIdx :+ 1
+			Return tToken.Create(TOK_LT,"&lt;")
+		EndIf
+	EndIf
+	
+	If tmp = "&gt;" Then
+		If codestring[CurrIdx..CurrIdx+2] = "&gt;=" Then
+			CurrIdx :+ 2
+			Return tToken.Create(TOK_GTE,"&gt;=")
+		Else
+			CurrIdx :+ 1
+			Return tToken.Create(TOK_GT,"&gt;")
+		EndIf
+	EndIf
+
+	If tmp = "~q" Then
+		t=lexString()
+		CurrIdx :+ 1
+		Return t
+	EndIf
+
+	RuntimeError("Unknown Token '" + tmp + "'")
+End Function
+'------------------------------------------------------------------------------------------------------------------------------
+Function Lexnumber:tToken()
+	Local t:tToken=New tToken
+	Local tmp$
+	Local dotcount%=0
+	
+	While "1234567890.".contains(codestring[CurrIdx..CurrIdx+1])
+		If codestring[CurrIdx..CurrIdx+1] = "." Then dotcount :+ 1
+		If dotcount &gt; 1 Then RuntimeError("Malformed number! '" + tmp + "'")
+		tmp :+ codestring[CurrIdx..CurrIdx+1]
+		CurrIdx :+ 1
+	Wend
+	t.typ = TOK_FLOAT
+	t.value = tmp
+	Return t
+End Function
+'------------------------------------------------------------------------------------------------------------------------------
+Function LexWord:tToken()
+	Local t:tToken=New tToken
+	Local tmp$
+	While "abcdefghijklmnopqrstuvwxyz_".contains(codestring[CurrIdx..CurrIdx+1])
+		tmp :+ codestring[CurrIdx..CurrIdx+1]
+		CurrIdx :+ 1
+	Wend
+	t.typ = TOK_IDENT
+	t.value = tmp
+	Return t
+End Function
+'------------------------------------------------------------------------------------------------------------------------------
+Function LexString:tToken()
+	Local t:tToken=New tToken
+	Local tmp$
+	Local endt$
+	currIdx :+ 1
+
+	Repeat
+		tmp :+ codestring[CurrIdx..CurrIdx+1]
+		currIdx :+ 1
+	Until "~r~n~q".Contains(codestring[CurrIdx..CurrIdx+1])
+	endt = codestring[CurrIdx..CurrIdx+1]	
+	
+	If endt = "~q" Then
+		t.typ = TOK_STRING
+		t.value = tmp
+		Return t
+	EndIf
+	
+	If "~r~n".contains(endt) Then
+		RuntimeError("Malformed string literal '" + tmp + "'")
+	EndIf
+End Function
+'------------------------------------------------------------------------------------------------------------------------------
+
+</pre><br><br><br>Parser:<br><br><pre class=code>
+
+SuperStrict 
+Framework brl.retro
+
+Include "lexer.bmx"
+	
+Rem
+	Simple Expression compiler v0.1 by Aaron Woodard, Jan 2014 [admin@...]
+	TODO: 
+		Add 'else' clause to 'if'
+		Check if the generated asm is even remotely correct..
+		better error msgs
+EndRem
+
+
+
+Global CodeString$	
+Global num_numbers#[]
+Global vars$[]
+Global cLabels%
+Global asmstring$
+
+
+CodeString = 	"var x;~n"
+CodeString :+ 	"var myvar;~n"
+CodeString :+ 	"var anothervar;~n"
+CodeString :+ 	"x=0.5*2;~n"
+CodeString :+ 	"if(x&gt;1) then~n"
+CodeString :+ 	"	myvar=1+2-3*4/5;~n"
+CodeString :+ 	"	if(myvar==1.1) then~n"
+CodeString :+ 	"		anothervar=x*(-myvar+123.456)*-0.1;~n"
+CodeString :+ 	"	endif~n"
+CodeString :+ 	"endif~n"
+
+
+
+Print "~n~n"+CodeString+"~n~n"
+Consume()
+Consume()
+Parse()
+
+Print prolog()
+Print asmstring
+Print epilog()
+Print datasec()
+
+
+
+
+
+
+
+'------------------------------------------------------------------------------------------------------------------------------
+Function Parse()
+	While  CurrToke.typ &lt;&gt; TOK_EOF And (CurrToke.typ = TOK_Var Or (CurrToke.typ = TOK_IDENT And NextToke.Typ = TOK_EQUALS) Or CurrToke.Typ = TOK_IF)
+		If CurrToke.typ = TOK_Var Then
+			DeclareVar()
+		
+		ElseIf CurrToke.typ = TOK_IDENT And NextToke.Typ = TOK_EQUALS Then
+			Assignment()
+				
+		ElseIf CurrToke.Typ = TOK_IF Then
+			IfExpression()		
+		EndIf
+	Wend
+End Function
+'------------------------------------------------------------------------------------------------------------------------------
+Function DeclareVar()
+	Local idx%
+	Local v$
+	If CurrToke.typ = TOK_Var Then
+		Consume()
+		If CurrToke.typ = TOK_IDENT Then 
+			If checkvars(Currtoke.Value) Then Error("Already Defined")
+			v=Currtoke.Value
+			vars :+ [v]
+			Consume()
+			If CurrToke.Typ &lt;&gt; TOK_SEMICOL Then Error("missing ';'")
+			Consume()
+		EndIf
+	EndIf
+End Function
+'------------------------------------------------------------------------------------------------------------------------------
+Function Assignment()
+	Local idx%
+	Local v$
+	While CurrToke.typ = TOK_IDENT And NextToke.Typ = TOK_EQUALS 
+		v=Currtoke.Value
+		Consume()
+		If CurrToke.typ = TOK_EQUALS Then	
+			Consume()
+			Expression()
+			idx = getvarindex(v)
+			If idx&lt;0 Then error("invalid for var  '"+v+"'")
+			addasm("	fstp dword [ebp-" + (4+idx*4) + "]		;store in "+v )
+			
+			If CurrToke.Typ &lt;&gt; TOK_SEMICOL Then Error("missing ';'")
+			Consume()
+		EndIf
+	Wend
+End Function
+
+'------------------------------------------------------------------------------------------------------------------------------
+Function Expression()
+	AddExpression()
+End Function
+'------------------------------------------------------------------------------------------------------------------------------
+Function IfExpression()
+	Local labElseif$ 
+	Local labEndif$
+	Local cond$=""
+	 
+	While CurrToke.Typ = TOK_IF 
+		If CurrToke.Typ = TOK_IF Then
+
+			labEndif= MakeLabel("_endif")
+			
+			Consume()
+			If CurrToke.Typ &lt;&gt; TOK_LPAREN Then
+				Error("Expected '('" )
+			EndIf
+			Consume()
+						
+			CondExpression(cond)
+			
+
+
+			If CurrToke.Typ &lt;&gt; TOK_RPAREN Then
+				Error("Expected ')'" )
+			EndIf
+			Consume()
+			'Then
+			If CurrToke.Typ &lt;&gt; TOK_THEN Then
+				Error("Expected 'then'" )
+			EndIf
+			Consume()
+			
+			addasm("	fxch")
+			addasm("	fucompp")
+			addasm("	fnstsw ax")
+			addasm("	sahf")
+		
+			Select cond
+				Case "&gt;"
+					addasm("	setbe al")
+				Case "&lt;"
+					addasm("	setae al")
+				Case "&gt;="
+					addasm("	setb al")
+				Case "&lt;="
+					addasm("	seta al")
+				Case "=="
+					addasm("	setnz al")
+				Case "&lt;&gt;"
+					addasm("	setz al")
+				Default
+					DebugLog("What!?")
+			End Select
+			
+			addasm("	movzx eax,al")
+			addasm("	cmp eax,0")
+			addasm("	jne "+labEndif)
+			
+			Parse()
+			
+			If CurrToke.Typ &lt;&gt; TOK_ENDIF Then
+				Error("Expected 'endif'" )
+			EndIf
+			addasm(labEndif)
+			Consume()
+		EndIf
+	Wend
+End Function
+'------------------------------------------------------------------------------------------------------------------------------
+Function CondExpression(cond$ Var)
+	Expression()
+	If CurrToke.Typ &lt;&gt; TOK_LT And CurrToke.Typ &lt;&gt; TOK_GT And CurrToke.Typ &lt;&gt; TOK_LTE And CurrToke.Typ &lt;&gt; TOK_GTE And CurrToke.Typ &lt;&gt; TOK_NE And CurrToke.Typ &lt;&gt; TOK_DBLEQUALS Then
+		Error("Expected '&lt;,&gt;,&lt;=,&gt;=,&lt;&gt;,=='" )
+	EndIf
+	
+	Select CurrToke.Value
+		Case "&gt;","&lt;","&gt;=","&lt;=","==","&lt;&gt;"
+			cond = CurrToke.Value
+		Default 
+			Error("Unkown token")
+	End Select
+	 
+	Consume()
+	Expression()
+End Function
+
+'------------------------------------------------------------------------------------------------------------------------------
+Function AddExpression()
+	If CurrToke.Typ&lt;&gt;TOK_MINUS And CurrToke.Typ&lt;&gt; TOK_LPAREN And CurrToke.Typ&lt;&gt; TOK_FLOAT And CurrToke.Typ&lt;&gt;TOK_IDENT Then Error("Expected '-' or '(' or number or ident'")
+	 
+	MulExpression()
+	While CurrToke.Typ = TOK_PLUS 'Then
+		Consume()
+		MulExpression()
+		addasm("	faddp ")
+	Wend
+	While CurrToke.Typ = TOK_MINUS 'Then
+		Consume()
+		MulExpression()
+		addasm("	fsubp ")
+	Wend
+End Function
+
+'------------------------------------------------------------------------------------------------------------------------------
+Function MulExpression()
+	If CurrToke.Typ&lt;&gt;TOK_MINUS And CurrToke.Typ&lt;&gt; TOK_LPAREN And CurrToke.Typ&lt;&gt; TOK_FLOAT And CurrToke.Typ&lt;&gt;TOK_IDENT Then Error("Expected '-' or '(' or number or ident'")
+	Primary()
+	While CurrToke.Typ = TOK_MUL 'Then
+		Consume()
+		Primary()
+		addasm("	fmulp ")
+	Wend
+	While CurrToke.Typ = TOK_DIV 'Then
+		Consume()
+		Primary()
+		addasm("	fdivp ")
+	Wend
+End Function
+
+'------------------------------------------------------------------------------------------------------------------------------
+Function Primary()
+	Local idx%,v$
+	If CurrToke.Typ&lt;&gt;TOK_MINUS And CurrToke.Typ&lt;&gt; TOK_LPAREN And CurrToke.Typ&lt;&gt; TOK_FLOAT And CurrToke.Typ&lt;&gt;TOK_IDENT Then Error("Expected '-' or '(' or number or ident'")
+	While CurrToke.Typ = TOK_MINUS
+		Consume()
+		If CurrToke.Typ = TOK_FLOAT Then
+			CurrToke.Value= String(-Float(CurrToke.Value))
+		Else 
+			Expression()
+			addasm("	fchs")	
+		End If
+	Wend
+	
+	While CurrToke.Typ = TOK_LPAREN 		
+		Consume()
+		Expression()
+		If CurrToke.Typ &lt;&gt; TOK_RPAREN Then Error("!!")
+		Consume() 
+	Wend
+	
+	While CurrToke.Typ = TOK_FLOAT 
+		addasm("	fld dword [_" + addorgetnum(CurrToke.Value)+"]")
+		Consume()
+	Wend
+	
+	While CurrToke.Typ = TOK_IDENT
+		v=CurrToke.Value 
+			idx = getvarindex(v)
+			If idx&lt;0 Then error("unkown var '"+v+"'")
+			addasm("	fld dword [ebp-"+(4+idx*4)+"]			;load '"+v+"'" )
+			Consume()
+		Return 
+	Wend
+End Function
+
+'------------------------------------------------------------------------------------------------------------------------------
+Function Error(s$)
+	Print("ERR!  " + s)
+	DebugStop
+	End	
+End Function
+
+'------------------------------------------------------------------------------------------------------------------------------
+Function dbg(s$)
+	'Print("dbg:  " + s)
+End Function
+
+'------------------------------------------------------------------------------------------------------------------------------
+Function FloatHex:String(num:Float) 'lendian
+	Local p:Float Ptr = Varptr num
+	Local bp:Byte Ptr = Int Ptr Int(p)
+	Local out:String = ""
+	
+	out:+Right(Hex(bp[3]), 2)
+	out :+ Right(Hex(bp[2]),2)
+	out :+ Right(Hex(bp[1]),2)
+	out :+ Right(Hex(bp[0]),2)
+	Return "0x" + out
+End Function 
+'------------------------------------------------------------------------------------------------------------------------------
+Function addorgetnum%(v$)
+	For Local i% = 0 Until num_numbers.Length
+		If num_numbers[i] = Float(v) Then
+			Return i
+		EndIf
+	Next
+	num_numbers :+ [Float(v)] '= AppendFArray( num_numbers,Float(v) )
+	Return num_numbers.Length-1 'num_numbers[num_numbers.Length-1]
+End Function
+
+'------------------------------------------------------------------------------------------------------------------------------
+Function checkvars%(v$)
+	If Not vars.length Then Return False
+	For Local i% = 0 Until vars.length
+		If v=vars[i] Then Return True
+	Next
+	Return False
+End Function
+
+'------------------------------------------------------------------------------------------------------------------------------
+Function getvarindex%(v$)
+	For Local i% = 0 Until vars.length
+		If v=vars[i] Then 
+			Return i
+		EndIf
+	Next
+	Return -1
+End Function
+
+'------------------------------------------------------------------------------------------------------------------------------
+Function addasm(s$)
+	asmstring :+ s + "~n"
+End Function
+'------------------------------------------------------------------------------------------------------------------------------
+Function prolog$()
+	Local tmp$
+	tmp = ";------Begin------;~n_func:~n"
+	tmp :+ "	push ebp~n~tmov ebp,esp~n"
+	If vars.length Then
+		tmp :+ "	sub esp, " + (vars.Length*4)
+	EndIf 
+	Return tmp
+End Function	
+'------------------------------------------------------------------------------------------------------------------------------
+Function epilog$()
+	Local tmp$
+	tmp = "	mov esp,ebp~n~tpop ebp~n~tret~n;------End------;"
+	Return tmp
+End Function
+'------------------------------------------------------------------------------------------------------------------------------
+Function datasec$()
+	Local tmp$
+	tmp ="~nsection ~qdata~q~n"
+	For Local i% = 0 Until num_numbers.length
+		tmp :+ "_"+i+":~n"
+		tmp :+"dd " + FloatHex(num_numbers[i]) + "		;-&gt; "+num_numbers[i]+"~n"
+		tmp :+"align 4~n"
+	Next
+	Return tmp
+End Function
+'------------------------------------------------------------------------------------------------------------------------------
+Function MakeLabel$(pre$="_")
+	cLabels :+ 1
+	Return Pre + String(cLabels) +":"
+End Function
+
+</pre> </td></tr><tr ><td class="cell"><pre class="code">'
+'
+'
+'
+'
+---------------------------------
+-=[ Here is an example input: ]=-
+---------------------------------
+var x;
+var myvar;
+var anothervar;
+x=0.5*2;
+if(x&gt;1) then
+	myvar=1+2-3*4/5;
+	if(myvar==1.1) then
+		anothervar=x*(-myvar+123.456)*-0.1;
+	endif
+endif
+
+-------------------------------
+-=[ and here is the output ]=-
+-------------------------------
+
+;------Begin------;
+_func:
+	push ebp
+	mov ebp,esp
+	sub esp, 12
+	fld dword [_0]
+	fld dword [_1]
+	fmulp 
+	fstp dword [ebp-4]		;store in x
+	fld dword [ebp-4]			;load 'x'
+	fld dword [_2]
+	fxch
+	fucompp
+	fnstsw ax
+	sahf
+	setbe al
+	movzx eax,al
+	cmp eax,0
+	jne _endif1:
+	fld dword [_2]
+	fld dword [_1]
+	faddp 
+	fld dword [_3]
+	fld dword [_4]
+	fmulp 
+	fld dword [_5]
+	fdivp 
+	fsubp 
+	fstp dword [ebp-8]		;store in myvar
+	fld dword [ebp-8]			;load 'myvar'
+	fld dword [_6]
+	fxch
+	fucompp
+	fnstsw ax
+	sahf
+	setnz al
+	movzx eax,al
+	cmp eax,0
+	jne _endif2:
+	fld dword [ebp-4]			;load 'x'
+	fld dword [ebp-8]			;load 'myvar'
+	fld dword [_7]
+	faddp 
+	fchs
+	fmulp 
+	fld dword [_8]
+	fmulp 
+	fstp dword [ebp-12]		;store in anothervar
+_endif2:
+_endif1:
+
+	mov esp,ebp
+	pop ebp
+	ret
+;------End------;
+
+section "data"
+_0:
+dd 0x3F000000		;-&gt; 0.500000000
+align 4
+_1:
+dd 0x40000000		;-&gt; 2.00000000
+align 4
+_2:
+dd 0x3F800000		;-&gt; 1.00000000
+align 4
+_3:
+dd 0x40400000		;-&gt; 3.00000000
+align 4
+_4:
+dd 0x40800000		;-&gt; 4.00000000
+align 4
+_5:
+dd 0x40A00000		;-&gt; 5.00000000
+align 4
+_6:
+dd 0x3F8CCCCD		;-&gt; 1.10000002
+align 4
+_7:
+dd 0x42F6E979		;-&gt; 123.456001
+align 4
+_8:
+dd 0xBDCCCCCD		;-&gt; -0.100000001
+align 4</pre></td></tr></table><br><a name="comments">Comments</a><br><br>None.<br><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,813 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Astar</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Astar</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >Astar</a><br><br>
+<a name="2001080"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GW_</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ported the excellent astar Pathfind class originally from Curtastic.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+'''''''''''''''''''''''''
+'A General A* Pathfinder'
+'Coded by Curtastic 2007'
+'Coded in Lightning IDE.'
+'Ported to Monkey by GW '
+'''''''''''''''''''''''''
+
+Class TPathfinder Abstract
+	Global Used:Int = False
+	'0=no diagonal movement.
+	'1=diagonal movement and cutting corners allowed.
+	'2=diagonal movement but no cutting corners.
+	Global Diagonals:Int
+	
+	'The higher this number, the more the path will randomly differ from what is optimum.
+	Global Randomity:Float
+	
+	'Map is a float. The closer to 1 the harder it is to move into this tile.
+	'All values 1 or greater are considered walls.
+	Global Map:Float[][]
+	Global MapWidth:Int
+	Global MapHeight:Int
+	
+	'The amount of steps in the route. (Read only)
+	Global Paths:Int
+	
+	'The resulting path is a 'resliced' route[].
+	' as [x0, y0, x1, y1, x2, y2, x3, y3, ..etc. .. xn,yn]
+	' The size of this array is paths*2.
+	Global Route:Int[]
+	
+	'The higher the BasicCost, the more accurate and slow pathfinding will be.
+	Const BasicCost:Float = .17
+	
+	
+'Private:
+	Global PathMap:TPath[][]
+	Const Root2:Float = 1.4142
+	
+	Function SetUp:Int(MapPassed:Float[][],mW%,mH%, Diag:Int=1, Random:Float=0)
+		'Assert Random&gt;0, "Randomity must be positive."
+		'Assert Diag = 0 Or Diag = 1 Or Diag = 2, "Diagonals must be 0 or 1 or 2."
+		If Not(Diag = 0 Or Diag = 1 Or Diag = 2) Then Error("Astar: Diagonals must be 0 Or 1 Or 2.")
+		'Assert MapPassed &lt;&gt; Null, "Map must not be null."
+		
+		Map = MapPassed
+		MapWidth = mW
+		MapHeight = mH
+		Diagonals = Diag
+		Randomity = Random
+		Return 0
+	End
+	
+	'Returns 1 if successful and 0 if unseccessful.
+	'Fills the route[] array if successful.
+	Function FindPath:Int(StartX:Int, StartY:Int, EndX:Int, EndY:Int)
+		
+		If StartX &lt; 0 Or StartY &lt; 0 Or StartX &gt;= MapWidth Or StartY &gt;= MapHeight Then 
+		 	Error("Astar: Starting point out of bounds: " + StartX + "," + StartY )
+		Endif
+			
+		If EndX &lt; 0 Or EndY &lt; 0 Or EndX &gt;= MapWidth Or EndY &gt;= MapHeight Then 
+		 	Error("Astar: End point out of bounds: " + EndX + "," + EndY )
+		Endif	
+		
+		If Not Map Then
+			Error("Astar: SetUp() must be called before FindPath" )
+		Endif		
+		
+		'If already on target.
+		If StartX = EndX And StartY = EndY Then
+			Route = New Int[2]
+			Route[0] = StartX
+			Route[1] = StartY
+			Paths = 1
+			Return 1
+		Endif
+		
+		Paths = 0
+		
+		'If target is a wall.
+		If Map[EndX][EndY] &gt;= 1 Then 
+			Route = New Int[0]
+			Return 0
+		Endif
+		
+		Local P:TPath
+		Local P2:TPath
+		Local NewP:TPath
+		Local NewX:Int
+		Local NewY:Int
+		Local Dir:Int
+		Local DirMax:Int
+		Local Done:Int
+		Local PHead:TPath
+		Local MapHere:Float
+		Local DistX:Int
+		Local DistY:Int
+		
+		PathMap = TPathArray2D(MapWidth,MapHeight)'[New TPath[MapWidth],New TPath[MapHeight]] '[MapWidth][MapHeight]
+		
+		'Make first path node at start.
+		P = New TPath
+		PHead = P
+		P.X = StartX
+		P.Y = StartY
+		PathMap[StartX][StartY] = P
+		
+		If Diagonals Then
+			DirMax = 7
+		Else
+			DirMax = 3
+		Endif
+		
+		
+		Repeat
+			
+			
+			For Dir = 0 To DirMax
+				
+				'Move based on direction.
+				Select Dir
+					Case 0
+						NewX = P.X + 1
+						NewY = P.Y
+					Case 1
+						NewX = P.X    
+						NewY = P.Y + 1
+					Case 2
+						NewX = P.X - 1
+						NewY = P.Y
+					Case 3
+						NewX = P.X    
+						NewY = P.Y - 1
+					Case 4
+						NewX = P.X + 1
+						NewY = P.Y + 1
+					Case 5
+						NewX = P.X - 1
+						NewY = P.Y + 1
+					Case 6
+						NewX = P.X - 1
+						NewY = P.Y - 1
+					Case 7
+						NewX = P.X + 1
+						NewY = P.Y - 1
+				End'Select
+				
+				'Check if it is ok to make a new path node here.
+				If NewX &gt;= 0 And NewY &gt;= 0 And NewX &lt; MapWidth And NewY &lt; MapHeight Then
+					MapHere = Map[NewX][NewY]
+					If MapHere &lt; 1 Then
+						
+						'No cutting corners.
+						If Diagonals = 2 And Dir &gt; 3 Then
+							If Map[NewX][P.Y] &gt;= 1 Then Continue
+							If Map[P.X][NewY] &gt;= 1 Then Continue
+						Endif
+						
+						P2 = PathMap[NewX][NewY]
+						
+						'Check if there already is a path here.
+						If P2 = Null Then
+							
+							'DrawRect newx*29,newy*29,29,29
+							'Flip False
+							'If KeyHit(key_escape) Then End
+							
+							'Make new node.
+							NewP = New TPath
+							PathMap[NewX][NewY] = NewP
+							NewP.Parent = P
+							NewP.X = NewX
+							NewP.Y = NewY
+							
+							'Cost is slightly more for diagnols.
+							If Dir &lt; 4 Then
+								NewP.Cost = P.Cost + BasicCost + MapHere + Rnd(0, Randomity)
+							Else
+								NewP.Cost = P.Cost + (BasicCost + MapHere + Rnd(0, Randomity)) * Root2
+							Endif
+							
+							'Calculate distance from this node to target.
+							If Diagonals Then
+								DistX = Abs(NewX - EndX)
+								DistY = Abs(NewY - EndY)
+								If DistX &gt; DistY Then
+									NewP.Dist = DistX - DistY + DistY * Root2
+								Else
+									NewP.Dist = DistY - DistX + DistX * Root2
+								Endif
+								NewP.Dist *= .1
+							Else
+								NewP.Dist = (Abs(NewX - EndX) + Abs(NewY - EndY)) / 8.0
+							Endif
+							
+							'Insert node at appropriate spot in list.
+							P2 = P
+							Repeat
+								If P2.After = Null Then
+									P2.After = NewP
+									Exit
+								Endif
+								If P2.After.Dist + P2.After.Cost &gt; NewP.Dist + NewP.Cost Then
+									NewP.After = P2.After
+									P2.After = NewP
+									Exit
+								Endif
+								P2 = P2.After
+							Forever
+							
+							'Check if found the end.
+							If NewX = EndX And NewY = EndY Then
+								Done = 1
+								Exit
+							Endif
+						Else
+							'Overwrite existing path node if this way costs less.
+							If P2.Cost &gt; P.Cost + BasicCost + MapHere * Root2 + Randomity Then
+								P2.Parent = P
+								'Cost is slightly more for diagnols.
+								If Dir &lt; 4 Then
+									P2.Cost = P.Cost + BasicCost + MapHere + Rnd(0, Randomity)
+								Else
+									P2.Cost = P.Cost + (BasicCost + MapHere + Rnd(0, Randomity)) * Root2
+								Endif
+							Endif
+						Endif
+					Endif
+				Endif
+			Next
+			
+			If Done = 1 Then Exit
+			
+			P = P.After
+			If P = Null Then Exit
+			
+		Forever
+		
+		
+		If Done Then
+			'Count how many paths.
+			P2 = NewP
+			Repeat
+				Paths+= 1
+				P2 = P2.Parent
+				If P2 = Null Then Exit
+				'If KeyDown(key_space) Then DebugStop
+			Forever
+			
+			'Make route from end to start.
+			Route = New Int[Paths * 2]
+			Local i:Int = 0
+			P2 = NewP
+			Repeat
+				Route[i] = P2.X
+				i+= 1
+				Route[i] = P2.Y
+				i+= 1
+				P2 = P2.Parent
+				If P2 = Null Then Exit
+			Forever
+		Endif
+		
+		'Nullify parent pointers so mem will be deallocated.
+		P = PHead
+		Repeat
+			P.Parent = Null
+			P = P.After
+			If P = Null Then Exit
+		Forever
+		
+		Return Done
+	End
+End
+
+
+
+Class TPath
+	Field X:Int
+	Field Y:Int
+	Field Parent:TPath
+	Field Cost:Float
+	Field Dist:Float
+	Field After:TPath
+End
+
+
+
+Function TPathArray2D:TPath[][] (X%,Y%)
+	Local tmp:TPath[X][]
+	For Local I% = 0 Until X
+		tmp[I] = New TPath[Y]
+	Next
+	Return tmp
+	
+	'Local tmp := [New TPath[X],New TPath[Y]]	'// this no worky!
+
+End Function
+
+</textarea><br><br>Here is a simple test app<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+Import mojo
+Import gw.astar
+
+Function Main%()
+	Local app := New MyApp
+	Return 0
+End
+
+Class MyApp Extends App
+	Field testMAP:Float[][]
+
+	Method OnCreate%()
+		SetUpdateRate(30)
+		Seed = Millisecs()
+		
+		testMAP = FloatArray2D(50,50)
+		MakeMap
+		
+		Return 0
+	End
+	
+	Method OnRender%()
+		Cls(0,0,0)
+		
+		For Local I% = 0 Until 50
+			For Local J% = 0 Until 50
+				SetAlpha( Min(testMAP[I][J],1.0))
+				DrawRect(Int(I*10),Int(J*10),9,9)
+			Next
+		Next	
+		
+		SetAlpha(1)
+		SetColor(255,0,0)
+		For Local Z% = 0 Until TPathfinder.Route.Length Step 2
+			DrawRect(TPathfinder.Route[Z]*10, TPathfinder.Route[Z+1]*10,9,9)
+		Next
+		SetColor(255,255,255)
+		
+		Return 0
+	End
+	
+	Method OnUpdate:Int()
+		If KeyHit(KEY_SPACE) Then
+			MakeMap
+			TPathfinder.FindPath(1,1,49,49)
+		Endif
+		Return 0
+	End
+	
+	
+	Method MakeMap:Void()
+		For Local I% = 0 Until 50
+			For Local J% = 0 Until 50
+				testMAP[I][J] = Rnd(0,1.5)
+			Next
+		Next	
+		
+		TPathfinder.SetUp(testMAP,50,50) 
+	End Method
+End
+
+
+
+Function FloatArray2D:Float[][] (X%,Y%)
+	Local tmp:Float[X][]
+	For Local I% = 0 Until X
+		tmp[I] = New Float[Y]
+	Next
+	Return tmp
+
+	'Local tmp := [New Float[X],New Float[Y]]  ' &gt;:-(
+End Function
+</textarea> <br><br></td></tr></table><br>
+<a name="2001084"></a>
+
+<a name="2001085"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice porting.<br><br>I would add this for newbee users and 'new modules' (I follow the 'blitzmax' way - modules folder...)<br><br>1. create a NEW folder <b>gw</b> in the monkey's modules folder.<br>2. create in <b>gw</b> a new folder <b>astar</b>: this is the name of the 'module'<br>3. save the module source code in <b>gw/astar</b> as '<b>astar.monkey</b>'<br><br>You should get something like this in the the monkey's module structure<br><pre class=code>
+C:\monkey
+     \modules
+        \gw
+          \astar
+              astar.monkey
+        \mojo
+        \monkey
+        \trans
+</pre> <br><br></td></tr></table><br>
+<a name="2032346"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raz</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just implemented this for something, so thank you very much GW_ :) <br><br></td></tr></table><br>
+<a name="2032446"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >andrew_r</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Perfect timing! I was just hunting for an implementation of A* in Monkey before I got my hands dirty rolling my own. <br><br>Now I just need to adapt it to my needs. :) <br><br></td></tr></table><br>
+<a name="2034812"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >impixi</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for the code! <br><br>Here's a simplified version I created for a roguelike game I'm working on. It requires map movement data as a 1-dimensional integer array (that simulates a 2d grid), where &gt;=1 is blocked, 0=not blocked. It makes use of object- -pooling, -referencing and -reuse so this version should be significantly faster on some platforms, though I've not tested it. It's also instance-based, so each creature/vehicle in your map could have its own pathfinding system with different parameters (that's how I'm using it, anyway).<br><br>[Left-click] to toggle a grid cell blocked/unblocked.<br>[Space] to block 100 random cells.<br><br>astarint.monkey<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+'''''''''''''''''''''''''
+'A General A* Pathfinder'
+'Coded by Curtastic 2007'
+'Coded in Lightning IDE.'
+'Ported to Monkey by GW '
+'''''''''''''''''''''''''
+
+'Modified by impixi, July 2012,
+'for improved performance on some platforms,
+'but requires map data passed as a 1D integer 
+'array (though simulating a 2D grid).
+
+Class Pathfinder
+
+	'0=no diagonal movement.
+	'1=diagonal movement and cutting corners allowed.
+	'2=diagonal movement but no cutting corners.
+	Field diagonals:Int
+	
+	'The higher this number, the more the path will randomly differ from what is optimum.
+	Field randomity:Float
+
+	'All values 1 or greater are considered walls.
+	Field map:Int[] 
+		
+	Field mapWidth:Int
+	Field mapHeight:Int
+
+	Field route:PathNode[]
+	Field routeCount:Int
+	
+	Field pathMap:PathNode[]
+
+	Field basicCost:Float
+	Field root2:Float
+	
+	Method New(mapWidth:Int, mapHeight:Int, diagonals:Int = 1, randomity:Float = 0.0)
+		'Randomity must be positive.
+		'Diagonals must be 0 or 1 or 2."
+
+		Self.mapWidth = mapWidth
+		Self.mapHeight = mapHeight
+		Self.diagonals = diagonals
+		Self.randomity = randomity
+		
+		'The higher the basicCost, the more accurate and slow pathfinding will be.
+		basicCost = 1.0
+		root2 = 1.4142
+
+		'Reserve enough memory (for pathNode object references) to store the longest 
+		'possible route.
+		route = New PathNode[mapWidth * mapHeight]
+		routeCount = 0
+		
+		'Create a pathNode object cache so none need to be created in the pathfinding algorithm.
+		pathMap = New PathNode[mapWidth * mapHeight]
+		For Local x:Int = 0 Until mapWidth
+			For Local y:Int = 0 Until mapHeight
+				pathMap[(y * mapWidth) + x] = New PathNode(x, y)
+			Next
+		Next
+
+	End
+	
+	Method RouteLength:Int() Property
+	
+		Return routeCount
+	
+	End
+	
+	Method SetMapData:Void(mapData:Int[])
+	
+		map = mapData
+	
+	End
+	
+	Method ResetPath:Void()
+
+		For Local i:Int = 0 Until pathMap.Length
+			pathMap[i].Reset()
+		Next
+	
+	End
+	
+	'Returns true if successful and false if unsuccessful.
+	'Fills the route[] array if successful.
+	'includeTarget: If true, find a path even if target coordinate is blocked
+	Method FindPath:Bool(startX:Int, startY:Int, endX:Int, endY:Int, includeTarget:Bool = True)
+		
+		routeCount = 0
+		
+		'Validate start and end coordinates. Return immediately if invalid.
+		If (startX &lt; 0) Or (startY &lt; 0) Or (startX &gt;= mapWidth) Or (startY &gt;= mapHeight) Then Return False
+		If (endX &lt; 0) Or (endY &lt; 0) Or (endX &gt;= mapWidth) Or (endY &gt;= mapHeight) Then Return False
+		If Not map Then Return False
+		
+		ResetPath
+		
+		'If already on target
+		If (startX = endX) And (startY = endY)
+			pathMap[(startY * mapWidth) + startX].inPath = True
+			route[0] = pathMap[(startY * mapWidth) + startX]
+			routeCount = 1
+			Return True
+		Endif
+
+		'Return if target is blocked and not set for path inclusion
+		If (Not includeTarget) And (map[(endY * mapWidth) + endX] &gt;= 1) Then Return False
+
+		Local p:PathNode, p2:PathNode, newP:PathNode
+		Local pHead:PathNode
+		Local done:Bool = False
+		Local newX:Int, newY:Int
+		Local dir:Int, dirMax:Int
+		
+		Local mapHere:Int
+		
+		Local distX:Int, distY:Int
+	
+		'Set start node
+		p = pathMap[(startY * mapWidth) + startX]
+		p.inPath = True
+		pHead = p
+		
+		If diagonals Then dirMax = 7 Else dirMax = 3
+		
+		Repeat
+			
+			For dir = 0 To dirMax
+				
+				'Move based on direction.
+				Select dir
+					Case 0
+						newX = p.x + 1
+						newY = p.y
+					Case 1
+						newX = p.x    
+						newY = p.y + 1
+					Case 2
+						newX = p.x - 1
+						newY = p.y
+					Case 3
+						newX = p.x    
+						newY = p.y - 1
+					Case 4
+						newX = p.x + 1
+						newY = p.y + 1
+					Case 5
+						newX = p.x - 1
+						newY = p.y + 1
+					Case 6
+						newX = p.x - 1
+						newY = p.y - 1
+					Case 7
+						newX = p.x + 1
+						newY = p.y - 1
+				End
+				
+				'Check coordinate is within map.
+				If (newX &gt;= 0) And (newY &gt;= 0) And (newX &lt; mapWidth) And (newY &lt; mapHeight)
+					mapHere = map[(newY * mapWidth) + newX]
+					
+					'Force inclusion of the final target coordinate If necessary
+					If (includeTarget) And (newX = endX) And (newY = endY) Then mapHere = 0
+					
+					If mapHere &lt; 1 Then
+						
+						'No cutting corners.
+						If (diagonals = 2) And (dir &gt; 3)
+							If map[(p.y * mapWidth) + newX] &gt;= 1 Then Continue
+							If map[(newY * mapWidth) + p.x] &gt;= 1 Then Continue
+						Endif
+						
+						p2 = pathMap[(newY * mapWidth) + newX]
+						
+						'Check if there already is a path here.
+						If (Not p2.inPath)
+
+							'If not, set node in path.
+							newP = pathMap[(newY * mapWidth) + newX]
+							newP.parent = p
+							newP.inPath = True
+							
+							'Cost is slightly more for diagonals.
+							If (dir &lt; 4)
+								newP.cost = p.cost + basicCost + 0.25 + Rnd(0, randomity)
+							Else
+								newP.cost = p.cost + (basicCost + 0.25 + Rnd(0, randomity)) * root2
+							Endif
+							
+							'Calculate distance from this node to target.
+							If diagonals
+								distX = Abs(newX - endX)
+								distY = Abs(newY - endY)
+								If (distX &gt; distY)
+									newP.dist = distX - distY + distY * root2
+								Else
+									newP.dist = distY - distX + distX * root2
+								Endif
+								newP.dist *= 0.1
+							Else
+								newP.dist = (Abs(newX - endX) + Abs(newY - endY)) / 8.0
+							Endif
+							
+							'Insert node at appropriate spot in list.
+							p2 = p
+							Repeat
+								If (p2.after = Null)
+									p2.after = newP
+									Exit
+								Endif
+								If (p2.after.dist + p2.after.cost) &gt; (newP.dist + newP.cost)
+									newP.after = p2.after
+									p2.after = newP
+									Exit
+								Endif
+								p2 = p2.after
+							Forever
+							
+							'Check if found the end.
+							If newX = endX And newY = endY Then
+								done = True
+								Exit
+							Endif
+						Else
+							'Overwrite existing path node if this way costs less.
+							If (p2.cost &gt; (p.cost + basicCost + 0.25 * root2 + randomity))
+								p2.parent = p
+								'Cost is slightly more for diagonals.
+								If (dir &lt; 4)
+									p2.cost = p.cost + basicCost + 0.25 + Rnd(0, randomity)
+								Else
+									p2.cost = p.cost + (basicCost + 0.25 + Rnd(0, randomity)) * root2
+								Endif
+							Endif
+						Endif
+					Endif
+					
+				Endif
+			Next
+			
+			If done = True Then Exit
+			
+			p = p.after
+			If p = Null Then Exit
+			
+		Forever
+		
+		
+		If done Then
+			
+			'Make route from end to start.
+			p2 = newP
+			Repeat
+				route[routeCount] = p2
+				routeCount += 1
+				p2 = p2.parent
+				If p2 = Null Then Exit
+			Forever
+		Endif
+
+		Return done
+	End
+	
+End
+
+
+Class PathNode
+
+	Field inPath:Bool
+
+	Field x:Int, y:Int
+	Field parent:PathNode, after:PathNode
+	Field cost:Float, dist:Float
+		
+	Method New(x:Int, y:Int)
+
+		Self.x = x
+		Self.y = y
+
+		Reset()
+		
+	End
+	
+	Method Reset:Void()
+	
+		inPath = False
+		parent = Null
+		after = Null
+		cost = 0.0
+		dist = 0.0
+	
+	End
+	
+End
+</textarea><br><br>astarinttest.monkey<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+Import mojo
+Import astarint
+
+Function Main:Int()
+
+	Local app := New MyApp
+	Return 0
+	
+End
+
+Class MyApp Extends App
+
+	Field testMap:Int[]
+	
+	Field testPath:Pathfinder
+	
+	Field mapWidth:Int, mapHeight:Int
+	
+	Field startX:Int, startY:Int
+	Field cellWidth:Int, cellHeight:Int
+	Field cellBorder:Int
+	
+	Method OnCreate:Int()
+	
+		mapWidth = 30
+		mapHeight = 30
+
+		startX = 5
+		startY = 5
+
+		cellWidth = 10
+		cellHeight = 10
+		cellBorder = 1
+
+		testMap = New Int[mapWidth * mapHeight]
+		MakeMap
+			
+		SetUpdateRate(30)
+
+		Return 0
+	End
+		
+	Method OnUpdate:Int()
+	
+		If KeyHit(KEY_SPACE) Then MakeMap
+		
+		If MouseHit(MOUSE_LEFT) 
+		
+			Local mapX:Int = (MouseX() - startX) / (cellWidth + cellBorder)
+			Local mapY:Int = (MouseY() - startY) / (cellHeight + cellBorder)
+			
+			If (mapX &gt;= 0) And (mapX &lt; mapWidth) And (mapY &gt;= 0) And (mapY &lt; mapHeight)
+				testMap[(mapY * mapWidth) + mapX] = Not testMap[(mapY * mapWidth) + mapX]
+				If (Not testPath.FindPath(1, 1, mapWidth - 2, mapHeight - 2, False)) Then Print "No viable path!"
+			Endif
+			
+		Endif
+		
+		Return 0
+		
+	End
+	
+	Method OnRender:Int()
+	
+		Cls(0, 0, 0)
+		
+		For Local x:Int = 0 Until mapWidth
+			For Local y:Int = 0 Until mapHeight
+
+				If testMap[(y * mapWidth) + x] = 0
+					SetColor 64, 64, 64
+				Else
+					SetColor 255, 255, 255
+				Endif
+				
+				DrawRect(startX + (x * (cellWidth + cellBorder)), startY + (y * (cellHeight + cellBorder)), cellWidth, cellHeight)
+			Next
+		Next
+		
+		SetAlpha 1.0
+		SetColor(0, 255, 0)
+		For Local i:Int = 0 Until testPath.RouteLength
+			DrawRect(startX + (testPath.route[i].x * (cellWidth + cellBorder)), startY + (testPath.route[i].y * (cellHeight + cellBorder)), cellWidth, cellHeight)
+		Next
+		
+		SetColor(255,255,255)
+		
+		Return 0
+	End
+
+	Method MakeMap:Void()
+			
+		Seed = Millisecs()
+		
+		For Local n:Int = 1 To 100
+			Local x:Int = Floor(Rnd(0, mapWidth))
+			Local y:Int = Floor(Rnd(0, mapHeight))
+			testMap[(y * mapWidth) + x] = 1
+		Next
+		
+		If (Not testPath) Then testPath = New Pathfinder(mapWidth, mapHeight, 1)
+		testPath.SetMapData(testMap)
+		
+		If (Not testPath.FindPath(1, 1, mapWidth - 2, mapHeight - 2, False)) Then Print "No path!"
+
+	End
+	
+End
+
+</textarea><br><br>EDIT: 29-JUL-12: fixed a bug in astarint.monkey <br><br></td></tr></table><br>
+<a name="2034747"></a>
+
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

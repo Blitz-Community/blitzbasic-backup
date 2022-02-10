@@ -1,0 +1,2606 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Occlusion System</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Occlusion System</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >Occlusion System</a><br><br>
+<a name="462193"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Rogue Vector</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>I'm having some problems with an occlusion system.<br><br>I've reached the point where I need help from a better programmer than me.<br><br>The problem seems to be with the pre-calculated bounding boxes for each zone in the level map - but I'm not sure of this.<br><br>The code with level map is here:<br><a href="http://www.octanedigitalstudios.com/downloads/Occlusion.zip" target="_blank">http://www.octanedigitalstudios.com/downloads/Occlusion.zip</a><br><br>Here's just the code:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+; ***************************************************************
+; PROG:   OCCLUSION SYSTEM
+; ETHOS:  Simple and Fast
+; AUTHOR: Rogue Vector
+; DATE:   Friday 3rd December 2004
+
+; **** THERE IS A PROBLEM WITH THIS CODE - NEED HELP ****
+
+; The bounding boxes are totally screwed up and I don't know why.
+
+; ***************************************************************
+
+
+
+; BASIC DESIGN OVERVIEW
+; ---------------------
+
+; The system works by reading the name of each object in the (.b3d) file hierarchy. 
+
+; The zone data is extracted from the name and placed into the TZone data structure.
+
+; The Level Designer determines which zones can be seen from a particular vantage point in the level map.
+
+; He records this data in the object name, before exporting to a (.b3d) file.
+
+; Thus, during run-time, if the player is in zone X, simply get the 'can_see' zones from the TZone data.
+
+; No need for portals.
+
+
+
+
+;CONSTANTS
+Const SUCCESS          = 1
+Const FAILURE          = -1
+Const VIS_FORMAT$      = "[ zone: # vis: # ]"		;The basic format of the vis data, in its simplest form.
+Const VIS_MAX_ZONES    = 10							;The maximum number of zones that can be seen from the current zone.
+Const VIS_STOP_SYMBOL$ = "]"						;End of line (terminator) used when parsing the vis data.
+Const VIS_DELIMITER$   = " "						;Words in the vis data are seperated by this character (i.e. space).
+Const VIS_INFO_START   = 5							;The first vis data begins at the fifth word in.
+Const ZONE_IDENT_START = 3
+
+
+
+;TYPES
+Type TZone
+
+	Field entity
+	Field name$
+	Field visible
+	Field can_see[VIS_MAX_ZONES]
+	Field max_X#
+	Field max_Y#
+	Field max_Z#
+	Field min_X#
+	Field min_Y#
+	Field min_Z#
+
+End Type 
+
+
+
+;GLOBALS
+Global g_check_format       = True
+Global g_current_zone.TZone = Null
+Global g_last_zone          = 0
+
+
+
+
+;TEST PROGRAM ************************
+Global g_keytimer, g_wireframe, g_time
+Global g_gravity# = -0.5
+runtest("level_map.b3d")	
+;DE-ACTIVATE AS DEFAULT **************
+
+
+
+
+;FUNCTIONS
+Function Occlusion_Initialise(v_level)
+
+	Local node         = 0
+	Local node_name$   = ""
+	Local token$       = ""
+	Local surface      = 0
+	Local max_surfaces = 0
+	Local verts        = 0
+	Local vis_index    = VIS_INFO_START
+	
+	;Iterate through every child object in the mesh hierarchy and populate the TZone objects
+	For i = 1 To CountChildren(v_level)
+		
+		;Find the zones in the level mesh hierarchy.
+		node = GetChild(v_level,i)
+		
+		;Get the name of the node.
+		node_name$ = EntityName$(node)
+
+		;Check formatting (SLOW - switched off by default).
+		If (g_check_format) CheckZoneInfoFormat(node_name)
+				
+		;Create zone object to hold data.
+		zone.TZone  = New TZone
+			
+		;Populate object with initial values.
+		zone\entity  = node
+		zone\name    = node_name 
+		
+		;Create a bounding box around the zone.
+		max_surfaces = CountSurfaces(zone\entity)
+			
+		For k=1 To max_surfaces
+			
+			surface = GetSurface(zone\entity, k)
+			
+			verts = CountVertices(surface) - 1
+				
+			For m = 0 To verts-1
+			
+				Vx# = VertexX#(surface, m)
+				Vy# = VertexY#(surface, m)
+				Vz# = VertexZ#(surface, m)
+					
+				If (Vx# &gt; zone\max_X) Then zone\max_X = Vx#
+				If (Vy# &gt; zone\max_Y) Then zone\max_Y = Vy#
+				If (Vz# &gt; zone\max_Z) Then zone\max_Z = Vz#
+						
+				If (Vx# &lt; zone\min_X) Then zone\min_X = Vx#
+				If (Vy# &lt; zone\min_Y) Then zone\min_Y = Vy#
+				If (Vz# &lt; zone\min_Z) Then zone\min_Z = Vz#
+				
+			Next
+
+		Next
+							
+		;Check that there is a stopping condition symbol in the zone info string.
+		If Instr(zone\name, VIS_STOP_SYMBOL)
+
+			;Parse initial vis data into the internal array. 
+			token = GetWord(node_name, vis_index, " ")
+							
+			If Not(Int(token) =&gt; 0) RuntimeError("ERROR!... DATA IN VIS ARRAY IS NOT OF THE REQUIRED TYPE.")
+
+			Repeat
+								
+					zone\can_see[vis_index - VIS_INFO_START] = Int(token)
+								
+					vis_index = vis_index + 1
+				
+					token = GetWord(zone\name, vis_index, " ")
+				
+			Until (token = VIS_STOP_SYMBOL)
+
+			;Reset vis array index
+			vis_index = VIS_INFO_START
+
+		Else
+		
+			RuntimeError("ERROR!...VIS DATA FORMAT INCORRECT")
+
+		EndIf
+
+	Next
+			
+	;Modify the data in the internal array. Need to convert the zone numbers to the corresponding entity id's.
+	;This is a preparatory stage to help keep Update function small and fast.
+	Local tmp_entity = 0
+	
+	For l_tmp.TZone = Each TZone
+	
+		For index=0 To VIS_MAX_ZONES
+	
+			tmp_entity = EntityLookUp(l_tmp\can_see[index])
+			
+			l_tmp\can_see[index] = tmp_entity
+							
+		Next
+	
+	Next
+		
+	;Check formatting of zone data structures.
+	If (g_check_format) CheckZoneDataStructure()
+
+End Function
+
+
+
+
+
+Function Occlusion_Update(v_playerX#, v_playerY#, v_playerZ#)
+
+	Text 5,30, "X: " + v_playerX
+
+	For g_current_zone = Each TZone
+		
+		If (IsInsideZone(v_playerX, v_playerY, v_playerZ, g_current_zone)) 
+		
+			Text 5, 60, "Zone name: " + g_current_zone\name
+			
+			
+			;**** TEMPORARILY DE-ACTIVATED UNTIL CORRECT ZONE IS SHOWN ON SCREEN ****
+			
+			; HAVEN'T BEEN ABLE TO TEST THIS BIT YET.
+			
+			;If Not(g_last_zone = Handle g_current_zone)
+					
+			;	HideAllZones()
+				
+			;	ShowEntity g_current_zone\entity
+				
+			;	For l_index = 0 To VIS_MAX_ZONES
+				
+			;		ShowEntity 	g_current_zone\can_see[l_index]
+					
+			;	Next
+				
+			;	g_last_zone = Handle g_current_zone
+				
+			;	Exit
+			
+			;EndIf
+			
+			; ***********************************************************************
+								
+		EndIf
+
+	Next
+
+End Function
+
+
+
+
+
+Function Occlusion_ClearAll()
+
+	Local l_tmp.TZone = Null
+	
+	For l_tmp = Each TZone
+	
+		Delete l_tmp
+		
+	Next
+
+	Return SUCCESS
+
+End Function
+
+
+
+
+
+Function EntityLookUp(v_zone_lookup)
+
+	Local l_tmp.TZone = Null
+	Local token$      = ""
+	
+	For l_tmp = Each TZone
+	
+		token = GetWord(l_tmp\name, ZONE_IDENT_START, VIS_DELIMITER)
+		If (Int(token) = v_zone_lookup) Return l_tmp\entity 
+		
+	Next
+
+	Return FAILURE
+
+End Function
+
+
+
+
+
+Function HideAllZones()
+		
+	For l_tmp.TZone = Each TZone
+	
+		For l_index = 0 To MAX_VIS_ZONES
+		
+			HideEntity l_tmp\can_see[l_index]
+			HideEntity l_tmp\entity
+	
+		Next
+	
+	Next
+
+	Return SUCCESS
+
+End Function
+
+
+
+
+
+Function EntityAlphaLevel(v_amount#)
+
+	For tmp.TZone = Each TZone
+	
+		EntityAlpha tmp\entity, v_amount
+	
+	Next
+	
+End Function
+
+
+
+
+
+Function CheckZoneInfoFormat(v_name$)
+	
+	Print "CHECKING FORMAT OF VIS DATA"
+		
+	Print "Analysing Zone: [ " + GetWord(v_name, 3, VIS_DELIMITER) + " ]"
+	
+	
+	If  Not(GetWord(v_name, 1 , VIS_DELIMITER) = GetWord(VIS_FORMAT, 1, VIS_DELIMITER)) Then RuntimeError("ERROR!...VIS DATA FORMAT INCORRECT")
+	If  Not(GetWord(v_name, 2 , VIS_DELIMITER) = GetWord(VIS_FORMAT, 2, VIS_DELIMITER)) Then RuntimeError("ERROR!...VIS DATA FORMAT INCORRECT")
+	If  Not(GetWord(v_name, 4 , VIS_DELIMITER) = GetWord(VIS_FORMAT, 4, VIS_DELIMITER)) Then RuntimeError("ERROR!...VIS DATA FORMAT INCORRECT")
+	If  Not(Int(GetWord(v_name, 3 , VIS_DELIMITER)) =&gt; 0) Then RuntimeError("ERROR!...VIS DATA FORMAT INCORRECT")
+	If  Not(Int(GetWord(v_name, 5 , VIS_DELIMITER)) =&gt; 0) Then RuntimeError("ERROR!...VIS DATA FORMAT INCORRECT")
+	
+	Print "        Result: [ PASS ]"
+	Print "------------------------"
+
+	Delay 500
+ 
+	Return SUCCESS
+
+End Function
+
+
+
+
+
+Function CheckZoneDataStructure()
+	
+	Print
+	Print
+	Print "CHECKING ZONE DATA STRUCTURE"
+		
+	For l_tmp.TZone = Each TZone
+	
+		Print "Analysing Zone: [ " + GetWord(l_tmp\name, 3, VIS_DELIMITER) + " ]"
+		Print "  Entity Ident: [ " + Str(l_tmp\entity) + " ]"
+		Print "   BoundingBox: [ max_X = " + Str(l_tmp\max_X) + " ]"		
+		Print "                [ max_Y = " + Str(l_tmp\max_Y) + " ]"
+		Print "                [ max_Z = " + Str(l_tmp\max_Z) + " ]"
+		Print "                [ min_X = " + Str(l_tmp\min_X) + " ]"
+		Print "                [ min_Y = " + Str(l_tmp\min_Y) + " ]"
+		Print "                [ min_Z = " + Str(l_tmp\min_Z) + " ]"
+		
+		For p=0 To VIS_MAX_ZONES
+	
+			If Not(l_tmp\can_see[p] = -1) Print "       Can See: [ " + Str(l_tmp\can_see[p]) + " ]"
+		
+		Next
+		
+		Print "---------------------"
+		
+		;WaitKey
+		Delay 500
+		
+	Next
+
+	Print
+	Print "FINISHED ANALYSIS..."
+	Print
+	Print "HIT A KEY TO CONTINUE"
+	Print
+	
+	Return SUCCESS
+
+End Function
+
+
+
+
+
+Function IsInsideZone%(v_objectspaceX#, v_objectspaceY#, v_objectspaceZ#, v_zone.TZone) 
+
+	; Transform point from global space to object space.
+	TFormPoint v_objectspaceX, v_objectspaceY, v_objectspaceZ, 0, v_zone\entity
+	v_objectspaceX = TFormedX()
+	v_objectspaceY = TFormedY()
+	v_objectspaceZ = TFormedZ()
+		
+	If (v_objectspaceX &gt; v_zone\min_X) And (v_objectspaceX &lt; v_zone\max_X) And (v_objectspaceY &gt; v_zone\min_Y) And (v_objectspaceY &lt; v_zone\max_Y) And (v_objectspaceZ &gt; v_zone\min_Z) And (v_objectspaceZ &lt; v_zone\max_Z)
+			
+		Return True
+		
+	Else
+			
+		Return False
+		
+	EndIf
+
+End Function
+
+
+
+
+
+
+Function GetWord$(InputString$, WordNum, Seperators$=" ") ;by sswift
+
+	FoundWord  = False
+	WordsFound = 0
+
+	; Loop through each character in the input string.
+	For CharLoop = 1 To Len(InputString$)
+
+		; Get the character at this location in the string.
+		ThisChar$ = Mid$(InputString$, CharLoop, 1)
+
+		; If the character at this position is one of the characters in the seperator list...
+		If Instr(Seperators$, ThisChar$, 1)
+		
+			; If a word has been started...
+			If FoundWord
+		
+				; ...then this character must mark the end of a word.
+
+				; Increment the number of words we've found.
+				WordsFound = WordsFound + 1
+
+				; Is this word the word we want?
+				If WordsFound = WordNum
+				
+					; Yes!  Exit the function and return the word.
+					Return Word$
+			
+				Else
+				
+					; No.  Discard this word.
+					Word$ = ""
+					FoundWord = False
+				
+				EndIf
+				
+			Else
+			
+				; Ignore this character.  We have either not reached a word yet, or are between words.
+			
+			EndIf				
+					
+		Else
+		
+			; This is not a character in our seperator list.  Add it to our word.
+			FoundWord = True
+			Word$ = Word$ + ThisChar$
+			
+		EndIf
+		
+	Next	
+		
+	; We have finished looking through the string.  Was the last word we were on the one we were looking for?
+	If (WordsFound+1) = WordNum
+
+		; Yes! 
+		; Return the word that at the end of the string which didn't have any seperators after it.
+		Return Word$
+
+	Else
+	
+		; No. 
+		; The word number passed to the function was greater than the number of words in the string. 
+		; Return an empty string.
+		Return ""
+
+	EndIf
+	
+End Function
+
+
+
+
+
+Function QuickTexture()
+
+	tex=CreateTexture(512,512)
+	ScaleTexture tex,.2,.5
+	SetBuffer TextureBuffer(tex)
+	
+	Color 50,50,50
+	
+	Rect 0,0,512,512
+	
+	Color 200,200,200
+	Rect 8,8,496,496
+	
+	Color 255,255,255
+	SetBuffer BackBuffer()
+	 
+	For tmp.TZone = Each TZone
+	
+		EntityTexture tmp\entity, tex 
+			
+	Next
+	
+	Return tex
+	
+End Function
+
+
+
+
+
+Function SuperCam(cam,ent,cspeed#,dist#,hite#,xrot#,tilt#) ;by PsychicParrot
+
+	TFormPoint 0,hite#,-dist#,ent,0
+	
+	cx#=(TFormedX()-EntityX(cam))*cspeed#
+	cy#=(TFormedY()-EntityY(cam))*cspeed#
+	cz#=(TFormedZ()-EntityZ(cam))*cspeed#
+	
+	TranslateEntity cam,cx,cy,cz
+	PointEntity cam,ent
+	RotateEntity cam,xrot#,EntityYaw(cam),tilt#
+	
+End Function
+
+
+
+
+
+Function DoWireFrame(v_key)
+
+	g_time = MilliSecs()
+	
+	If (g_KeyTimer + 200 &lt; g_time)
+
+		If (KeyDown(v_key)) 
+		
+			g_wireFrame = 1 - g_wireFrame
+			WireFrame g_wireFrame
+			g_keyTimer = g_time : Return SUCCESS
+		
+		EndIf
+ 		
+	EndIf
+
+End Function
+
+
+
+
+
+
+Function RunTest(v_level_filename$)
+
+	AppTitle "Occlusion Test Program","Are you sure you want to quit?"
+	Graphics3D 800,600,16,2
+	SetBuffer BackBuffer()
+	
+	C_PLAYER   = 1
+	C_LEVEL	   = 2
+	C_TRIGGER  = 3
+	
+	Collisions C_PLAYER,C_LEVEL,2,2
+	
+	level = LoadAnimMesh(v_level_filename)
+	
+	EntityType level,C_LEVEL,True
+	
+
+	;Initialise Occlusion system
+	Occlusion_Initialise(level)
+		
+	WaitKey
+	
+	player  = CreateSphere(8) ;the player
+	
+	ScaleMesh player, 1,1,1
+	MoveEntity player, 0,2,0
+	TurnEntity player, 0,90,0
+	EntityColor player, 255,0,0
+	EntityType player,C_PLAYER
+	EntityRadius player, 1 
+	
+	camera = CreateCamera()
+	
+	PositionEntity camera, -200,50,-200
+	PointEntity camera, player
+		
+	light = CreateLight()
+	RotateEntity light, 60,30,0
+	
+	texture = QuickTexture()	
+		
+	Repeat
+		
+		DoWireFrame(17)						 			;W for wireframe
+		
+		If (KeyDown(200)) MoveEntity player, 0,0,1		;Up arrow	
+		If (KeyDown(208)) MoveEntity player, 0,0,-1		;Down arrow
+		If (KeyDown(203)) TurnEntity player, 0,2,0		;Left arrow
+		If (KeyDown(205)) TurnEntity player, 0,-2,0		;Right arrow
+		If (KeyDown(57 )) MoveEntity player, 0,1.4, 0	;Space to jump
+		
+		SuperCam(camera,player,0.5,12,5,0,2)
+
+		MoveEntity player, 0, g_gravity, 0
+				
+		UpdateWorld()
+		
+						
+		
+		RenderWorld()
+		
+		
+		Occlusion_Update(EntityX(player),EntityY(player),EntityZ(player))
+		
+		Text 5,5, "Triangles Rendered: " + TrisRendered()
+		
+		Flip
+		
+	Until KeyHit(1)
+	
+	Occlusion_ClearAll()
+	
+	FreeEntity  level
+	FreeTexture texture
+	ClearWorld()
+	End
+
+End Function
+
+
+
+
+</textarea><br><br>Any help would be much appreciated.<br><br>Regards,<br><br>Rogue Vector <br><br></td></tr></table><br>
+<a name="462350"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sunteam Software</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I think if your just referring to what is being displayed on the text then replace your Occlusion_Update function with this one (you weren't displaying each line on seperate y axis):<br><br><pre class=code>
+Function Occlusion_Update(v_playerX#, v_playerY#, v_playerZ#)
+
+	Text 5,30, "X: " + v_playerX
+	Local n=0
+
+	For g_current_zone = Each TZone
+		
+		If (IsInsideZone(v_playerX, v_playerY, v_playerZ, g_current_zone)) 
+			n=n+1
+			Text 5, 60+(n*20), "Zone name: " + g_current_zone\name
+			
+			
+			;**** TEMPORARILY DE-ACTIVATED UNTIL CORRECT ZONE IS SHOWN ON SCREEN ****
+			
+			; HAVEN'T BEEN ABLE TO TEST THIS BIT YET.
+			
+			;If Not(g_last_zone = Handle g_current_zone)
+					
+			;	HideAllZones()
+				
+			;	ShowEntity g_current_zone\entity
+				
+			;	For l_index = 0 To VIS_MAX_ZONES
+				
+			;		ShowEntity 	g_current_zone\can_see[l_index]
+					
+			;	Next
+				
+			;	g_last_zone = Handle g_current_zone
+				
+			;	Exit
+			
+			;EndIf
+			
+			; ***********************************************************************
+								
+		EndIf
+
+	Next
+
+End Function
+
+</pre><br><br>Notice the use of local var n. <br><br></td></tr></table><br>
+<a name="462688"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Rogue Vector</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Okay!<br><br>But the problem is with the bounding boxes.<br><br>They're supposed to encapsulate each of the rooms.<br><br>The system uses the bounding box to determine if the player is inside a particular room.<br><br>It hides the rooms that cannot be seen based on this determination.<br><br>It looks like the scale and alignment of the bounding boxes doesn't match the scale and alignment of the level geometry.<br><br><br>Regards,<br><br>Rogue Vector <br><br></td></tr></table><br>
+<a name="462693"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sunteam Software</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sorry but I must be missing something, how can you tell. It doesn't appear that your displaying the bounding boxes so I can't see how you know if it's working or not.<br><br>tis early in the morning (for me), so if I'm missing the obvious then please tell me. but help me to help you :) <br><br></td></tr></table><br>
+<a name="462715"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Rogue Vector</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> The bounding boxes are defined mathematically when the level map is loaded.<br><br>They don't exist as 3D objects.<br><br>They are described using the following numerical values:<br><br>    [min_X, max_X], [min_Y, max_Y], [min_Z, max_Z]<br><br>They are stored in the TZone object.<br><br>It is the calculation of these values that seems to be wrong.<br><br>But I can't see where I've gone wrong.<br><br><br>Regards,<br><br>Rogue Vector <br><br></td></tr></table><br>
+<a name="462739"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> You need to create the bounding boxes by parsing all vertices and get their true world coordinates trough TFormPoint. At least that's what I do with water zones and it seems to work, even with scaled levels.<br><br>I TForm them before I check them for Min/Max and then store them in an array, and in the inside-zone-check I don't have to TFormPoint anymore. <br><br></td></tr></table><br>
+<a name="462798"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sunteam Software</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ah I see, jfk is right, use tformpoint to convert the vertices to 3dworld coords first... i.e.:<br><br><pre class=code>TFormPoint VertexX#(surface, m),VertexY#(surface, m),VertexZ#(surface, m),zone\entity,0</pre><br><br>Then use TFormedX#,TFormedY#,TFormedZ# to get the transformed coords.<br><br>Hope that helps. <br><br></td></tr></table><br>
+<a name="463003"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >N</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just posting what I wrote in the case it might help you.  I'm afraid that I don't have the time to go over it all, but since you wrote your own occlusion system you might get it.<br><br>Portals. (E.g., what Quake 1/2/3 use, except you have to place the portals yourself or write your own code to generate them and split the meshes accordingly.)<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;#Region DESCRIPTION
+	;; An alternative to the simple occlusion provided by the default Vein Scene Manager
+	;; You have to set up the portal polygons yourself in whichever map editor you use
+	;; Do NOT pass SceneManager nodes to the portal functions, they are NOT the same
+;#End Region
+
+;#Region CLASSES
+	Type Portal
+		Field Polygon				;; The portal mesh (contains a polygon with the mesh that defines the portal)
+		Field AABB.Cube			;; Portal axially aligned bounding box, used for determining visibility
+		Field NodeA.PortalNode		;; A portal can only connect two nodes
+		Field NodeB.PortalNode
+		Field R,G,B
+		Field Name$
+	End Type
+	
+	Global PortalDebugCount = 0
+	
+	Type PortalNode
+		Field Traversed
+		Field Node
+		Field AABB.Cube			;; The node's axially aligned bounding box- used to determine if the view is in the node
+		Field Portals				;; Stack of portals
+		Field Visible
+	End Type
+	
+	Global PortalRange = 2
+;#End Region
+
+;#Region PROCEDURES
+	Function CreatePortal(Mesh,NodeA,NodeB)
+		p.Portal = New Portal
+		p\Polygon = Mesh
+		EntityColor p\Polygon,127+Rand(127),127+Rand(127),127+Rand(127)
+		EntityAlpha p\Polygon,.5
+		EntityFX p\Polygon,1+16
+		p\AABB = GetMeshAABB(Mesh,1)
+		p\NodeA = Object.PortalNode(NodeA)
+		p\NodeB = Object.PortalNode(NodeB)
+		PushObject p\NodeA\Portals,Handle(p)
+		PushObject p\NodeB\Portals,Handle(p)
+		HideEntity Mesh
+		PortalDebugCount = PortalDebugCount + 1
+		p\Name = PortalDebugCount
+		p\R = Rand(4,14)*18
+		p\G = Rand(4,14)*18
+		p\B = Rand(4,14)*18
+		Return Handle(p)
+	End Function
+	
+	Function FreePortal(Portal)
+		p.Portal = Object.Portal(Portal)
+		
+		For n.PortalNode = Each PortalNode
+			For i = 0 To Objects(n\Portals)-1
+				hand = GetObjectI(n\Portals,i)
+				If hand = Portal Then
+					GetObject(n\Portals,i,1)
+					Exit
+				EndIf
+			Next
+		Next
+		
+		FreeEntity p\Polygon
+		FreeCube p\AABB
+		Delete p
+	End Function
+	
+	Function CreatePortalNode(Mesh)
+		p.PortalNode = New PortalNode
+		p\AABB = GetMeshAABB(Mesh)
+		p\Portals = CreateStack()
+		p\Node = Mesh
+		Return Handle(p)
+	End Function
+	
+	Function FreePortalNode(Node,FreeContent=1)
+		p.PortalNode = Object.PortalNode(Node)
+		If FreeContent Then FreeEntity p\Node
+		FreeCube p\AABB
+		FreeStack p\Portals
+		Delete p
+	End Function
+	
+	Function UpdatePortals(Camera)
+		For n.PortalNode = Each PortalNode
+			HideEntity n\Node
+			n\Visible = 0
+			n\Traversed = 0
+		Next
+		
+		x# = EntityX(Camera,1)
+		y# = EntityY(Camera,1)
+		z# = EntityZ(Camera,1)
+		
+		For n.PortalNode = Each PortalNode
+			If PointInCube(x,y,z,n\AABB) Then
+				IteratePortals(Camera,n,Null,PortalRange)
+				Done=1
+			EndIf
+		Next
+		
+		If Done Then Return 1
+		
+		For n.PortalNode = Each PortalNode
+			ShowEntity n\Node
+			n\Visible = 1
+		Next
+		
+		Return 2
+	End Function
+	
+	Function IteratePortals(Camera,p.PortalNode,par.Rectangle,Range)
+		If p\Traversed = 1 Then
+			Return
+		EndIf
+		
+		If par = Null Then
+			par = New Rectangle
+			par\x = 0
+			par\y = 0
+			par\width = GraphicsWidth()
+			par\height = GraphicsHeight()
+			nsd = 1
+		EndIf
+		
+		p\Traversed = 1
+		
+		If Range &lt;= 0 Then
+			Return
+		EndIf
+		ShowEntity p\Node
+		
+		For n = 0 To Objects(p\Portals)-1
+			i.Portal = Object.Portal(GetObject(p\Portals,n))
+			r.Rectangle = AABBToScreen(Camera,i\AABB\Position\X,i\AABB\Position\Y,i\AABB\Position\Z,i\AABB\Size\Width,i\AABB\Size\Height,i\AABB\Size\Depth)
+			
+			If RectsOverlap(r\x,r\y,r\width,r\height,par\x,par\y,par\width,par\height) And r\Onscreen &gt; 0 Then
+				If r\x &lt; par\x Then
+					d = par\x-r\x
+					r\x = r\x + d
+					r\width = r\width - d
+				EndIf
+				
+				If r\x + r\width &gt; par\x + par\width Then
+					d = (r\x + r\width) - (par\x + par\width)
+					r\width = r\width + d
+				EndIf
+				
+				If r\y &lt; par\y Then
+					d = r\y - par\y
+					r\y = r\y + d
+					r\height = r\height - d
+				EndIf
+				
+				If r\y + r\Height &gt; par\y + par\height Then
+					d = (r\y + r\height) - (par\y + par\height)
+					r\height = r\height + d
+				EndIf
+				
+				If p = i\NodeA Then
+					IteratePortals(Camera,i\NodeB,r,Range-1)
+				ElseIf p = i\NodeB
+					IteratePortals(Camera,i\NodeA,r,Range-1)
+				EndIf
+			EndIf
+			
+			Delete r
+		Next
+		
+		If nsd Then Delete par
+	End Function
+	
+	Function ShowPortals()
+		For p.Portal = Each Portal
+			ShowEntity p\Polygon
+		Next
+	End Function
+	
+	Function HidePortals()
+		For p.Portal = Each Portal
+			HideEntity p\Polygon
+		Next
+	End Function
+;#End Region
+</textarea><br><br>A simple bounding box one. (Similar to what you're doing, I think.)<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;#Region DESCRIPTION
+	;; Scene node culling system
+;#End Region
+
+;#Region CLASSES
+	Type SceneNode
+		Field MinCube.Vector
+		Field MaxCube.Vector
+		Field Cube
+		Field Adjacent
+		Field Root
+		Field Visible
+	End Type
+	
+	Global NodeRange = 2
+;#End Region
+
+;#Region PROCEDURES
+	Function CreateSceneNode()
+		s.SceneNode = New SceneNode
+		s\MinCube = Vector(9999,9999,9999)
+		s\MaxCube = Vector(-9999,-9999,-9999)
+		s\Root = CreatePivot()
+		NameEntity(CreateCube(s\Root),"_NODEOCCLUDER")
+		s\Adjacent = CreateStack()
+		NameEntity s\Root,Handle(s)
+		
+		Return s\Root
+	End Function
+	
+	Function AddEntityToNode(Node,Entity)
+		s.SceneNode = Object.SceneNode(EntityName(Node))
+		
+		If Upper(EntityClass(Entity)) = "MESH" Then
+			For n = 1 To CountSurfaces(Entity)
+				surf = GetSurface(Entity,n)
+				For i = 0 To CountVertices(surf)-1
+					x# = VertexX(surf,i)
+					y# = VertexY(surf,i)
+					z# = VertexZ(surf,i)
+					
+					TFormPoint x,y,z,Entity,0
+					
+					If x &lt; s\MinCube\X Then s\MinCube\X = x
+					If x &gt; s\MaxCube\X Then s\MaxCube\X = x
+					
+					If y &lt; s\MinCube\y Then s\MinCube\y = y
+					If y &gt; s\MaxCube\y Then s\MaxCube\y = y
+					
+					If z &lt; s\MinCube\z Then s\MinCube\z = z
+					If z &gt; s\MaxCube\z Then s\MaxCube\z = z
+				Next
+			Next
+			
+			CreateMeshBox(Entity)
+		Else
+			x# = EntityX(Entity,1)
+			y# = EntityY(Entity,1)
+			z# = EntityZ(Entity,1)
+			
+			If x &lt; s\MinCube\X Then s\MinCube\X = x
+			If x &gt; s\MaxCube\X Then s\MaxCube\X = x
+			
+			If y &lt; s\MinCube\y Then s\MinCube\y = y
+			If y &gt; s\MaxCube\y Then s\MaxCube\y = y
+			
+			If z &lt; s\MinCube\z Then s\MinCube\z = z
+			If z &gt; s\MaxCube\z Then s\MaxCube\z = z
+		EndIf
+		
+		EntityBox FindChild(s\Root,"_NODEOCCLUDER"),s\MaxCube\X,s\MaxCube\Y,s\MaxCube\Z,s\MinCube\X-s\MaxCube\X,s\MinCube\Y-s\MaxCube\Y,s\MinCube\Z-s\MaxCube\Z
+		
+		EntityParent Entity,s\Root
+	End Function
+	
+	Function AddAdjacentNode(NodeA,NodeB)
+		a.SceneNode = Object.SceneNode(EntityName(NodeA))
+		b.SceneNode = Object.SceneNode(EntityName(NodeB))
+		
+		PushObject b\Adjacent,NodeA
+		PushObject a\Adjacent,NodeB
+	End Function
+	
+	Function SetNodeBoundaries(Node,MinX#,MinY#,MinZ#,MaxX#,MaxY#,MaxZ#)
+		s.SceneNode = Object.SceneNode(EntityName(Node))
+		If s = Null Then Return 0
+		Delete s\MinCube
+		Delete s\MaxCube
+		s\MinCube = Vector(MinX,MinY,MinZ)
+		s\MaxCube = Vector(MaxX,MaxY,MaxZ)
+		Return 1
+	End Function
+	
+	Function EntityInsideNode(Entity,Node)
+		s.SceneNode = Object.SceneNode(EntityName(Node))
+		If s = Null Then Return 0
+		
+		TFormPoint 0,0,0,Entity,s\Root
+		
+		x# = TFormedX()
+		y# = TFormedY()
+		z# = TFormedZ()
+		
+		Return ( x &gt; s\MinCube\X And x &lt; s\MaxCube\X And y &gt; s\MinCube\Y And y &lt; s\MaxCube\Y And z &gt; s\MinCube\Z And z &lt; s\MaxCube\Z )
+	End Function
+	
+	Function UpdateSceneNodes(Camera)
+		For s.SceneNode = Each SceneNode
+			HideEntity s\Root
+			s\Visible = 0
+		Next
+		
+		For s.SceneNode = Each SceneNode
+			If EntityInsideNode(Camera,s\Root)
+				Cube = FindChild(s\Root,"_NODEOCCLUDER")
+				For c = 1 To CountChildren(s\Root)
+					child = GetChild(s\Root,c)
+					If Child &lt;&gt; Cube Then
+						If EntityInView(Child,Camera)=0 Then HideEntity child
+					EndIf
+				Next
+				SetNodesVisible(Camera,s\Root,NodeRange)
+				Return
+			EndIf
+		Next
+		
+		For s.SceneNode = Each SceneNode
+			ShowEntity s\Root
+			HideEntity FindChild(s\Root,"_NODEOCCLUDER")
+		Next
+	End Function
+	
+	Function NodeVisible(Node)
+		s.SceneNode = Object.SceneNode(EntityName(Node))
+		If s = Null Then Return 0
+		Return s\Visible
+	End Function
+	
+	Function GetNodeRoot(Node)
+		s.SceneNode = Object.SceneNode(EntityName(Node))
+		If s = Null Then Return 0
+		Return s\Root
+	End Function
+	
+	Function SetNodesVisible(Camera,Node,Range=2)
+		s.SceneNode = Object.SceneNode(EntityName(Node))
+		If s = Null Then Return 0
+		
+		Cube = FindChild(Node,"_NODEOCCLUDER")
+		
+		If Cube = 0 Then
+			rt$ = "ERROR: _NODEOCCLUDER was not found in child list"+Chr(10)+Chr(10)+"Children:"
+			For c = 1 To CountChildren(Node)
+				name$ = EntityName(GetChild(Node,c))
+				If name$ = "" Then name$ = "NONAME"
+				rt$ = rt$ + Chr(10) + name$ + "  :  " + GetChild(Node,c)
+			Next
+			If CountChildren(Node) = 0 Then rt$ = rt$ + Chr(10) + "None"
+			RuntimeError rt$
+		EndIf
+		
+		EntityParent Cube,0
+		ShowEntity Cube
+		
+		If EntityInView(Cube,Camera) = 1 Or Range=NodeRange Then
+			ShowEntity s\Root
+			s\Visible = 1
+			
+			HideEntity Cube
+			EntityParent Cube,s\Root
+			
+			For i = 0 To (Objects(s\Adjacent)*(Range-1 &gt; 0))-1
+				SetNodesVisible(Camera,GetObjectI(s\Adjacent,i),Range-1)
+			Next
+			
+			Return
+		EndIf
+		
+		HideEntity Cube
+		EntityParent Cube,s\Root
+		Return
+	End Function
+;#End Region
+</textarea><br><br>Math code needed for both of them.<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;#Region DESCRIPTION
+	;; Math functions, Vector class taken from the Anima engine (written by me)
+;#End Region
+
+;#Region CLASSES
+	Type Vector
+		Field X#
+		Field Y#
+		Field Z#
+	End Type
+	
+	Type Size
+		Field Width#
+		Field Height#
+		Field Depth#
+	End Type
+	
+	Type Cube
+		Field Position.Vector
+		Field Size.Size
+	End Type
+	
+	Type Rectangle
+		Field X,Y,Width,Height
+		Field Onscreen
+	End Type
+;#End Region
+
+;#Region PROCEDURES
+	Function Size.Size(Width#=0,Height#=0,Depth#=0)
+		Local s.Size = New Size
+		s\Width = Width
+		s\Height = Height
+		s\Depth = Depth
+		Return s
+	End Function
+	
+	Function Vector.Vector(X#=0,Y#=0,Z#=0)
+		Local v.Vector = New Vector
+		v\X = X
+		v\Y = Y
+		v\Z = Z
+		Return v
+	End Function
+	
+	Function VectorAdd(a.Vector,b.Vector)
+		a\X =a\X + b\X
+		a\Y =a\Y + b\Y
+		a\Z =a\Z + b\Z
+	End Function
+	
+	Function VectorSubtract(a.Vector,b.Vector)
+		a\X =a\X - b\X
+		a\Y =a\Y - b\Y
+		a\Z =a\Z - b\Z
+	End Function
+	
+	Function VectorSum.Vector(a.Vector,b.Vector)
+		Return Vector(a\X+b\X,a\Y+b\Y,a\Z+b\Z)
+	End Function
+	
+	Function VectorDifference.Vector(a.Vector,b.Vector)
+		Return Vector(a\X-b\X,a\Y-b\Y,a\Z-b\Z)
+	End Function
+	
+	Function VectorMultiply(a.Vector,b.Vector)
+		a\X =a\X * b\X
+		a\Y =a\Y * b\Y
+		a\Z =a\Z * b\Z
+	End Function
+	
+	Function VectorDivide(a.Vector,b.Vector)
+		a\X =a\X / b\X
+		a\Y =a\Y / b\Y
+		a\Z =a\Z / b\Z
+	End Function
+	
+	Function VectorProduct.Vector(a.Vector,b.Vector)
+		Return Vector(a\X*b\X,a\Y*b\Y,a\Z*b\Z)
+	End Function
+	
+	Function VectorQuotient.Vector(a.Vector,b.Vector)
+		Return Vector(a\X/b\X,a\Y/b\Y,a\Z/b\Z)
+	End Function
+	
+	Function VectorCross.Vector(a.Vector,b.Vector)
+		Return Vector( (a\Y*b\Z)-(a\Z*b\Y), (a\Z*b\X)-(a\X*b\Z), (a\X*b\Y)-(a\Y*b\X) )
+	End Function
+	
+	Function VectorDot#(a.Vector,b.Vector)
+		Return (a\X*b\X) + (a\Y*b\Y) + (a\Z*b\Z)
+	End Function
+	
+	Function VectorAngle#(a.Vector,b.Vector)
+		Local d# = VectorDot(a,b)
+		Local m# = VectorMagnitude(a)*VectorMagnitude(b)
+		Return ACos(d#/m#)
+	End Function
+	
+	Function VectorNormalize(a.Vector)
+		Local m# = VectorMagnitude(a)
+		a\X = a\X / m#
+		a\Y = a\Y / m#
+		a\Z = a\Z / m#
+	End Function
+	
+	Function VectorMagnitude#(a.Vector)
+		Return Sqr(a\X*a\X + a\Y*a\Y + a\Z*a\Z)
+	End Function
+	
+	Function VectorScale(a.Vector,b#)
+		a\X = a\X * b#
+		a\Y = a\Y * b#
+		a\Z = a\Z * b#
+	End Function
+	
+	Function VectorSDivide(a.Vector,b#)
+		a\X = a\X / b#
+		a\Y = a\Y / b#
+		a\Z = a\Z / b#
+	End Function
+	
+	Function MinF#(A#,B#)
+		If A &lt; B Then Return B
+		Return A
+	End Function
+	
+	Function MinI%(A%,B%)
+		If A &lt; B Then Return B
+		Return A
+	End Function
+	
+	Function MaxF#(A#,B#)
+		If A &gt; B Then Return B
+		Return A
+	End Function
+	
+	Function MaxI%(A%,B%)
+		If A &gt; B Then Return B
+		Return A
+	End Function
+	
+	Function ConstrictF#(A#,B#,C#)
+		If A &gt; C Then
+			While A &gt; C
+				A = A - (C-B)
+			Wend
+		ElseIf A &lt; B Then
+			While A &lt; B
+				A = A + (C-B)
+			Wend
+		EndIf
+		Return A
+	End Function
+	
+	Function ConstrictI#(A%,B%,C%)
+		If A &gt; C Then
+			While A &gt; C
+				A = A - (C-B)
+			Wend
+		ElseIf A &lt; B Then
+			While A &lt; B
+				A = A + (C-B)
+			Wend
+		EndIf
+		Return A
+	End Function
+	
+	Function PointInRect(PX,PY,RX,RY,W,H)
+		Return (PX &gt;= RX) And (PY &gt;= RY) And (PX &lt;= RX+W) And (PY &lt;= RY+H)
+	End Function
+	
+	Function NearestPower(N#)
+		v# = 1
+		While N# &gt; v#
+			v# = v# * 2
+		Wend
+		k# = v# - N#
+		Return v/(1 Or (k# &gt; v/4))
+	End Function
+	
+	Function GetCube.Cube(Camera,x#,y#,z#,sx#,sy#,sz#)
+		Local MinX=9999,MinY=9999,MaxX=-9999,MaxY=-9999,MaxZ=-9999
+		
+		Local c = Camera
+		
+		CameraProject c,x,y,z
+		px = ProjectedX()
+		py = ProjectedY()
+		pz = ProjectedZ()
+		
+		If px &lt; MinX Then MinX = px
+		If py &lt; MinY Then MinY = py
+		If px &gt; MaxX Then MaxX = px
+		If py &gt; MaxY Then MaxY = py
+		If pz &gt; MaxZ Then MaxZ = pz
+		
+		CameraProject c,sx,y,z
+		px = ProjectedX()
+		py = ProjectedY()
+		pz = ProjectedZ()
+		
+		If px &lt; MinX Then MinX = px
+		If py &lt; MinY Then MinY = py
+		If px &gt; MaxX Then MaxX = px
+		If py &gt; MaxY Then MaxY = py
+		If pz &gt; MaxZ Then MaxZ = pz
+		
+		CameraProject c,sx,y,sz
+		px = ProjectedX()
+		py = ProjectedY()
+		pz = ProjectedZ()
+		
+		If px &lt; MinX Then MinX = px
+		If py &lt; MinY Then MinY = py
+		If px &gt; MaxX Then MaxX = px
+		If py &gt; MaxY Then MaxY = py
+		If pz &gt; MaxZ Then MaxZ = pz
+		
+		CameraProject c,x,y,sz
+		px = ProjectedX()
+		py = ProjectedY()
+		pz = ProjectedZ()
+		
+		If px &lt; MinX Then MinX = px
+		If py &lt; MinY Then MinY = py
+		If px &gt; MaxX Then MaxX = px
+		If py &gt; MaxY Then MaxY = py
+		If pz &gt; MaxZ Then MaxZ = pz
+		
+		CameraProject c,x,sy,z
+		px = ProjectedX()
+		py = ProjectedY()
+		pz = ProjectedZ()
+		
+		If px &lt; MinX Then MinX = px
+		If py &lt; MinY Then MinY = py
+		If px &gt; MaxX Then MaxX = px
+		If py &gt; MaxY Then MaxY = py
+		If pz &gt; MaxZ Then MaxZ = pz
+		
+		CameraProject c,sx,sy,z
+		px = ProjectedX()
+		py = ProjectedY()
+		pz = ProjectedZ()
+		
+		If px &lt; MinX Then MinX = px
+		If py &lt; MinY Then MinY = py
+		If px &gt; MaxX Then MaxX = px
+		If py &gt; MaxY Then MaxY = py
+		If pz &gt; MaxZ Then MaxZ = pz
+		
+		CameraProject c,sx,sy,sz
+		px = ProjectedX()
+		py = ProjectedY()
+		pz = ProjectedZ()
+		
+		If px &lt; MinX Then MinX = px
+		If py &lt; MinY Then MinY = py
+		If px &gt; MaxX Then MaxX = px
+		If py &gt; MaxY Then MaxY = py
+		If pz &gt; MaxZ Then MaxZ = pz
+		
+		CameraProject c,x,sy,sz
+		px = ProjectedX()
+		py = ProjectedY()
+		pz = ProjectedZ()
+		
+		If px &lt; MinX Then MinX = px
+		If py &lt; MinY Then MinY = py
+		If px &gt; MaxX Then MaxX = px
+		If py &gt; MaxY Then MaxY = py
+		If pz &gt; MaxZ Then MaxZ = pz
+		
+		i.Cube = New Cube
+		i\Position = Vector(MinX,MinY,-1)
+		i\Size = Size(MaxX-MinX,MaxY-MinY,MaxZ)
+		Return i
+	End Function
+	
+	Function CubeInCamera(Camera,x#,y#,z#,sx#,sy#,sz#)
+		Local c = Camera
+		Local MinX=9999,MinY=9999,MaxX=-9999,MaxY=-9999
+		
+		CameraProject c,x,y,z
+		px = ProjectedX()
+		py = ProjectedY()
+		If ProjectedZ() &gt;= 1 Then
+			If px &lt; MinX Then MinX = px
+			If px &gt; MaxX Then MaxX = px
+			If py &lt; MinY Then MinY = py
+			If py &gt; MaxY Then MaxY = py
+		EndIf
+		z = z + ProjectedZ()
+		
+		CameraProject c,sx,y,z
+		px = ProjectedX()
+		py = ProjectedY()
+		If ProjectedZ() &gt;= 1 Then
+			If px &lt; MinX Then MinX = px
+			If px &gt; MaxX Then MaxX = px
+			If py &lt; MinY Then MinY = py
+			If py &gt; MaxY Then MaxY = py
+		EndIf
+		z = z + ProjectedZ()
+		
+		CameraProject c,sx,y,sz
+		px = ProjectedX()
+		py = ProjectedY()
+		If ProjectedZ() &gt;= 1 Then
+			If px &lt; MinX Then MinX = px
+			If px &gt; MaxX Then MaxX = px
+			If py &lt; MinY Then MinY = py
+			If py &gt; MaxY Then MaxY = py
+		EndIf
+		z = z + ProjectedZ()
+		
+		CameraProject c,x,y,sz
+		px = ProjectedX()
+		py = ProjectedY()
+		If ProjectedZ() &gt;= 1 Then
+			If px &lt; MinX Then MinX = px
+			If px &gt; MaxX Then MaxX = px
+			If py &lt; MinY Then MinY = py
+			If py &gt; MaxY Then MaxY = py
+		EndIf
+		z = z + ProjectedZ()
+		
+		CameraProject c,x,sy,z
+		px = ProjectedX()
+		py = ProjectedY()
+		If ProjectedZ() &gt;= 1 Then
+			If px &lt; MinX Then MinX = px
+			If px &gt; MaxX Then MaxX = px
+			If py &lt; MinY Then MinY = py
+			If py &gt; MaxY Then MaxY = py
+		EndIf
+		z = z + ProjectedZ()
+		
+		CameraProject c,sx,sy,z
+		px = ProjectedX()
+		py = ProjectedY()
+		If ProjectedZ() &gt;= 1 Then
+			If px &lt; MinX Then MinX = px
+			If px &gt; MaxX Then MaxX = px
+			If py &lt; MinY Then MinY = py
+			If py &gt; MaxY Then MaxY = py
+		EndIf
+		z = z + ProjectedZ()
+		
+		CameraProject c,sx,sy,sz
+		px = ProjectedX()
+		py = ProjectedY()
+		If ProjectedZ() &gt;= 1 Then
+			If px &lt; MinX Then MinX = px
+			If px &gt; MaxX Then MaxX = px
+			If py &lt; MinY Then MinY = py
+			If py &gt; MaxY Then MaxY = py
+		EndIf
+		z = z + ProjectedZ()
+		
+		CameraProject c,x,sy,sz
+		px = ProjectedX()
+		py = ProjectedY()
+		If ProjectedZ() &gt;= 1 Then
+			If px &lt; MinX Then MinX = px
+			If px &gt; MaxX Then MaxX = px
+			If py &lt; MinY Then MinY = py
+			If py &gt; MaxY Then MaxY = py
+		EndIf
+		z = z + ProjectedZ()
+		Stop
+		If z &lt;= 0 Then Return
+		
+		Return RectsOverlap(0,0,GraphicsWidth(),GraphicsHeight(),MinX,MinY,maxx-minx,maxy-miny)
+	End Function
+	
+	Function GetMeshAABB.Cube(Mesh,glbl=1)
+		c.Cube = New Cube
+		c\Position = Vector()
+		c\Size = Size()
+		
+		Local min#[3]
+		Local max#[3]
+		
+		For x# = 0 To 3
+			min[x] = 65536
+			max[x] = -65536
+		Next
+		
+		Local MX = 1
+		Local MY = 2
+		Local MZ = 3
+		
+		For surfaces = 1 To CountSurfaces(Mesh)
+			s = GetSurface(Mesh,surfaces)
+			For i = 0 To CountVertices(s)-1
+				x# = VertexX(s,i)
+				y# = VertexY(s,i)
+				z# = VertexZ(s,i)
+				
+				If glbl Then
+					TFormPoint x,y,z,Mesh,0
+					x = TFormedX()
+					y = TFormedY()
+					z = TFormedZ()
+				EndIf
+				
+				If x &lt; min[MX] Then min[MX] = x
+				If x &gt; max[MX] Then max[MX] = x
+				
+				If y &lt; min[MY] Then min[MY] = y
+				If y &gt; max[MY] Then max[MY] = y
+				
+				If z &lt; min[MZ] Then min[MZ] = z
+				If z &gt; max[MZ] Then max[MZ] = z
+			Next
+		Next
+		
+		c\Position\x = min[MX]-.1
+		c\Position\y = min[MY]-.1
+		c\Position\z = min[MZ]-.1
+		c\Size\Width = max[MX]-min[MX]+.2
+		c\Size\height = max[MY]-min[MY]+.2
+		c\Size\depth = max[MZ]-min[MZ]+.2
+		Return c
+	End Function
+	
+	Function AABBToScreen.Rectangle(Camera,x#,y#,z#,width#,height#,depth#)
+		r.Rectangle = New Rectangle
+		
+		Local minx=16777215,miny=16777215,maxx=-16777215,maxy=-16777215
+		
+		CameraProject Camera,x,y,z
+		zs = zs + (ProjectedZ() &gt; 0)
+		px = ProjectedX()
+		py = ProjectedY()
+		
+		If px &gt; maxx Then maxx = px
+		If px &lt; minx Then minx = px
+		
+		If py &gt; maxy Then maxy = py
+		If py &lt; miny Then miny = py
+		
+		CameraProject Camera,x+width,y,z
+		zs = zs + (ProjectedZ() &gt; 0)
+		px = ProjectedX()
+		py = ProjectedY()
+		
+		If px &gt; maxx Then maxx = px
+		If px &lt; minx Then minx = px
+		
+		If py &gt; maxy Then maxy = py
+		If py &lt; miny Then miny = py
+		
+		CameraProject Camera,x+width,y,z+depth
+		zs = zs + (ProjectedZ() &gt; 0)
+		px = ProjectedX()
+		py = ProjectedY()
+		
+		If px &gt; maxx Then maxx = px
+		If px &lt; minx Then minx = px
+		
+		If py &gt; maxy Then maxy = py
+		If py &lt; miny Then miny = py
+		
+		CameraProject Camera,x,y,z+depth
+		zs = zs + (ProjectedZ() &gt; 0)
+		px = ProjectedX()
+		py = ProjectedY()
+		
+		If px &gt; maxx Then maxx = px
+		If px &lt; minx Then minx = px
+		
+		If py &gt; maxy Then maxy = py
+		If py &lt; miny Then miny = py
+		
+		CameraProject Camera,x,y+height,z
+		zs = zs + (ProjectedZ() &gt; 0)
+		px = ProjectedX()
+		py = ProjectedY()
+		
+		If px &gt; maxx Then maxx = px
+		If px &lt; minx Then minx = px
+		
+		If py &gt; maxy Then maxy = py
+		If py &lt; miny Then miny = py
+		
+		CameraProject Camera,x+width,y+height,z
+		zs = zs + (ProjectedZ() &gt; 0)
+		px = ProjectedX()
+		py = ProjectedY()
+		
+		If px &gt; maxx Then maxx = px
+		If px &lt; minx Then minx = px
+		
+		If py &gt; maxy Then maxy = py
+		If py &lt; miny Then miny = py
+		
+		CameraProject Camera,x+width,y+height,z+depth
+		zs = zs + (ProjectedZ() &gt; 0)
+		px = ProjectedX()
+		py = ProjectedY()
+		
+		If px &gt; maxx Then maxx = px
+		If px &lt; minx Then minx = px
+		
+		If py &gt; maxy Then maxy = py
+		If py &lt; miny Then miny = py
+		
+		CameraProject Camera,x,y+height,z+depth
+		zs = zs + (ProjectedZ() &gt; 0)
+		px = ProjectedX()
+		py = ProjectedY()
+		
+		If px &gt; maxx Then maxx = px
+		If px &lt; minx Then minx = px
+		
+		If py &gt; maxy Then maxy = py
+		If py &lt; miny Then miny = py
+		
+		r\Onscreen = 1
+		r\x = minx
+		r\y = miny
+		r\width = maxx-minx
+		r\height = maxy-miny
+		
+		Return r
+	End Function
+	
+	Function FreeCube(c.Cube)
+		If c = Null Then Return
+		Delete c\Size
+		Delete c\Position
+		Delete c
+	End Function
+	
+	Function PointInCube(x#,y#,z#,c.Cube)
+		Return (x &gt;= c\Position\X And x &lt;= c\Position\X+c\Size\Width And y =&gt; c\Position\Y And y &lt;= c\Position\Y+c\Size\Height And z =&gt; c\Position\Z And z &lt;= c\Position\Z+c\Size\Depth)
+	End Function
+	
+	Function CreateMeshBox(Entity)
+		Local MinX#,MinY#,MinZ#
+		Local MaxX#,MaxY#,MaxZ#
+		For n = 1 To CountSurfaces(Entity)
+			s = GetSurface(Entity,n)
+			For i = 0 To CountVertices(s)-1
+				x# = VertexX(s,i)
+				y# = VertexY(s,i)
+				z# = VertexZ(s,i)
+				
+				If x &lt; MinX Then MinX = x
+				If x &gt; MaxX Then MaxX = x
+				
+				If y &lt; MinY Then MinY = y
+				If y &gt; MaxY Then MaxY = y
+				
+				If z &lt; MinZ Then MinZ = z
+				If z &gt; MaxZ Then MaxZ = z
+			Next
+		Next
+		EntityBox Entity,MaxX,MaxY,MaxZ,MinX-MaxX,MinY-MaxY,MinZ-MaxZ
+	End Function
+;#End Region
+</textarea><br><br>Stack code needed by both.<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;#Region DESCRIPTION
+	;; Stack sub-system used for organization of objects
+;#End Region
+
+;#Region CLASSES
+	Type Stack
+		Field F.StackObject
+		Field L.StackObject
+		Field Objects%
+	End Type
+	
+	Type StackObject
+		Field Content$
+		Field Class$
+		Field N.StackObject
+		Field P.StackObject
+		Field Parent.Stack
+		Field z
+	End Type
+	
+	Global STACK_Class$
+	Global STACK_Content$
+;#End Region
+
+;#Region PROCEDURES
+	Function CreateStack( )
+		Local s.Stack = New Stack
+		
+		Return Handle( s )
+	End Function
+	
+	Function PushObject( Stack , Content$ , Class$="", ToFront = 0 )
+		Local s.Stack = Object.Stack (Stack )
+		
+		If s = Null Then Return 0
+		
+		Local Index = s\Objects
+		
+		Local i.StackObject = New StackObject
+		
+		i\Content = Content
+		i\Class = Class
+		i\Parent = s
+		
+		If ToFront &lt;= 0 Then
+			Local l.StackObject = s\L
+			If l &lt;&gt; Null Then
+				l\N = i
+				i\P = l
+			EndIf
+			s\L = i
+			If s\F = Null Then s\F = i
+		Else
+			Local f.StackObject = s\F
+			If f &lt;&gt; Null Then
+				f\P = i
+				i\N = f
+			EndIf
+			s\F = i
+			If s\L = Null Then s\L = i
+		EndIf
+		
+		i\Z = s\Objects
+		
+		s\Objects = s\Objects + 1
+		
+		If DEVELOP And LOG_STACK Then DebugLog "Push "+Stack +" "+ Index +" "+ Content
+		
+		Return Index
+	End Function
+	
+	Function PopObject$( Stack , FromFront = 0 )
+		Local s.Stack = Object.Stack( Stack )
+		
+		Local Content$ = "",Class$ = ""
+		
+		If s = Null Then Return Content
+		
+		If FromFront &lt;= 0 Then
+			If s\L = Null Then Return Content
+			
+			Local l.StackObject = s\L
+			
+			If l\P &lt;&gt; Null Then
+				l\P\N = Null
+				s\L = l\P
+			EndIf
+			
+			If s\L = Null Then s\L = s\F
+			
+			Content = l\Content
+			Class = l\Class
+			
+			Delete l
+		Else
+			If s\F = Null Then Return Content
+			
+			Local f.StackObject = s\F
+			
+			If f\P &lt;&gt; Null Then
+				f\N\P = Null
+				s\F = f\N
+			EndIf
+			
+			If s\F = Null Then s\F = s\L
+			
+			Content = f\Content
+			Class = f\Class
+			
+			Delete f
+		EndIf
+		
+		If DEVELOP And LOG_STACK Then DebugLog "Pop "+Stack+" "+Content
+		STACK_Content = Content
+		STACK_Class = Class
+		Return Content
+	End Function
+	
+	Function GetObject$( Stack, Index, RemoveData=0 )
+		Local Content$ = "",Class$ = ""
+		
+		Local s.Stack = Object.Stack( Stack )
+		
+		If s = Null Then Return Content
+		
+		Local i
+		Local f.StackObject = s\F
+		
+		If f = Null Then Return Contents
+		
+		For i = 0 To Index-1
+			If f\N = Null Then Exit
+			f = f\N
+		Next
+		
+		Content = f\Content
+		Class = f\Class
+		
+		If RemoveData &gt; 0 Then
+			If f\N &lt;&gt; Null Then f\N\P = f\P
+			If f\P &lt;&gt; Null Then f\P\N = f\N
+			
+			If s\L = f Then s\L = f\P
+			If s\F = f Then s\F = f\N
+			
+			s\Objects = s\Objects - 1
+			
+			Delete f
+		EndIf
+		
+		If DEVELOP And LOG_STACK Then DebugLog "Get "+Stack+" "+Index+" "+Content+" "+RemoveData
+		
+		STACK_Class = Class
+		STACK_Content = Content
+		
+		Return Content
+	End Function
+	
+	Function GetObjectF#( Stack, Index, RemoveData=0 )
+		Return Float(GetObject(Stack,Index,RemoveData))
+	End Function
+	
+	Function GetObjectI%( Stack, Index, RemoveData=0 )
+		Return Int(GetObject(Stack,Index,RemoveData))
+	End Function
+	
+	Function InsertObject( Stack, At, Content$, Class$="" )
+		Local s.Stack = Object.Stack( Stack )
+		
+		If s = Null Then Return -1
+		
+		Local i
+		Local f.StackObject = s\F
+		
+		If f = Null Then Return PushObject( Stack, Content)
+		
+		For i = 0 To At-1
+			If f\N = Null Then Exit
+			f = f\N
+		Next
+		
+		Local n.StackObject = New StackObject
+		n\Content = Content
+		n\Class = Class
+		n\Parent = s
+		
+		If f &lt;&gt; Null Then
+			n\N = f\N
+			n\P = f
+			f\N = n
+		EndIf
+		
+		s\Objects = s\Objects + 1
+		
+		If DEVELOP And LOG_STACK Then DebugLog "Insert "+Stack+" "+At+" "+Content
+		
+		Return i
+	End Function
+	
+	Function MoveObject( Stack, TakeFrom, MoveTo )
+		Local cont$ = GetObject(Stack,TakeFrom,1)
+		Return InsertObject(Stack, MoveTo-1,cont$,STACK_Class)
+	End Function
+	
+	Function MoveObjectToFront( Stack, Index )
+		Local cont$ = GetObject(Stack,Index,1)
+		Return PushObject(Stack,cont$,1)
+	End Function
+	
+	Function MoveObjectToBack( Stack, Index )
+		Local cont$ = GetObject(Stack,Index,1)
+		Return PushObject(Stack,cont$,0)
+	End Function
+	
+	Function Objects( Stack )
+		Local s.Stack = Object.Stack( Stack )
+		
+		If s = Null Then Return -1
+		
+		Return s\Objects
+	End Function
+	
+	Function FreeStack( Stack )
+		Local s.Stack = Object.Stack( Stack )
+		
+		If s = Null Then Return 0
+		
+		Delete s
+		
+		Local i.StackObject = Null
+		
+		For i = Each StackObject
+			If i\Parent = Null Then
+				Delete i
+			EndIf
+		Next
+		
+		If DEVELOP And LOG_STACK Then DebugLog "Free "+Stack
+		
+		Return 1
+	End Function
+	
+	Function Debug_StackContents(stack)
+		For i = 0 To Objects(stack)-1
+			s$ = s$+" | "+GetObject(stack,i)
+		Next
+		
+;		If Right(s$,2) = "| " Then s$ = Left(s$,Len(s)-3)
+		DebugLog s$
+	End Function
+;#End Region
+</textarea> <br><br></td></tr></table><br>
+<a name="463208"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sunteam Software</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Noel, I'm sure there is some good stuff there, why not put it in the code archives :) <br><br></td></tr></table><br>
+<a name="463211"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Rogue Vector</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> I've implemented the TFormPoint stuff and it has improved the system slightly.<br><br>Here's the latest code for the occlusion system.<br>You'll need to download the test level (see above).<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+; ***************************************************************
+; PROG:   OCCLUSION SYSTEM
+; ETHOS:  Simple and Fast
+; AUTHOR: Rogue Vector
+; DATE:   Friday 5th December 2004 [REVISED]
+
+; **** THERE IS A PROBLEM WITH THIS CODE - NEED HELP ****
+
+; The bounding boxes are totally screwed up and I don't know why.
+
+; ***************************************************************
+
+
+
+; BASIC DESIGN OVERVIEW
+; ---------------------
+
+; The system works by reading the name of each object in the (.b3d) file hierarchy. 
+
+; The zone data is extracted from the name and placed into the TZone data structure.
+
+; The Level Designer determines which zones can be seen from a particular vantage point in the level map.
+
+; He records this data in the object name, before exporting to a (.b3d) file.
+
+; Thus, during run-time, if the player is in zone X, simply get the 'can_see' zones from the TZone data.
+
+; No need for portals.
+
+
+
+
+;CONSTANTS
+Const SUCCESS          = 1
+Const FAILURE          = -1
+Const VIS_FORMAT$      = "[ zone: # vis: # ]"		;The basic format of the vis data, in its simplest form.
+Const VIS_MAX_ZONES    = 10							;The maximum number of zones that can be seen from the current zone.
+Const VIS_STOP_SYMBOL$ = "]"						;End of line (terminator) used when parsing the vis data.
+Const VIS_DELIMITER$   = " "						;Words in the vis data are seperated by this character (i.e. space).
+Const VIS_INFO_START   = 5							;The first vis data begins at the fifth word in.
+Const ZONE_IDENT_START = 3
+
+
+;TYPES
+Type TZone
+
+	Field entity
+	Field name$
+	Field visible
+	Field can_see[VIS_MAX_ZONES]
+	Field max_X#
+	Field max_Y#
+	Field max_Z#
+	Field min_X#
+	Field min_Y#
+	Field min_Z#
+
+End Type 
+
+
+
+;GLOBALS
+Global g_check_format       = True
+Global g_current_zone.TZone = Null
+Global g_last_zone          = 0
+
+
+
+
+;TEST PROGRAM ************************
+Global g_keytimer, g_wireframe, g_time
+Global g_gravity# = -0.5
+runtest("level_map.b3d")	
+;DE-ACTIVATE AS DEFAULT **************
+
+
+
+;FUNCTIONS
+Function Occlusion_Initialise(v_level)
+
+	Local node         = 0
+	Local node_name$   = ""
+	Local token$       = ""
+	Local surface      = 0
+	Local max_surfaces = 0
+	Local vis_index    = VIS_INFO_START
+	
+	;Iterate through every child object in the mesh hierarchy and populate the TZone objects
+	For i = 1 To CountChildren(v_level)
+		
+		;Find the zones in the level mesh hierarchy.
+		node = GetChild(v_level,i)
+		
+		;Get the name of the node.
+		node_name$ = EntityName$(node)
+
+		;Check formatting (SLOW - switched off by default).
+		If (g_check_format) CheckZoneInfoFormat(node_name)
+				
+		;Create zone object to hold data.
+		zone.TZone  = New TZone
+			
+		;Populate object with initial values.
+		zone\entity  = node
+		zone\name    = node_name 
+		zone\visible = True
+		zone\max_X   = 0.0
+		zone\max_Y   = 0.0
+		zone\max_Z   = 0.0
+		zone\min_X   = 0.0
+		zone\min_Y   = 0.0 
+		zone\min_Z   = 0.0
+						
+		;Create a bounding box around the zone.
+		max_surfaces = CountSurfaces(zone\entity)
+			
+		For k=1 To max_surfaces 
+					
+			surface = GetSurface(zone\entity, k)
+			
+			For m = 0 To CountVertices(surface) - 1
+			
+				;Transform points to world (global) space
+				TFormPoint VertexX#(surface, m), VertexY#(surface, m), VertexZ#(surface, m), zone\entity, 0
+				
+				Vx# = TFormedX#()
+				Vy# = TFormedY#()
+				Vz# = TFormedZ#()
+				
+				If (Vx# &gt; zone\max_X) Then zone\max_X = Vx#
+				If (Vy# &gt; zone\max_Y) Then zone\max_Y = Vy#
+				If (Vz# &gt; zone\max_Z) Then zone\max_Z = Vz#
+										
+				If (Vx# &lt; zone\min_X) Then zone\min_X = Vx#
+				If (Vy# &lt; zone\min_Y) Then zone\min_Y = Vy#
+				If (Vz# &lt; zone\min_Z) Then zone\min_Z = Vz#
+					
+			Next
+
+		Next
+							
+		;Check that there is a stopping condition symbol in the zone info string.
+		If Instr(zone\name, VIS_STOP_SYMBOL)
+
+			;Parse initial vis data into the internal array. 
+			token = GetWord(node_name, vis_index, " ")
+							
+			If Not(Int(token) =&gt; 0) RuntimeError("ERROR!... DATA IN VIS ARRAY IS NOT OF THE REQUIRED TYPE.")
+
+			Repeat
+								
+					zone\can_see[vis_index - VIS_INFO_START] = Int(token)
+								
+					vis_index = vis_index + 1
+				
+					token = GetWord(zone\name, vis_index, " ")
+				
+			Until (token = VIS_STOP_SYMBOL)
+
+			;Reset vis array index
+			vis_index = VIS_INFO_START
+
+		Else
+		
+			RuntimeError("ERROR!...VIS DATA FORMAT INCORRECT")
+
+		EndIf
+
+	Next
+			
+	;Modify the data in the internal array. Need to convert the zone numbers to the corresponding entity id's.
+	;This is a preparatory stage to help keep Update function small and fast.
+	Local tmp_entity = 0
+	
+	For l_tmp.TZone = Each TZone
+	
+		For index=0 To VIS_MAX_ZONES
+	
+			tmp_entity = FindEntity(l_tmp\can_see[index])
+			
+			l_tmp\can_see[index] = tmp_entity
+							
+		Next
+	
+	Next
+		
+	;Check formatting of zone data structures.
+	If (g_check_format) CheckZoneDataStructure()
+	
+	
+End Function
+
+
+
+
+
+Function Occlusion_Update(v_playerX#, v_playerY#, v_playerZ#)
+
+	Text 5,30, "X: " + v_playerX
+	Text 5,40, "Y: " + v_playerY
+	Text 5,50, "Z: " + v_playerZ
+	
+	
+	Local n = 0
+
+	For g_current_zone = Each TZone
+		
+		If (IsInsideZone(v_playerX, v_playerY, v_playerZ, g_current_zone)) 
+		
+			n = n + 1
+			
+			Text 5, 70+(n*20), "Zone name: " + g_current_zone\name
+			
+			
+			;**** TEMPORARILY DE-ACTIVATED UNTIL CORRECT ZONE IS SHOWN ON SCREEN ****
+			
+			;If Not(g_last_zone = Handle g_current_zone)
+					
+			;	HideAllZones()
+				
+			;	ShowEntity g_current_zone\entity
+				
+			;	For l_index = 0 To VIS_MAX_ZONES
+				
+			;		ShowEntity 	g_current_zone\can_see[l_index]
+					
+			;	Next
+				
+			;	g_last_zone = Handle g_current_zone
+				
+			;	Exit
+			
+			;EndIf
+			
+			; ***********************************************************************
+								
+		EndIf
+
+	Next
+
+End Function
+
+
+
+
+
+Function Occlusion_ClearAll()
+
+	Local l_tmp.TZone = Null
+	
+	For l_tmp = Each TZone
+	
+		Delete l_tmp
+		
+	Next
+
+	Return SUCCESS
+
+End Function
+
+
+
+
+
+Function FindEntity(v_number)
+
+	Local l_tmp.TZone = Null
+	Local token$      = ""
+	
+	For l_tmp = Each TZone
+	
+		token = GetWord(l_tmp\name, ZONE_IDENT_START, VIS_DELIMITER)
+		If (Int(token) = v_number) Return l_tmp\entity 
+		
+	Next
+
+	Return FAILURE
+
+End Function
+
+
+
+
+
+Function FindZone.TZone(v_number)
+
+	Local l_tmp.TZone = Null
+	Local token$      = ""
+	
+	For l_tmp = Each TZone
+	
+		token = GetWord(l_tmp\name, ZONE_IDENT_START, VIS_DELIMITER)
+		If (Int(token) = v_number) Return l_tmp 
+		
+	Next
+
+	Return Null
+
+End Function
+
+
+
+
+
+Function ZoneToggle(v_number)
+
+	Local l_tmp.TZone = Null
+	Local token$      = ""
+	
+	g_time = MilliSecs()
+	
+	If (g_KeyTimer + 200 &lt; g_time)
+
+		For l_tmp = Each TZone
+		
+			token = GetWord(l_tmp\name, ZONE_IDENT_START, VIS_DELIMITER)
+			
+			If (Int(token) = v_number) 
+			
+				If (l_tmp\visible) 
+				
+					HideEntity l_tmp\entity
+					l_tmp\visible = False
+							
+				Else 
+				
+					ShowEntity l_tmp\entity
+					l_tmp\visible = True
+					
+				EndIf
+			
+			EndIf
+				
+		Next
+
+		g_keyTimer = g_time
+	
+	EndIf
+
+	Return SUCCESS
+
+End Function
+
+
+
+
+
+Function HideAllZones()
+		
+	For l_tmp.TZone = Each TZone
+	
+		For l_index = 0 To MAX_VIS_ZONES
+		
+			HideEntity l_tmp\can_see[l_index]
+			HideEntity l_tmp\entity
+	
+		Next
+	
+	Next
+
+	Return SUCCESS
+
+End Function
+
+
+
+Function EntityAlphaLevel(v_amount#)
+
+	For tmp.TZone = Each TZone
+	
+		EntityAlpha tmp\entity, v_amount
+	
+	Next
+	
+End Function
+
+
+
+
+
+Function CheckZoneInfoFormat(v_name$)
+	
+	Print "CHECKING FORMAT OF VIS DATA"
+		
+	Print "Analysing Zone: [ " + GetWord(v_name, 3, VIS_DELIMITER) + " ]"
+	
+	
+	If  Not(GetWord(v_name, 1 , VIS_DELIMITER) = GetWord(VIS_FORMAT, 1, VIS_DELIMITER)) Then RuntimeError("ERROR!...VIS DATA FORMAT INCORRECT")
+	If  Not(GetWord(v_name, 2 , VIS_DELIMITER) = GetWord(VIS_FORMAT, 2, VIS_DELIMITER)) Then RuntimeError("ERROR!...VIS DATA FORMAT INCORRECT")
+	If  Not(GetWord(v_name, 4 , VIS_DELIMITER) = GetWord(VIS_FORMAT, 4, VIS_DELIMITER)) Then RuntimeError("ERROR!...VIS DATA FORMAT INCORRECT")
+	If  Not(Int(GetWord(v_name, 3 , VIS_DELIMITER)) =&gt; 0) Then RuntimeError("ERROR!...VIS DATA FORMAT INCORRECT")
+	If  Not(Int(GetWord(v_name, 5 , VIS_DELIMITER)) =&gt; 0) Then RuntimeError("ERROR!...VIS DATA FORMAT INCORRECT")
+	
+	Print "        Result: [ PASS ]"
+	Print "------------------------"
+
+	Delay 500
+ 
+	Return SUCCESS
+
+End Function
+
+
+
+
+
+Function CheckZoneDataStructure()
+	
+	Print
+	Print
+	Print "CHECKING ZONE DATA STRUCTURE"
+		
+	For l_tmp.TZone = Each TZone
+	
+		Print "Analysing Zone: [ " + GetWord(l_tmp\name, 3, VIS_DELIMITER) + " ]"
+		Print "  Entity Ident: [ " + Str(l_tmp\entity) + " ]"
+		Print "   BoundingBox: [ max_X = " + Str(l_tmp\max_X) + " ]"		
+		Print "                [ max_Y = " + Str(l_tmp\max_Y) + " ]"
+		Print "                [ max_Z = " + Str(l_tmp\max_Z) + " ]"
+		Print "                [ min_X = " + Str(l_tmp\min_X) + " ]"
+		Print "                [ min_Y = " + Str(l_tmp\min_Y) + " ]"
+		Print "                [ min_Z = " + Str(l_tmp\min_Z) + " ]"
+		
+		For p=0 To VIS_MAX_ZONES
+	
+			If Not(l_tmp\can_see[p] = -1) Print "       Can See: [ " + Str(l_tmp\can_see[p]) + " ]"
+		
+		Next
+		
+		Print "---------------------"
+		
+		;WaitKey
+		Delay 500
+		
+	Next
+
+	Print
+	Print "FINISHED ANALYSIS..."
+	Print
+	Print "HIT A KEY TO CONTINUE"
+	Print
+	
+	Return SUCCESS
+
+End Function
+
+
+
+
+
+Function IsInsideZone%(v_objectspaceX#, v_objectspaceY#, v_objectspaceZ#, v_zone.TZone) 
+
+	If (v_objectspaceX &gt; v_zone\min_X) And (v_objectspaceX &lt; v_zone\max_X) And (v_objectspaceY &gt; v_zone\min_Y) And (v_objectspaceY &lt; v_zone\max_Y) And (v_objectspaceZ &gt; v_zone\min_Z) And (v_objectspaceZ &lt; v_zone\max_Z)
+			
+		Return True
+		
+	Else
+			
+		Return False
+		
+	EndIf
+
+End Function
+
+
+
+
+
+
+Function GetWord$(InputString$, WordNum, Seperators$=" ") ;by sswift
+
+	FoundWord  = False
+	WordsFound = 0
+
+	; Loop through each character in the input string.
+	For CharLoop = 1 To Len(InputString$)
+
+		; Get the character at this location in the string.
+		ThisChar$ = Mid$(InputString$, CharLoop, 1)
+
+		; If the character at this position is one of the characters in the seperator list...
+		If Instr(Seperators$, ThisChar$, 1)
+		
+			; If a word has been started...
+			If FoundWord
+		
+				; ...then this character must mark the end of a word.
+
+				; Increment the number of words we've found.
+				WordsFound = WordsFound + 1
+
+				; Is this word the word we want?
+				If WordsFound = WordNum
+				
+					; Yes!  Exit the function and return the word.
+					Return Word$
+			
+				Else
+				
+					; No.  Discard this word.
+					Word$ = ""
+					FoundWord = False
+				
+				EndIf
+				
+			Else
+			
+				; Ignore this character.  We have either not reached a word yet, or are between words.
+			
+			EndIf				
+					
+		Else
+		
+			; This is not a character in our seperator list.  Add it to our word.
+			FoundWord = True
+			Word$ = Word$ + ThisChar$
+			
+		EndIf
+		
+	Next	
+		
+	; We have finished looking through the string.  Was the last word we were on the one we were looking for?
+	If (WordsFound+1) = WordNum
+
+		; Yes! 
+		; Return the word that at the end of the string which didn't have any seperators after it.
+		Return Word$
+
+	Else
+	
+		; No. 
+		; The word number passed to the function was greater than the number of words in the string. 
+		; Return an empty string.
+		Return ""
+
+	EndIf
+	
+End Function
+
+
+
+
+
+Function QuickTexture()
+
+	tex=CreateTexture(512,512)
+	ScaleTexture tex,.2,.5
+	SetBuffer TextureBuffer(tex)
+	
+	Color 50,50,50
+	
+	Rect 0,0,512,512
+	
+	Color 200,200,200
+	Rect 8,8,496,496
+	
+	Color 255,255,255
+	SetBuffer BackBuffer()
+	 
+	For tmp.TZone = Each TZone
+	
+		EntityTexture tmp\entity, tex 
+			
+	Next
+	
+	Return tex
+	
+End Function
+
+
+
+
+
+Function SuperCam(cam,ent,cspeed#,dist#,hite#,xrot#,tilt#) ;by PsychicParrot
+
+	TFormPoint 0,hite#,-dist#,ent,0
+	
+	cx#=(TFormedX()-EntityX(cam))*cspeed#
+	cy#=(TFormedY()-EntityY(cam))*cspeed#
+	cz#=(TFormedZ()-EntityZ(cam))*cspeed#
+	
+	TranslateEntity cam,cx,cy,cz
+	PointEntity cam,ent
+	RotateEntity cam,xrot#,EntityYaw(cam),tilt#
+	
+End Function
+
+
+
+
+
+Function DoWireFrame(v_key)
+
+	g_time = MilliSecs()
+	
+	If (g_KeyTimer + 200 &lt; g_time)
+
+		If (KeyDown(v_key)) 
+		
+			g_wireFrame = 1 - g_wireFrame
+			WireFrame g_wireFrame
+			g_keyTimer = g_time : Return SUCCESS
+		
+		EndIf
+ 		
+	EndIf
+
+End Function
+
+
+
+
+
+
+Function RunTest(v_level_filename$)
+
+	AppTitle "Occlusion Test Program","Are you sure you want to quit?"
+	Graphics3D 800,600,16,2
+	SetBuffer BackBuffer()
+	
+	C_PLAYER   = 1
+	C_LEVEL	   = 2
+	C_TRIGGER  = 3
+	
+	Collisions C_PLAYER,C_LEVEL,2,2
+	
+	level = LoadAnimMesh(v_level_filename)
+	
+	EntityType level,C_LEVEL,True
+	
+
+	;Initialise Occlusion system
+	Occlusion_Initialise(level)
+		
+	WaitKey
+	
+	player  = CreateSphere(8) ;the player
+	
+	ScaleMesh player, 1,1,1
+	MoveEntity player, 0,2,0
+	TurnEntity player, 0,90,0
+	EntityColor player, 255,0,0
+	EntityType player,C_PLAYER
+	EntityRadius player, 1 
+	
+	camera = CreateCamera()
+	
+	PositionEntity camera, -200,50,-200
+	PointEntity camera, player
+		
+	light = CreateLight()
+	RotateEntity light, 60,30,0
+	
+	texture = QuickTexture()	
+		
+	Repeat
+		
+		DoWireFrame(17)						 			;W for wireframe
+		
+		
+		;DEBUG *********************
+		If (KeyDown(2)) ZoneToggle(2)
+		If (KeyDown(3)) ZoneToggle(3)
+		If (KeyDown(4)) ZoneToggle(4)
+		If (KeyDown(5)) ZoneToggle(5)
+		If (KeyDown(6)) ZoneToggle(6)
+		If (KeyDown(7)) ZoneToggle(7)
+		If (KeyDown(8)) ZoneToggle(8)
+		;***************************
+		
+		
+		
+		If (KeyDown(200)) MoveEntity player, 0,0,1		;Up arrow	
+		If (KeyDown(208)) MoveEntity player, 0,0,-1		;Down arrow
+		If (KeyDown(203)) TurnEntity player, 0,2,0		;Left arrow
+		If (KeyDown(205)) TurnEntity player, 0,-2,0		;Right arrow
+		If (KeyDown(57 )) MoveEntity player, 0,1.4, 0	;Space to jump
+		
+		SuperCam(camera,player,0.5,12,5,0,2)
+
+		MoveEntity player, 0, g_gravity, 0
+				
+		UpdateWorld()
+		
+						
+		
+		RenderWorld()
+		
+		
+		Occlusion_Update(EntityX(player,True),EntityY(player,True),EntityZ(player,True))
+		
+		Text 5,5, "Triangles Rendered: " + TrisRendered()
+		
+		Flip
+		
+	Until KeyHit(1)
+	
+	Occlusion_ClearAll()
+	
+	FreeEntity  level
+	FreeTexture texture
+	ClearWorld()
+	End
+
+End Function
+</textarea><br><br>Zones 1 and 7 are correctly mapped with a bounding box, but for some reason the other (in-between)zones are still messed up.<br><br>Regards,<br><br>Rogue Vector. <br><br></td></tr></table><br>
+<a name="463214"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well if you have overlapping zones, you may have to show multiple zones. And make sure to compare the players position globally. And as I said, use the world locations of the vertices to store min and max xyz (aka bounding box) of the children. oh yes and don't forget to set min to max and max to min before xou start comparing each childs vertices, somethinglike this:<br><br><pre class=code>
+minx=100000
+maxx=-100000
+
+for i=1 to countvertices(s)
+ get vertex locations
+ if x &lt; minx then
+  minx=x
+ endif
+next
+
+store bounding box
+</pre> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

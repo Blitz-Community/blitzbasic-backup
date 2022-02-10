@@ -1,0 +1,156 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Gaussian Blur Filter</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='A true Gaussian blur filter, language=bmx, category=Graphics'><meta name='author' content='Queller'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=1>Graphics</a>/Gaussian Blur Filter</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2364.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Gaussian Blur Filter by Queller</td><td align="right">2008 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This Gaussian Blur filter is simple to use and provides great results without those weird artifacts you get when you use simple box blurs. Setting the radius to something small gives a nice smoothing effect. Naturally, larger radii will take longer to process. Please let me know of any optimizations that can be made! </td></tr><tr ><td class="cell"><pre class="code">'======== Example ========
+
+SuperStrict
+
+Local pix:TPixmap = gaussianblur(LoadPixmap("yourimagehere.png"), 5)
+Local gfx:TGraphics = Graphics(pix.width, pix.height)
+
+DrawPixmap(pix, 0, 0)
+Flip
+WaitMouse()
+
+'====== Example Ends ======
+
+Function gaussianblur:TPixmap(tex:TPixmap, radius:Int)
+	If radius &lt;=0 Return tex
+	Local texclone:TPixmap = tex.copy()			'clone incoming texture
+	Local filter:TGaussianFilter = New TGaussianFilter		'instantiate a new gaussian filter
+		filter.radius = radius					'configure it
+	Return filter.apply(tex, texclone)
+End Function
+
+Type TGaussianFilter
+
+	Field radius:Double
+	Field kernel:TKernel
+	
+	Method apply:TPixmap(src:TPixmap, dst:TPixmap)
+		Self.kernel = makekernel(Self.radius)
+		Self.convolveAndTranspose(Self.kernel, src, dst, PixmapWidth(src), PixmapHeight(src), True)
+		Self.convolveAndTranspose(Self.kernel, dst, src, PixmapHeight(dst), PixmapWidth(dst), True)
+		dst = Null
+		GCCollect()
+		Return src
+	End Method
+
+'Make a Gaussian blur kernel.
+
+	Method makekernel:TKernel(radius:Double)
+		Local r:Int = Int(Ceil(radius))
+		Local rows:Int = r*2+1
+		Local matrix:Double[] = New Double[rows]
+		Local sigma:Double = radius/3.0
+		Local sigma22:Double = 2*sigma*sigma
+		Local sigmaPi2:Double = 2*Pi*sigma
+		Local sqrtSigmaPi2:Double = Double(Sqr(sigmaPi2))
+		Local radius2:Double = radius*radius
+		Local total:Double = 0
+		Local index:Int = 0
+
+		For Local row:Int = -r To r
+			Local distance:Double = Double(row*row)
+			If (distance &gt; radius2)
+				matrix[index] = 0
+			Else
+				matrix[index] = Double(Exp(-(distance/sigma22)) / sqrtSigmaPi2)
+				total:+matrix[index]
+				index:+1
+			End If
+		Next
+
+		For Local i:Int = 0 Until rows
+			matrix[i] = matrix[i]/total			'normalizes the gaussian kernel
+		Next 
+
+		Return mkernel(rows, 1, matrix)
+	End Method
+	
+	Function mkernel:TKernel(w:Int, h:Int, d:Double[])
+		Local k:TKernel = New TKernel
+			k.width = w
+			k.height = h
+			k.data = d
+		Return k
+	End Function
+
+
+	Method convolveAndTranspose(kernel:TKernel, in:TPixmap, out:TPixmap, width:Int, height:Int, alpha:Int)
+		Local inba:Byte Ptr = in.pixels
+		Local outba:Byte Ptr = out.pixels
+		Local matrix:Double[] = kernel.getKernelData()
+		Local cols:Int = kernel.getWidth()
+		Local cols2:Int = cols/2
+		
+		For Local y:Int = 0 Until height
+			Local index:Int = y
+			Local ioffset:Int = y*width
+				For Local x:Int = 0 Until width
+					Local r:Double = 0, g:Double = 0, b:Double = 0, a:Double = 0
+					Local moffset:Int = cols2
+						For Local col:Int = -cols2 To cols2
+							Local f:Double = matrix[moffset+col]
+					If (f &lt;&gt; 0)
+						Local ix:Int = x+col
+						If ( ix &lt; 0 )
+							ix = 0
+						Else If ( ix &gt;= width)
+							ix = width-1
+						End If
+						
+						Local rgb:Int = (Int Ptr inba)[ioffset+ix]
+						a:+f *((rgb Shr 24) &amp; $FF)
+						b:+f *((rgb Shr 16) &amp; $FF)
+						g:+f *((rgb Shr 8) &amp; $FF)
+						r:+f *(rgb &amp; $FF)
+					End If
+				Next
+				Local ia:Int
+					If alpha = True Then ia = clamp(Int(a+0.5)) Else ia = $FF
+				Local ir:Int =clamp( Int(r+0.5))
+				Local ig:Int = clamp(Int(g+0.5))
+				Local ib:Int = clamp(Int(b+0.5))
+				(Int Ptr outba)[index] =((ia Shl 24) | (ib Shl 16) | (ig Shl 8) | (ir Shl 0))
+				index:+height
+				Next
+		Next
+	End Method
+End Type
+
+Type TKernel
+
+	Field width:Int
+	Field height:Int
+	Field data:Double[]
+	
+	Method getkerneldata:Double[]()
+		Return Self.data
+	End Method
+	
+	Method getwidth:Int()
+		Return Self.width
+	End Method
+	
+	Method getheight:Int()
+		Return Self.height
+	End Method
+
+End Type
+
+Function clamp:Int(val:Int)
+If val &lt; 0
+	Return 0
+ElseIf val &gt; 255
+	Return 255
+Else
+	Return val
+EndIf
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jesse</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> works only with rgba images. to work with other formats, replace this line:<br><pre class=code>
+Local pix:TPixmap = gaussianblur(LoadPixmap("yourimagehere.png"), 5)
+</pre><br>with this:<br><pre class=code>
+Local px:TPixmap = LoadPixmap("yourimagehere.png")
+px = ConvertPixmap(px,PF_RGBA8888)
+Local pix:TPixmap = gaussianblur(px, 5)
+</pre><br><br>Works good. Thanks for sharing. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xlsior</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Still can't get this to work: the original errors out, and the modiciation by Jesse only shows a black screen... <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jesse</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> if it is a mac, it might be a little endian big endian thing try replacing PF_RGBA8888 with PF_BGRA8888 <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xlsior</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Nope, just Windows. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jesse</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> xlsior, do you mind posting a link to the image. Maybe I can figure it out as I don't have any problems with the few images I tryed. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xlsior</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> I've tried half a dozen different images, both JPG and PNG, all with the same results: just a black screen until I click the mouse.<br><br>For example: \samples\digesteroids\graphics\digestive.png <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Queller</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> xlsior, your entire screen is black? ... emphasis on entire. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jesse</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> it works fine here 128, 130 and the svn version. <br>possible vista or driver issue? <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xlsior</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> xlsior, your entire screen is black? ... emphasis on entire.  <br></div><br><br>The window that's opened by blitz is black, yes. I can still see my normal desktop around it.<br><br>1.30 SVN version, ATI X1650XT.<br><br>I haven't seen any problems at all with other programs or Blitz sourcecode, this appears to be the only program not operating as expected... <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Queller</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> xlsior, which version of windows? It works fine on XP for me. Perhaps forcing use of DX with:<br><br><pre class=code>
+Framework brl.d3d7max2d
+Import brl.pngloader
+</pre> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xlsior</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Nope, still nothing... Also tried full-screen mode, no change there either. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >markcw</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Works fine on XP with 1.30 and ubuntu with svn using digestive.png. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xlsior</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> I found that this works OK if I add the following to the top of the program: SetGraphicsDriver GLMax2DDriver()<br><br>but without that, it's just a black screen. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

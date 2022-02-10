@@ -1,0 +1,1749 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Multithreaded web server</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='A simple multithreaded web server, language=bmx, category=Networking'><meta name='author' content='BlitzSupport'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=4>Networking</a>/Multithreaded web server</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2482.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Multithreaded web server by BlitzSupport</td><td align="right">2009 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This is an update to an earlier Code Archives entry I made: <a href="/codearcs/codearcs.php?code=621" >BlitzServe</a><br><br>That implementation was heavily restricted by its single-threadedness, meaning it could only serve one file at a time. Even requesting one web page from it would take a long time as each image would have to wait for the previous image to finish transferring.<br><br>Now that BlitzMax supports multithreading, I was finally able to update it to serve multiple files at once.<br><br>I've even tested this over the internet (ie. using a web browser on my brother's PC to connect to my IP address), and it worked fine.<br><br>Note that the Graphics window is just there to receive the closing ESC key hit, allowing the threads to exit properly for this demo -- a real server would probably just be running in an infinite loop. It won't actually cause any harm if you direct ESC to the IDE (which just brutally terminates the program). </td></tr><tr ><td class="cell"><pre class="code">' IMPORTANT: Make sure "Threaded Build" is enabled in the Program -&gt; Build Options menu!
+
+' -----------------------------------------------------------------------------
+' BlitzServe 2 -- a very crude multithreaded HTTP server...
+' -----------------------------------------------------------------------------
+
+SuperStrict
+
+' -----------------------------------------------------------------------------
+' Set this to a folder on your hard drive containing the files to be served:
+' -----------------------------------------------------------------------------
+
+Global folder:String = "C:\Temp\"
+
+' The value below is derived from Win32 -&gt; GetSystemInfo (info:SYSTEM_INFO) -&gt;
+' info.dwAllocationGranularity, the 'ideal' size for optimum read/write speeds
+' in Windows. Later version might report bigger numbers, but this will be fine:
+
+Const OPTIMUM_IO:Int = 65536
+
+' -----------------------------------------------------------------------------
+' To test...
+' -----------------------------------------------------------------------------
+
+' 1) Run the program and launch a web browser;
+
+' 2) In the browser's address bar, type 127.0.0.1 plus the file name, eg.
+
+'		http://127.0.0.1/index.html
+'		http://127.0.0.1/h0tchix.jpg
+
+'	Don't type the folder name!
+
+' 3) If your firewall complains, you need to unblock/allow this program!
+
+' 4) Repeatedly hit F5/Refresh in your browser to see the server handle
+'    cut-off requests (you'll see ERROR: xyz messages).
+
+' -----------------------------------------------------------------------------
+
+' -----------------------------------------------------------------------------
+' OK...
+' -----------------------------------------------------------------------------
+
+AppTitle = "BlitzServe 2..."
+
+' -----------------------------------------------------------------------------
+' Remove trailing slash from server's folder (HTTP GET command prefixes file
+' name with a forward slash)...
+' -----------------------------------------------------------------------------
+
+folder = Replace (folder, "/", "\")
+
+If (Right (folder, 1) = "\")'"/") Or (Right (folder, 1) = "\")	
+	folder = Left (folder, Len (folder) - 1)
+EndIf
+
+If FileType (folder) = 0
+	RuntimeError "Set folder:String to a folder on your computer!"
+EndIf
+
+' -----------------------------------------------------------------------------
+' Print queue for threads -- multiple threads running at the same time will
+' cause corrupted output for Print, so queue within the thread and print all
+' the thread's messages when ready...
+' -----------------------------------------------------------------------------
+
+Type PrintList
+
+	Field list:TList = CreateList ()
+
+	Method Add (info:String)
+		ListAddLast list, info
+	End Method
+
+	Method PrintAll ()
+		For Local i:String = EachIn list
+			Print i
+			ListRemove list, i
+		Next
+	End Method
+
+End Type
+
+' -----------------------------------------------------------------------------
+' Each connection has a socket and an associated stream to read from...
+' -----------------------------------------------------------------------------
+
+Type Connection
+	Field socket:TSocket
+	Field stream:TSocketStream
+End Type
+
+' -----------------------------------------------------------------------------
+' Thread list and mutex for safe access...
+' -----------------------------------------------------------------------------
+
+Global ThreadListMutex:TMutex = CreateMutex ()
+Global ThreadList:TList = CreateList ()
+
+' -----------------------------------------------------------------------------
+' Temporary graphics window...
+' -----------------------------------------------------------------------------
+
+' This is just to allow keyboard input to be captured. Don't press ESC on
+' the IDE output, as that just terminates the program. Press ESC with the
+' graphics window highlighted so the program can close all connections. It won't
+' cause any harm if you don't -- this is just for completeness' sake...
+
+' Note that in real life, this would just be running in an infinite loop
+' so there would be no need to test for ESC!
+
+Graphics 320, 200
+
+' -----------------------------------------------------------------------------
+' Just a local pointer
+' -----------------------------------------------------------------------------
+
+Local thread:TThread
+
+Local threads:Int = 0
+
+' -----------------------------------------------------------------------------
+' Create HTTP server (always on port 80)...
+' -----------------------------------------------------------------------------
+
+Local server:TSocket = CreateTCPSocket ()
+
+If server
+
+	' Bind to port 80...
+	
+	If BindSocket (server, 80)
+
+		' Start listening for incoming connections on port 80...
+		
+		' NOTE: Don't use default 0 for backlog parameter, as this will cause
+		' web pages to fail occasionally. The web browser will be requesting
+		' all the files in any HTML page you request, and a 0-sized backlog
+		' won't process the requests quickly enough. If the backlog isn't
+		' cleared between SocketListen and the call to SocketAccept, the
+		' request will fail, meaning images, etc, fail to display.
+		
+		' 5 is an old Windows standard, but there is lots of disagreement
+		' as to what it should be, and different use scenarios. A server
+		' expecting to be Slashdotted will require a much larger amount,
+		' while a lowly desktop serving local files like this won't need
+		' as much...
+		
+		' More information here:
+		
+		' http://tangentsoft.net/wskfaq/advanced.html#backlog
+		' http://stackoverflow.com/questions/114874/socket-listen-backlog-parameter-how-to-determine-this-value
+		' http://patchwork.kernel.org/patch/2297/
+		
+		SocketListen server, 5
+		
+		Print
+		Print "BlitzServe 2: awaiting incoming connections..."
+		Print
+		Print "Launch your web browser and direct it to http://127.0.0.1/myfilename.html"
+		Print "where myfilename.html is a file inside the folder you specified..."
+		Print ""
+		
+		Repeat
+		
+			' -------------------------------------------------------------------------
+			' See if there's been an incoming connection attempt...
+			' -------------------------------------------------------------------------
+		
+			Local remote:TSocket = SocketAccept (server)
+
+			If remote
+
+				thread = CreateThread (ProcessConnection, remote)
+				ListAddLast ThreadList, thread
+				threads = threads + 1
+
+			EndIf
+			
+			For thread = EachIn ThreadList
+				If Not ThreadRunning (thread)
+					ListRemove ThreadList, thread
+					threads = threads - 1
+				EndIf
+			Next
+
+			' -------------------------------------------------------------------------
+			' Don't wanna hog CPU (also update temp graphics window)...
+			' -------------------------------------------------------------------------
+		
+			' Graphics/Cls/Flip not needed in a real server!
+			
+			Delay 10
+			Cls
+			DrawText "Direct ESC to this window, not IDE!", 20, 20
+			Flip
+			
+		Until KeyHit (KEY_ESCAPE)
+		
+		Print ""
+		Print "Waiting for connections to close..."
+		
+		' -----------------------------------------------------------------------------
+		' Free any open TCP streams...
+		' -----------------------------------------------------------------------------
+
+		' Wait for each thread to finish its current job and close its own stream/socket...
+
+		LockMutex ThreadListMutex
+			For thread = EachIn ThreadList
+				WaitThread thread
+			Next
+		UnlockMutex ThreadListMutex
+
+		' -----------------------------------------------------------------------------
+		' All done!
+		' -----------------------------------------------------------------------------
+		
+		CloseSocket server
+
+	Else
+		Print "Couldn't bind to port 80!"
+	EndIf
+	
+Else
+
+	Print "Couldn't create server!..."
+	
+EndIf
+
+End
+
+' -----------------------------------------------------------------------------
+' Threaded file serve function...
+' -----------------------------------------------------------------------------
+
+Function ProcessConnection:Object (obj:Object)
+
+	Local p:PrintList = New PrintList
+
+	Local c:Connection = New Connection
+	c.socket = TSocket (obj)
+	
+	If SocketConnected (c.socket)
+
+		p.Add ""
+		p.Add "Request from " + DottedIP (SocketRemoteIP (c.socket))
+		
+		c.stream = CreateSocketStream (c.socket)
+
+	Else
+		
+		p.Add "ERROR: No stream created from socket!"
+		
+		' No stream was created -- this can happen!
+
+		KillConnection c
+		p.PrintAll
+		
+		Return Null
+
+	EndIf
+
+	' ---------------------------------------------------------------------
+	' Some variables (see further down for meanings)...
+	' ---------------------------------------------------------------------
+	
+	Local eoc:Int
+	Local eop:Int
+
+	Local command:String
+	Local parameter:String
+	Local file:String
+	Local http:String
+	Local program:String
+	Local incoming:String
+	
+	' ---------------------------------------------------------------------
+	' HTTP requests end with a blank line, so we read until we get that...
+	' ---------------------------------------------------------------------
+
+	Repeat
+	
+		' -----------------------------------------------------------------
+		' Read a line from an incoming HTTP request...
+		' -----------------------------------------------------------------
+
+		' The format of an incoming request line is:
+		
+		'		"Command" [space] "parameters"
+
+		' Examples...
+						
+		'		"GET /thisfile.txt"
+		'		"User-Agent; AcmeBrowse"
+		
+		If SocketConnected (c.socket)
+		
+			incoming = ReadLine (c.stream)
+			
+		Else
+		
+			KillConnection c
+			p.PrintAll
+			
+			Return Null
+			
+		EndIf
+
+		If incoming &lt;&gt; ""
+
+			' -------------------------------------------------------------
+			' Got a line? Let's parse! Split command and parameter(s)...
+			' -------------------------------------------------------------
+
+			eoc = Instr (incoming, " ")				' End of command part of incoming
+			command = Lower (Left (incoming, eoc))		' Command part of incoming
+			parameter = Mid (incoming, eoc + 1)		' Parameter part of incoming
+
+		EndIf
+			
+		' -----------------------------------------------------------------
+		' Let's see what command we've got...
+		' -----------------------------------------------------------------
+
+		Select command$
+		
+			Case "get "
+
+				' ---------------------------------------------------------
+				' Got a HTTP file request!
+				' ---------------------------------------------------------
+
+				' Format of GET is: "GET /thisfile.txt"
+				
+				eop = Instr (parameter, " ")			' End of first parameter ("GET")
+				file = Mid (parameter, 1, eop - 1)		' First parameter ("GET")
+				http = Mid (parameter, eop + 1)		' Second parameter ("/thisfile.txt")
+
+				' ---------------------------------------------------------
+				' Requesting program's name/identifier...
+				' ---------------------------------------------------------
+
+			Case "user-agent: "
+
+				program = Mid (incoming, eoc + 1)
+				
+		End Select
+		
+	Until incoming = "" ' Got blank line after headers, so all done here...
+
+	file = Replace (file, "/", "\")
+
+	' -------------------------------------------------------------
+	' Remove \ from end of filename (used for folder redirection)...
+	' -------------------------------------------------------------
+
+	If Right (file, 1) = "\" Then file = Left (file, Len (file) - 1)
+	
+	' ---------------------------------------------------------------------
+	' Lessee what we've got...
+	' ---------------------------------------------------------------------
+	
+	p.Add "Requested file: " + file
+	p.Add "Requested by: " + program
+	p.Add "Requested HTTP version: " + http
+	p.PrintAll
+
+	' ---------------------------------------------------------------------
+	' OK, we barely know what we're doing, so only accept HTTP 1.1...
+	' ---------------------------------------------------------------------
+	
+	If http$ &lt;&gt; "HTTP/1.1"
+
+		' Very wary of streams now!
+		
+		Try
+		
+			If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, "HTTP/1.1 505 This server only accepts HTTP version 1.1"
+			If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, ""
+
+		Catch error:Object
+		
+			p.Add "ERROR (" + file + "): Received non-HTTP 1.1 request, but stream failed outside error-checking!"
+			
+			KillConnection c
+			p.PrintAll
+			
+			Return Null
+			
+		End Try
+		
+	Else
+
+		' -----------------------------------------------------------------
+		' It was a HTTP 1.1 request...
+		' -----------------------------------------------------------------
+
+		' Convert any %xx (Hex) codes in URL to Chr (ascii) character...
+		' (Eg. %20 is ascii 57, ie. Chr (57), ie. a Space.)
+		
+		file = UnHexURL (file)
+
+		If file
+			If Left (file, 1) &lt;&gt; "\"
+				file = "\" + file ' Add leading "/" if not found...
+			EndIf
+		EndIf
+		
+		' -------------------------------------------------------------
+		' Does the requested file exist in our 'site' folder?
+		' -------------------------------------------------------------
+
+		Local file_type:Int = FileType (folder + file)
+		
+		If file = "" Then file_type = 2
+		
+		Select file_type
+		
+			Case 0 ' File does not exist...
+
+				p.Add "404: File not found (" + file + ")"
+
+				Try
+				
+					If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, "HTTP/1.1 404 Not Found"
+					If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, ""
+
+				Catch error:Object
+				
+					p.Add "ERROR (" + file + "): Stream failed outside error-checking!"
+					
+					KillConnection c
+					p.PrintAll
+					
+					Return Null
+					
+				End Try
+				
+			Case 1 ' File exists!
+
+				Try
+				
+					If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, "HTTP/1.1 200 OK"
+					If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, ""
+
+				Catch error:Object
+				
+					p.Add "ERROR (" + file + "): Stream failed outside error-checking!"
+					
+					KillConnection c
+					p.PrintAll
+					
+					Return Null
+					
+				End Try
+
+				Local requested:TStream = ReadFile (folder + file)
+
+				If requested
+
+					Try
+
+						While Not Eof (requested)
+						
+							If SocketConnected (c.socket) And Not Eof (c.stream)
+							
+								Local buffer:TBank = CreateBank (OPTIMUM_IO)
+								Local bytesread:Int = 0
+								Local offset:Int = 0
+								
+								If buffer
+
+									Repeat
+
+										bytesread = ReadBank (buffer, requested, 0, OPTIMUM_IO)
+
+										' This line may trigger Try/Catch error (write-to-stream)...
+
+										WriteBank buffer, c.stream, 0, bytesread
+										offset = offset + bytesread
+
+									Until Eof (requested)
+
+								EndIf
+								
+								buffer = Null
+								
+							Else
+						
+								p.Add "ERROR (" + file + "): Socket lost while writing file"
+								Exit
+						
+							EndIf
+						
+						Wend
+						
+						If requested
+							CloseFile requested
+						EndIf
+
+						If SocketConnected (c.socket)
+
+							If Not Eof (c.stream)
+								WriteLine c.stream, ""
+							EndIf
+
+						Else
+
+							p.Add "ERROR (" + file + "): No socket for sending blank line after file"
+							
+							KillConnection c
+							p.PrintAll
+
+							Return Null
+
+						EndIf
+
+					Catch error:Object
+				
+						' This can be triggered during file read/write While/Wend loop,
+						' for reasons unknown (socket lost just after socket and stream
+						' checked valid?)...
+						
+						p.Add "ERROR (" + file + "): Error while writing file to stream"
+						
+						KillConnection c
+						p.PrintAll
+						
+						Return Null
+					
+					End Try
+			
+				EndIf
+
+			Case 2 ' Folder...
+
+				' Try index.htm and index.html...
+				
+				Local redirect:String = file + "\index.htm"
+				
+				If FileType (folder + redirect) = 0 ' Nope!
+					redirect = file + "\index.html" ' We'll see...
+					If FileType (folder + redirect) = 0
+						redirect = ""
+					EndIf
+				EndIf
+				
+				Try
+
+					If redirect
+
+						' Re-direct browser to index.htm or index.html if present (browser will make new request, ie. new thread will kick in)...
+						
+						If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, "HTTP/1.1 307 Temporary Redirect"
+						If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, "location: " + redirect			
+						If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, ""
+
+					Else
+						
+						' No index.htm or index.html found, so show folder listing message...
+
+						Local html:String = "&lt;HTML&gt;&lt;TITLE&gt;Folder request&lt;/TITLE&gt;&lt;BODY&gt;Folder listings not allowed!&lt;/BODY&gt;&lt;/HTML&gt;"
+
+						If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, "HTTP/1.1 200 OK"
+						If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, ""
+						If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, html
+
+					EndIf
+					
+				Catch error:Object
+				
+					p.Add "ERROR (" + file + "): Stream failed outside error-checking!"
+					
+					KillConnection c
+					p.PrintAll
+					
+					Return Null
+					
+				End Try
+
+		End Select
+
+	EndIf
+
+	p.PrintAll
+	KillConnection c
+	
+	Return Null
+	
+End Function
+
+' Made separate as it's referenced a lot...
+
+Function KillConnection (c:Connection)
+	If SocketConnected (c.socket) Then CloseSocket c.socket
+	If c.stream And Not Eof (c.stream) Then CloseStream c.stream
+End Function
+
+' Helper functions...
+
+Function UnHexURL:String (url:String)
+	Local pos:Int
+	Repeat
+		pos = Instr (url, "%")
+		If pos
+			Local hexx:String = Mid (url$, pos, 3)
+			url = Replace (url, hexx, Chr (HexToDec (hexx)))
+		EndIf
+	Until pos = 0
+	Return url
+End Function
+
+Function HexToDec:Int (h:String)
+
+	' From PureBasic code by 'PB'...
+
+	If Left (h, 1) = "%" Then h = Right (h, Len (h) - 1)
+	h = Upper (h)
+
+	Local a:String
+	Local d:Int
+
+	For Local r:Int = 1 To Len (h)
+		d = d Shl 4; a = Mid (h, r, 1)
+		If Asc (a) &gt; 60
+			d = d + Asc (a) - 55
+		Else
+			d = d + Asc (a) - 48
+		EndIf
+	Next
+	
+	Return d
+	
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ked</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> This is great! It really helps if you are new to threads. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >slenkar</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> so you could potentially write scripts in LUA or briskvm <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>helps if you are new to threads<br> <br></div><br>Although it's an ideal candidate for multithreading, it's possibly too simple an example to learn from, since the threads don't have to access any global data or return a result to the main thread, meaning no mutexes are needed (I just removed a couple of unnecessary mutex locks) -- the threads are just launched and left to their own devices. Most threading situations <i>will</i> need to exchange or somehow share data with the main thread (or other threads).<br><br>JPY, I wasn't sure what you meant, but I suppose you mean you could use LUA or similar in place of PHP, etc?<br><br><b>TOP TIP!</b><br><br>I did find it very useful to create the thread function as a normal function for the purposes of debugging, ie. just call it normally, as <i>ProcessConnection (remote)</i>, rather than via <i>CreateThread (ProcessConnection, remote)</i>. Threads can't be debugged properly in BlitzMax, so running it as a normal function lets you troubleshoot as normal, then you can switch to calling via CreateThread once it's working. This certainly won't be applicable to all multithreading situations, though. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> I just updated this to deal with URLs representing folders better -- checking for index.htm and index.html (redirecting the browser via a 307 response if found), then providing a 'directory listing denied' message if neither of these default files was found.<br><br>I also fixed the file sending code to read/write 64 KB at a time, ie. it serves individual files much more quickly now. Exciting stuff! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Heh... I just wrapped the server into a type and made this little demo. Now your game can serve web pages in the background! No, I don't know why anyone would want to do that either...<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+' Quickly hacked into a Type... seems fine!
+
+SuperStrict
+
+Const OPTIMUM_IO:Int = 65536
+
+Type Connection
+	Field socket:TSocket
+	Field stream:TSocketStream
+End Type
+
+Type PrintList
+
+	Field list:TList = CreateList ()
+
+	Method Add (info:String)
+		ListAddLast list, info
+	End Method
+
+	Method PrintAll ()
+		For Local i:String = EachIn list
+			Print i
+			ListRemove list, i
+		Next
+	End Method
+
+End Type
+
+Type WebServer
+
+	Global ThreadListMutex:TMutex = CreateMutex ()
+	Global ThreadList:TList = CreateList ()
+
+	Global Folder:String
+	
+	Global Instance:Int = 0 ' Only one instance can run at a time...
+	
+	Field thread:TThread
+	Field threadcount:Int
+	
+	Field server:TSocket
+	Field remote:TSocket
+	
+	Field quit:Int
+
+	Method CreateWebServer:TSocket (server_folder:String)
+
+		Instance = Instance + 1
+			
+		If Instance &gt; 1
+			Print "Only one instance of the web server can run at a time! Aborting..."
+			Instance = Instance - 1
+			Return Null
+		EndIf
+		
+		If FileType (server_folder) = 2
+			Folder = server_folder
+		Else
+			Print "Invalid folder specified in CreateWebServer call! Aborting..."
+			Return Null
+		EndIf
+		
+		server = CreateTCPSocket ()
+		
+		If server
+		
+			' Bind to port 80...
+			
+			If BindSocket (server, 80)
+		
+				SocketListen server, 5
+				
+				Print
+				Print "MultiServe: awaiting incoming connections..."
+				Print
+				Print "Launch your web browser and direct it to http://127.0.0.1/myfilename.html"
+				Print "where myfilename.html is a file inside the folder you specified..."
+				Print ""
+								
+			Else
+				Print "Couldn't bind to port 80!"
+				Return Null
+			EndIf
+			
+			Return server
+			
+		Else
+		
+			Return Null
+			
+		EndIf
+		
+	End Method
+	
+	Method UpdateServer (sleep:Int = 5)
+
+		' Check for incoming connections and spawn threads/add to list...
+		
+		remote = SocketAccept (server)
+
+		If remote
+
+			thread = CreateThread (ProcessConnection, remote)
+			ListAddLast ThreadList, thread
+			threadcount = threadcount + 1
+
+		EndIf
+		
+		' Remove finished threads from list...
+		
+		For thread = EachIn ThreadList
+			If Not ThreadRunning (thread)
+				ListRemove ThreadList, thread
+				threadcount = threadcount - 1
+			EndIf
+		Next
+		
+		' Don't hog CPU...
+
+		Delay sleep
+
+	End Method
+
+	Method CloseWebServer ()
+	
+		Print ""
+		Print "Waiting for connections to close..."
+
+		' Wait for each thread to finish its current job and close its own stream/socket...
+	
+		LockMutex ThreadListMutex
+			For thread = EachIn ThreadList
+				WaitThread thread
+			Next
+		UnlockMutex ThreadListMutex
+	
+		CloseSocket server
+	
+	End Method
+
+	Function ProcessConnection:Object (obj:Object)
+
+		' ------------------------------------------------------------------------
+		' Functions only used locally by ProcessConnection ()...
+		' ------------------------------------------------------------------------
+
+		' Made separate as it's referenced a lot...
+	
+		Function KillConnection (c:Connection)
+			If SocketConnected (c.socket) Then CloseSocket c.socket
+			If c.stream And Not Eof (c.stream) Then CloseStream c.stream
+		End Function
+		
+		' Helper functions...
+		
+		Function UnHexURL:String (url:String)
+			Local pos:Int
+			Repeat
+				pos = Instr (url, "%")
+				If pos
+					Local hexx:String = Mid (url$, pos, 3)
+					url = Replace (url, hexx, Chr (HexToDec (hexx)))
+				EndIf
+			Until pos = 0
+			Return url
+		End Function
+		
+		Function HexToDec:Int (h:String)
+		
+			' From PureBasic code by 'PB'...
+		
+			If Left (h, 1) = "%" Then h = Right (h, Len (h) - 1)
+			h = Upper (h)
+		
+			Local a:String
+			Local d:Int
+		
+			For Local r:Int = 1 To Len (h)
+				d = d Shl 4; a = Mid (h, r, 1)
+				If Asc (a) &gt; 60
+					d = d + Asc (a) - 55
+				Else
+					d = d + Asc (a) - 48
+				EndIf
+			Next
+			
+			Return d
+			
+		End Function
+	
+		' ------------------------------------------------------------------------
+		' OK, here we go...
+		' ------------------------------------------------------------------------
+
+		Local c:Connection = New Connection
+		Local p:PrintList = New PrintList
+		
+		c.socket = TSocket (obj)
+		
+		If SocketConnected (c.socket)
+	
+			p.Add ""
+			p.Add "Request from " + DottedIP (SocketRemoteIP (c.socket))
+			
+			c.stream = CreateSocketStream (c.socket)
+	
+		Else
+			
+			p.Add "ERROR: No stream created from socket!"
+			
+			' No stream was created -- this can happen!
+	
+			KillConnection c
+			p.PrintAll
+			
+			Return Null
+	
+		EndIf
+	
+		' ---------------------------------------------------------------------
+		' Some variables (see further down for meanings)...
+		' ---------------------------------------------------------------------
+		
+		Local eoc:Int
+		Local eop:Int
+	
+		Local command:String
+		Local parameter:String
+		Local file:String
+		Local http:String
+		Local program:String
+		Local incoming:String
+		
+		' ---------------------------------------------------------------------
+		' HTTP requests end with a blank line, so we read until we get that...
+		' ---------------------------------------------------------------------
+	
+		Repeat
+		
+			' -----------------------------------------------------------------
+			' Read a line from an incoming HTTP request...
+			' -----------------------------------------------------------------
+	
+			' The format of an incoming request line is:
+			
+			'		"Command" [space] "parameters"
+	
+			' Examples...
+							
+			'		"GET /thisfile.txt"
+			'		"User-Agent; AcmeBrowse"
+			
+			If SocketConnected (c.socket)
+			
+				incoming = ReadLine (c.stream)
+				
+			Else
+			
+				KillConnection c
+				p.PrintAll
+				
+				Return Null
+				
+			EndIf
+	
+			If incoming &lt;&gt; ""
+	
+				' -------------------------------------------------------------
+				' Got a line? Let's parse! Split command and parameter(s)...
+				' -------------------------------------------------------------
+	
+				eoc = Instr (incoming, " ")				' End of command part of incoming
+				command = Lower (Left (incoming, eoc))		' Command part of incoming
+				parameter = Mid (incoming, eoc + 1)		' Parameter part of incoming
+	
+			EndIf
+				
+			' -----------------------------------------------------------------
+			' Let's see what command we've got...
+			' -----------------------------------------------------------------
+	
+			Select command$
+			
+				Case "get "
+	
+					' ---------------------------------------------------------
+					' Got a HTTP file request!
+					' ---------------------------------------------------------
+	
+					' Format of GET is: "GET /thisfile.txt"
+					
+					eop = Instr (parameter, " ")			' End of first parameter ("GET")
+					file = Mid (parameter, 1, eop - 1)		' First parameter ("GET")
+					http = Mid (parameter, eop + 1)		' Second parameter ("/thisfile.txt")
+	
+					' ---------------------------------------------------------
+					' Requesting program's name/identifier...
+					' ---------------------------------------------------------
+	
+				Case "user-agent: "
+	
+					program = Mid (incoming, eoc + 1)
+					
+			End Select
+			
+		Until incoming = "" ' Got blank line after headers, so all done here...
+	
+		file = Replace (file, "/", "\")
+	
+		' -------------------------------------------------------------
+		' Remove \ from end of filename (used for folder redirection)...
+		' -------------------------------------------------------------
+	
+		If Right (file, 1) = "\" Then file = Left (file, Len (file) - 1)
+		
+		' ---------------------------------------------------------------------
+		' Lessee what we've got...
+		' ---------------------------------------------------------------------
+		
+		p.Add "Requested file: " + file
+		p.Add "Requested by: " + program
+		p.Add "Requested HTTP version: " + http
+		p.PrintAll
+	
+		' ---------------------------------------------------------------------
+		' OK, we barely know what we're doing, so only accept HTTP 1.1...
+		' ---------------------------------------------------------------------
+		
+		If http$ &lt;&gt; "HTTP/1.1"
+	
+			' Very wary of streams now!
+			
+			Try
+			
+				If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, "HTTP/1.1 505 This server only accepts HTTP version 1.1"
+				If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, ""
+	
+			Catch error:Object
+			
+				p.Add "ERROR (" + file + "): Received non-HTTP 1.1 request, but stream failed outside error-checking!"
+				
+				KillConnection c
+				p.PrintAll
+				
+				Return Null
+				
+			End Try
+			
+		Else
+	
+			' -----------------------------------------------------------------
+			' It was a HTTP 1.1 request...
+			' -----------------------------------------------------------------
+	
+			' Convert any %xx (Hex) codes in URL to Chr (ascii) character...
+			' (Eg. %20 is ascii 57, ie. Chr (57), ie. a Space.)
+			
+			file = UnHexURL (file)
+	
+			If file
+				If Left (file, 1) &lt;&gt; "\"
+					file = "\" + file ' Add leading "/" if not found...
+				EndIf
+			EndIf
+			
+			' -------------------------------------------------------------
+			' Does the requested file exist in our 'site' folder?
+			' -------------------------------------------------------------
+	
+			Local file_type:Int = FileType (WebServer.Folder + file)
+			
+			If file = "" Then file_type = 2
+			
+			Select file_type
+			
+				Case 0 ' File does not exist...
+	
+					p.Add "404: File not found (" + file + ")"
+	
+					Try
+
+						If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, "HTTP/1.1 404 Not Found"
+						If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, ""
+	
+					Catch error:Object
+					
+						p.Add "ERROR (" + file + "): Stream failed outside error-checking!"
+						
+						KillConnection c
+						p.PrintAll
+						
+						Return Null
+						
+					End Try
+					
+				Case 1 ' File exists!
+	
+					Try
+					
+						If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, "HTTP/1.1 200 OK"
+						If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, ""
+	
+					Catch error:Object
+					
+						p.Add "ERROR (" + file + "): Stream failed outside error-checking!"
+						
+						KillConnection c
+						p.PrintAll
+						
+						Return Null
+						
+					End Try
+	
+					Local requested:TStream = ReadFile (WebServer.Folder + file)
+	
+					If requested
+	
+						Try
+	
+							While Not Eof (requested)
+							
+								If SocketConnected (c.socket) And Not Eof (c.stream)
+								
+									Local buffer:TBank = CreateBank (OPTIMUM_IO)
+									Local bytesread:Int = 0
+									Local offset:Int = 0
+									
+									If buffer
+	
+										Repeat
+	
+											bytesread = ReadBank (buffer, requested, 0, OPTIMUM_IO)
+	
+											' This line may trigger Try/Catch error (write-to-stream)...
+	
+											WriteBank buffer, c.stream, 0, bytesread
+											offset = offset + bytesread
+	
+										Until Eof (requested)
+	
+									EndIf
+									
+									buffer = Null
+									
+								Else
+							
+									p.Add "ERROR (" + file + "): Socket lost while writing file"
+									Exit
+							
+								EndIf
+							
+							Wend
+							
+							If requested
+								CloseFile requested
+							EndIf
+	
+							If SocketConnected (c.socket)
+	
+								If Not Eof (c.stream)
+									WriteLine c.stream, ""
+								EndIf
+	
+							Else
+	
+								p.Add "ERROR (" + file + "): No socket for sending blank line after file"
+								
+								KillConnection c
+								p.PrintAll
+	
+								Return Null
+	
+							EndIf
+	
+						Catch error:Object
+					
+							' This can be triggered during file read/write While/Wend loop,
+							' for reasons unknown (socket lost just after socket and stream
+							' checked valid?)...
+							
+							p.Add "ERROR (" + file + "): Error while writing file to stream"
+							
+							KillConnection c
+							p.PrintAll
+							
+							Return Null
+						
+						End Try
+				
+					EndIf
+	
+				Case 2 ' Folder...
+	
+					' Try index.htm and index.html...
+					
+					Local redirect:String = file + "\index.htm"			' Try this first...
+					
+					If FileType (WebServer.Folder + redirect) = 0		' Nope!
+						redirect = file + "\index.html"				' How about this?
+						If FileType (WebServer.Folder + redirect) = 0
+							redirect = ""							' Oh, well, whatever, never mind...
+						EndIf
+					EndIf
+					
+					Try
+	
+						If redirect
+	
+							' Re-direct browser to index.htm or index.html if present (browser will make new request, ie. new thread will kick in)...
+							
+							If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, "HTTP/1.1 307 Temporary Redirect"
+							If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, "location: " + redirect			
+							If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, ""
+	
+						Else
+							
+							' No index.htm or index.html found, so show folder listing message...
+	
+							Local html:String = "&lt;HTML&gt;&lt;TITLE&gt;Folder request&lt;/TITLE&gt;&lt;BODY&gt;Folder listings not allowed!&lt;/BODY&gt;&lt;/HTML&gt;"
+	
+							If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, "HTTP/1.1 200 OK"
+							If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, ""
+							If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, html
+	
+						EndIf
+						
+					Catch error:Object
+					
+						p.Add "ERROR (" + file + "): Stream failed outside error-checking!"
+						
+						KillConnection c
+						p.PrintAll
+						
+						Return Null
+						
+					End Try
+	
+			End Select
+	
+		EndIf
+	
+		p.PrintAll
+		KillConnection c
+		
+		Return Null
+		
+	End Function
+
+End Type
+
+' -----------------------------------------------------------------------------
+' Demo of "game" running with embedded web server. Don't know why.
+' -----------------------------------------------------------------------------
+
+Graphics 640, 480
+
+Local x:Float, y:Float
+Local xs:Float = 2, ys:Float = 2
+
+Local ws:WebServer = New WebServer
+
+If ws.CreateWebServer ("J:\TeraFiles\Store\Downloaded Web Sites\Store")
+
+	Repeat
+
+		ws.UpdateServer
+
+		x = x + xs
+		y = y + ys
+		
+		If x &lt; 0 Or x &gt; GraphicsWidth () Then xs = -xs; x = x + xs
+		If y &lt; 0 Or y &gt; GraphicsHeight () Then ys = -ys; y = y + ys
+		
+		Cls
+		DrawRect x, y, 32, 32
+		Flip
+		
+	Until KeyHit (KEY_ESCAPE)
+	
+	ws.CloseWebServer
+
+EndIf
+</textarea><br><br>(Actually, it was a step towards doing <a href="http://www.devmaster.net/forums/showthread.php?t=14948" target="_blank">this kind of thing</a>.) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> This is a little step further towards <a href="http://www.devmaster.net/forums/showthread.php?t=14948" target="_blank">this kind of thing</a>.<br><br>Run the program and open a web browser. Enter any of the following URLs:<br><br><a href="http://127.0.0.1/commands/hello.html" target="_blank">http://127.0.0.1/commands/hello.html</a><br><a href="http://127.0.0.1/commands/goodbye.html" target="_blank">http://127.0.0.1/commands/goodbye.html</a><br><a href="http://127.0.0.1/commands/test.html" target="_blank">http://127.0.0.1/commands/test.html</a><br><br>(Hit F5 a couple of times after seeing each one.)<br><br>Note that these aren't <i>real</i> files/folders, just organised 'commands' that the web server will recognise (or not, in the case of test.html)...<br><br>Next up would be passing 'live' variables (eg. player position) and including the code from that article to make the browser auto-update.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+' Quickly hacked into a Type... seems fine!
+
+SuperStrict
+
+Const OPTIMUM_IO:Int = 65536
+
+Type Connection
+	Field socket:TSocket
+	Field stream:TSocketStream
+End Type
+
+Type PrintList
+
+	Field list:TList = CreateList ()
+
+	Method Add (info:String)
+		ListAddLast list, info
+	End Method
+
+	Method PrintAll ()
+		For Local i:String = EachIn list
+			Print i
+			ListRemove list, i
+		Next
+	End Method
+
+End Type
+
+Type WebServer
+
+	Global ThreadListMutex:TMutex = CreateMutex ()
+	Global ThreadList:TList = CreateList ()
+
+	Global Folder:String
+	
+	Global Instance:Int = 0 ' Only one instance can run at a time...
+	
+	Field thread:TThread
+	Field threadcount:Int
+	
+	Field server:TSocket
+	Field remote:TSocket
+	
+	Field quit:Int
+
+	Method CreateWebServer:TSocket (server_folder:String)
+
+		Instance = Instance + 1
+			
+		If Instance &gt; 1
+			Print "Only one instance of the web server can run at a time! Aborting..."
+			Instance = Instance - 1
+			Return Null
+		EndIf
+		
+		If FileType (server_folder) = 2
+			Folder = server_folder
+		Else
+			Print "Invalid folder specified in CreateWebServer call! Aborting..."
+			Return Null
+		EndIf
+		
+		server = CreateTCPSocket ()
+		
+		If server
+		
+			' Bind to port 80...
+			
+			If BindSocket (server, 80)
+		
+				SocketListen server, 5
+				
+				Print
+				Print "MultiServe: awaiting incoming connections..."
+				Print
+				Print "Launch your web browser and direct it to http://127.0.0.1/myfilename.html"
+				Print "where myfilename.html is a file inside the folder you specified..."
+				Print ""
+								
+			Else
+				Print "Couldn't bind to port 80!"
+				Return Null
+			EndIf
+			
+			Return server
+			
+		Else
+		
+			Return Null
+			
+		EndIf
+		
+	End Method
+	
+	Method UpdateServer (sleep:Int = 5)
+
+		' Check for incoming connections and spawn threads/add to list...
+		
+		remote = SocketAccept (server)
+
+		If remote
+
+			thread = CreateThread (ProcessConnection, remote)
+			ListAddLast ThreadList, thread
+			threadcount = threadcount + 1
+
+		EndIf
+		
+		' Remove finished threads from list...
+		
+		For thread = EachIn ThreadList
+			If Not ThreadRunning (thread)
+				ListRemove ThreadList, thread
+				threadcount = threadcount - 1
+			EndIf
+		Next
+		
+		' Don't hog CPU...
+
+		Delay sleep
+
+	End Method
+
+	Method CloseWebServer ()
+	
+		Print ""
+		Print "Waiting for connections to close..."
+
+		' Wait for each thread to finish its current job and close its own stream/socket...
+	
+		LockMutex ThreadListMutex
+			For thread = EachIn ThreadList
+				WaitThread thread
+			Next
+		UnlockMutex ThreadListMutex
+	
+		CloseSocket server
+	
+	End Method
+
+	Function ProcessConnection:Object (obj:Object)
+
+		' ------------------------------------------------------------------------
+		' Functions only used locally by ProcessConnection ()...
+		' ------------------------------------------------------------------------
+
+		' Made separate as it's referenced a lot...
+	
+		Function KillConnection (c:Connection)
+			If SocketConnected (c.socket) Then CloseSocket c.socket
+			If c.stream And Not Eof (c.stream) Then CloseStream c.stream
+		End Function
+		
+		' Helper functions...
+		
+		Function UnHexURL:String (url:String)
+			Local pos:Int
+			Repeat
+				pos = Instr (url, "%")
+				If pos
+					Local hexx:String = Mid (url$, pos, 3)
+					url = Replace (url, hexx, Chr (HexToDec (hexx)))
+				EndIf
+			Until pos = 0
+			Return url
+		End Function
+		
+		Function HexToDec:Int (h:String)
+		
+			' From PureBasic code by 'PB'...
+		
+			If Left (h, 1) = "%" Then h = Right (h, Len (h) - 1)
+			h = Upper (h)
+		
+			Local a:String
+			Local d:Int
+		
+			For Local r:Int = 1 To Len (h)
+				d = d Shl 4; a = Mid (h, r, 1)
+				If Asc (a) &gt; 60
+					d = d + Asc (a) - 55
+				Else
+					d = d + Asc (a) - 48
+				EndIf
+			Next
+			
+			Return d
+			
+		End Function
+	
+		' ------------------------------------------------------------------------
+		' OK, here we go...
+		' ------------------------------------------------------------------------
+
+		Local c:Connection = New Connection
+		Local p:PrintList = New PrintList
+		
+		c.socket = TSocket (obj)
+		
+		If SocketConnected (c.socket)
+	
+			p.Add ""
+			p.Add "Request from " + DottedIP (SocketRemoteIP (c.socket))
+			
+			c.stream = CreateSocketStream (c.socket)
+	
+		Else
+			
+			p.Add "ERROR: No stream created from socket!"
+			
+			' No stream was created -- this can happen!
+	
+			KillConnection c
+			p.PrintAll
+			
+			Return Null
+	
+		EndIf
+	
+		' ---------------------------------------------------------------------
+		' Some variables (see further down for meanings)...
+		' ---------------------------------------------------------------------
+		
+		Local eoc:Int
+		Local eop:Int
+	
+		Local command:String
+		Local parameter:String
+		Local file:String
+		Local http:String
+		Local program:String
+		Local incoming:String
+		
+		' ---------------------------------------------------------------------
+		' HTTP requests end with a blank line, so we read until we get that...
+		' ---------------------------------------------------------------------
+	
+		Repeat
+		
+			' -----------------------------------------------------------------
+			' Read a line from an incoming HTTP request...
+			' -----------------------------------------------------------------
+	
+			' The format of an incoming request line is:
+			
+			'		"Command" [space] "parameters"
+	
+			' Examples...
+							
+			'		"GET /thisfile.txt"
+			'		"User-Agent; AcmeBrowse"
+			
+			If SocketConnected (c.socket)
+			
+				incoming = ReadLine (c.stream)
+				
+			Else
+			
+				KillConnection c
+				p.PrintAll
+				
+				Return Null
+				
+			EndIf
+	
+			If incoming &lt;&gt; ""
+	
+				' -------------------------------------------------------------
+				' Got a line? Let's parse! Split command and parameter(s)...
+				' -------------------------------------------------------------
+	
+				eoc = Instr (incoming, " ")				' End of command part of incoming
+				command = Lower (Left (incoming, eoc))		' Command part of incoming
+				parameter = Mid (incoming, eoc + 1)		' Parameter part of incoming
+	
+			EndIf
+				
+			' -----------------------------------------------------------------
+			' Let's see what command we've got...
+			' -----------------------------------------------------------------
+	
+			Select command$
+			
+				Case "get "
+	
+					' ---------------------------------------------------------
+					' Got a HTTP file request!
+					' ---------------------------------------------------------
+	
+					' Format of GET is: "GET /thisfile.txt"
+					
+					eop = Instr (parameter, " ")			' End of first parameter ("GET")
+					file = Mid (parameter, 1, eop - 1)		' First parameter ("GET")
+					http = Mid (parameter, eop + 1)		' Second parameter ("/thisfile.txt")
+	
+					' ---------------------------------------------------------
+					' Requesting program's name/identifier...
+					' ---------------------------------------------------------
+	
+				Case "user-agent: "
+	
+					program = Mid (incoming, eoc + 1)
+					
+			End Select
+			
+		Until incoming = "" ' Got blank line after headers, so all done here...
+	
+		file = Replace (file, "/", "\")
+	
+		' -------------------------------------------------------------
+		' Remove \ from end of filename (used for folder redirection)...
+		' -------------------------------------------------------------
+	
+		If Right (file, 1) = "\" Then file = Left (file, Len (file) - 1)
+		
+		' ---------------------------------------------------------------------
+		' Lessee what we've got...
+		' ---------------------------------------------------------------------
+		
+		p.Add "Requested file: " + file
+		p.Add "Requested by: " + program
+		p.Add "Requested HTTP version: " + http
+		
+		p.PrintAll
+	
+		' ---------------------------------------------------------------------
+		' OK, we barely know what we're doing, so only accept HTTP 1.1...
+		' ---------------------------------------------------------------------
+		
+		If http$ &lt;&gt; "HTTP/1.1"
+	
+			' Very wary of streams now!
+			
+			Try
+			
+				If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, "HTTP/1.1 505 This server only accepts HTTP version 1.1"
+				If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, ""
+	
+			Catch error:Object
+			
+				p.Add "ERROR (" + file + "): Received non-HTTP 1.1 request, but stream failed outside error-checking!"
+				
+				KillConnection c
+				p.PrintAll
+				
+				Return Null
+				
+			End Try
+			
+		Else
+	
+			' -----------------------------------------------------------------
+			' It was a HTTP 1.1 request...
+			' -----------------------------------------------------------------
+	
+			' Convert any %xx (Hex) codes in URL to Chr (ascii) character...
+			' (Eg. %20 is ascii 57, ie. Chr (57), ie. a Space.)
+			
+			file = UnHexURL (file)
+	
+			If file
+				If Left (file, 1) &lt;&gt; "\"
+					file = "\" + file ' Add leading "/" if not found...
+				EndIf
+			EndIf
+
+			Local message:String
+			
+			Try
+			
+				If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, "HTTP/1.1 200 OK"
+				If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, ""
+
+				Select file
+				
+					Case "\commands\hello.html"
+						
+						message = "&lt;HTML&gt;&lt;TITLE&gt;Test response&lt;/TITLE&gt;&lt;BODY&gt;Hello world! This is a random number: " + Rand (100) + "&lt;/BODY&gt;&lt;/HTML&gt;"
+					
+					Case "\commands\goodbye.html"
+						
+						message = "&lt;HTML&gt;&lt;TITLE&gt;Test response&lt;/TITLE&gt;&lt;BODY&gt;See ya! Have a random floating point number: " + Rnd (100) + "&lt;/BODY&gt;&lt;/HTML&gt;"
+					
+					Default
+
+						message = "&lt;HTML&gt;&lt;TITLE&gt;Error!&lt;/TITLE&gt;&lt;BODY&gt;Unknown command!&lt;/BODY&gt;&lt;/HTML&gt;"
+
+				End Select
+
+				If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, message
+				If SocketConnected (c.socket) And Not Eof (c.stream) Then WriteLine c.stream, ""
+				
+			Catch error:Object
+			
+				p.Add "ERROR (" + file + "): Stream failed outside error-checking!"
+				
+				KillConnection c
+				p.PrintAll
+				
+				Return Null
+				
+			End Try
+
+Rem
+
+					Local requested:TStream = ReadFile (WebServer.Folder + file)
+	
+					If requested
+	
+						Try
+	
+							While Not Eof (requested)
+							
+								If SocketConnected (c.socket) And Not Eof (c.stream)
+								
+									Local buffer:TBank = CreateBank (OPTIMUM_IO)
+									Local bytesread:Int = 0
+									Local offset:Int = 0
+									
+									If buffer
+	
+										Repeat
+	
+											bytesread = ReadBank (buffer, requested, 0, OPTIMUM_IO)
+	
+											' This line may trigger Try/Catch error (write-to-stream)...
+	
+											WriteBank buffer, c.stream, 0, bytesread
+											offset = offset + bytesread
+	
+										Until Eof (requested)
+	
+									EndIf
+									
+									buffer = Null
+									
+								Else
+							
+									p.Add "ERROR (" + file + "): Socket lost while writing file"
+									Exit
+							
+								EndIf
+							
+							Wend
+							
+							If requested
+								CloseFile requested
+							EndIf
+	
+							If SocketConnected (c.socket)
+	
+								If Not Eof (c.stream)
+									WriteLine c.stream, ""
+								EndIf
+	
+							Else
+	
+								p.Add "ERROR (" + file + "): No socket for sending blank line after file"
+								
+								KillConnection c
+								p.PrintAll
+	
+								Return Null
+	
+							EndIf
+	
+						Catch error:Object
+					
+							' This can be triggered during file read/write While/Wend loop,
+							' for reasons unknown (socket lost just after socket and stream
+							' checked valid?)...
+							
+							p.Add "ERROR (" + file + "): Error while writing file to stream"
+							
+							KillConnection c
+							p.PrintAll
+							
+							Return Null
+						
+						End Try
+				
+					EndIf
+End Rem
+	
+		EndIf
+	
+		p.PrintAll
+		KillConnection c
+		
+		Return Null
+		
+	End Function
+
+End Type
+
+' -----------------------------------------------------------------------------
+' Demo of "game" running with embedded web server. Don't know why.
+' -----------------------------------------------------------------------------
+
+Graphics 640, 480
+
+Local x:Float, y:Float
+Local xs:Float = 2, ys:Float = 2
+
+Local ws:WebServer = New WebServer
+
+If ws.CreateWebServer ("J:\TeraFiles\Store\Downloaded Web Sites\Store")
+
+	Repeat
+
+		ws.UpdateServer
+
+		x = x + xs
+		y = y + ys
+		
+		If x &lt; 0 Or x &gt; GraphicsWidth () Then xs = -xs; x = x + xs
+		If y &lt; 0 Or y &gt; GraphicsHeight () Then ys = -ys; y = y + ys
+		
+		Cls
+		DrawRect x, y, 32, 32
+		Flip
+		
+	Until KeyHit (KEY_ESCAPE)
+	
+	ws.CloseWebServer
+
+EndIf
+</textarea> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Panno</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> thx james i use this ! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Galaxy613</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> This is epicly awesome. Thanks a ton for sharing this! :D <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Panno</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> unfortunately its not working for videos if u have a ipod / iphone  as client.<br>maybe the streaming method isnt "apple" like <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_JIM</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Oh my god! I can't believe I've missed this!<br><br>Any further progress with "live" variables? This could be an excellent tuning/debugging console. It could even be used as an editor/configurator!<br><br>This is really exciting. Going to try it as soon as I get home. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Blitzplotter</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Any further progress with "live" variables? This could be an excellent tuning/debugging console. It could even be used as an editor/configurator! <br></div><br><br>good point! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dabhand</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Nice work!<br><br>Dabz <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GW</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> All it does is crash when you point a browser at it. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Luke111</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> Sorry to rehash an old thread, but I have been modifying the code to work with PHP. This is the process:<br>Check if the extension is PHP, if so, System_("php.exe -f filename &gt; output path/filename")<br>Problem is, php outputs to the standard IO buffer, not the file. It should be working somehow, I have tried CreateProcess (pub.FreeProcess), I have tried OpenUrl, but System_ seems like the best way to go about this.<br>It (PHP) does not output the file as it should. Is this a PHP problem, or a Windows bug (yes I said bug, not problem), or a BMax Problem? (Or am I just doing it wrong?)<br>I would post my code, but I do not know how to insert code properly in the frame and such. :)<br>Thanks in advance! <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

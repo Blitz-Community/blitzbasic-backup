@@ -1,0 +1,889 @@
+<!DOCTYPE html><html lang="en" ><head ><title >myDirCtrl</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >myDirCtrl</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=124" >Brucey's Modules</a>/<a href="#bottom" >myDirCtrl</a><br><br>
+<a name="1189859"></a>
+
+<a name="1189860"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >UNZ</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br>because I needed such a thing a made a wxTreeCtrl based widget that can show the filesystem starting from different paths. you can also add filters (file extensions that should not be shown) and extensions that files must have to be displayed.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Import brl.filesystem
+Import brl.linkedlist
+Import wx.wxApp
+Import wx.wxFrame
+Import wx.wxPanel
+Import wx.wxTreeCtrl
+Import wx.wxArtProvider 
+
+Type myDirCtrl Extends wxTreeCtrl
+	Field pathList:TList 'contains TPathInfo Objects
+	Field filterList:TList 'contains extensions that files should not have to be displayed
+	Field extensionList:TList 'contains extensions which files must have to get displayed
+	Field showHidden:Int 'show hidden files? (they are starting with a dot '.')
+	Field alphabeticOrder:Int
+	
+	Field imageList:wxImageList
+	
+	Global X_FOLDER:Int,X_NORMAL_FILE:Int,X_EXECUTABLE_FILE:Int,X_HARDDISK:Int
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: constructor
+	End Rem
+	Function CreateMyDirCtrl:myDirCtrl(parent:wxWindow, id:Int = - 1, ..
+				x:Int = - 1, y:Int = - 1, w:Int = - 1, h:Int = - 1, style:Int = wxTR_DEFAULT_STYLE | wxTR_HIDE_ROOT)
+		
+		Local o:myDirCtrl = myDirCtrl( New myDirCtrl.Create(parent, id, x, y, w, h, style) )
+		o._init()
+		Return o
+	End Function
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: internal method to init the widget called by the constructor
+	End Rem
+	Method _init:myDirCtrl()
+		initImages()
+		
+		pathList = New TList
+		filterList = New TList
+		extensionList = New TList
+		AddRoot("root")
+		AssignImageList(imageList)
+		ConnectAny(wxEVT_COMMAND_TREE_ITEM_EXPANDING,OnExpand)
+		Return Self
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: load images to use in the tree ctrl
+	End Rem
+	Method initImages()
+		Local size:Int= 16
+		imageList = New wxImageList.Create(size, size, False)
+		
+		X_NORMAL_FILE = imageList.Add(wxArtProvider.GetBitmap(wxART_NORMAL_FILE,, size, size ) )
+		X_FOLDER = imageList.Add(wxArtProvider.GetBitmap(wxART_FOLDER,, size, size ) )
+		X_EXECUTABLE_FILE =imageList.Add(wxArtProvider.GetBitmap(wxART_EXECUTABLE_FILE,, size, size))
+		X_HARDDISK =imageList.Add(wxArtProvider.GetBitmap(wxART_HARDDISK,, size, size ) )
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: return an image based on the file extension
+	End Rem
+	Method GetImage:int(filepath$)
+		Local img:Int = X_FOLDER
+		If _isFilePath(filepath)
+			Select ExtractExt(filepath).ToLower()
+				Case "exe"
+					img = X_EXECUTABLE_FILE
+				?linux
+				Case ""
+					img = X_EXECUTABLE_FILE
+				?
+				Default
+					img = X_NORMAL_FILE
+			EndSelect
+		Endif
+		Return img
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: enable / disable to show hidden files
+		about: If hidden files are Not shown Then files And dirs
+				starting with a dot (eg. '.a_file') will not be displayed
+	End Rem
+	Method ShowHiddenFiles(bool:int)
+		showHidden= bool
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: you can change to alphabetic sorting with this
+		about: normally first folders are displayed and then files
+	End Rem
+	Method SetAlphabeticOrder(bool:Int= false)
+		alphabeticOrder= bool
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: adds a path that will be displayed in the tree ctrl
+	End Rem
+	Method AddPath(path$,rootName$="")
+		If Not path Then Return
+		?win32
+			path = path.Replace("\", "/")
+		?
+		
+		If Not rootName Then rootName = StripDir(path)
+		If Not rootName Then rootName= path
+		If _isDirPath(path)
+			pathList.AddLast(New TPathInfo.Create(path,rootName))
+		Else
+			_NotifyAssertion("tried to add invalid path in myDirCtrl:"+path)
+		Endif
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: remove a path. the path and its will not be displayed anymore
+	End Rem
+	Method RemovePath(path$)
+		If Not path Then Return
+		?win32
+			path = path.Replace("\", "/")
+		?
+		
+		For Local o:TPathInfo = EachIn pathList
+			If o.path = path
+				pathList.Remove(o)
+				Exit				
+			EndIf
+		Next
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: expand the tree items to a given path
+	End Rem
+	Method ExpandPath(path$)
+		If Not path Then Return
+		?win32
+			path = path.Replace("\", "/")
+		?
+		
+		_ExpandOrCollapsePath_iterator(GetRootItem(), path, True)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: collapse the tree items of a given path
+	End Rem
+	Method CollapsePath(path$)
+		If Not path Then Return
+		?win32
+			path = path.Replace("\", "/")
+		?
+		
+		_ExpandOrCollapsePath_iterator(GetRootItem(), path, False)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: internal helper function for ExpandPath() and CollapsePath()
+	End Rem
+	Method _ExpandOrCollapsePath_iterator:wxTreeItemId(parent:wxTreeItemId,path$,doExpand:Int= True)		
+		Local item:wxTreeItemId= GetFirstChild(parent)
+		Local tmpPath$
+		Local tmpBestPath$
+		Local tmpBestItem:wxTreeItemId
+		While(item.IsOk( ) )
+			tmpPath = String(GetItemData(item ) )
+			If ExtractDir(tmpPath) = path
+				Return item
+			EndIf
+			
+			'search in best fitting sub dir
+			If ItemHasChildren(item)
+				'is a sub dir?
+				If path.Contains(tmpPath)
+					'better path than the last?
+					If tmpPath.length &gt; tmpBestPath.length
+						tmpBestPath = tmpPath
+						tmpBestItem= item
+					EndIf
+				EndIf
+			EndIf
+			item = GetNextChild(item)
+		Wend
+		
+		'expand/collapse best fitting child
+		If tmpBestItem And tmpBestItem.IsOk()
+			If doExpand
+				Expand(tmpBestItem)
+			Else
+				Collapse(tmpBestItem)
+			Endif
+			Return _ExpandOrCollapsePath_iterator(tmpBestItem,path,doExpand)
+		Endif
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: returns the full filepath of a tree item
+	End Rem
+	Method GetItemPath$(item:wxTreeItemId)
+		Return String(GetItemData(item))
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: adds an extension that should be filtered. files with these extensions won't be shown.
+	End Rem
+	Method AddFilter(extension$)
+		If Not extension Then Return
+		filterList.AddLast(extension)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: removes a filter
+	End Rem
+	Method RemoveFilter(extension$)
+		If Not extension Then Return
+		filterList.Remove(extension)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: adds an extension that should be shown. other extensions won't be displayed.
+		about: To display all extensions don't call this method.
+	End Rem
+	Method AddExtension(extension$)
+		If Not extension Then Return
+		extensionList.AddLast(extension)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: removes a given extension.
+		about: files with this extension will Not be displayed anymore. 
+				If no extension is defined anymore, all extensions will be shown
+	End Rem
+	Method RemoveExtension(extension$)
+		If Not extension Then Return
+		extensionList.Remove(extension)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: clear tree and (re)fill it with the pathes that should be displayed
+	End Rem
+	Method Update()
+		'save current path
+		Local currentPath$
+		Local currentSel:wxTreeItemId= GetSelection()
+		If currentSel And currentSel.isOK()
+			currentPath= String(GetItemData(currentSel))
+		Endif
+		
+		'recreate tree
+		Local root:wxTreeItemId = GetRootItem()
+		Local item:wxTreeItemId
+		DeleteChildren(root)
+		For Local o:TPathInfo = EachIn pathList
+			item = _AppendPathItem(root, o.displayName, o.path)
+			_GetFilesFromDir(o.path, item)
+		Next
+		
+		'extract to last current path
+		If currentPath Then ExpandPath(currentPath)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: internal helper method to create the children of a tree item recursive
+	End Rem
+	Method _GetFilesFromDir(path$, parent:wxTreeItemId, recursiveLevel:Int= 1)
+		If recursiveLevel &lt;= 0 Then Return
+		
+		Local item:wxTreeItemId
+		Local file$
+		Local filepath$
+		
+		Local dir:Int = ReadDir(path)
+		If Not dir
+			_NotifyAssertion("can't open dir:"+path)
+			Return
+		EndIf
+		
+		'files should be displayed behind dirs in the ctrl
+		'thats why we save them in a list first and the add them later
+		Local fileList:TList
+		If Not alphabeticOrder Then fileList = New TList
+		
+		'search for files
+		Repeat
+			file = NextFile(dir)
+			If file And file &lt;&gt; "." And file &lt;&gt; ".."
+				filepath = path + "/" + file
+				If _IsPathOK(filepath,file)
+					Select FileType(filepath)
+						Case FILETYPE_FILE
+							'add the file immediate
+							If alphabeticOrder
+								item = _AppendPathItem(parent, file, filepath)
+								
+							'remember the file and add it after the folders
+							Else
+								fileList.AddLast(filepath)
+							Endif
+						Case FILETYPE_DIR
+							item = _AppendPathItem(parent, file, filepath)
+							_GetFilesFromDir(filepath, item, recursiveLevel-1)
+					End Select
+				Endif
+			EndIf
+		Until file = ""
+		
+		'we add the files behind the folders
+		If Not alphabeticOrder
+			For filepath$ = EachIn fileList
+				item = _AppendPathItem(parent, StripDir(filepath ), filepath)
+			Next
+		Endif
+		CloseDir(dir)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: internal helper method to check if a path should be displayed.
+		about: the Method is checking against constraints like filters And 'show hidden files'
+	End Rem
+	Method _IsPathOK:int(filepath$,file$)
+		If showHidden Or (Not showHidden And Not file.StartsWith("." ) )
+			Local ex$ = ExtractExt(filepath)
+			If _isDirPath(filepath)
+				Return True
+			Else
+				If Not filterList.Contains(ex)
+					If (extensionList.IsEmpty() Or extensionList.Contains(ex) )
+						Return True
+					Endif
+				Endif
+			EndIf
+		Endif
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: internal helper method to check if a path should be displayed.
+		about: the Method is checking against constraints like filters And 'show hidden files'
+	End Rem
+	Method _AppendPathItem:wxTreeItemId(parent:wxTreeItemId, file$, filepath$)
+		'get image
+		Local img:Int= GetImage(filepath)
+		
+		'append
+		Local item:wxTreeItemId = AppendItem(parent, file, img)
+		SetItemData(item, filepath)
+		Return item
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: util
+	End Rem
+	Function _isFilePath:Int(path$)
+		Return FileType(path)= FILETYPE_FILE
+	End Function
+	Function _isDirPath:Int(path$)
+		Return FileType(path)= FILETYPE_DIR
+	End Function
+	Function _isPath:Int(path$)
+		Return FileType(path) &lt;&gt; 0
+	End Function
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: method to display a message box because something bad happend
+	End Rem
+	Method _NotifyAssertion(message$)
+		wxMessageBox("Assertion failed: "+message)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: 
+	End Rem
+	Function OnExpand(event:wxEvent)
+		Local evt:wxTreeEvent = wxTreeEvent(event)
+		Local item:wxTreeItemId = evt.GetItem()
+		Local ctrl:myDirCtrl = myDirCtrl(evt.parent)
+		
+		If item.IsOk()
+			Local sub:wxTreeItemId = ctrl.GetFirstChild(item)
+			Local path$
+			While(sub And sub.IsOk( ) )
+				If Not ctrl.ItemHasChildren(sub)
+					path = String(ctrl.GetItemData(sub ) )
+					If ctrl._isDirPath(path)
+						ctrl._GetFilesFromDir(path, sub)
+					Endif
+				Endif
+				sub= ctrl.GetNextSibling(sub)
+			Wend
+			
+		Endif
+		event.Skip()
+	End Function
+	
+End Type
+
+'===================================================================
+Private
+Rem
+	bbdoc: type to store infos about the roots of paths (actual path and name to be displayed)
+End Rem
+Type TPathInfo
+	Field path$
+	Field displayName$
+	Method Create:TPathInfo(path$, displayName$)
+		Self.path = path
+		Self.displayName = displayName
+		Return Self
+	End Method
+End TypeSuperStrict
+Import brl.filesystem
+Import brl.linkedlist
+Import wx.wxApp
+Import wx.wxFrame
+Import wx.wxPanel
+Import wx.wxTreeCtrl
+Import wx.wxArtProvider 
+
+Type myDirCtrl Extends wxTreeCtrl
+	Field pathList:TList 'contains TPathInfo Objects
+	Field filterList:TList 'contains extensions that files should not have to be displayed
+	Field extensionList:TList 'contains extensions which files must have to get displayed
+	Field showHidden:Int 'show hidden files? (they are starting with a dot '.')
+	Field alphabeticOrder:Int
+	
+	Field imageList:wxImageList
+	
+	Global X_FOLDER:Int,X_NORMAL_FILE:Int,X_EXECUTABLE_FILE:Int,X_HARDDISK:Int
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: constructor
+	End Rem
+	Function CreateMyDirCtrl:myDirCtrl(parent:wxWindow, id:Int = - 1, ..
+				x:Int = - 1, y:Int = - 1, w:Int = - 1, h:Int = - 1, style:Int = wxTR_DEFAULT_STYLE | wxTR_HIDE_ROOT)
+		
+		Local o:myDirCtrl = myDirCtrl( New myDirCtrl.Create(parent, id, x, y, w, h, style) )
+		o._init()
+		Return o
+	End Function
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: internal method to init the widget called by the constructor
+	End Rem
+	Method _init:myDirCtrl()
+		initImages()
+		
+		pathList = New TList
+		filterList = New TList
+		extensionList = New TList
+		AddRoot("root")
+		AssignImageList(imageList)
+		ConnectAny(wxEVT_COMMAND_TREE_ITEM_EXPANDING,OnExpand)
+		Return Self
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: load images to use in the tree ctrl
+	End Rem
+	Method initImages()
+		Local size:Int= 16
+		imageList = New wxImageList.Create(size, size, False)
+		
+		X_NORMAL_FILE = imageList.Add(wxArtProvider.GetBitmap(wxART_NORMAL_FILE,, size, size ) )
+		X_FOLDER = imageList.Add(wxArtProvider.GetBitmap(wxART_FOLDER,, size, size ) )
+		X_EXECUTABLE_FILE =imageList.Add(wxArtProvider.GetBitmap(wxART_EXECUTABLE_FILE,, size, size))
+		X_HARDDISK =imageList.Add(wxArtProvider.GetBitmap(wxART_HARDDISK,, size, size ) )
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: return an image based on the file extension
+	End Rem
+	Method GetImage:int(filepath$)
+		Local img:Int = X_FOLDER
+		If _isFilePath(filepath)
+			Select ExtractExt(filepath).ToLower()
+				Case "exe"
+					img = X_EXECUTABLE_FILE
+				?linux
+				Case ""
+					img = X_EXECUTABLE_FILE
+				?
+				Default
+					img = X_NORMAL_FILE
+			EndSelect
+		Endif
+		Return img
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: enable / disable to show hidden files
+		about: If hidden files are Not shown Then files And dirs
+				starting with a dot (eg. '.a_file') will not be displayed
+	End Rem
+	Method ShowHiddenFiles(bool:int)
+		showHidden= bool
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: you can change to alphabetic sorting with this
+		about: normally first folders are displayed and then files
+	End Rem
+	Method SetAlphabeticOrder(bool:Int= false)
+		alphabeticOrder= bool
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: adds a path that will be displayed in the tree ctrl
+	End Rem
+	Method AddPath(path$,rootName$="")
+		If Not path Then Return
+		?win32
+			path = path.Replace("\", "/")
+		?
+		
+		If Not rootName Then rootName = StripDir(path)
+		If Not rootName Then rootName= path
+		If _isDirPath(path)
+			pathList.AddLast(New TPathInfo.Create(path,rootName))
+		Else
+			_NotifyAssertion("tried to add invalid path in myDirCtrl:"+path)
+		Endif
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: remove a path. the path and its will not be displayed anymore
+	End Rem
+	Method RemovePath(path$)
+		If Not path Then Return
+		?win32
+			path = path.Replace("\", "/")
+		?
+		
+		For Local o:TPathInfo = EachIn pathList
+			If o.path = path
+				pathList.Remove(o)
+				Exit				
+			EndIf
+		Next
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: expand the tree items to a given path
+	End Rem
+	Method ExpandPath(path$)
+		If Not path Then Return
+		?win32
+			path = path.Replace("\", "/")
+		?
+		
+		_ExpandOrCollapsePath_iterator(GetRootItem(), path, True)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: collapse the tree items of a given path
+	End Rem
+	Method CollapsePath(path$)
+		If Not path Then Return
+		?win32
+			path = path.Replace("\", "/")
+		?
+		
+		_ExpandOrCollapsePath_iterator(GetRootItem(), path, False)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: internal helper function for ExpandPath() and CollapsePath()
+	End Rem
+	Method _ExpandOrCollapsePath_iterator:wxTreeItemId(parent:wxTreeItemId,path$,doExpand:Int= True)		
+		Local item:wxTreeItemId= GetFirstChild(parent)
+		Local tmpPath$
+		Local tmpBestPath$
+		Local tmpBestItem:wxTreeItemId
+		While(item.IsOk( ) )
+			tmpPath = String(GetItemData(item ) )
+			If ExtractDir(tmpPath) = path
+				Return item
+			EndIf
+			
+			'search in best fitting sub dir
+			If ItemHasChildren(item)
+				'is a sub dir?
+				If path.Contains(tmpPath)
+					'better path than the last?
+					If tmpPath.length &gt; tmpBestPath.length
+						tmpBestPath = tmpPath
+						tmpBestItem= item
+					EndIf
+				EndIf
+			EndIf
+			item = GetNextChild(item)
+		Wend
+		
+		'expand/collapse best fitting child
+		If tmpBestItem And tmpBestItem.IsOk()
+			If doExpand
+				Expand(tmpBestItem)
+			Else
+				Collapse(tmpBestItem)
+			Endif
+			Return _ExpandOrCollapsePath_iterator(tmpBestItem,path,doExpand)
+		Endif
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: returns the full filepath of a tree item
+	End Rem
+	Method GetItemPath$(item:wxTreeItemId)
+		Return String(GetItemData(item))
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: adds an extension that should be filtered. files with these extensions won't be shown.
+	End Rem
+	Method AddFilter(extension$)
+		If Not extension Then Return
+		filterList.AddLast(extension)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: removes a filter
+	End Rem
+	Method RemoveFilter(extension$)
+		If Not extension Then Return
+		filterList.Remove(extension)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: adds an extension that should be shown. other extensions won't be displayed.
+		about: To display all extensions don't call this method.
+	End Rem
+	Method AddExtension(extension$)
+		If Not extension Then Return
+		extensionList.AddLast(extension)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: removes a given extension.
+		about: files with this extension will Not be displayed anymore. 
+				If no extension is defined anymore, all extensions will be shown
+	End Rem
+	Method RemoveExtension(extension$)
+		If Not extension Then Return
+		extensionList.Remove(extension)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: clear tree and (re)fill it with the pathes that should be displayed
+	End Rem
+	Method Update()
+		'save current path
+		Local currentPath$
+		Local currentSel:wxTreeItemId= GetSelection()
+		If currentSel And currentSel.isOK()
+			currentPath= String(GetItemData(currentSel))
+		Endif
+		
+		'recreate tree
+		Local root:wxTreeItemId = GetRootItem()
+		Local item:wxTreeItemId
+		DeleteChildren(root)
+		For Local o:TPathInfo = EachIn pathList
+			item = _AppendPathItem(root, o.displayName, o.path)
+			_GetFilesFromDir(o.path, item)
+		Next
+		
+		'extract to last current path
+		If currentPath Then ExpandPath(currentPath)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: internal helper method to create the children of a tree item recursive
+	End Rem
+	Method _GetFilesFromDir(path$, parent:wxTreeItemId, recursiveLevel:Int= 1)
+		If recursiveLevel &lt;= 0 Then Return
+		
+		Local item:wxTreeItemId
+		Local file$
+		Local filepath$
+		
+		Local dir:Int = ReadDir(path)
+		If Not dir
+			_NotifyAssertion("can't open dir:"+path)
+			Return
+		EndIf
+		
+		'files should be displayed behind dirs in the ctrl
+		'thats why we save them in a list first and the add them later
+		Local fileList:TList
+		If Not alphabeticOrder Then fileList = New TList
+		
+		'search for files
+		Repeat
+			file = NextFile(dir)
+			If file And file &lt;&gt; "." And file &lt;&gt; ".."
+				filepath = path + "/" + file
+				If _IsPathOK(filepath,file)
+					Select FileType(filepath)
+						Case FILETYPE_FILE
+							'add the file immediate
+							If alphabeticOrder
+								item = _AppendPathItem(parent, file, filepath)
+								
+							'remember the file and add it after the folders
+							Else
+								fileList.AddLast(filepath)
+							Endif
+						Case FILETYPE_DIR
+							item = _AppendPathItem(parent, file, filepath)
+							_GetFilesFromDir(filepath, item, recursiveLevel-1)
+					End Select
+				Endif
+			EndIf
+		Until file = ""
+		
+		'we add the files behind the folders
+		If Not alphabeticOrder
+			For filepath$ = EachIn fileList
+				item = _AppendPathItem(parent, StripDir(filepath ), filepath)
+			Next
+		Endif
+		CloseDir(dir)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: internal helper method to check if a path should be displayed.
+		about: the Method is checking against constraints like filters And 'show hidden files'
+	End Rem
+	Method _IsPathOK:int(filepath$,file$)
+		If showHidden Or (Not showHidden And Not file.StartsWith("." ) )
+			Local ex$ = ExtractExt(filepath)
+			If _isDirPath(filepath)
+				Return True
+			Else
+				If Not filterList.Contains(ex)
+					If (extensionList.IsEmpty() Or extensionList.Contains(ex) )
+						Return True
+					Endif
+				Endif
+			EndIf
+		Endif
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: internal helper method to check if a path should be displayed.
+		about: the Method is checking against constraints like filters And 'show hidden files'
+	End Rem
+	Method _AppendPathItem:wxTreeItemId(parent:wxTreeItemId, file$, filepath$)
+		'get image
+		Local img:Int= GetImage(filepath)
+		
+		'append
+		Local item:wxTreeItemId = AppendItem(parent, file, img)
+		SetItemData(item, filepath)
+		Return item
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: util
+	End Rem
+	Function _isFilePath:Int(path$)
+		Return FileType(path)= FILETYPE_FILE
+	End Function
+	Function _isDirPath:Int(path$)
+		Return FileType(path)= FILETYPE_DIR
+	End Function
+	Function _isPath:Int(path$)
+		Return FileType(path) &lt;&gt; 0
+	End Function
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: method to display a message box because something bad happend
+	End Rem
+	Method _NotifyAssertion(message$)
+		wxMessageBox("Assertion failed: "+message)
+	End Method
+	
+	'-----------------------------------------------------
+	Rem
+		bbdoc: 
+	End Rem
+	Function OnExpand(event:wxEvent)
+		Local evt:wxTreeEvent = wxTreeEvent(event)
+		Local item:wxTreeItemId = evt.GetItem()
+		Local ctrl:myDirCtrl = myDirCtrl(evt.parent)
+		
+		If item.IsOk()
+			Local sub:wxTreeItemId = ctrl.GetFirstChild(item)
+			Local path$
+			While(sub And sub.IsOk( ) )
+				If Not ctrl.ItemHasChildren(sub)
+					path = String(ctrl.GetItemData(sub ) )
+					If ctrl._isDirPath(path)
+						ctrl._GetFilesFromDir(path, sub)
+					Endif
+				Endif
+				sub= ctrl.GetNextSibling(sub)
+			Wend
+			
+		Endif
+		event.Skip()
+	End Function
+	
+End Type
+
+'===================================================================
+Private
+Rem
+	bbdoc: type to store infos about the roots of paths (actual path and name to be displayed)
+End Rem
+Type TPathInfo
+	Field path$
+	Field displayName$
+	Method Create:TPathInfo(path$, displayName$)
+		Self.path = path
+		Self.displayName = displayName
+		Return Self
+	End Method
+End Type
+</textarea><br><br><br>example:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Framework brl.standardio
+
+Import "myDirCtrl.bmx"
+
+New MyApp.Run()
+
+Type MyApp Extends wxApp
+	Method OnInit:Int()		
+		Local frame:wxFrame = New wxFrame.Create(null, wxID_ANY, "test")
+		Local ctrl:myDirCtrl = myDirCtrl.CreateMyDirCtrl(frame)
+		ctrl.AddPath("C:\")
+		ctrl.Update()
+		
+		frame.Center()
+		frame.Show()
+		Return True
+	End Method
+End Type 
+</textarea> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

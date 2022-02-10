@@ -1,0 +1,295 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Need advice on interacting with OpenB3D's C++ code</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Need advice on interacting with OpenB3D's C++ code</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=119" >MiniB3D Module</a>/<a href="#bottom" >Need advice on interacting with OpenB3D's C++ code</a><br><br>
+<a name="1317387"></a>
+
+<a name="1317388"></a>
+
+<a name="1317389"></a>
+
+<a name="1317390"></a>
+
+<a name="1317391"></a>
+
+<a name="1317392"></a>
+
+<a name="1317393"></a>
+
+<a name="1317394"></a>
+
+<a name="1317395"></a>
+
+<a name="1317397"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi all,<br><br>I'm dabbling with Brucey's <a href="https://github.com/bmx-ng/newton.mod" target="_blank">newton.mod</a> and <a href="https://github.com/markcwm/openb3d.mod/tree/f152c0280812508814e7bf81f336eacf7d9b65cd" target="_blank">OpenB3D</a>.<br><br>I realise there are very few people that will fall within in this particular overlap of relatively obscure module intersections, but hope someone will 'get' this!<br><br>I'm using <a href="/post.php?topic=106680&amp;post=1314781" target="_blank">col's method</a> of copying matrices between OpenB3D and Newton in order to get OpenB3D entities to appear in sync with Newton's physics bodies.<br><br>This works for simple demos, but if you then try to use OpenB3D commands such as EntityX/EntityYaw, etc, to retrieve the resulting positions/rotations, it doesn't work.<br><br>I believe this is because these commands interact with OpenB3D's entity.cpp/entity.h internals, which aren't being updated by the matrix copies.<br><br>Take the example of calling EntityX to get a physics object's x-position: the BMX EntityX wrapper, in a round-about way, calls Entity::EntityX, located within entity.cpp:<br><br><pre class=code>
+
+entity.cpp:
+
+		...
+		
+		float Entity::<u>EntityX</u>(int global){
+			if(global==false){
+				return <u>px</u>;
+			}else{
+				return mat.grid[3][0];
+			}
+		}
+
+		...
+
+</pre>		<br><br>This returns part of the internal matrix if you request the global parameter (which you would do where you need the position of a child entity in world space), but, in the more common case of obtaining a 'parent' or 'childless' entity's position using the default 'false' <i>global</i> parameter -- eg. you're just interacting with a basic cube -- it returns an internal 'px' field.<br><br>This can be seen in the definition of the Entity class, along with some scale, rotation and (quaternion?) equivalents:<br><br><pre class=code>
+
+entity.h:
+
+		class Entity{
+			
+		public:
+				
+			// static entity list
+			static list&lt;Entity*&gt; entity_list;
+
+
+			
+			// relations
+			list&lt;Entity*&gt; child_list;
+			Entity* parent;
+			
+			// transform
+			Matrix mat;
+			Matrix rotmat;
+			float <u>px,py,pz</u>;
+			float <u>sx,sy,sz</u>;
+			float <u>rx,ry,rz</u>;
+			float <u>qw,qx,qy,qz</u>;
+
+			...
+			
+</pre><br><br>As you can see, these are updated by the likes of MoveEntity:<br><br><pre class=code>
+
+entity.cpp:
+
+		...
+
+		void Entity::MoveEntity(float mx,float my,float mz){
+			rotmat.TransformVec(mx,my,mz); //transform point by internal matrix
+			px = px + mx; //add to position
+			py = py + my;
+			pz = pz + mz;
+			MQ_Update();
+		}
+
+		...
+		
+</pre><br><br>For focus, let's just assume I want to call EntityX to get a B3D entity's x-position after I've updated its matrix from the Newton matrix: because updating the matrix doesn't update px, py, pz, the result of EntityX is incorrect.<br><br>Can anyone suggest an appropriate way to update these fields without too much fuss/meddling with OpenB3D internals? I suppose I could add some functions to entity.cpp and call them from an intermediary bmx/cpp wrapper, but I'm not convinced I'll be able to figure out the matrix stuff (eg. I've no idea what the equivalent of <i>return mat.grid[3][0]</i> would be for local co-ordinates!) and it's not ideal, having to break from the 'standard'.<br><br>In short, I need a way to also update px/px/pz and the sx, rx, qx equivalents when updating the B3D matrix from the Newton matrix, so that EntityX then works! I'm thinking a wrapper between Newton and B3D, but suspect that trying to import entity.h/cpp is just going to be a nightmare of dependencies and ultimate failure... <br><br></td></tr></table><br>
+<a name="1317401"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> I'm thinking a wrapper between Newton and B3D... <br></div><br>I'd be inclined to agree. <br><br></td></tr></table><br>
+<a name="1317409"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Floyd</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> For focus, let's just assume I want to call EntityX to get a B3D entity's x-position after I've updated its matrix from the Newton matrix<br><br>Can anyone suggest an appropriate way to update these fields <br></div><br><br>Unfortunately I know nothing about Newton or OpenB3D.<br><br>If the problem arises with a parent/child relationship then what did that Newton matrix represent? Does Newton know about this?<br><br>Perhaps you could work around the problem by temporarily breaking the parent/child bond, updating from Newton and then reparenting. Maybe everything will be magically updated. It's worth trying a few variations on this theme before embarking on the much more arduous wrapper quest. <br><br></td></tr></table><br>
+<a name="1317448"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> How about extracting the euler angles from the matrix that newton returns and apply the rotation and position using the regular commands? I think I did mention it very briefly in your original thread ;-)<br><br>I can't get NG to build at the moment but here are a couple of links that may help in the meantime<br><a href="http://gamedev.stackexchange.com/questions/50963/how-to-extract-euler-angles-from-transformation-matrix" target="_blank">Euler angles from 4x4 transformation matrix</a><br><a href="https://d3cw3dd2w32x2b.cloudfront.net/wp-content/uploads/2012/07/euler-angles1.pdf" target="_blank">Extracting euler angles</a> <br><br></td></tr></table><br>
+<a name="1317451"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks, guys -- might be a bit advanced for me, col, but I'm at work on a bank holiday, so will at least have a read!<br><br>Floyd, nice thinking -- I'll have to look and see if ParentEntity (EntityParent?) does anything to these internals, might be an option.<br><br><div class="quote"> <br>&gt; I'm thinking a wrapper between Newton and B3D... <br><br>I'd be inclined to agree.<br> <br></div><br>Yeah, I think writing out the problem at least made clear I need to have a go-between of some sort. Might dabble with importing entity.cpp/h into a C++ file and seeing if I can get Blitz to play, but I'm useless with this stuff and expect endless 'xyz not found/defined/whatever' errors!<br><br>However I do it, I suppose I can just override the EntityX and co methods/functions in my proxy/wrapper thingy anyway. Not sure how to do that in C++ if I need to, but I guess I'll figure that out.<br><br>Thanks again! <br><br></td></tr></table><br>
+<a name="1317619"></a>
+
+<a name="1317620"></a>
+
+<a name="1317627"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> The priority is to get a simple setup that you can debug and try different things. This is matrix math and will take some trial and error.<br><br>There's this function in entity.cpp, MQ_GetMatrix, it transforms the matrix you give it from identity (null) to the transformation stored in the translation px,py,pz, the scale sx,sy,sz and the rotation in the 'rotmat' matrix (which seems to be a clean matrix with just rotation values).<br><br>What you need is to create a function "MQ_SetMatrix" that does the opposite, it overwrites the matrix of the entity and also fills in those px,py,pz, sx,sy,sz and rotmat properties all based on an input matrix that you send to the function.<br>This matrix that you use with MQ_SetMatrix is the one that comes from Newton.<br>You also need to expose that MQ_SetMatrix function to BlitzMax code so you can call it from there, from the Newton update callbacks or whatever place you're required to do this. <br><br></td></tr></table><br>
+<a name="1317622"></a>
+
+<a name="1317623"></a>
+
+<a name="1317624"></a>
+
+<a name="1317625"></a>
+
+<a name="1317628"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> In these 4x4 matrices used for 3D transformations (linear algebra), the scale and rotation are usually represented by the same vectors:<br>The rotation is represented by three vectors, each pointing in the X, Y and Z directions that you want the entity to be rotated to. If these vectors are not all orthogonal you can get warping effects like shear etc.<br>The scale is encoded into these rotation vectors as their length (default length is 1.0).<br><br>So if you look at the entity.cpp MQ_GetScaleXYZ function, it does just that, it gets the length of the X, Y and Z rotation vectors:<br><a href="https://github.com/markcwm/openb3d.mod/blob/f152c0280812508814e7bf81f336eacf7d9b65cd/openb3dlib.mod/openb3d/src/entity.cpp#L1434" target="_blank">https://github.com/markcwm/openb3d.mod/blob/f152c0280812508814e7bf81f336eacf7d9b65cd/openb3dlib.mod/openb3d/src/entity.cpp#L1434</a><br><br>That function actually transforms 3 vectors by the entity matrix and gets the length of those, I'm not sure why it doesn't get the length of the rotation vectors of the matrix directly.<br>This is why you need to setup a debug environment, because it's small things like these that you'll have to test until getting right. Good luck. <br><br></td></tr></table><br>
+<a name="1317672"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks, Kryzon, that looks really helpful. Not had chance to play around yet, but this stuff ought to help me big time! <br><br></td></tr></table><br>
+<a name="1317977"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Finding the wrapper approach impossible! Given the OpenB3D wrapper is effectively dead, just going to hack away at my working version, currently attempting MQ_SetMatrix.<br><br>So far, major job just getting a dummy 'return 1' version implemented! (Stop chuckling, Brucey, it's rude.) Had to update all of:<br><br><pre class=code>
+openb3d.mod\openb3dlib.mod\openb3d\src\entity.cpp
+openb3d.mod\openb3dlib.mod\openb3d\src\entity.h
+openb3d.mod\openb3dlib.mod\methods.cpp
+openb3d.mod\openb3dlib.mod\methods.h
+
+openb3d.mod\openb3dlib.mod\openb3dlib.bmx
+openb3d.mod\openb3dex.mod\inc\TEntity.bmx
+</pre><br><br>That's working, though -- can call it from a test program -- so at least I have the basic interaction going and can now faff about attempting to get values out of the matrix. <br><br></td></tr></table><br>
+<a name="1318013"></a>
+
+<a name="1318014"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Good going, you imported that function from C++ to BlitzMax.<br>As for the body of MQ_SetMatrix, if you're looking for ideas:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">void Entity::MQ_SetMatrix( const Matrix &amp;inputMatrix )
+{
+		/* Overwrite the entity matrix with 'inputMatrix' from Newton.
+		 * Hopefully this works straight away. */
+		
+		mat.Overwrite( inputMatrix );
+		
+		/* Update the px,py,pz and sx,sy,sz and rotmat properties.
+		 * We shouldn't use the PositionEntity etc. functions because they call
+		 * for MQ_Update() and it could mess with this overwriting process. */
+		
+		/* px, py, pz.
+		 * These seem to be the local position of the entity, in other words
+		 * the position of the entity considering its parent as the origin. */
+		
+		float tempPX, tempPY, tempPZ;
+		tempPX = mat.grid[3][0];
+		tempPY = mat.grid[3][1];
+		tempPZ = mat.grid[3][2];
+		if ( parent != NULL )
+			parent-&gt;mat.TransformVec( tempPX, tempPY, tempPZ, 1 ); // Taken from TFormPoint.
+		px	= tempPX;
+		py	= tempPY;
+		pz	= -tempPZ; // Not sure if the Z flipping is necessary, need to test.
+		
+		/* sx, sy, sz.
+		 * Code taken from MQ_GetScaleXYZ.
+		 * Maybe it's not even necessary to retrieve these, since the scale
+		 * of the entity is not expected to change during the game\simulation.
+		 * Later, test commenting this part and seeing if it still works. */
+		
+		float xx=1.0, xy=0.0, xz=0.0;
+		float yx=0.0, yy=1.0, yz=0.0;
+		float zx=0.0, zy=0.0, zz=1.0;
+
+		mat.TransformVec(xx,xy,xz);
+		mat.TransformVec(yx,yy,yz);
+		mat.TransformVec(zx,zy,zz);
+
+		sx = sqrt((xx*xx)+(xy*xy)+(xz*xz));
+		sy = sqrt((yx*yx)+(yy*yy)+(yz*yz));
+		sz = sqrt((zx*zx)+(zy*zy)+(zz*zz));
+		
+		/* rotmat.
+		 * It seems to be a Matrix object with just rotation vectors (no scale).
+		 * Since we know the scale of the vectors from the previous step we can
+		 * divide the rotation vectors by that to get clean 1.0 length vectors, but
+		 * this might introduce some imprecision. 		
+		 * This part should work even if you comment the previous one out. */
+	
+		// Pitch (X vector).
+		if ( sx != 0.0 )
+		{
+			rotmat.grid[0][0] = inputMatrix.grid[0][0] / sx;
+			rotmat.grid[0][1] = inputMatrix.grid[0][1] / sx;
+			rotmat.grid[0][2] = inputMatrix.grid[0][2] / sx;
+		}
+		// Yaw (Y vector).
+		if ( sy != 0.0 )
+		{
+			rotmat.grid[1][0] = inputMatrix.grid[1][0] / sy;
+			rotmat.grid[1][1] = inputMatrix.grid[1][1] / sy;
+			rotmat.grid[1][2] = inputMatrix.grid[1][2] / sy;
+		}
+		// Roll (Z vector).
+		if ( sz != 0.0 )
+		{
+			rotmat.grid[2][0] = inputMatrix.grid[2][0] / sz;
+			rotmat.grid[2][1] = inputMatrix.grid[2][1] / sz;
+			rotmat.grid[2][2] = inputMatrix.grid[2][2] / sz;
+		}
+		
+		/* Update the BlitzMax (wrapper) matrix?
+		 * Maybe this is best done within BlitzMax, inside the MQ_SetMatrix function
+		 * that you added to TEntity.bmx.
+		 * So in that BlitzMax function you call this C++ function and then update
+		 * the BlitzMax wrapper entity. */
+}</textarea> <br><br></td></tr></table><br>
+<a name="1318034"></a>
+
+<a name="1318042"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Kryzon, that's amazing, thanks! I realise it may need some tweaking still, but hopefully will point me in the right direction for some trial-and-error based fumbling. If I can get the right results from this, the adding of relevant C++ functions and wrapping into BlitzMax shouldn't be too much a problem.<br><br>Thanks again! <br><br></td></tr></table><br>
+<a name="1318472"></a>
+
+<a name="1318473"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Kryzon, I... I think I love you!<br><br>Finally got to sit down with this, and although I need to do something about the nasty temp:TMatrix here, EntityX/Y/Z at least now work.<br><br>Turned out I had to keep the matrix copy operation in the Newton body callback code below, then comment out <i>mat.Overwrite( inputMatrix )</i> in matrix.cpp, otherwise it kept failing in various ways. Might investigate that further, but at least I know I can get the correct result now, so thanks a million! Amazing that your code basically just worked!<br><br><div class="quote"> <br>	' Fill in OpenB3D's TEntity.mat[:TMatrix].grid from Newton TNMatrix...<br>	<br>	Method AlignEntity:Int (matrix:Float Ptr)<br>		<br>		MemCopy mesh.mat.grid, matrix, 64<br>		<br>		Local temp:TMatrix = TMatrix.CreateObject (TEntity.GetInstance (Self.mesh))<br>		temp.grid = matrix<br>		<br>		mesh.MQ_SetMatrix temp<br>		<br>	End Method<br> <br></div> <br><br></td></tr></table><br>
+<a name="1318474"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> OK, EntityPitch/Roll/Yaw don't quite work (well, EntityPitch seems to work, the others basically give -0.0 or 180.0), but I might be able to figure this out, as I see you do something with the rotmat thing in the C++ code... <br><br></td></tr></table><br>
+<a name="1318577"></a>
+
+<a name="1318578"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi. If Newton gives you a float array then it might be better to pass that along to MQ_SetMatrix and avoid having to create that 'temp' TMatrix BlitzMax object which I think has to be garbage collected. <br>Your AlignEntity function will be called each frame for several objects, so it needs to be fast.<br><br>So something like this (renamed the function to something more appropriate):<br><pre class=code>void Entity::MQ_ApplyNewtonTransform( const float* newtonMatrix )
+{
+	memcpy( mat.grid, newtonMatrix, 64 );
+	...
+</pre>Once this is working (your OpenB3D object is being controlled by Newton) then you can focus on getting the px,py,pz etc. values working. <br><br></td></tr></table><br>
+<a name="1320921"></a>
+
+<a name="1320923"></a>
+
+<a name="1320924"></a>
+
+<a name="1320925"></a>
+
+<a name="1320930"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi Kryzon, meant to reply to this 3 weeks ago, sorry!<br><br>I think I've got it working now (after several aborted attempts since your post), but I wondered if you might be able to check my logic at some point?<br><br>I implemented your MQ_ApplyNewtonTransform in "openb3d.mod\openb3dlib.mod\openb3d\src\entity.cpp" after I accidentally got EntityPitch &amp; co working -- basically by changing the Pitch/Yaw/Roll matrix that was being used, from:<br><br><pre class=code>
+ 		// Pitch (X vector).
+		if ( sx != 0.0 )
+		{
+			rotmat.grid[0][0] = <u>inputMatrix</u>.grid[0][0] / sx;
+			rotmat.grid[0][1] = inputMatrix.grid[0][1] / sx;
+			rotmat.grid[0][2] = inputMatrix.grid[0][2] / sx;
+</pre><br><br>... to:<br><br><pre class=code>
+		// Pitch (X vector).
+		if ( sx != 0.0 )
+		{
+			rotmat.grid[0][0] = <u>mat</u>.grid[0][0] / sx;
+			rotmat.grid[0][1] = mat.grid[0][1] / sx;
+			rotmat.grid[0][2] = mat.grid[0][2] / sx;
+		}
+</pre><br><br>The logic here is that I've overwritten the entity's matrix with the Newton matrix at the start of MQ_ApplyNewtonTransform using:<br><br><pre class=code>
+memcpy( mat.grid, newtonMatrix, 64 );
+</pre><br><br>... so I'm now working with the updated mat.grid when getting the pitch/roll/yaw.<br><br>Your comments mentioned "Update the BlitzMax (wrapper) matrix?" at the end, suggesting it be updated from the Blitz side, but as far as I can tell, this isn't necessary, since overwriting mat.grid and updating rotmat.grid has effectively done this anyway. Does this make sense?<br><br>This is my current newton.mod and openb3d.mod with a test program (in "newtonb3d_testing"):<br><br><a href="http://www.hi-toro.com/blitz/newtonb3d.7z" target="_blank">http://www.hi-toro.com/blitz/newtonb3d.7z</a><br><br>The example seems to suggest it's working -- if you hold the space bar it manually aligns a semi-transparent cube based on the Newton cube's resulting EntityX/Y/Z and EntityPitch/Roll/Yaw.<br><br>MQ_ApplyNewtonTransform is called from "NewtonB3D\newtonb3d_testing\hitoro.mod\newtonb3d.mod\newtonbody.bmx" -&gt; AlignEntity, BTW.<br><br>NB. If you try the archive, it's ~30 MB that expands to over 330 MB! I didn't want to try to remove all of the built parts of the module, but on the plus side, it should avoid having to rebuild if you select x86 builds! (EDIT: Er, on Windows anyway... ) <br><br></td></tr></table><br>
+<a name="1321039"></a>
+
+<a name="1321153"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi. You're right, it's not necessary to change anything in the BlitzMax module after updating the matrix, it only uses the C++ object, it doesn't have its own unique matrices etc.<br><br>I tried to run the example you posted but it seems to be BlitzMax NG, so my vanilla Max complained about things (those are cool things though, like overloading the New method, using Public and Private inside types etc.).<br>I read the code and found nothing off, so hopefully it's working right. <br><br></td></tr></table><br>
+<a name="1321058"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for having a look, appreciate it -- it does seem to be working well so far. I might have a go at making it vanilla Max-compatible, not sure if that's even possible while using the NG features, though!<br><br>Thanks again. <br><br></td></tr></table><br>
+<a name="1321463"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm, you can use easily ?bmxng to wrap NG-only stuff, which works fine, eg:<br><br><pre class=code>
+Type XYZ
+
+    ?bmxng
+    Private
+    ?
+
+    ?bmxng
+    Public
+    ?
+
+    ...
+
+End Type
+
+</pre><br><br>... but it looks like newton and openb3d can't build on vanilla Max anyway... unless I'm doing something stupid. <br><br></td></tr></table><br>
+<a name="1321835"></a>
+
+<a name="1321836"></a>
+
+<a name="1321837"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> Been playing about with this -- little executable demo* in this archive (in examples folder), along with my WIP Newton/OpenB3D go-between source, which is still just me messing about:<br><br><a href="http://www.hi-toro.com/blitz/newtonb3d/newtonb3d.zip" target="_blank">http://www.hi-toro.com/blitz/newtonb3d/newtonb3d.zip</a> - Checked with <a href="https://www.virustotal.com/en/file/423da48b0e0862a7ef186f6c23e36599668e5e10df894236f5044d29070168dc/analysis/1476399245/" target="_blank">VirusTotal</a><br><br>* Built for x86 Windows only, physics running at 120 fps to accommodate fast-moving 'bullets'.<br><br><img src="http://www.hi-toro.com/blitz/newtonb3d/shooter.jpg"><br><br>Fun stuff: add/remove ground, spawn cubes/spheres with -/+, shoot them out of the sky with Space (or shoot the wall), reset all with R.<br><br>BTW, Kryzon, your MQ_ApplyNewtonTransform is currently as below -- I've kept the scaling stuff just in case it turns out to be needed for scaled entities, but currently working great with just this:<br><br><pre class=code>
+void Entity::MQ_ApplyNewtonTransform( const float* newtonMatrix ){
+
+	memcpy( mat.grid, newtonMatrix, 64 );
+		
+	float tempPX, tempPY, tempPZ;
+
+	tempPX = mat.grid[3][0];
+	tempPY = mat.grid[3][1];
+	tempPZ = mat.grid[3][2];
+
+	if ( parent != NULL )
+		parent-&gt;mat.TransformVec( tempPX, tempPY, tempPZ, 1 );
+
+	px	= tempPX;
+	py	= tempPY;
+	pz	= -tempPZ;
+}
+</pre> <br><br></td></tr></table><br>
+<a name="1321844"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thank you for sharing, real-time physics is a nice addition to OpenB3D. <br><br></td></tr></table><br>
+<a name="1321854"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well, Brucey did the hard part (besides the Newton Dynamics guys)! I'm just wrapping up some functions for ease of use.<br><br>Once I have a decent setup I'll put my slightly modified modules on Github, will be a while yet, though, as you can probably tell by my progress so far! If anyone wants another dump of my current progress in the meantime, just shout. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,404 @@
+<!DOCTYPE html><html lang="en" ><head ><title >fast .PNG tracing and outline collision !</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >fast .PNG tracing and outline collision !</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=524" >User Modules</a>/<a href="#bottom" >fast .PNG tracing and outline collision !</a><br><br>
+<a name="2104554"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GC-Martijn</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> UPDATE 2:<br>Made it a little faster and a float/int bug<br><br>UPDATE 1: <br>Now with collision detection and better polygon data.<br><br>Small fix, and now with atlas support.<br><br>Main target: ios/android/desktop<br>Other targets: You need to get PNG data to extend this script with your target<br><br>Its very simple, use a transparent png file, en this script get the outline.<br>Then you can convert the outline to a polygon and use that for collision detection.<br><br>Tested with several complex figures.<br><pre class=code>
+Strict
+
+Import mojo
+Import opengl.gles11
+Import classes.point
+
+Class Pngtracer
+	Field outline:Stack&lt;Point&gt;
+	Field simplyfied_outline:Stack&lt;Point&gt;
+	Field data:Int[]
+	Field verts:Float[]
+
+	Method Trace:Stack&lt;Point&gt;(path:String, tolerance:Int=1,highestQuality:Bool=True, startX:Int=0, startY:Int=0, w:Int=-1, h:Int=-1)
+		Local info:Int[2]
+		Local db:DataBuffer = LoadImageData(path, info)
+		Local startPixelX:Int = -1
+		Local startPixelY:Int = -1
+
+		If w=-1 Then w=info[0]
+		If h=-1 Then h=info[1]
+
+		data = data.Resize(w * h)
+		For Local y:Int = 0 Until h
+			For Local x:Int = 0 Until w
+				Local j:Int = db.PeekInt( ( (startY + y) * info[0] + (startX + x)) * 4)
+				
+				data[y * w + x] = (j &amp; $ff000000) | ( (j &amp; $00ff0000) Shr 16) | (j &amp; $0000ff00) | ( (j &amp; $000000ff) Shl 16)
+				If startPixelX=-1 And startPixelY=-1 And (data[y*w+x] shr 24) &amp; $FF Then
+					startPixelX=x
+					startPixelY=y
+				End
+			Next
+		Next
+		db = Null	
+
+		squaresAlg(startPixelX,startPixelY,w,h)
+		
+		If highestQuality=False Then
+			simplifyRadialDistance(outline,tolerance)
+			simplifyDouglasPeucker(simplyfied_outline,tolerance)
+		Else
+			simplifyDouglasPeucker(outline,tolerance)
+		End
+
+		
+
+		toPolyData(simplyfied_outline)
+
+		Return outline
+	End
+
+
+	Method getSquareValue:Int(_x:Int,_y:Int, _w:Int, _h:Int)
+		Local squareValue:Int=0
+		
+		' checking upper left pixel
+		If (_y-1)*_w+(_x-1)&gt;=0 And (data[(_y-1)*_w+(_x-1)] shr 24) &amp; $FF Then
+			squareValue+=1;
+		End
+		'' checking upper pixel
+		If (_y-1)*_w+_x&gt;=0 And (data[(_y-1)*_w+_x] shr 24) &amp; $FF Then
+			squareValue+=2;
+		End
+		'' checking left pixel
+		If _y*_w+(_x-1)&gt;=0 And _y*_w+(_x-1)&lt;=data.Length And (data[_y*_w+(_x-1)] shr 24) &amp; $FF Then
+			squareValue+=4;
+		End
+		'' checking the pixel itself
+		If _y*_w+_x&gt;=0 And _y*_w+_x&lt;=data.Length And (data[_y*_w+_x] shr 24) &amp; $FF Then
+			squareValue+=8;
+		End
+		Return squareValue
+	End
+
+	Method getSquareDistance:Float(p1:Point, p2:Point)
+    	Local dx:Float = p1.x - p2.x
+    	Local dy:Float = p1.y - p2.y
+    	Return dx * dx + dy * dy
+    End
+	Method simplifyRadialDistance:Stack&lt;Point&gt;(points:Stack&lt;Point&gt;, tolerance:Int=1)
+		Local length:Int = points.Length()
+		Local prev_point:Point = points.Get(0)
+		Local new_points:Stack&lt;Point&gt; = New Stack&lt;Point&gt;()
+		new_points.Push(prev_point)
+
+		Local point:Point
+
+		For Local i:Int = 0 Until length
+			point = points.Get(i)
+			If getSquareDistance(point, prev_point) &gt; tolerance Then
+            	new_points.Push(point)
+            	prev_point = point
+            End
+		Next
+
+		If prev_point &lt;&gt; point Then
+        	new_points.Push(point)
+        End
+
+        simplyfied_outline = new_points
+        Return new_points
+	End
+
+	Method getSquareSegmentDistance:Float(p:Point, p1:Point, p2:Point)
+	    Local x:Float = p1.x
+	    Local y:Float = p1.y
+
+	    Local dx:Float = p2.x - x
+	    Local dy:Float = p2.y - y
+
+	    If dx &lt;&gt; 0 or dy &lt;&gt; 0 Then
+	        Local t:Float = ((p.x - x) * dx + (p.y - y) * dy) / (dx * dx + dy * dy)
+
+	        If t &gt; 1 Then
+	            x = p2.x
+	            y = p2.y
+	        Elseif t &gt; 0 Then
+	            x += dx * t
+	            y += dy * t
+	        End
+	    End
+
+	    dx = p.x - x
+	    dy = p.y - y
+
+	    Return dx * dx + dy * dy
+    End
+
+	Method simplifyDouglasPeucker:Stack&lt;Point&gt;(points:Stack&lt;Point&gt;, tolerance:Int=1)
+		Local length:Int = points.Length()
+		Local markers:Int[] = New Int[length]
+
+		Local f:Int = 0
+		Local l:Int = length-1
+
+		Local first_stack:IntStack = New IntStack()
+		Local last_stack:IntStack = New IntStack()
+		Local new_points:Stack&lt;Point&gt; = New Stack&lt;Point&gt;()
+
+		markers[f] = 1
+		markers[l] = 1
+
+		Local index:Int = 0
+		Local max_sqdist:Float = 0
+
+		Local stop:Bool = False
+
+		While stop=False
+			max_sqdist = 0
+
+			For Local i:Int = f Until l
+				Local sqdist:Float = getSquareSegmentDistance(points.Get(i), points.Get(f), points.Get(l))
+				If sqdist &gt; max_sqdist Then
+                	index = i
+                	max_sqdist = sqdist
+                End
+			Next
+
+			If max_sqdist &gt; tolerance Then
+	            markers[index] = 1
+
+	            first_stack.Push(f)
+	            last_stack.Push(index)
+
+	            first_stack.Push(index)
+	            last_stack.Push(l)
+	        End
+
+	        If first_stack.IsEmpty() Then
+	        	f = 0
+	        Else
+	        	f = first_stack.Pop()
+	        End
+
+	        If last_stack.IsEmpty() Then
+	        	l = 0
+	        	stop = True
+	        Else
+	        	l = last_stack.Pop()
+	        End
+		End
+
+		For Local i:Int = 0 Until length
+        	If markers[i] Then
+            	new_points.Push(points.Get(i))
+           	End
+        Next
+
+       	simplyfied_outline = new_points
+       	Return new_points
+	End
+
+	Method squaresAlg:Void(_x:Int,_y:Int,_w:Int,_h:Int)
+		Local pX:Int=_x
+		Local pY:Int=_y
+		Local stepX:Int
+		Local stepY:Int
+		Local prevX:Int
+		Local prevY:Int
+		Local closedLoop:Bool=False
+
+		outline = New Stack&lt;Point&gt;()
+		While closedLoop=False
+			Select getSquareValue(pX,pY,_w,_h)
+				Case 1,5,13
+					stepX=0
+					stepY=-1
+			  	Case 8,10,11
+					stepX=0
+					stepY=1
+				Case 4,12,14
+					stepX=-1
+					stepY=0
+				Case 2,3,7
+					stepX=1
+					stepY=0
+				Case 6
+					If prevX=0 And prevY=-1 Then
+						stepX=-1
+						stepY=0
+					Else 
+						stepX=1
+						stepY=0
+					End
+				Case 9
+					If prevX=1 And prevY=0 Then
+						stepX=0
+						stepY=-1
+					Else
+						stepX=0
+						stepY=1
+					End
+			End
+
+			pX+=stepX
+			pY+=stepY
+
+			outline.Push(new Point(pX, pY))
+			prevX=stepX
+			prevY=stepY
+	
+			If pX=_x And pY=_y Then
+				closedLoop=true
+			End
+		End
+
+	End
+
+
+	Method toPolyData:Float[](points:Stack&lt;Point&gt;)
+		verts = verts.Resize(points.Length*2)
+		Local tmpI:Int = 0
+
+		For Local point:Point = Eachin points
+			verts[tmpI] = point.x
+			tmpI=tmpI+1
+			verts[tmpI] = point.y
+			tmpI=tmpI+1
+		Next
+
+		Return verts
+	End
+End
+</pre><br><br>example<br><pre class=code>
+Strict
+
+Import mojo
+Import opengl.gles11
+Import classes.pngtracer
+
+Function Main:Int()
+	New MyApp()
+	Return 0
+End
+
+Class MyApp Extends App
+	Field thing:Sprite
+		
+	Method OnCreate:Int()		
+
+		SetUpdateRate(60)
+		thing = New Sprite()
+		Return 0
+	End
+	
+	Method OnUpdate:Int()
+		thing.Update()
+		Return 0
+	End
+	
+	Method OnRender:Int()
+		Cls(255,255,255)
+
+		thing.Draw()
+		Return 0
+	End
+End
+
+
+
+Class Sprite
+	Field visible_outline:Stack&lt;Point&gt; = New Stack&lt;Point&gt;()
+	Field simplyfied_outline:Stack&lt;Point&gt; = New Stack&lt;Point&gt;()
+	Field verts:Float[]
+
+	Field hit:Bool
+	Field imgSlice:Image
+
+	Method New()
+		Local PNGTrace:Pngtracer = New Pngtracer()
+
+		PNGTrace.Trace("monkey://data/test-thing2.png",1,True)
+		visible_outline = PNGTrace.outline
+		simplyfied_outline = PNGTrace.simplyfied_outline
+		verts = PNGTrace.verts
+
+		' or atlas file
+	''	PNGTrace.Trace("monkey://data/atlas-world1.png",1,True,660,1207,242,132)
+	''	visible_outline = PNGTrace.outline
+	''	simplyfied_outline = PNGTrace.simplyfied_outline
+	''	verts = PNGTrace.verts
+
+	''	imgSlice = CreateImage(242, 132)
+	''	imgSlice.WritePixels(PNGTrace.data, 0, 0, 242, 132)
+
+		' ! I WILL USE IT LIKE THIS
+		' I save the verts in a json file, so I don't have to calculate it before
+	
+		' Monkey has a bug or it yust don't want to work with my poly data, I don't know why yet.
+		' DrawPoly(verts) don't work, but hit detection and other poly math do work.
+		' 
+	End
+	
+	Method Draw:Void()
+	''	DrawImage(imgSlice,0,0)
+
+		If hit Then
+			SetColor(255,0,0)
+			For Local point:Point = Eachin simplyfied_outline
+				DrawPoint(point.x,point.y)
+			Next
+		Else
+			SetColor(0,0,255)
+			For Local point:Point = Eachin visible_outline
+				DrawPoint(point.x,point.y)
+			Next
+		End
+
+		' DrawPoly(verts) '&lt;--- MONKEY fails, but the poly data is correct !!!
+	End
+	
+	Method Update:Void()
+		If PointInPoly(MouseX(),MouseY(),verts) Then
+			hit = True
+		Else
+			hit = False
+		End
+	End
+
+	
+
+	Function PointInPoly:Bool(x:Float, y:Float, poly:Float[])
+		Local i:Int, j:Int, c:Bool
+		Local v1:Bool, v2:Bool, v3:Bool, v4:Bool, v5#, v6#, v7#
+		c = False
+		Local p_count% = (poly.Length() / 2)
+		
+		For i = 0 To p_count-1
+			j = (i+1) Mod p_count
+			v1 = (poly[i*2+1] &lt;= y)
+			v2 = (y &lt; poly[j*2+1])
+			v3 = (poly[j*2+1] &lt;= y)
+			v4 = (y &lt; poly[i*2+1])
+			v5 = (poly[j*2]-poly[i*2]) * (y-poly[i*2+1])
+			v6 = (poly[j*2+1]-poly[i*2+1])
+			If v6 = 0.0 Then v6 = 0.0001
+			v7 = poly[i*2]
+			If (((v1 And v2) Or (v3 And v4)) And (x &lt; v5 / v6 + v7)) Then c = Not c
+		Next
+		Return c
+	End
+End
+</pre> <br><br></td></tr></table><br>
+<a name="2104551"></a>
+
+<a name="2104097"></a>
+
+<a name="2104050"></a>
+
+<a name="2103136"></a>
+
+<a name="2103159"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Why0Why</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looks very handy! <br><br></td></tr></table><br>
+<a name="2103205"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DruggedBunny</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh, that's some nice code! Great result with this test: <img src="http://www.hi-toro.com/boing.png"> <br><br></td></tr></table><br>
+<a name="2103204"></a>
+
+<a name="2103208"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GC-Martijn</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> within some time i will post the outline points2poly code to check a collision. i have to find a code to convert all the coordinates to clockwise polygon verts. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

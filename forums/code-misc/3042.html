@@ -1,0 +1,598 @@
+<!DOCTYPE html><html lang="en" ><head ><title >bb Tokenizer + parser + bbToDecls</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='smart simple tokenizer + decls extractor, language=bb, category=Miscellaneous'><meta name='author' content='Bobysait'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=9>Miscellaneous</a>/bb Tokenizer + parser + bbToDecls</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="3042.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >bb Tokenizer + parser + bbToDecls by Bobysait</td><td align="right">2013 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> the "How To" tokenize some code, fully commented.<br>It does not search for errors and does not make difference between a number and an hex or bin value as it is not made this way.<br><br>A sample is released on the bottom<br>it parses some blitz code using syntax color.<br><br>ps : this is a kind of tutorial, I didn't even test it for production. It may be slow or not, I don't even know, but actually, it should run pretty fast. </td></tr><tr ><td class="cell"><pre class="code">Const MAX_TOKEN_PER_SET% = 512
+
+Const TOKEN_OP%=0, TOKEN_WORD%=1, TOKEN_NUM%=2, TOKEN_STR%=3
+
+Type TokenSet Field Tokens, count% End Type
+Type Token Field v$, t%, p%, e% End Type
+
+Function TokenSetCount%(ts.TokenSet)
+	Return ts\count
+End Function
+
+Function TokenSetToken.Token(ts.TokenSet,id)
+	Return Object.Token(PeekInt(ts\Tokens,id*4-4))
+End Function
+
+Function TokenValue$(ts.TokenSet,id)
+	Local tok.Token = Object.Token(PeekInt(ts\Tokens,id*4-4)) : If tok&lt;&gt;Null : Return tok\v : EndIf
+	Return ""
+End Function
+Function TokenType%(ts.TokenSet,id)
+	Local tok.Token = Object.Token(PeekInt(ts\Tokens,id*4-4)) : If tok&lt;&gt;Null : Return tok\t : EndIf
+	Return 0
+End Function
+Function TokenStart%(ts.TokenSet,id)
+	Local tok.Token = Object.Token(PeekInt(ts\Tokens,id*4-4)) : If tok&lt;&gt;Null : Return tok\p : EndIf
+	Return 0
+End Function
+Function TokenEnd%(ts.TokenSet,id)
+	Local tok.Token = Object.Token(PeekInt(ts\Tokens,id*4-4)) : If tok&lt;&gt;Null : Return tok\e : EndIf
+	Return 0
+End Function
+
+Function FreeTokenSet(ts.TokenSet)
+	If ts\Tokens
+		Local size=BankSize(ts\Tokens)
+		If size&gt;3
+			For n = 0 To size-1 Step 4
+				Local tok.Token = Object.Token(PeekInt(ts\Tokens,n))
+				If tok&lt;&gt;Null Then Delete tok
+			Next
+		EndIf
+		FreeBank ts\Tokens
+	EndIf
+	Delete ts
+End Function
+
+Function NewToken.Token(ts.TokenSet, v$, t%, p%,e%)
+	ResizeBank(ts\Tokens,BankSize(ts\Tokens)+4)
+	Local tok.Token = New Token
+	; value of the token
+	tok\v = v
+	; type of token (word, operator)
+	tok\t = t
+	; as the tokenizer declare numerals as they were words, check if is actually is a numeral or not
+	If tok\t = TOKEN_WORD
+		If IsNum(tok\v)
+			tok\t=TOKEN_NUM
+		EndIf
+	EndIf
+	; token position in the string
+	tok\p = p
+	; end position in the string ( length is e-p+1 ... or Len(v) )
+	tok\e = e
+	
+	; insert the token in the token bank
+	PokeInt(ts\Tokens,ts\count*4,Handle(tok))
+	; increase the count of token in the set
+	ts\count = ts\count + 1
+	
+	; eventually returns the token ... (not really usefull BTW)
+	Return tok
+End Function
+
+; tokenize a string @s
+; @ops  : a string containing all symbols (one char length per symbol)
+; @seps : a string containing all symbols removed from the set
+;         -&gt; like spaces or tabs, they are used to split words
+;		     but not relevant in for the language.
+Function Tokenize.TokenSet(s$, ops$, seps$=" ", strchars$="'")
+	Local ts.TokenSet = New TokenSet
+	ts\Tokens = CreateBank(0)
+	Local word$="",start%=0
+	Local ln=Len(s), i, c$, b
+	
+	For i = 1 To ln
+		
+		c = Mid(s,i,1)
+		
+		; first -&gt; detect strings !
+		If Instr(strchars,c)
+			
+			; register eventual started word
+			If word&lt;&gt;"" Then NewToken(ts,word,TOKEN_WORD,start,i)
+			
+			; find the respective closer
+			start=i
+			i=Instr(s,c,i+1)
+			If i&gt;start
+				; add the string to the tokenset
+				NewToken(ts,Mid(s,start,i-start+1),TOKEN_STR,start,i)
+			; not closed ? let's close it with to the end of the string.
+			Else
+				NewToken(ts,Right(s,ln-start),TOKEN_STR,start,i)
+				; exit the loop. We encountered the end, there 's nothing left to parse.
+				Exit
+			EndIf
+			
+		; ok, so it's not a String, maybe an empty char.
+		ElseIf Instr(seps,c)
+			
+			; add the current word (if any)
+			If word&lt;&gt;"" Then NewToken(ts,word,TOKEN_WORD,start,i)
+			; reset position
+			word="" : start=i+1
+			; do not add the token ... it's an empty token!
+			
+		; or an operator maybe
+		ElseIf Instr(ops,c)
+			
+			Local isnumber=False
+			; as a dot may be an operator or the separator between integer and decimal
+			; we wouldn't to separate them, don't we ?! ... Do you ? oO ... it's bad ! really bad !
+			
+			; then let's track numerals
+			If c="."
+				
+				; if current word is not empty, check if its first char is litteral or numeral
+				; generally a word can contain some number, but can't start with a number.
+				; (except for Hex wich actually are not really numbers but a litteral expression
+				;  to represent a number .... outch ... my brain is bleeding
+				;  anyway, it's a kind of a rule up to the user to define. so ... we don't care about 'hex'.)
+				If Len(word)
+					b=Asc(Left(word,1))
+					; alright, we found a number (or an ... something erroneous containing some chars that we don't care about.
+					;                             Did I told you about Hex ?... mmm... probably.)
+					If b&gt;=Asc("0") And b&lt;=Asc("9")
+						isnumber=True
+						word=word+c
+					; else the first char is not a numeral
+					; it means we have a word and a dot. So the dot will be managed as an operator.
+					EndIf
+				Else
+				; no word currently ? so we have to be sure the next char is a numeral or not.
+				; because we can start a decimal using just the dot ( ex : ".0704" )
+					If i&lt;ln
+						b=Asc(Mid(s,i+1,1))
+						; ok we found a numeral :) (the integer part will get back its baby \o/)
+						If b&gt;=Asc("0") And b&lt;=Asc("9")
+							isnumber=True
+							word=word+c
+						EndIf
+					; else the string ends with a dot ... uncommun oO ...
+					; but maybe it's an unfinished string or ... don't know ..."
+					; maybe you're trying to parse a book ? ... did I noticed you this parser is only made for programming language ?
+					; my bad, I should have... doesn't matter, now, you know it.
+					EndIf
+				EndIf
+			EndIf
+			
+			; we reach this point without finding numeral, so this is an operator (wether it's a dot or not)
+			If isnumber=False
+				; if any started word, then just add it to the set.
+				If word&lt;&gt;"" Then NewToken(ts,word,TOKEN_WORD,start,i)
+				; add the symbol
+				NewToken(ts,c,TOKEN_OP,i,i)
+				; reset start and word
+				word="" : start=i+1
+			EndIf
+			
+			; by the way, don't leave a variable with a state (doesn't really matter but, it's an habit to have)
+			isnumber=False
+			
+		; Else, this is just a legal char ... let's say it's part of a word.
+		; (this tokenizer doesn't care about illegal chars, it lives in a wonderfull world of freedom)
+		Else
+			; add the char to the word.
+			word=word+c
+		EndIf
+	Next
+	
+	; the word contains some chars ? let's register them before ending the set.
+	If word&lt;&gt;"" Then NewToken(ts,word,TOKEN_WORD,start,Len(s))
+	
+	; and Voila !
+	; we can return our set, the user will take care of it (I hope ...)
+	Return ts
+	
+End Function
+
+; a basic function that returns true if the string contains only numeral chars (0-9 + ".")
+; actually this function returns true if there is more than one "." ...
+; but as we don't deal this kind of errors, whatever ... let's say it's a number !
+Function IsNum%(v$)
+	Local a0=Asc("0"), a9=Asc("9"), ad=Asc("."), l=Len(v), i, b
+	For i = 1 To l:b=Asc(Mid(v,i,1)):If((b&lt;a0 Or b&gt;a9) And b&lt;&gt;ad):Return False:EndIf:Next
+	Return l&gt;0 ; return false is the string is empty, it's not a numeral.
+End Function
+
+
+Type Keyword
+	Field word$, cs
+End Type
+Function NewKeyWord(word$,casesensitive%=False)
+	Local kw.Keyword = New Keyword
+	If casesensitive
+		kw\word = word
+	Else
+		kw\word = Lower(word)
+	EndIf
+	kw\cs=casesensitive
+End Function
+
+; small sample
+Function Tokenizer_SimpleSample()
+	Graphics 800,600,0,2
+	
+	ClsColor 0,40,60
+	Cls
+	
+	; let's load a font (I like consolas, as it's a fixed width and lite font)
+	; but if you don't have it, let's go for the blitz font (you should have it, as it's the ... blitz font)
+	Local font=LoadFont("Consolas",18) : If Not(font) Then font=LoadFont("Blitz",16)
+	SetFont font
+	
+	; setup our tokenizer
+	Local ops$ = ".=()[]#$%;:/\+-*.,?" ; basic symbols to parse
+	Local emptyops$ = " "+Chr(9) ; space + tab -&gt; thoose symbols split words but are not output by the tokenizer
+	Local strops$ = Chr(34); (chr(34) = ["] ) -&gt; the string chars. everything started with thoose symbol end with the same symbol.
+	
+	; some strings to parse
+	Local mystring$[4]
+	mystring[0] = "; the Holy function"
+	mystring[1] = "Function TokenizeMe.ReturnType(Params%=12.6,param2$="+Chr(34)+"I'm a striiiiIiing"+Chr(34)+")"
+	mystring[2] = "  This code will never compile ... but the parser doesn't know it"
+	mystring[3] = " Return Null"
+	mystring[4] = "End Function ; and I'm a bronish comment"
+	
+	Local ns
+	For ns = 0 To 4
+	
+		; tokenize the string
+		Local ts.TokenSet=Tokenize(mystring[ns], ops, emptyops,strops)
+		
+		NewKeyWord("Function")
+		NewKeyWord("End")
+		NewKeyWord("Return")
+		NewKeyWord("Null")
+		
+		Local NbToken = TokenSetCount(ts), n
+		
+		If NbToken
+			
+			Local tok.Token
+			; parse each token in the set with a Blitz-like style
+			For n = 1 To NbToken
+				
+				Select TokenType(ts,n)
+					
+					; if it's a word color it Yellow
+					Case TOKEN_WORD : Color 255,255,000
+						
+						; we should parse all keywords, but this is just a sample, we'll only track the "Function" and "End keywords
+						; keywords are light-blue (actually, it's turquoise... or orange ... mmm ... colorblindness is a pain in the ****)
+						Local word$ = TokenValue(ts,n)
+						Local lowerword$=Lower(word)
+						Local kw.Keyword
+						For kw = Each Keyword
+							If kw\cs
+								If word=kw\word Then Color 000,255,255:Exit
+							Else
+								If lowerword=kw\word Then Color 000,255,255:Exit
+							EndIf
+						Next
+						
+					; operators are whyte
+					Case TOKEN_OP   : Color 255,255,255
+						; except the comments ...
+						If TokenValue(ts,n)=";"
+							; let's color the comments in a brownish orange
+							Color 255,100,000
+							; write all the left tokens and quit the loop.
+							Write "; "
+							Local n2=n+1
+							For n=n2 To NbToken
+								Write TokenValue(ts,n)+" "
+							Next
+							Exit
+						EndIf
+						
+					; numbers are blue
+					Case TOKEN_NUM  : Color 000,128,255
+					
+					; and finally, the string in green
+					Case TOKEN_STR  : Color 000,255,000
+					
+				End Select
+				
+				; here we are. Write the token
+				Write TokenValue(ts,n)+" "
+				
+			Next
+		EndIf
+		FreeTokenSet(ts)
+		Print ""
+	Next
+	
+	Flip True
+	
+	FreeFont font
+	
+	WaitKey
+	End
+End Function
+
+
+Tokenizer_SimpleSample()</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> And here is an other sample<br>It parses a bb file and extract a decls (with the same filename at same directory)<br><br>(this is actually the reason why I made the tokenizer... big libraries to export, and too lazzy to write the decls myself)<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Function bbToDecls(file$, ExportType%=False,ExportConst%=False,ExportGlobal%=False,ComFunc%=False,ComType%=False,ComConst%=False,ComGlobal%=False)
+	
+	Local ops$ = ".=()[]#$%;:/\+-*.,?"
+	Local emptyops$ = " "+Chr(9)
+	Local strops$ = Chr(34)
+	
+	If Lower(Right(file,3))&lt;&gt;".bb" Then Return False
+	Local o$ = Left(file,Len(file)-3)+".decls" ; same name replacing ".bb" with ".decls"
+	
+	; read the inputfile (return if not "readable")
+	Local in = ReadFile(file) : If Not(in) Then Return False
+	; write the output decls
+	Local out = WriteFile(o) : If Not(out) Then Return False
+	
+	; add the decoration
+	WriteLine out, ".lib "+Chr(34)+" "+Chr(34)
+	WriteLine out, ""
+	
+	Local LId% = 0
+	Local lastcomment$=""
+	
+	; parse the bb-file
+	While Not(Eof(in))
+		
+		; read the lines (remove spaces before and after)
+		Local l$=Trim(ReadLine(in))
+		LId = LId+1
+		
+		If Len(l)
+			
+			Local ts.TokenSet = Tokenize(l,ops,emptyops,strops)
+			
+			If TokenSetCount(ts) ; assert there is tokens (not an empty line ... should not happen due to the trim ... but anyway.)
+				
+				; find function signature (decoration)
+				Select Lower(TokenValue(ts,1))
+					Case "function"
+						
+						If TokenSetCount(ts)&lt;4 Then RuntimeError "Error at line "+LId+" : in the function declaration '"+l+"'"
+						; tokenize the line
+						
+						; set all to default.
+						Local fname$=""
+						Local freturn$=""
+						Local freturntype$=""
+						
+						; actually, the start of the parameters can't be smaller than "3"
+						; Function Name([...])
+						; if can start at 4
+						; Function Name%([...])
+						; if can also start at 5
+						; Function Name .ReturnType([...])
+						; I don't think it can start later...
+						Local fparamstart%=3
+						; so, let's start grabing the "name" and the "return" thing
+						
+						; let's assume the file is a "valid" bb-file (we won't deal with errors in the file)
+						; pos 1 = function
+						; pos 2 = name
+						; pos 3 = "." or % or "$" or "#" or "("
+						
+						; so the name is at pos 2 !
+						fname=TokenValue(ts,2)
+						
+						; for the pos 3, we have to check wether it's a "(" or something else
+						Select TokenValue(ts,3)
+							
+							; so we found the first bracket
+							Case "("
+								; no return type
+								freturn=""
+								; and the first argument start at pos 4 (if any)
+								fparamstart=3
+								
+							Case "."
+								freturn="" ; do not mark the 'type' return (decls does not support them)
+								; eventually if we wanted to catch the type : (for document or else)
+								freturntype = TokenValue(ts,4)
+								fparamstart=5 ; go after the bracket
+								
+							Case "%","$","#"
+								freturn=TokenValue(ts,3)
+								fparamstart=4
+								
+							Default
+								; maybe we could check what else happend here
+								RuntimeError "Error at line "+LId+" : This symbol is Not supported : ["+TokenValue(ts,3)+"] as a Function decoration"
+								; we should not be here as there is a RuntimeError call ...
+								; but if the user override the RuntimeError Function ?! ... I know someone who ..."
+								End
+								; Hey, maybe someone override the "End" too &gt;.&lt; what knid of person do that ?!
+								Return False
+								; I hope the return can't be override ... damn, I think I'm paranoid
+								DebugLog "Are you serious ? He !"
+								Print "You think I'm paranoid, don't you ?!"
+								
+						End Select
+						
+						; so we have the name and the return style, let's parse the arguments.
+						Local fargs$="(", lastarg$=""
+						For n = fparamstart To ts\count
+							
+							Select TokenType(ts,n)
+								
+								Case TOKEN_WORD
+									
+									lastarg = TokenValue(ts,n)
+									fargs=fargs+lastarg
+									
+								Case TOKEN_OP
+									
+									Select TokenValue(ts,n)
+										
+										Case "," ; start of a new argument
+											; check if there is no previous argument ... if so, its' a syntax error.
+											If lastarg=""
+												RuntimeError "Error at line "+LId+" : Illegal declaration in function '"+fname+"' missing argument before comma"
+											EndIf
+											fargs=fargs+", "
+											
+										Case "%","#","$"
+											
+											; add the type specifier
+											fargs=fargs+TokenValue(ts,n)
+											
+										Case "[" ; a static array as parameter, Yes Sir !
+											
+											; arrays are marked with a "*" for pointers, but we have to remove the type specifier (if any)
+											Select TokenValue(ts,n-1)
+												Case "%","#","$"
+													fargs=Left(fargs,Len(fargs)-1)
+											End Select
+											; add the "*"
+											fargs=fargs+"*"
+											; jump to the end of the array decoration
+											n2 = n+1
+											For n=n2 To TokenSetCount(ts)
+												If TokenValue(ts,n)="]" Then Exit
+											Next
+											
+										Case "."
+											
+											; it's a Blitz-type &gt; marked with a "*" in decls files. (but we have to skyp the type-name)
+											fargs = fargs+"*"
+											; skip the next token (should be the typename, but if it's not there is an error)
+											If TokenType(ts,n+1)=TOKEN_WORD
+												n=n+1
+											Else
+												RuntimeError "Error at line "+LId+" : Illegal declaration of BlitzType in Function '"+fname+"'"
+											EndIf
+											
+										Case "=" ; start of optionnal value of the current argument
+											
+											If TokenSetCount(ts)&gt;n+1
+												; skip the optional value and check if the next token is a valid one. (end of arguments, or separator)
+												Select TokenValue(ts,n+2)
+													Case ")", ","
+														n=n+1
+													Default
+														RuntimeError "Error at line "+LId+" : Unknown decoration for argument '"+lastarg+"'"
+												End Select
+											Else
+												; not enough space : function is not defined correctly
+												RuntimeError "Error at line "+LId+" : Unknown error in end of Function declaration '"+fname+"'"
+											EndIf
+											
+										; The ending brackets, we did it !
+										Case ")"
+											
+											fargs=fargs+")"
+											Exit
+											
+									End Select
+									
+								Case TOKEN_NUM
+									; as the "=value..." is skiped, we should not find any numbers.
+									RuntimeError "Error at line "+LId+" : Unexpected Number in function declaration '"+fname+"'"
+									
+								Case TOKEN_STR
+									; we should not find any strings either.
+									RuntimeError "Error at line "+LId+" : Unexpected string in function declaration '"+fname+"'"
+									
+							End Select
+							
+						Next
+						
+						; assert the arguments are closed !
+						If Right(fargs,1)&lt;&gt;")"
+							RuntimeError "Error at line "+LId+" : missing bracket ')' in function declaration '"+fname+"'"
+						EndIf
+						
+						If ComFunc And lastcomment&lt;&gt;"" Then WriteLine out, lastcomment
+						WriteLine out, fname+" "+freturn+" "+fargs
+						
+						lastcomment = ""
+						
+					; manage the comments ?
+					Case ";"
+						
+						lastcomment=l
+						
+					Case "type"
+						; export types as function the currently won't be function, but they will be highlighted)
+						If ExportType
+							If TokenSetCount(ts)&gt;1
+								If ComType And lastcomment&lt;&gt;"" Then WriteLine out, lastcomment
+								WriteLine out, TokenValue(ts,2)+"()"
+							Else
+								RuntimeError "Error at line "+LId+" : missing Type specifier"
+							EndIf
+						EndIf
+						lastcomment = ""
+						
+					Case "global"
+						; export globals as function the currently won't be function, but they will be highlighted)
+						If ExportGlobal
+							If TokenSetCount(ts)&gt;4
+								If TokenType(ts,2)=TOKEN_WORD
+									If ComGlobal And lastcomment&lt;&gt;"" Then WriteLine out, lastcomment
+									Select TokenValue(ts,3)
+										Case "%","$","#"
+											WriteLine out, TokenValue(ts,2)+TokenValue(ts,3)+"()"
+										Default
+											WriteLine out, TokenValue(ts,2)+"()"
+									End Select
+								Else
+									RuntimeError "Error at line "+LId+" : missing Type specifier"
+								EndIf
+							Else
+								RuntimeError "Error at line "+LId+" : missing Type specifier"
+							EndIf
+						EndIf
+						lastcomment = ""
+						
+					Case "const"
+						; export const as function the currently won't be function, but they will be highlighted)
+						If ExportConst
+							If TokenSetCount(ts)&gt;4
+								If TokenType(ts,2)=TOKEN_WORD
+									If ComConst And lastcomment&lt;&gt;"" Then WriteLine out, lastcomment
+									Select TokenValue(ts,3)
+										Case "%","$","#"
+											WriteLine out, TokenValue(ts,2)+TokenValue(ts,3)+"()"
+										Default
+											WriteLine out, TokenValue(ts,2)+"()"
+									End Select
+								Else
+									RuntimeError "Error at line "+LId+" : missing Type specifier"
+								EndIf
+							Else
+								RuntimeError "Error at line "+LId+" : missing Type specifier"
+							EndIf
+						EndIf
+						lastcomment = ""
+						
+					; else ... skip the line.
+					Default
+						; here we should get all tokens and catch the "function" words inside the set
+						; some people use the ":" to stick lines on the same line
+						; ex : Function f1():dothings:End Function : Function F2(): blablabla : End Function
+						; but whatever, this small version does not deal with it at the moment.
+						; hey ! it's just a sample :)
+						lastcomment = ""
+						
+				End Select
+				
+			EndIf
+			
+			FreeTokenSet(ts)
+			
+		EndIf
+		
+	Wend
+	
+	CloseFile In
+	CloseFile Out
+	
+End Function
+
+bbToDecls("YOUR_BB_FILE_HERE.bb",True,True,True,True,False,False,False)
+
+</textarea> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2013</font></td></tr></table></td></tr><tr ><td class="posttext"> You seem too have it well in hand, but if you want a tested and "practical" (quite slow though) backend for such a task, you might find these useful: <br><a href="/codearcs/codearcs.php?code=2990" >Parser framework</a><br><a href="/codearcs/codearcs.php?code=2985" >Lexical scanner framework</a> (tokeniser and lexical scanner are the same thing) <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

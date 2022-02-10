@@ -1,0 +1,799 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Problem with Roamalgo</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Problem with Roamalgo</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Problem with Roamalgo</a><br><br>
+<a name="714905"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >klepto2</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi guys, As you may know, I try to implement a Terrain Rendering class to Minib3D, and after some problem I had have with quadtree terrains I have found a java source for simple roaming. Now I have converted this code to BMax to go with Minib3D. But there are several problems I don't know where they come from:<br><br>First the original source is located here: <a href="http://homepage.mac.com/jhuwaldt/java/3DStuff/ROAMApp/ROAMApp.html" target="_blank">http://homepage.mac.com/jhuwaldt/java/3DStuff/ROAMApp/ROAMApp.html</a><br>this is how i converted it to BMax:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+Import "minib3d.bmx"
+
+Global Splitted:Int = 0
+
+Type TTerrain
+	Field gMapXSize:Int
+	Field gMApYSize:Int
+	Field gMapDiagSize:Int
+	Field gGridSpace:Float = 4
+	
+	Field gNumPatchesperXSide:Int
+	Field gNumPatchesperYSide:Int
+	Field gPatchSize:Int
+	Field RecurseDepth:Int = 8
+	Field gHeightmap:THeightmap
+	Field minAlt:Int
+	Field maxalt:Int
+	
+	Field colorfactor:Float
+	Field gPatches:TPatch[,]
+	Field gNextTriNode:Int = 0
+	Field POOL_SIZE:Int = 25001
+	Field gTriPool:TTriTreeNode[]
+	Field gNumTrisRendered:Int = 0
+	Field gDesiredTris:Int = 5000
+	Field gFrameVariance:Int = 2
+	
+	Field ViewPosition:Float[3]
+	Field Mesh:TMesh
+	Field Surface:TSurface
+	
+	Function Create:TTerrain(Url:Object , PatchSize:Int , gridSpacing:Float)
+		'ToDo Loading Routine einbauen
+		'
+		'
+		'
+		Local T:TTerrain = New TTerrain
+		T.gHeightmap = THeightmap.Load(Url)
+		Local Height:Int = T.gHeightmap.GetHeight()
+		Local Width:Int = T.gHeightmap.GetWidth()
+		
+		If Width Mod Patchsize &lt;&gt; 0 Then Throw "Heightmap width must be (patchsize*n + 1)."
+		If Height Mod Patchsize &lt;&gt; 0 Then Throw "Heightmap height must be (patchsize*n + 1)."
+		
+		T.gMapXSize = Width
+		T.gMapYSize = Height
+		T.gMapDiagSize = Int(Sqr(Width * Width + Height * Height) )
+		T.gNumPatchesperXSide = Width / patchsize
+		T.gNumPatchesperYSide = Height / Patchsize
+		T.gPatchsize = patchsize
+		T.gPatches = New TPatch[T.gNumPatchesperXSide , T.GnumPatchesperYSide]
+		T.RecurseDepth = 1 Shl (2 * T.Log2(Patchsize) - 1)
+		Print T.RecurseDepth
+		T.gTriPool = T.genTriTreeNodePool(T.Pool_Size)
+		T.MinALt = T.gHeightmap.minAlt
+		T.maxAlt = T.gHeightmap.MaxAlt
+		
+		T.gGridSpace = gridspacing
+		T.ViewPosition[0] = 0
+		T.ViewPosition[1] = 0
+		T.ViewPosition[2] = 0
+		
+		T.Mesh = CreateMesh()
+		T.Surface = CreateSurface(T.Mesh)
+		
+		
+		T.Init()
+		
+		T.MarkChanged(0,T.gMapySize-1,T.gmapxsize-1,0)
+	
+		Return T
+	End Function
+	
+	Method getLOD:Int()
+		Return gDesiredTris
+	End Method
+	
+	Method setLOD:Int(LOD:Int)
+		If Lod &lt; 4000 Then Lod = 4000
+		gDesiredtris = LOD
+	End Method
+	
+	Method TrisRendered:Int()
+		Return gNumTrisRendered
+	End Method
+	
+	Method getFrameVariance:Int()
+		Return gFrameVariance
+	End Method
+	
+	Method markchanged(_Top:Int , _Left:Int , _Bottom:Int , _Right:Int)
+		For Local Y:Int = 0 To gNumPatchesPerYSide - 1
+			For Local X:Int = 0 To gNumPatchesPerXSide - 1
+				Local P:TPatch = gPatches[Y , X]
+				Local ptop:Int = P.getOffsetX()
+				Local pLeft:Int = P.GetOffSetY()
+				Local pbottom:Int = pTop + gPatchsize
+				Local pRight:Int = pLeft + gPatchsize
+				
+				If (Pleft &lt; _Right And pright &gt; _left ) And (ptop &lt; _bottom And pbottom &gt; _top) Then
+				Print "dirty"
+				 p.MarkDirty()
+				End If
+			Next
+		Next
+	End Method
+	
+	Method Init()
+		For Local Y:Int = 0 To gNumPatchesPerYSide - 1
+			For Local X:Int = 0 To gNumPatchesPerXSide - 1
+				Local P:TPatch = TPatch.Create(x * gPatchSize , Y * gPatchSize,Self)
+				P.ComputeVariance()
+				gPatches[Y , X] = P
+			Next
+		Next
+	End Method
+	
+	Method Update(ViewPosition:Float[])'Cam:TEntity)
+		'Surface.ClearSurface()
+		Self.ViewPosition = ViewPosition 
+		'ViewPosition[0] = EntityX(Cam)
+		'ViewPosition[1] = entityY(Cam)
+		'ViewPosition[2] = EntityZ(Cam)
+		'TODO: Culling Functions
+		
+		gNextTriNode = 0
+		gNumTrisRendered = 0
+		
+		For Local Y:Int = 0 To gNumPatchesPerYSide - 1
+			For Local X:Int = 0 To gNumPatchesPerXSide - 1
+				Local P:TPatch = gPatches[Y , X]
+				P.Reset()
+				'P.SetVisibility()
+				
+				If P.isDirty()  = True Then P.ComputeVariance()
+				
+				If P.GetVisible() = True Then
+					If X &gt; 0 Then
+						P.GetBaseLeft().LeftNeighbor = gPatches[Y , X - 1].GetBaseRight()
+					Else
+						P.getBaseLeft().LeftNeighbor = Null
+					EndIf
+					
+					If X &lt; gnumPatchesPerXSide-1 Then
+						P.GetBaseRight().LeftNeighbor = gPatches[Y , X + 1].GetBaseLeft()
+					Else
+						P.getBaseRight().LeftNeighbor = Null
+					EndIf
+					
+					If Y &gt; 0 Then
+						P.GetBaseLeft().RightNeighbor = gPatches[Y -1, X ].GetBaseRight()
+					Else
+						P.getBaseLeft().RightNeighbor = Null
+					EndIf
+					
+					If Y &lt; gNumPatchesperYSide-1 Then
+						P.GetBaseRight().RightNeighbor = gPatches[Y+1 , X].GetBaseLeft()
+					Else
+						P.getBaseRight().RightNeighbor = Null
+					EndIf
+					
+				EndIf
+				
+			Next
+		Next
+		
+		Tessellate(ViewPosition)
+	End Method
+	
+	Method Tessellate(ViewPosition:Float[]) 
+		Local viewPosX:Int = (viewPosition[0] / gGridSpace)
+		Local viewPosY:Int = (viewPosition[2] / gGridSpace)
+		
+		For Local i:Int = 0 To gNumPatchesPerYSide -1
+			For Local j:Int = 0 To gNumPatchesPerXSide -1
+				Local P:TPatch = gPatches[i , j]
+				If P.GetVisible() = True Then P.Tessellate(viewposX , viewposY)
+			Next
+		Next
+	End Method
+	
+	Method Render()
+		For Local P:TPatch = EachIn gPatches
+			If P.GetVisible() = True Then P.Render()
+		Next
+		
+		If Abs(gNumTrisRendered - gDesiredTris) &gt; 250 Then
+			gFrameVariance:+ (gNumTrisRendered - gDesiredTris) * 10 / Float(gDesiredTris)
+		EndIf
+		
+		If gFrameVariance &lt; 0 Then
+			gFrameVariance = 0
+		EndIf
+		
+	End Method
+					
+	Method allocateTriNode:TTriTreeNode()
+		Local pTri:TTriTreeNode = Null
+		
+		If gNextTriNode &lt; POOL_SIZE
+			pTri = gTriPool[gNextTriNode]
+			gNextTriNode:+ 1
+			pTri.LeftChild = Null
+			pTri.RightChild = Null
+		EndIf
+		
+		Return pTri
+	End Method
+	
+	Method genTriTreeNodePool:TTriTreeNode[](Size:Int)
+		Local pool:TTriTreeNode[] = New TTriTreeNode[Size]
+		For Local I:Int = 0 To Size-1
+			Pool[i] = New TTriTreeNode
+		Next
+		Return Pool
+	End Method
+	
+	Method log2:Int(number:Int)
+		'Print Int(Log(Number) / Log(2) )
+		Return Int(Log(Number) / Log(2) ) 
+	End Method
+	
+End Type
+
+Type TTriTreeNode
+	Field LeftChild:TTriTreeNode
+	Field RightChild:TTriTreeNode
+	Field BaseNeighbor:TTriTreeNode
+	Field LeftNeighbor:TTriTreeNode
+	Field RightNeighbor:TTriTreeNode
+End Type
+
+Type TPatch
+	Field offsetx:Int
+	Field offsety:Int
+	
+	Field Variance_Depth:Int
+	Field varianceLeft:Int[]
+	Field varianceRight:Int[]
+	Field currentVariance:Int[]
+	Field ViewPosX:Int
+	Field ViewPosY:Int
+	Field varianceDirty:Int
+	Field isVisible:Int
+	
+	Field baseLeft:TTriTreeNode = New TTriTreeNode
+	Field baseRight:TTriTreeNode = New TTriTreeNode
+	
+	Field Terrain:TTerrain
+	
+	Function Create:TPatch(heightX:Int , HeightY:Int, T:TTerrain)
+		Local P:TPatch = New TPatch
+		'P.Reset()
+			P.baseLeft.RightNeighbor = Null
+			P.baseLeft.LeftNeighbor = Null
+			P.baseRight.RightNeighbor = Null
+			P.baseRight.LeftNeighbor = Null
+			P.baseLeft.LeftChild = Null
+			P.baseLeft.RightChild = Null
+			P.baseRight.LeftChild = Null 
+			P.baseLeft.LeftChild = Null
+			
+		P.BaseLeft.BaseNeighbor = P.BaseRight
+		P.BaseRight.BaseNeighbor = P.BaseLeft
+		P.offsetX = heightX
+		P.offsetY = heightY
+		P.Variance_Depth = Sqr(T.gPatchSize) + 1
+		P.VarianceLeft = New Int[1 Shl P.Variance_Depth]
+		P.VarianceRight = New Int[1 Shl P.Variance_Depth]
+		'Print P.VarianceLeft.Length
+		
+		P.varianceDirty = True
+		P.isVisible = True
+		P.Terrain = T
+				
+		Return P
+	End Function
+	
+	Method reset()
+		isvisible = True
+		'Variancedirty = True
+		baseleft.LeftChild = Null
+		baseleft.RightChild = Null
+		baseright.LeftChild = Null
+		Baseright.RightChild = Null
+		
+		BaseLeft.BaseNeighbor = BaseRight
+		BaseRight.BaseNeighbor = BaseLeft
+		
+		baseLeft.RightNeighbor = Null
+		baseLeft.LeftNeighbor = Null
+		baseRight.Rightneighbor = Null
+		BaseRight.LeftNeighbor = Null
+	End Method
+	
+	Method ComputeVariance()
+		Local offYpPSize:Int = offsetY + Terrain.gPatchsize
+		Local offXpPSize:Int = offsetX + Terrain.gPatchSize
+		Local leftZ:Int = Terrain.gHeightmap.get(offsetX , OffYpPSize)
+		Local rightZ:Int = Terrain.gHeightmap.get(offXpPSize , offsetY)
+		Local apexZ:Int = Terrain.gHeightmap.get(offsetX , offsetY)
+		currentvariance = varianceLeft
+		recursComputeVariance(0 , Terrain.gPatchSize , leftZ , Terrain.gPatchSize , 0 , rightZ , 0 , 0 , apexZ , 1)
+		
+		rightZ = apexZ
+		apexZ = leftZ
+		leftZ = RightZ
+		apexZ = Terrain.gHeightmap.get(OffxpPSize , OffYppSize)
+		currentvariance = varianceRight
+		recursComputeVariance(Terrain.gPatchsize , 0 , leftZ , 0 , Terrain.gPatchsize , rightZ , Terrain.gPatchsize , Terrain.gPatchsize , apexZ , 1)
+		
+		variancedirty = False
+	End Method
+	
+	Method recursComputeVariance:Int(leftX:Int , LeftY:Int , LeftZ:Int , rightX:Int , RightY:Int , RightZ:Int , apexX:Int , apexY:Int , apexZ:Int, Node:Int)
+		Local CenterX:Int = (LeftX + RightX) Shr 1
+		Local CenterY:Int = (leftY + RightY) Shr 1
+		Local CenterZ:Int = Terrain.gHeightmap.get(offsetx + centery , offsety + centery)
+		
+		Local myVariance:Int = Abs(centerZ - ( (leftZ + rightZ) Shr 1) )
+		
+		If Abs(leftx - rightx) &gt;= 8 Or Abs(leftY - Righty) &gt;= 8 Then
+			myVariance = Max(myVariance , recursComputeVariance(apexX , apexY , apexZ , leftX , leftY , LeftZ , centerX , centerY , centerZ , node Shl 1) )
+		'	Print myVariance
+			myVariance = Max(myVariance , recursComputeVariance(rightX , righty , rightZ , apexX , apexY , apexZ , CenterX,CenterY , CenterZ , 1 + (node Shl 1) ) )
+		EndIf
+		
+		If node &lt; (1 Shl Variance_Depth) = True
+			currentVariance[node] = (1 + myVariance) '* 1024 * 2
+		End If
+		
+		Return MyVariance
+	End Method
+	
+	Method tessellate(viewposX:Int , ViewPosY:Int)
+		Self.ViewPosX = ViewPosX
+		Self.ViewPosY = ViewPosY
+		
+		CurrentVariance = varianceLeft
+		Local pSize:Int = Terrain.gPatchsize
+		Local oXpPSize:Int = offsetX + pSize
+		Local oYpPSize:Int = offsetY + pSize
+		recursTessellate(baseleft , offsetX , oypPsize , oXpPSize , offsetY , offsetX , offsetY , 1)
+		currentVariance = varianceRight
+		recursTessellate(baseRight , oxppsize , offsety , offsetx , oyppsize , oxppsize , oyppsize , 1)
+	End Method
+	
+	Method recursTessellate(tri:TTriTreeNode,leftX:Int,leftY:Int,rightX:Int,rightY:Int,apexX:Int,apexY:Int,node:Int )
+		
+			Local triVariance:Int=0;
+			Local centerX:Int = (leftX + rightX) Shr 1'; // Compute X coordinate of center of Hypotenuse
+			Local centerY:Int = (leftY + rightY) Shr 1'; // Compute Y coord...
+
+			If ( node &lt; (1 Shl VARIANCE_DEPTH) ) Then 
+				'//	Calculate approximate distance from view position To center of triangle.
+				Local dx:Int = centerX - viewPosX
+				Local dy:Int = centerY - viewPosY
+				Local distance:Int = 1 + distanceApprox( dx , dy )
+				Print distance
+		
+				'// Egads!  A division?  What's this world coming to!
+				'// This should be replaced with a faster operation.
+				'// Take both distance And variance into consideration
+				triVariance = currentVariance[node]/distance
+			EndIf
+
+			'// If we do Not have variance info For this node, Then we must have gotten
+			'//    here by splitting, so Continue down To the lowest level.
+			'// Or If we are Not below the variance tree, test For variance.
+			If ( (node &gt;= (1 Shl VARIANCE_DEPTH)) Or (triVariance &gt; Terrain.gFrameVariance)) Then
+			
+		 		'// Split this triangle.
+				split(tri)
+		
+				'// If this triangle was split, Try To split it's children as well.
+				'// Tessellate all the way down To one vertex per height Field entry
+				If ( tri.LeftChild &lt;&gt; Null And node &lt; Terrain.recurseDepth) Then
+					recursTessellate( tri.LeftChild,   apexX,  apexY, leftX, leftY,centerX, centerY,    node Shl 1  )
+					recursTessellate( tri.RightChild, rightX, rightY, apexX, apexY,centerX, centerY, 1+(node Shl 1) )
+				EndIf
+			EndIf
+
+	End Method
+	
+	Method Split(Tri:TTriTreeNode)
+		'DebugStop()
+		If Tri.LeftChild &lt;&gt; Null Then Return
+		Splitted:+1
+		
+		If tri.BaseNeighbor &lt;&gt; Null And tri.BaseNeighbor.BaseNeighbor &lt;&gt; tri Then
+				split(tri.baseNeighbor)
+				tri.LeftChild = Terrain.allocateTriNode() 
+				tri.RightChild = Terrain.allocateTriNode()
+		EndIf
+				
+		If tri.LeftChild = Null Or tri.RightChild = Null Then
+			tri.Leftchild = Null
+			tri.RightChild = Null
+			Return
+		EndIf
+				
+				tri.LeftChild.BaseNeighbor  = tri.LeftNeighbor
+				tri.LeftChild.LeftNeighbor  = tri.RightChild
+	
+				tri.RightChild.BaseNeighbor  = tri.RightNeighbor
+				tri.RightChild.RightNeighbor = tri.LeftChild
+	
+				If (tri.LeftNeighbor &lt;&gt; Null) Then
+					If (tri.LeftNeighbor.BaseNeighbor = tri)
+						tri.LeftNeighbor.BaseNeighbor = tri.LeftChild
+					Else If (tri.LeftNeighbor.LeftNeighbor = tri)
+						tri.LeftNeighbor.LeftNeighbor = tri.LeftChild
+					Else If (tri.LeftNeighbor.RightNeighbor = tri)
+						tri.LeftNeighbor.RightNeighbor = tri.LeftChild
+					EndIf
+				EndIf
+				
+	
+				If (tri.RightNeighbor &lt;&gt; Null) 
+					If (tri.RightNeighbor.BaseNeighbor = tri)
+						tri.RightNeighbor.BaseNeighbor = tri.RightChild
+					Else If (tri.RightNeighbor.RightNeighbor = tri)
+						tri.RightNeighbor.RightNeighbor = tri.RightChild
+					Else If (tri.RightNeighbor.LeftNeighbor = tri)
+						tri.RightNeighbor.LeftNeighbor = tri.RightChild
+					EndIf
+				EndIf
+	
+				If (tri.BaseNeighbor &lt;&gt; Null) 
+					If ( tri.BaseNeighbor.LeftChild &lt;&gt; Null ) 
+						tri.BaseNeighbor.LeftChild.RightNeighbor = tri.RightChild
+						tri.BaseNeighbor.RightChild.LeftNeighbor = tri.LeftChild
+						tri.LeftChild.RightNeighbor = tri.BaseNeighbor.RightChild
+						tri.RightChild.LeftNeighbor = tri.BaseNeighbor.LeftChild
+					 Else
+						split( tri.BaseNeighbor)
+					EndIf
+					
+				Else 
+					tri.LeftChild.RightNeighbor = Null
+					tri.RightChild.LeftNeighbor = Null
+				EndIf
+			'EndIf
+	End Method
+	
+	Method Render() 
+		recursRender(baseLeft,0,Terrain.gPatchSize,Terrain.gPatchSize,0,0,0)
+		recursRender(baseRight , Terrain.gPatchSize , 0 , 0 , Terrain.gPatchSize , Terrain.gPatchSize , Terrain.gPatchSize)
+		'Print "Render Done ----------------------------------------------------"
+	End Method
+	
+	Method recursRender(tri:TTriTreeNode, leftX:Int,leftY:Int,rightX:Int, rightY:Int,apexX:Int, apexY:Int)
+		
+			If ( tri.LeftChild &lt;&gt; Null) Then
+				Local centerX:Int = (leftX + rightX) Shr 1
+				Local centerY:Int = (leftY + rightY) Shr 1
+
+				recursRender(tri.LeftChild,  apexX,   apexY, leftX, leftY, centerX, centerY )
+				recursRender(tri.RightChild, rightX, rightY, apexX, apexY, centerX, centerY )
+			
+			Else				
+				Terrain.gNumTrisRendered:+1
+				Local leftZ:Float  = Terrain.gHeightMap.get(offsetX + leftX,  offsetY + leftY);
+				Local rightZ:Float = Terrain.gHeightMap.get(offsetX + rightX, offsetY + rightY);
+				Local apexZ:Float  = Terrain.gHeightMap.get(offsetX + apexX,  offsetY + apexY);
+				
+				'Left
+				'gl.glVertex3f(	leftX, leftZ, leftY );
+				Local v0:Int Terrain.Surface.AddVertex(OffsetX + leftX , leftZ , OffsetY + leftY , 0 , 0)
+				'Print (OffsetX + leftX) + " : " +(OffsetY + leftY)
+				'Print leftx + " : " + LeftZ + " : " + Leftx
+
+				'Right
+				'gl.glVertex3f(	rightX, rightZ, rightY );
+				Local v1:Int Terrain.Surface.AddVertex(OffSetX+ rightX, rightZ, OffsetY+rightY ,0,1)
+
+				
+				
+				'APEX VERTEX 
+				'gl.glVertex3f(	apexX, apexZ, apexY );
+				Local v2:Int Terrain.Surface.AddVertex(OffSetX + apexX , apexZ , OffsetY+apexY ,1,1)
+				DrawTriangle(offsetX+leftX  , OffsetY+leftY,OffsEtX+rightX ,OffsetY+rightY,+OffSetX+apexX , OffSetY+apexY)
+				Terrain.Surface.AddTriangle(v0,v1,v2)
+
+			EndIf
+	End Method
+	
+	Method DrawTriangle(x1:Int , y1:Int , x2:Int , y2:Int , x3:Int , y3:Int)
+		DrawLine x1 , y1 , x2 , y2
+		DrawLine x1 , y1 , x3 , y3
+		DrawLine x2 , y2 , x3 , y3
+	End Method
+
+		
+	Method getBaseLeft:TTriTreeNode()
+			Return baseLeft
+	End Method
+	
+	Method getBaseRight:TTriTreeNode() 
+			Return baseRight
+	End Method
+	
+	Method getOffsetX:Int() 
+			Return offsetX
+	End Method
+	
+	Method getOffsetY:Int() 
+		Return offsetY
+	End Method
+	
+	Method isDirty:Int() 
+			Return varianceDirty
+	End Method
+	
+	Method markDirty() 
+		varianceDirty = True
+	End Method
+	
+	Method GetVisible:Int() 
+			Return isVisible
+	End Method
+	
+	Method setVisibility:Int() 
+		Return True
+	End Method	
+	
+	Method orientation:Int( pX:Int, pY:Int, qX:Int, qY:Int, rX:Int,rY:Int )
+			Local aX:Int = qX - pX
+			Local aY:Int = qY - pY
+
+			Local bX:Int = rX - pX
+			Local bY:Int = rY - pY
+
+			Local d:Int = aX*bY - aY*bX
+			Return ( d &lt;= 0 )
+	End Method
+	
+End Type
+
+Function distanceApprox:Int(dx:Int, dy:Int) 
+		Local maxc:Int = Abs(dx)'dx &gt; 0 ? dx:-dx';		//	Math.abs(dx);
+		Local minc:Int = Abs(dy)'dy &gt; 0 ? dy:-dy';		//	Math.abs(dy);
+		
+		If (maxc &lt; minc) Then
+			Local temp:Int = maxc
+			maxc = minc;
+			minc = temp
+		EndIf
+		
+		minc = minc Shr 2
+		maxc:+minc
+
+		Return maxc
+End Function
+
+Type THeightMap
+	
+	Field hm:Int[,]
+	Field undefined:Int
+	Field minAlt:Int = 257
+	Field maxAlt:Int = 0
+	Field width:Int
+	Field height:Int
+		
+	Function Load:THeightmap(url:Object)
+		Local T:THeightmap= New THeightmap
+		
+		Local Pix:TPixmap = LoadPixmap(url)
+		
+		Local BRes:Float = PixmapWidth(Pix)
+		If PixmapWidth(Pix) &lt;&gt; PixmapHeight(Pix) Then Throw "Not Quadatic!"
+				
+		T.hm = New Int[PixmapWidth(Pix)+1, PixmapHeight(Pix)+1]
+				
+		' Loading HeightValues
+		Local r:Int , g:Int , b:Int
+		Local avg:Int
+		
+		For Local x:Int = 0 To BRes - 1
+			For Local Y:Int = 0 To Bres - 1
+				Local C:Int = ReadPixel(pix , x , y)
+				r=(C &amp; $00FF0000) Shr 16
+				g=(C &amp; $FF00) Shr 8
+				b=(C &amp; $FF)
+				avg = (r * 0.299) + (g * 0.587) + (b * 0.114)
+				T.hm[x , y] = avg
+				If avg &lt; T.minalt Then T.minalt = avg
+				If avg &gt; t.maxalt Then T.maxalt = avg
+			Next
+		Next
+		
+		T.Width = PixmapWidth(Pix)
+		T.Height = PixmapHeight(Pix)
+		
+		Return T
+	End Function
+	
+	Method Get:Int(X:Int , Y:Int) 
+		Return hm[x , y]
+	End Method
+	
+	Method GetWidth:Int()
+		Return Width
+	End Method
+	
+	Method GetHeight:Int()
+		Return Height
+	End Method
+End Type
+
+		
+Function Distance2D#(x0# , y0# , x1# , y1#)
+	Local dx# = x0-x1
+	Local dy# = y0-y1
+	Return Sqr(dx*dx + dy*dy)
+End Function
+
+		
+'Test app
+
+Function SampleMouse()
+	
+	Local curMouseX:Int, curMouseY:Int
+	curMouseX = MouseX()
+	curMouseY = MouseY()
+	
+	MouseXSpeed2=curMouseX - prevMouseX
+	MouseYSpeed2=curMouseY - prevMouseY
+	If Abs(centerX - curMouseX) &gt; movementZone Or Abs(centerY - curMouseY) &gt; movementZone Then
+		MoveMouse centerX, centerY
+		prevMouseX = centerX - MouseXSpeed2
+		prevMouseY = centerY - MouseYSpeed2
+	Else
+		prevMouseX = curMouseX
+		prevMouseY = curMouseY
+	EndIf
+End Function
+
+Graphics 800 , 600 , 0 , 2
+
+
+'Local T:TMesh = Q.BuildMesh()
+'ScaleEntity(Q.Mesh , 400 , 40 , 400) 
+Local Q:TTerrain = TTerrain.Create("height.bmp" , 32 , 4)
+
+
+Global oldmx:Int
+Global oldmy:Int
+Const SAFEZONE:Int = 0 ' set this high to disable repositioning; set to 0 to always reposition
+
+Global MouseXSpeed2:Int , MouseYSpeed2:Int , prevMouseX:Int , prevMouseY:Int , movementZone:Int
+movementzone = Safezone
+Global CenterX:Int = GraphicsWidth() / 2
+Global CenterY:Int = GraphicsHeight() / 2
+Global W:Byte = False
+Local old_ms:Int = MilliSecs()
+Local fps:Int
+Local renders:Int
+
+
+
+While Not KeyHit(Key_Escape)
+	Cls
+	Local MX:Int = MouseX()
+	Local MY:Int = MouseY()	
+	'SetScale 4,4
+	
+	Q.Update([Float(MX),0.0,Float(MY)])
+	Q.Render()
+	
+	
+	
+	
+	Splitted =0 	
+	renders=renders+1
+	
+	If MilliSecs()-old_ms&gt;=1000
+		old_ms=MilliSecs()
+		fps=renders
+		renders=0
+	EndIf
+	
+	
+	DrawText "FPS            : " + FPS + " Split : " + Splitted, GraphicsWidth() - 200 , 40
+	
+	DrawText  " Split : " + Splitted, GraphicsWidth() - 200 , 60
+
+	Flip
+Wend
+
+Graphics3D 800 , 600 , 0 , - 1
+
+TGlobal.WireFrame(True)
+Global Cam:TCamera = CreateCamera()
+Global L:TLight = CreateLight(1)
+
+CameraRange cam , 1 , 80000
+'CameraFogMode(cam,0)
+'CameraFogRange(cam,500 , 80000)
+'CameraFogColor(cam ,128,128,255) 
+CameraCLSColor(cam , 128 , 128 , 255)
+
+Global brush:TTexture = LoadTexture("color.jpg")
+'Local detail:TTexture = LoadTexture("detail1.jpg",8)
+'Local alpha:TTexture = LoadTexture("rock01.jpg",8)
+'Local sand:TTexture = LoadTexture("sand1.jpg" , 8)
+'scaleTexture(detail , 0.01 , 0.01)
+
+'Q.Mesh.EntityTexture(detail ,, 1) 
+
+Q.Mesh.EntityTexture(brush ,, 0)
+
+
+AmbientLight 90,90,90
+LightColor l,200,200,100
+RotateEntity l,60,-90,0
+
+PositionEntity(L , 0 , 90000 , 0)
+PositionEntity(Cam , EntityX(Q.Mesh) , -800 , EntityZ(Q.Mesh))
+PointEntity(Cam,Q.Mesh)
+
+
+
+
+Q.Update([0.0,0.0,0.0])
+
+
+While Not KeyHit(KEY_EScape)
+	
+	SampleMouse()
+
+	
+	If KeyDown(KEY_UP) Then MoveEntity(Cam , 0 , 0 , 26)
+	If KeyDown(KEY_DOWN) Then MoveEntity(Cam , 0 , 0 , -26)
+	If KeyDown(KEY_Left) Then MoveEntity(Cam , -26, 0 , 0)
+	If KeyDown(KEY_Right) Then MoveEntity(Cam , 26, 0 , 0)
+	If KeyDown(KEY_A) Then MoveEntity(Cam , 0 , 26 , 0)
+	If KeyDown(KEY_Y) Then MoveEntity(Cam , 0 , - 26 , 0)
+	
+	If KeyHit(Key_W) Then 
+		WireFrame(Not W)
+		W = Not W
+	EndIf
+	
+	TurnEntity(cam , MouseYSpeed2 * 0.5 , - MouseXSpeed2 * 0.5 , 0)
+	
+	'PointEntity(Cam,Q.Mesh)
+
+
+	
+	'For Local I:Int = 0 To 20
+	'	If Rand(0,1000) &gt; 990 Then
+	'		Q.Find(Rand(1 , Q.MatrixSize - 1) , Rand(1 , Q.MatrixSize - 1) ).Split()
+	'	ElseIf Rand(0,1000) &lt; 1
+	'		Q.Find(Rand(1 , Q.MatrixSize - 1) , Rand(1 , Q.MatrixSize - 1) ).UnSplit()
+	'	EndIf
+	'Next
+	
+	'Q.Detail(EntityX(Cam),EntityY(Cam),EntityZ(Cam))
+
+
+	
+'	Q.Update(Cam)
+	'Q.Tessellate()
+	Splitted = 0
+	Q.Update([Float(EntityX(Cam)),0.0,Float(EntityZ(Cam))])
+	Q.Render()
+	'ScaleEntity(T,400,40,400)
+
+
+	
+	Updateworld()
+	RenderWorld()
+	
+	renders = renders + 1
+	'MoveMouse(CenterX,CenterY)
+	
+	If MilliSecs()-old_ms&gt;=1000
+		old_ms=MilliSecs()
+		fps=renders
+		renders=0
+	EndIf
+	DebugText 20 , 20,"FPS: " + fps + " Quads: " + Q.gPatches.Length
+	DebugText 20 , 40,EntityX(Cam) + " : " + EntityZ(cam) 
+	DebugText 20 , 60 , EntityX(Cam) / 400 + " : " + EntityZ(cam) / 400 
+	DebugText 20 , 80 , "TerraTris: " + Q.TrisRendered()
+	DebugText 20 , 100 , "Splits : " + Splitted
+	
+	Flip 0
+Wend
+	
+</textarea><br>As a Heightfile every image which is power of 2 will work.<br><br>No my problem:<br><br>As you will see, the test app will wirst start a 2d mode, which I have used to check if the triangles are draw right. That's because in the 3d context there appear no triangle also if they where rendered. The next problem is, that there seems to be no update, so the triangles are not really splitted and the triangles are always th same.<br><br>Maybe someone with greater experience in Java could take a look to this both sources and maybe he finds out what i was (i lack of java experience) converting wrong. <br><br>thx klepto2 <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

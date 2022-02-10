@@ -1,0 +1,71 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Can't concat empty arrays of extern type</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Can't concat empty arrays of extern type</h1><a href="forums.php" >Archives Forums</a>/<a href="topics.php?forum=105" >BlitzMax Bug Reports</a>/<a href="#bottom" >Can't concat empty arrays of extern type</a><br><br>
+<a name="1258814"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Example of the problem:<br><br><pre class=code>SuperStrict
+
+Type foo
+	Field a:Int, b:Int
+End Type
+
+Extern
+Type bar
+	Field a:Int, b:Int
+End Type
+Function newBar:bar(sz:Int) = "bbMemAlloc"
+End Extern
+
+Local a:foo[] = Null
+a :+ [New foo, New foo, New foo]
+a :+ New foo[3]
+
+Local b:bar[] = Null
+b :+ [newBar(16), newBar(16), newBar(16)]
+'b :+ New bar[3]	'boom
+
+Local c:bar[] = New bar[3]	'not a problem
+'c :+ b		'boom
+
+Print "done."</pre><br><br>Uncomment either of the lines that try to add to b or c, and the program doesn't even raise an exception in debug mode - it just dies.<br><br>As you can see from c, actually creating an empty array of extern objects doesn't seem to be the problem, and using an auto-array (which I guess is equivalent to creating and then immediately populating it) works well too. But trying to add an array of nulls to anything is a no go. <br><br></td></tr></table><br>
+<a name="1258819"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> A related problem:<br><br><pre class=code>SuperStrict
+
+Type foo
+	Field a:Int, b:Int
+End Type
+
+Extern
+Type bar
+	Field f:foo
+End Type
+Function newBar:bar(sz:Int) = "bbMemAlloc"
+End Extern
+
+Local b:bar = newBar(16)
+b.f = New foo
+
+Print "done."</pre><br><br>Trying to store a BlitzMax object in a field of an extern object also causes the program to die without warning.<br><br>It's reasonable that this one might not be allowed, but the compiler doesn't actually object to it. <br><br></td></tr></table><br>
+<a name="1258841"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yipes, even when it works it doesn't work. Even worse example:<br><br><pre class=code>SuperStrict
+
+Extern
+Type foo
+	Field b:bar
+End Type
+Type bar
+	Field a:Int, b:Int
+End Type
+Function newFoo:foo(sz:Int) = "bbMemAlloc"
+Function newBar:bar(sz:Int) = "bbMemAlloc"
+End Extern
+
+Local arr:foo[] = Null
+
+Local f:foo = newFoo(16)
+f.b = newBar(16)
+
+Print Hex(Int(Byte Ptr(f.b)))
+arr :+ [f]
+Print Hex(Int(Byte Ptr(f.b)))
+
+Print "done."</pre><br><br>This does something worse than crash: it corrupts the data in the objects!<br><br>I've managed to track the cause of this new behaviour down, at least - bbArrayConcat contains this line:<br><br><pre class=code>if( type[0]==':' || type[0]=='$' || type[0]=='[' ){</pre><br><br>...to determine whether to increment the reference counts of its elements (i.e. if they're objects or not). The names of extern types are stored with the ':' prefix in the assembly, so they're incorrectly detected as BlitzMax objects by this code, and it attempts to BBRETAIN them.<br><br>This is a critical bug, although again, it's not clear whether the problem is with the implementation of arrays, or with the fact that the compiler allows one to write this code at all. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

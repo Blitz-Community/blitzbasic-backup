@@ -1,0 +1,69 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Off screen rendering and texture uploading</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Off screen rendering and texture uploading</h1><a href="forums.php" >Monkey Targets Forums</a>/<a href="topics.php?forum=502" >Android</a>/<a href="#bottom" >Off screen rendering and texture uploading</a><br><br>
+<a name="2034342"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Karja</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I decided to try to optimize the Android version of my li'l game, and the first thing I wanted to tackle was the slow text rendering. The easiest way seemed to be to create a bitmap via off screen rendering. That works fine and dandy - but there's an issue with uploading the texture to video memory.<br><br>The steps I perform are:<br><br>1) Create a "backbuffer", draw each individual character, and then create a gxtkSurface from it.<br>2) When calling the Draw method of the backbuffer, I use the normal DrawSurface in mojo.<br><br>However, the texture doesn't get uploaded to video mem before I actually do a DrawSurface call. Which means that I get a flicker - first it renders nothing for a frame or two, and then - after the texture is uploaded - it shows the texture as expected.<br><br>"Well OK," I thought. "I'll just call it directly when I create the gxtkSurface." No dice. It needs to be called in OnRender, not OnUpdate.<br><br>Alright, I thought; then I do a double-rendering for a frame or two. I draw both the backbuffer and the original text, and after that I only use the backbuffer. I'll still gain some performance in the long run. But that causes a major delay on my HTC Desire. Uploading a texture to video mem is EXTREMELY slow on my Desire... So the app freezes for a second.<br><br>In summary: does anyone know a good way to handle texture uploading? Can it be performed in a separate thread? Can it be sped up? Should I use another format than ARBG_8888? This slowness is also causing major problems for my loading class - I need to first load the textures (which is fast), and then I need to present a static screen while pre-caching everything, which takes AGES.<br><br>FYI, my experimental backbuffer code:<br><br><pre class=code>Import "native/backbuffer.${TARGET}.${LANG}"
+
+Import mojo
+
+Extern 
+
+Class Backbuffer="fontBackbuffer"
+	Method Create(w:Int, h:Int)
+	Method SetColor(r:Int, g:Int, b:Int)
+	Method DrawImageRect(image:Surface, startx:Int, starty:Int, x:Int, y:Int, w:Int, h:Int)
+	Method Finalize()
+	Method Draw(x:Int, y:Int)
+End Class
+
+Public
+
+Function DrawBackbufferImageRect(b:Backbuffer, image:Image, startx:Int, starty:Int, x:Int, y:Int, w:Int, h:Int)
+	b.DrawImageRect(image.surface, startx, starty, x, y, w, h)
+End</pre><br><br><pre class=code>class fontBackbuffer{
+	private Bitmap backbuffer = null;
+	private Canvas canvas = null;
+	private gxtkSurface surface = null;
+	private Paint paint = null;
+
+	public void Create(int w, int h) {
+		backbuffer = Bitmap.createBitmap( w+16, h+16, Bitmap.Config.ARGB_8888 );
+		canvas = new Canvas( backbuffer );
+	}
+
+	public void SetColor(int r, int g, int b) {
+		int col = Color.argb( 255, r, g, b );
+		paint = new Paint( col );
+		ColorFilter filter = new PorterDuffColorFilter( col, PorterDuff.Mode.MULTIPLY );
+		paint.setColorFilter( filter );
+	}
+
+	public void DrawImageRect(gxtkSurface image, int startx, int starty, int x, int y, int w, int h) {
+		canvas.drawBitmap( image.bitmap, new Rect(x, y, x+w, y+h), new Rect(startx+8, starty+8, startx+w+8, starty+h+8), paint );
+	}
+	
+	public void Finalize() {
+		surface = new gxtkSurface( backbuffer );
+	}
+
+	public void Draw(int x, int y) {
+		bb_graphics.bb_graphics_ValidateMatrix();
+		bb_graphics.bb_graphics_context.f_device.DrawSurface( surface, x - 8, y - 8 );
+    }
+}</pre><br><br>Note: Extra padding at the sides due to a rendering issue with AngelCode. Also, some mojo modifications are necessary, to make Surface public instead of private. <br><br></td></tr></table><br>
+<a name="2034346"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> How big is this backbuffer you're using? I'm doing something similar for text  and not seeing any huge pause on my android phone. My UI text elements create their own buffers just big enough for the text. <br><br></td></tr></table><br>
+<a name="2034351"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Karja</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> They're small - 150x50, 300x80 and sizes like that. But, granted, I often create a few text objects at once (e.g. when creating a dialog).<br><br>But in other words it seems like I'm not doing anything too weird? Thanks for reassuring me regarding that! I'll just have to think of ways to make it less noticeable for the player.<br><br>But I still feel a bit frustrated. It seems like every other game on my phone runs smoothly, but my Monkey stuff have all these stutters whenever the textures are uploading. <br><br></td></tr></table><br>
+<a name="2034353"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> All I can say is that I do something similar and it's fine for me. I've got a different phone (ZTE Blade) and my other texture usage is fairly light though. I think my heaviest usage of this method is sixteen or so text elements and I don't see any terrible glitches. <br><br></td></tr></table><br>
+<a name="2034414"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh, by the way. I remembered the discovery of much faster texture binding solution in this thread: <a href="http://www.monkeycoder.co.nz/Community/posts.php?topic=2589" target="_blank">http://www.monkeycoder.co.nz/Community/posts.php?topic=2589</a><br><br>You might want to read it and give it a try. <br><br></td></tr></table><br>
+<a name="2034420"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Samah</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> For offscreen rendering, you may want to take a look at framebuffer objects:<br><a href="http://en.wikipedia.org/wiki/Framebuffer_Object" target="_blank">http://en.wikipedia.org/wiki/Framebuffer_Object</a> <br><br></td></tr></table><br>
+<a name="2034424"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> FBOs are fine as long as you can be sure that the OGL implementation supports them (and even if it claims to that it does so properly). I use them on iOS, but I've got no desire to try it with Android as the platform currently stands. <br><br></td></tr></table><br>
+<a name="2034423"></a>
+
+<a name="2034455"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Karja</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks a lot for the hints! Going to read up on the other thread, and consider FBOs as well. I'm a bit reluctant on having anything that might be a cause of errors on Android though; I've heard a lot of how hard it is to ensure compatibility across phone models.<br><br>I ought to work on the actual gameplay instead, but I got kind of sidetracked on this optimization. :) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

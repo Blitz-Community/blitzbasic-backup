@@ -1,0 +1,476 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Pixmap to brush?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Pixmap to brush?</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=119" >MiniB3D Module</a>/<a href="#bottom" >Pixmap to brush?</a><br><br>
+<a name="918235"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> LoadBrush requires a path, rather than a URL for loading an image so as far as I can determine that means you need to have your images saved as files to load them. I need to be able to turn a pixmap into a brush so I poked around and came up with the following.<br><br><pre class=code>
+Strict
+
+Import sidesign.minib3d
+
+Function LoadBrushPixmap:TBrush(pixmapin:TPixmap,flags=1,u_scale#=1.0,v_scale#=1.0)
+	Return PixTBrush.LoadBrushPixmap(pixmapin,flags,u_scale#,v_scale#)
+End Function
+
+Function LoadTexturePixmap:TTexture(pixmapin:TPixmap,flags=1)
+	Return PixTTexture.LoadTexturePixmap(pixmapin,flags)
+End Function
+
+Type PixTBrush Extends TBrush
+	Function LoadBrushPixmap:TBrush(pixmapin:TPixmap,flags=1,u_scale#=1.0,v_scale#=1.0)
+		Local brush:TBrush=New TBrush
+		brush.tex[0]=PixTTexture.LoadTexturePixmap:TTexture(pixmapin,flags)
+		brush.no_texs=1
+		'brush.tex[0].u_scale#=u_scale#
+		'brush.tex[0].v_scale#=v_scale#
+				
+		Return brush
+		
+	End Function
+End Type
+
+Type PixTTexture Extends TTexture
+	Function LoadTexturePixMap:TTexture(pixmapin:TPixmap,flags=1,tex:TTexture=Null)
+		Return LoadAnimTexturePixMap:TTexture(pixmapin,flags,0,0,0,1,tex)
+	End Function
+
+	Function LoadAnimTexturePixMap:TTexture(pixmapin:TPixmap,flags,frame_width,frame_height,first_frame,frame_count,tex:TTexture=Null)
+	
+		If flags&amp;128 Then Return LoadCubeMapTexture("pixmap",flags,tex)
+	
+		If tex=Null Then tex:TTexture=New TTexture
+		
+		tex.file$="pixmap"
+		tex.file_abs$="pixmap"
+		
+		' set tex.flags before TexInList
+		tex.flags=flags
+		tex.FilterFlags()
+		
+		' check to see if texture with same properties exists already, if so return existing texture
+		Local old_tex:TTexture
+		old_tex=tex.TexInList()
+		If old_tex&lt;&gt;Null And old_tex&lt;&gt;tex
+			Return old_tex
+		Else
+			If old_tex&lt;&gt;tex
+				ListAddLast(tex_list,tex)
+			EndIf
+		EndIf
+	
+		' load pixmap
+		tex.pixmap = CopyPixmap(pixmapin)
+		
+		' check to see if pixmap contain alpha layer, set alpha_present to true if so (do this before converting)
+		Local alpha_present=False
+		If tex.pixmap.format=PF_RGBA8888 Or tex.pixmap.format=PF_BGRA8888 Or tex.pixmap.format=PF_A8 Then alpha_present=True
+	
+		' convert pixmap to appropriate format
+		If tex.pixmap.format&lt;&gt;PF_RGBA8888
+			tex.pixmap=tex.pixmap.Convert(PF_RGBA8888)
+		EndIf
+		
+		' if alpha flag is true and pixmap doesn't contain alpha info, apply alpha based on color values
+		If tex.flags&amp;2 And alpha_present=False
+			tex.pixmap=ApplyAlpha(tex.pixmap)
+		EndIf		
+	
+		' if mask flag is true, mask pixmap
+		If tex.flags&amp;4
+			tex.pixmap=MaskPixmap(tex.pixmap,0,0,0)
+		EndIf
+		
+		' ---
+		
+		' if tex not anim tex, get frame width and height
+		If frame_width=0 And frame_height=0
+			frame_width=tex.pixmap.width
+			frame_height=tex.pixmap.height
+		EndIf
+	
+		' ---
+		
+		tex.no_frames=frame_count
+		tex.gltex=tex.gltex[..tex.no_frames]
+	
+		' ---
+		
+		' pixmap -&gt; tex
+	
+		Local xframes=tex.pixmap.width/frame_width
+		Local yframes=tex.pixmap.height/frame_height
+			
+		Local startx=first_frame Mod xframes
+		Local starty=(first_frame/yframes) Mod yframes
+			
+		Local x=startx
+		Local y=starty
+	
+		Local pixmap:TPixmap
+	
+		For Local i=0 To tex.no_frames-1
+	
+			' get static pixmap window. when resize pixmap is called new pixmap will be returned.
+			pixmap=tex.pixmap.Window(x*frame_width,y*frame_height,frame_width,frame_height)
+			x=x+1
+			If x&gt;=xframes
+				x=0
+				y=y+1
+			EndIf
+		
+			' ---
+		
+			pixmap=AdjustPixmap(pixmap)
+			tex.width=pixmap.width
+			tex.height=pixmap.height
+			Local width=pixmap.width
+			Local height=pixmap.height
+	
+			Local name
+			glGenTextures 1,Varptr name
+			glBindtexture GL_TEXTURE_2D,name
+	
+			Local mipmap
+			If tex.flags&amp;8 Then mipmap=True
+			Local mip_level=0
+			Repeat
+				glPixelStorei GL_UNPACK_ROW_LENGTH,pixmap.pitch/BytesPerPixel[pixmap.format]
+				glTexImage2D GL_TEXTURE_2D,mip_level,GL_RGBA8,width,height,0,GL_RGBA,GL_UNSIGNED_BYTE,pixmap.pixels
+				If Not mipmap Then Exit
+				If width=1 And height=1 Exit
+				If width&gt;1 width:/2
+				If height&gt;1 height:/2
+	
+				pixmap=ResizePixmap(pixmap,width,height)
+				mip_level:+1
+			Forever
+			tex.no_mipmaps=mip_level
+	
+			tex.gltex[i]=name
+	
+		Next
+				
+		Return tex
+		
+	End Function
+End Type
+</pre><br><br>which works... only once... every other brush you make is the same as the first. replacing the loadpixmap with a copypixmap and changing the pathstring to a Tpixmap was the only changes I made, but I also don't understand the nuts and bolts of what's going on here with the gl functions so I assume there's something missing between a loaded pixmap and a copy of a pixmap that makes all the difference... <br><br></td></tr></table><br>
+<a name="918255"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ima747</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> nevermind, I found it. seems like LoadCubeMapTexture uses the filename provided to determine if the texture already exists somewhere so it might not need to load it. Since everything was being named pixmap it thought it was already loaded. Below is a modified version that creates a fake name for the texture to force it to load, it uses the time and then a random number on the off chance the computer is fast enough to load multiple textures in a millisecond... p.s. I want that computer<br><br>you can use this as an include so you don't need it dumped into your code.<br><br><pre class=code>
+Strict
+
+Import sidesign.minib3d
+
+Function LoadBrushPixmap:TBrush(pixmapin:TPixmap,flags=1,u_scale#=1.0,v_scale#=1.0)
+	Return PixTBrush.LoadBrushPixmap(pixmapin,flags,u_scale#,v_scale#)
+End Function
+
+Function LoadTexturePixmap:TTexture(pixmapin:TPixmap,flags=1)
+	Return PixTTexture.LoadTexturePixmap(pixmapin,flags)
+End Function
+
+Type PixTBrush Extends TBrush
+	Function LoadBrushPixmap:TBrush(pixmapin:TPixmap,flags=1,u_scale#=1.0,v_scale#=1.0)
+		Local brush:TBrush=New TBrush
+		brush.tex[0]=PixTTexture.LoadTexturePixmap:TTexture(pixmapin,flags)
+		brush.no_texs=1
+		'brush.tex[0].u_scale#=u_scale#
+		'brush.tex[0].v_scale#=v_scale#
+				
+		Return brush
+		
+	End Function
+End Type
+
+Type PixTTexture Extends TTexture
+	Function LoadTexturePixMap:TTexture(pixmapin:TPixmap,flags=1,tex:TTexture=Null)
+		Return LoadAnimTexturePixMap:TTexture(pixmapin,flags,0,0,0,1,tex)
+	End Function
+
+	Function LoadAnimTexturePixMap:TTexture(pixmapin:TPixmap,flags,frame_width,frame_height,first_frame,frame_count,tex:TTexture=Null)
+		Local pixmapFileName$ = "pixmap"+MilliSecs()+Rnd()
+		
+		If flags&amp;128 Then Return LoadCubeMapTexture(pixmapFileName$,flags,tex)
+	
+		If tex=Null Then tex:TTexture=New TTexture
+		
+		tex.file$=pixmapFileName$
+		tex.file_abs$=pixmapFileName$
+		
+		' set tex.flags before TexInList
+		tex.flags=flags
+		tex.FilterFlags()
+		
+		' check to see if texture with same properties exists already, if so return existing texture
+		Local old_tex:TTexture
+		old_tex=tex.TexInList()
+		If old_tex&lt;&gt;Null And old_tex&lt;&gt;tex
+			Return old_tex
+		Else
+			If old_tex&lt;&gt;tex
+				ListAddLast(tex_list,tex)
+			EndIf
+		EndIf
+	
+		' load pixmap
+		tex.pixmap = CopyPixmap(pixmapin)
+		
+		' check to see if pixmap contain alpha layer, set alpha_present to true if so (do this before converting)
+		Local alpha_present=False
+		If tex.pixmap.format=PF_RGBA8888 Or tex.pixmap.format=PF_BGRA8888 Or tex.pixmap.format=PF_A8 Then alpha_present=True
+	
+		' convert pixmap to appropriate format
+		If tex.pixmap.format&lt;&gt;PF_RGBA8888
+			tex.pixmap=tex.pixmap.Convert(PF_RGBA8888)
+		EndIf
+		
+		' if alpha flag is true and pixmap doesn't contain alpha info, apply alpha based on color values
+		If tex.flags&amp;2 And alpha_present=False
+			tex.pixmap=ApplyAlpha(tex.pixmap)
+		EndIf		
+	
+		' if mask flag is true, mask pixmap
+		If tex.flags&amp;4
+			tex.pixmap=MaskPixmap(tex.pixmap,0,0,0)
+		EndIf
+		
+		' ---
+		
+		' if tex not anim tex, get frame width and height
+		If frame_width=0 And frame_height=0
+			frame_width=tex.pixmap.width
+			frame_height=tex.pixmap.height
+		EndIf
+	
+		' ---
+		
+		tex.no_frames=frame_count
+		tex.gltex=tex.gltex[..tex.no_frames]
+	
+		' ---
+		
+		' pixmap -&gt; tex
+	
+		Local xframes=tex.pixmap.width/frame_width
+		Local yframes=tex.pixmap.height/frame_height
+			
+		Local startx=first_frame Mod xframes
+		Local starty=(first_frame/yframes) Mod yframes
+			
+		Local x=startx
+		Local y=starty
+	
+		Local pixmap:TPixmap
+	
+		For Local i=0 To tex.no_frames-1
+	
+			' get static pixmap window. when resize pixmap is called new pixmap will be returned.
+			pixmap=tex.pixmap.Window(x*frame_width,y*frame_height,frame_width,frame_height)
+			x=x+1
+			If x&gt;=xframes
+				x=0
+				y=y+1
+			EndIf
+		
+			' ---
+		
+			pixmap=AdjustPixmap(pixmap)
+			tex.width=pixmap.width
+			tex.height=pixmap.height
+			Local width=pixmap.width
+			Local height=pixmap.height
+	
+			Local name
+			glGenTextures 1,Varptr name
+			glBindtexture GL_TEXTURE_2D,name
+	
+			Local mipmap
+			If tex.flags&amp;8 Then mipmap=True
+			Local mip_level=0
+			Repeat
+				glPixelStorei GL_UNPACK_ROW_LENGTH,pixmap.pitch/BytesPerPixel[pixmap.format]
+				glTexImage2D GL_TEXTURE_2D,mip_level,GL_RGBA8,width,height,0,GL_RGBA,GL_UNSIGNED_BYTE,pixmap.pixels
+				If Not mipmap Then Exit
+				If width=1 And height=1 Exit
+				If width&gt;1 width:/2
+				If height&gt;1 height:/2
+	
+				pixmap=ResizePixmap(pixmap,width,height)
+				mip_level:+1
+			Forever
+			tex.no_mipmaps=mip_level
+	
+			tex.gltex[i]=name
+	
+		Next
+				
+		Return tex
+		
+	End Function
+End Type
+</pre> <br><br></td></tr></table><br>
+<a name="1263441"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Krischan</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm using this function excessively, thanks for that. But I have a small improvement - your function does not clear the tex.pixmap after loading which causes a memory leak each time you load the same pixmap again and again. So I had to add "tex.pixmap = Null" at the end before returning the tex to fix it.<br><br>Here my corrected function:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Function LoadBrushPixmap:TBrush(pixmapin:TPixmap, Flags:Int = 1, u_scale:Float = 1.0, v_scale:Float = 1.0)
+
+	Return PixTBrush.LoadBrushPixmap(pixmapin,flags,u_scale,v_scale)
+	
+End Function
+
+Function LoadTexturePixmap:TTexture(pixmapin:TPixmap,flags:Int=1)
+
+	Return PixTTexture.LoadTexturePixmap(pixmapin,flags)
+	
+End Function
+
+Type PixTBrush Extends TBrush
+
+	Function LoadBrushPixmap:TBrush(pixmapin:TPixmap,flags:Int=1,u_scale:Float=1.0,v_scale:Float=1.0)
+	
+		Local brush:TBrush=New TBrush
+		
+		brush.tex[0]=PixTTexture.LoadTexturePixmap:TTexture(pixmapin,flags)
+		brush.no_texs=1
+		
+		'brush.tex[0].u_scale#=u_scale#
+		'brush.tex[0].v_scale#=v_scale#
+		
+		pixmapin = Null
+				
+		Return brush
+		
+	End Function
+	
+End Type
+
+Type PixTTexture Extends TTexture
+
+	Function LoadTexturePixMap:TTexture(pixmapin:TPixmap,flags:Int=1,tex:TTexture=Null)
+	
+		Return LoadAnimTexturePixMap:TTexture(pixmapin,flags,0,0,0,1,tex)
+		
+	End Function
+
+	Function LoadAnimTexturePixMap:TTexture(pixmapin:TPixmap,flags:Int,frame_width:Int,frame_height:Int,first_frame:Int,frame_count:Int,tex:TTexture=Null)
+	
+		Local pixmapFileName:String="pixmap"+MilliSecs()+Rnd()
+		
+		If flags&amp;128 Then Return LoadCubeMapTexture(pixmapFileName$,flags,tex)
+	
+		If tex=Null Then tex:TTexture=New TTexture
+		
+		tex.file:String=pixmapFileName
+		tex.file_abs:String=pixmapFileName
+		
+		' set tex.flags before TexInList
+		tex.flags=flags
+		tex.FilterFlags()
+		
+		' check to see if texture with same properties exists already, if so return existing texture
+		Local old_tex:TTexture
+		old_tex=tex.TexInList()
+		If old_tex&lt;&gt;Null And old_tex&lt;&gt;tex
+			Return old_tex
+		Else
+			If old_tex&lt;&gt;tex
+				ListAddLast(tex_list,tex)
+			EndIf
+		EndIf
+	
+		' load pixmap
+		tex.pixmap = CopyPixmap(pixmapin)
+		
+		' check to see if pixmap contain alpha layer, set alpha_present to true if so (do this before converting)
+		Local alpha_present:Int=False
+		If tex.pixmap.format=PF_RGBA8888 Or tex.pixmap.format=PF_BGRA8888 Or tex.pixmap.format=PF_A8 Then alpha_present=True
+	
+		' convert pixmap to appropriate format
+		If tex.pixmap.format&lt;&gt;PF_RGBA8888
+			tex.pixmap=tex.pixmap.Convert(PF_RGBA8888)
+		EndIf
+		
+		' if alpha flag is true and pixmap doesn't contain alpha info, apply alpha based on color values
+		If tex.flags&amp;2 And alpha_present=False
+			tex.pixmap=ApplyAlpha(tex.pixmap)
+		EndIf		
+	
+		' if mask flag is true, mask pixmap
+		If tex.flags&amp;4
+			tex.pixmap=MaskPixmap(tex.pixmap,0,0,0)
+		EndIf
+		
+		' ---
+		
+		' if tex not anim tex, get frame width and height
+		If frame_width=0 And frame_height=0
+			frame_width=tex.pixmap.width
+			frame_height=tex.pixmap.height
+		EndIf
+	
+		' ---
+		
+		tex.no_frames=frame_count
+		tex.gltex=tex.gltex[..tex.no_frames]
+	
+		' ---
+		
+		' pixmap -&gt; tex
+	
+		Local xframes:Int=tex.pixmap.width/frame_width
+		Local yframes:Int=tex.pixmap.height/frame_height
+			
+		Local startx:Int=first_frame Mod xframes
+		Local starty:Int=(first_frame/yframes) Mod yframes
+			
+		Local x:Int=startx
+		Local y:Int=starty
+	
+		Local pixmap:TPixmap
+	
+		For Local i:Int=0 To tex.no_frames-1
+	
+			' get static pixmap window. when resize pixmap is called new pixmap will be returned.
+			pixmap=tex.pixmap.Window(x*frame_width,y*frame_height,frame_width,frame_height)
+			x=x+1
+			If x&gt;=xframes
+				x=0
+				y=y+1
+			EndIf
+		
+			' ---
+		
+			pixmap=AdjustPixmap(pixmap)
+			tex.width=pixmap.width
+			tex.height=pixmap.height
+			Local width:Int=pixmap.width
+			Local height:Int=pixmap.height
+	
+			Local name:Int
+			glGenTextures 1,Varptr name
+			glBindtexture GL_TEXTURE_2D,name
+	
+			Local mipmap:Int
+			If tex.flags&amp;8 Then mipmap=True
+			Local mip_level:Int=0
+			Repeat
+				glPixelStorei GL_UNPACK_ROW_LENGTH,pixmap.pitch/BytesPerPixel[pixmap.format]
+				glTexImage2D GL_TEXTURE_2D,mip_level,GL_RGBA8,width,height,0,GL_RGBA,GL_UNSIGNED_BYTE,pixmap.pixels
+				If Not mipmap Then Exit
+				If width=1 And height=1 Exit
+				If width&gt;1 width:/2
+				If height&gt;1 height:/2
+	
+				pixmap=ResizePixmap(pixmap,width,height)
+				mip_level:+1
+			Forever
+			tex.no_mipmaps=mip_level
+	
+			tex.gltex[i]=name
+	
+		Next
+				
+		tex.pixmap = Null
+				
+		Return tex
+		
+	End Function
+	
+End Type</textarea> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

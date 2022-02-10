@@ -1,0 +1,518 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Inline profiler v0.1</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Inline profiler v0.1</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Inline profiler v0.1</a><br><br>
+<a name="484884"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >teamonkey</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi<br><br>I found myself in need of a profiler so I thought I'd write one.<br><br>What you do is create little "samples" that you start before the code you want to profile and stop just afterwards. Then every so often you gather all the sample data together and it should calculate a rough average of how long your program spends doing certain tasks.<br><br>Usage:<br><pre class=code>mySample:TProfSample = CreateSample("A Useful Name")
+
+StartSample(mySample)
+' Code you want to investigate
+StopSample(mySample)
+
+
+Profile()    ' Gathers the information together (it only updates it every second or so)
+
+ShowProfInfo()    ' Uses DrawText to display it on screen
+</pre><br><br>It is <b>not</b> accurate by any means. It works best if you let it sample the same task many times, which is why Profile() lets the data build up over a second or so before recording it. The Millisecs timer only has a resolution of about 10ms and your sample is not going to take that long, so the only way to do it is to take an average. It should still be useful though.<br><br><br>Here we go...<br><br>profiler.bmx:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Rem
+	Teamonkey's Inline Profiler for BlitzMax v0.1
+	
+	(c) James Arthur 2005, teamonkey@...
+	
+	This code is public domain
+End Rem
+
+
+
+Strict
+
+Import BRL.LinkedList
+Import BRL.System
+Import BRL.Retro
+Import BRL.Max2D
+
+Type TProfResult
+	Global results:TProfResult[]
+	Global last_t:Int
+	Global dt:Int
+	
+	Field name:String
+	Field total_t:Int
+	Field level:Int
+	
+
+	Function matchSize(list:TList)
+		Local l_size:Int = CountList(list)
+		
+		If(Not results)
+			results = New TProfResult[l_size]
+		EndIf
+		
+		If(results.length &lt;&gt; l_size)
+			results = results[..l_size]
+		EndIf
+	End Function
+	
+	
+	Function getResults(min_interval:Int)	
+		Local now = MilliSecs()
+				
+		If(now-last_t &lt; min_interval) Then Return
+
+		dt = now-last_t
+		last_t = now
+		
+		matchSize(TProfSample.samples)
+		
+		Local i:Int = 0
+		For Local sample:TProfSample = EachIn TProfSample.samples
+			'DebugLog("i: "+i+"/"+results.length+"    name: "+sample.name+"    t: "+sample.total_t)
+			If(Not results[i])
+				results[i] = New TProfResult
+			EndIf
+			results[i].fromSample(sample)
+			i:+1
+		Next
+	End Function
+	
+	
+	Function displayResults()
+		Local x# = 8.0, y# = 8.0
+		Local str:String
+		
+		str = "    Profile Name    |  msec  | % CPU  "
+		DrawText str,x,y
+		y :+ Float(TextHeight(str))
+		
+		str = "--------------------+--------+-------"
+		DrawText str,x,y
+		y :+ Float(TextHeight(str))
+
+		
+		For Local result:TProfResult = EachIn results
+			str = LSet(RSet(result.name, result.name.length+2*result.level),19)
+			str :+ " | "
+			str :+ RSet(Left(String.FromInt(result.total_t),5),6)
+			str :+ " | "
+			str :+ LSet(Left(String.FromFloat(Float(result.total_t*100)/Float(dt)),5),6)
+			
+			DrawText str,x,y
+			y :+ Float(TextHeight(str))
+		Next
+	End Function
+	
+	
+	Method fromSample(sample:TProfSample)
+		name = sample.name
+		total_t = sample.get_t()
+		level = sample.level
+	End Method
+End Type
+
+
+
+Type TProfSample
+	Field name:String
+	Field link:TLink
+	Field running:Int
+	Field start_t:Int
+	Field end_t:Int
+	Field total_t:Int
+	Field level:Int
+	Field parent:TProfSample
+	
+	Global global_level:Int		' Depth of nested profiling
+	Global samples:TList			' Linked list of samples
+	Global last_sample:TProfSample	' Last sample we have started
+	
+	Method New()
+		running  = False
+		total_t = 0
+
+		If(Not samples)
+			samples = CreateList()
+		EndIf
+	End Method
+	
+	Function create:TProfSample(name_in:String)
+		Local tps:TProfSample = New TProfSample
+		tps.name = name_in
+		tps.link = ListAddLast(samples,tps)
+		Return tps
+	End Function
+	
+	
+	Function DeleteSample(sample:TProfSample)
+		Assert(sample)
+		
+		RemoveLink(sample.link)
+	End Function
+	
+	Function ProfReset()
+		ClearList samples
+	End Function
+	
+	
+	Method start()
+		If(running)
+			DebugLog("Profiler: Sample '"+name+"' already started")
+			Return
+		End If
+		
+		running = True
+		level = global_level
+
+		parent = last_sample
+		last_sample = Self
+
+		global_level :+ 1
+		start_t = MilliSecs()
+	End Method
+	
+	
+	Method stop()
+		If(Not running)
+			DebugLog("Profiler: Sample '"+name+"' is not started")
+			Return
+		End If
+		
+		last_sample = parent
+		
+		running = False
+		global_level :- 1
+		end_t = MilliSecs()
+		
+		total_t :+ (end_t-start_t)
+	End Method
+
+
+	Method get_t:Int()
+		Local t:Int = total_t
+		total_t = 0
+		Return t
+	End Method
+
+End Type
+
+
+
+Global _prof_last_t:Int		' Last time the results were called
+
+
+Function CreateSample:TProfSample(name:String)
+	Return TProfSample.create(name)
+End Function
+
+Function DeleteSample(sample:TProfSample)
+	TProfSample.DeleteSample(sample)
+End Function
+
+Function StartSample(sample:TProfSample)
+	sample.start()
+End Function
+
+Function StopSample(sample:TProfSample = Null)
+	If(Not sample) Then sample = TProfSample.last_sample
+	sample.stop()
+End Function
+
+
+Function Profile(min_interval=1000)
+	TProfResult.getResults(min_interval)
+End Function
+
+Function ShowProfInfo()
+	TProfResult.displayResults()
+End Function
+</textarea><br><br><br>And here's the firepaint demo modified to demonstrate the profiler (try pressing the mouse button). F12 toggles the profile display on and off.<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Rem
+
+Firepaint demo:
+
+Hold down mouse button to emit *FIRE*!
+
+endrem
+
+Strict
+
+'For minimal build...
+Framework BRL.GLMax2D
+
+Import BRL.Basic
+Import BRL.System
+Import BRL.FreeAudioAudio
+Import BRL.PNGLoader 
+Import BRL.WAVLoader
+
+Import "profiler.bmx"
+
+Import "color.bmx"
+
+Incbin "stars.png"
+Incbin "player.png"
+Incbin "bullet.png"
+Incbin "shoot.wav"
+
+Const WIDTH=640,HEIGHT=480
+Const DEPTH=0,HERTZ=60
+
+Const GRAVITY#=.15,SPARKS_PER_FRAME=25
+
+Global sparks:TList=New TList
+Global bullets:TList=New TList
+
+Type TEntity
+
+	Field link:TLink
+
+	Method remove()
+		link.remove
+	End Method
+
+	Method AddLast( list:TList )
+		link=list.AddLast( Self )
+	End Method
+
+	Method Update() Abstract
+
+End Type
+
+Type TSpark Extends TEntity
+
+	Field x#,y#,xs#,ys#
+	Field color[3],rot#,rots#
+
+	Method Update()
+
+		ys:+GRAVITY
+		x:+xs
+		y:+ys
+
+		If x&lt;0 Or x&gt;=WIDTH Or y&gt;=HEIGHT
+			remove
+			Return
+		EndIf
+
+		rot=rot+rots
+		SetHandle 8,8
+		SetRotation rot#
+		SetAlpha 1-y/HEIGHT
+		SetColor color[0],color[1],color[2]
+		DrawRect x,y,17,17
+		SetHandle 0,0
+
+	End Method
+
+	Function CreateSpark:TSpark( x#,y#,color[] )
+		Local spark:TSpark=New TSpark
+		Local an#=Rnd(360),sp#=Rnd(3,5)
+		spark.x=x
+		spark.y=y
+		spark.xs=Cos(an)*sp
+		spark.ys=Sin(an)*sp
+		spark.rots=Rnd(-15,15)
+		spark.color=color
+		spark.AddLast sparks
+		Return spark
+	End Function
+
+End Type
+
+Type TBullet Extends TEntity
+
+	Field x#,y#,ys#
+	Field rot#,img
+
+	Method Update()
+		ys:-.01
+		y:+ys
+		If y&lt;0
+			remove
+			Return
+		EndIf
+		rot:+3
+		SetRotation rot
+		DrawImage img,x,y
+	End Method
+
+	Function CreateBullet:TBullet( x#,y#,img )
+		Local bullet:TBullet=New TBullet
+		bullet.x=x
+		bullet.y=y
+		bullet.ys=-1 
+		bullet.img=img
+		bullet.AddLast bullets
+		Return bullet
+	End Function
+
+End Type
+
+Function UpdateEntities( list:TList )
+	For Local entity:TEntity=EachIn list
+		entity.Update
+	Next
+End Function
+
+Graphics WIDTH,HEIGHT,DEPTH,HERTZ
+
+AutoMidHandle True
+
+Local fire=LoadSound( "incbin::shoot.wav" )
+Local dude=LoadImage( "incbin::player.png" ),dude_x=WIDTH/2,dude_y=HEIGHT-30
+Local bull=LoadImage( "incbin::bullet.png" ),bull_x,bull_y
+Local stars=LoadImage( "incbin::stars.png" ),stars_x,stars_y
+
+Local show_debug,color_rot#
+
+
+Local sMain:TProfSample = CreateSample("Main")
+Local sUpdate:TProfSample = CreateSample("Update")
+Local sUpdateBullets:TProfSample = CreateSample("Bullets")
+Local sUpdateSparks:TProfSample  = CreateSample("Sparks")
+Local sFlip:TProfSample = CreateSample("Flip")
+Local displayProf:Int = True
+
+While Not KeyHit( KEY_ESCAPE )
+	StartSample(sMain)
+	
+	Cls
+	
+	stars_y:+1
+
+	SetBlend MASKBLEND
+	TileImage stars,stars_x,stars_y
+	TileImage stars,stars_x+7,stars_y*2
+	TileImage stars,stars_x+7,stars_y*3
+
+	If KeyDown( KEY_LEFT )
+		dude_x:-5
+	Else If  KeyDown( KEY_RIGHT )
+		dude_x:+5
+	EndIf
+
+	SetBlend MASKBLEND
+	DrawImage dude,dude_x,dude_y
+
+	If KeyHit( KEY_SPACE )
+		PlaySound fire
+		TBullet.CreateBullet dude_x,dude_y-16,bull
+		sparks.Clear
+	EndIf
+
+	If MouseDown(1)
+		color_rot:+1.5
+		color_rot:Mod 360
+		Local color:TRGBColor=HSVColor( color_rot,1,1 ).RGBColor()
+		Local rgb[]=[Int(color.Red()*255),Int(color.Green()*255),Int(color.Blue()*255)]
+		For Local k=1 To SPARKS_PER_FRAME
+			TSpark.CreateSpark MouseX(),MouseY(),rgb
+		Next
+	EndIf
+
+	StartSample(sUpdate)
+	
+	StartSample(sUpdateBullets)
+	SetBlend MASKBLEND
+	UpdateEntities bullets
+	SetRotation 0
+	StopSample(sUpdateBullets)
+	
+	StartSample(sUpdateSparks)
+	SetBlend LIGHTBLEND
+	UpdateEntities sparks
+	SetAlpha 1
+	SetRotation 0
+	SetColor 255,255,255
+	StopSample(sUpdateSparks)
+	
+	StopSample(sUpdate)
+	
+	If KeyHit( Asc("D") ) show_debug=1-show_debug
+	
+	FlushMem
+
+	If show_debug
+		Local mem_alloced=MemAlloced(),mem_usage=MemUsage()
+		DrawText "MemAlloced="+mem_alloced+" MemUsage="+mem_usage,0,0
+		DrawText MilliSecs(),0,24
+	EndIf
+	
+	Profile()
+	
+	If KeyHit(KEY_F12) Then displayProf = Not displayProf
+	If(displayProf) Then ShowProfInfo()
+
+	StartSample(sFlip)
+	Flip
+	StopSample(sFlip)
+
+	StopSample(sMain)	
+Wend
+
+</textarea> <br><br></td></tr></table><br>
+<a name="484917"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Robert</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> You can use QueryPerformanceCounter on Windows to get more accurate time information.  Windows code below - I am not sure what the Linux and Mac equivilents are:<br><br><pre class=code>
+
+Framework BRL.GLMax2D
+Import BRL.PNGLoader
+
+Extern "Win32"
+       Function QueryPerformanceFrequency:Int(freqency:Long Ptr)
+       Function QueryPerformanceCounter:Int(frequency:Long Ptr)
+End Extern
+
+Graphics 1024,768,0
+
+image:TImage=LoadImage("graphics/ship_light.png")
+
+SetScale 0.1,0.1
+
+Global gameSpeed:Long=0
+Global oldGameSpeed:Long=0
+
+r=QueryPerformanceFrequency(Varptr gameSpeed)
+
+QueryPerformanceCounter(Varptr oldGameSpeed)
+
+Global fps:Long
+Global totalFps:Long=0
+Global totalR:Long=0
+
+Repeat
+
+       For x=0 To 20
+               For y=0 To 20
+                       DrawImage image,x*50,y*50
+                       SetRotation rotate
+                       rotate :+ 3
+               Next
+       Next
+
+       Flip
+
+       Cls
+
+       fps=(gameSpeed-oldGameSpeed)/100
+       oldGameSpeed=gameSpeed
+
+       QueryPerformanceCounter(Varptr gameSpeed)
+
+       totalR = totalR+1
+
+       If (totalR &gt; 50)
+
+       totalFps :+ fps
+
+       EndIf
+Until KeyHit(KEY_ESCAPE)
+
+       Print (totalFps/(totalR-50))
+
+EndGraphics
+</pre> <br><br></td></tr></table><br>
+<a name="485131"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >teamonkey</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> You can use QueryPerformanceCounter on Windows to get more accurate time information. <br></div><br>Thanks, I'll try adding that. I'm pretty sure there's a high-resolution timer in /proc under Linux, but last time I played about with that stuff you needed to be root to access it. No idea how to get more accurate timing on the Mac. <br><br></td></tr></table><br>
+<a name="485133"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Robert</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> gettimeofday() is supposed to be accurate to around one microsecond.  There are probably more advanced timers, and I don't know whether that is what millisecs already uses on Linux. <br><br></td></tr></table><br>
+<a name="1010131"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Blueapples</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Pretty slick, this just helped me quickly find a few bottlenecks. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

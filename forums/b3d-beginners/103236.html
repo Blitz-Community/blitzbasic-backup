@@ -1,0 +1,468 @@
+<!DOCTYPE html><html lang="en" ><head ><title >TCP\IP server-client</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >TCP\IP server-client</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=5" >Blitz3D Beginners Area</a>/<a href="#bottom" >TCP\IP server-client</a><br><br>
+<a name="1241257"></a>
+
+<a name="1241262"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ILonion</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hello!<br>I'm beginner and now learning blitz3d tcp\ip working with a little server-client code.<br>Some parts used from Wings example (http://www.blitzbasic.com/codearcs/codearcs.php?code=3140) and from default samples.<br><br>Well, server and client are working until ~&lt; 15 clients connected.<br><br>Here my example code. I run it local on my machine. <br>After 15+ clients - server is hanged (on 8192 incoming bytes per stream (see prints on server screen)) until not stop some clients. <br><br>What is wrong? <br>Is this buffer overflow (RWIN - Receive Window TCP\IP) or wrong packet size (recommended 576 - 40(tcp header)=536?) or CPU "low" speed?<br>or something else?<br><br><br><br>server:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">;//////////////////////////////////////////////////////////////////////
+;//////////////////////////////////////////////////////////////////////
+;SERVER
+;//////////////////////////////////////////////////////////////////////
+;//////////////////////////////////////////////////////////////////////
+
+;request code (action id):
+	;SERVER &gt; CLIENT
+		;1001 - create player
+		;1004 - update pos
+		
+	;CLIENT &gt; SERVER
+		;1002 - request
+	
+	;global vars:
+	Global player_count
+	Global PACK_SIZE = 536 ;bytes
+	Global PORT = 49001
+
+	Type player_type
+		Field player_counter
+		Field x#,y#,z#
+		Field mesh
+		Field stream
+	End Type
+	
+	;global massives:
+	Global S_server
+	Global S_serv_bank = CreateBank(PACK_SIZE)
+
+	
+	;default mode for pivots:
+	Graphics3D 320,240,0,2
+
+	;CREATE SERVER:
+	S_server = CreateTCPServer(PORT)
+	If Not S_server
+		RuntimeError "cannot create"
+		End
+	Else
+		Print "created"
+	End If
+
+
+
+
+
+;###########################################################################################
+	;loop
+;###########################################################################################
+While Not KeyHit(1)
+	
+	;CONNECT\CREATE NEW PLAYER:
+	S_define_new_stream()
+
+	;READ REQUESTS FROM CLIENT:
+	For p.player_type = Each player_type
+		If p.player_type &lt;&gt; Null
+			If Not Eof(p\stream)
+;debug:
+If ReadAvail(p\stream) &gt; 0
+;DebugLog "incoming bytes: " + ReadAvail(p\stream)
+Print "incoming bytes: " + ReadAvail(p\stream)
+End If
+;debug.
+				Repeat
+					If ReadAvail(p\stream) =&gt; PACK_SIZE
+						ReadBytes(S_serv_bank,p\stream,0,PACK_SIZE)
+						;request code:
+						If PeekInt(S_serv_bank,0) = 1002
+							;request type:
+							inner_request = PeekInt(S_serv_bank,4)
+							;execute request:
+							S_request_execute(p.player_type,inner_request)
+							
+							;send result of request execute to all clients:
+							x# = EntityX(p\mesh)
+							y# = EntityY(p\mesh)
+							z# = EntityZ(p\mesh)
+							yaw# = EntityYaw#(p\mesh)
+							p\x = x
+							p\y = y
+							p\z = z
+							pl_id = p\player_counter
+							ACTION_ID = 1004
+							S_send_actions_to_all(ACTION_ID,x#,y#,z#,yaw#,pl_id)
+							
+						End If
+					End If
+				Until ReadAvail(p\stream) &lt; PACK_SIZE
+			Else
+				Print "client crashed"
+				Delete p
+			End If
+		End If
+	Next
+	
+Wend
+;###########################################################################################
+Function S_define_new_stream()
+;connect\create new player:
+
+	;if new stream (client) defined: 
+	S_inner_stream = AcceptTCPStream(S_server)
+	If S_inner_stream
+		
+		Print "new player connected"
+		
+		;NEW PLAYER (local. create pivot like pos\rot clone (header) of client player entity):
+			p.player_type = New player_type
+			;player link (stream) = connected stream id:
+			p\stream = S_inner_stream
+			;player pivot:
+			p\mesh = CreatePivot()
+			;counter (id):
+			player_count = player_count + 1
+			Print "count of players: " + player_count
+			
+		;SEND TO ALL: CREATE NEW PLAYER:
+			PositionEntity p\mesh,0,0,0
+			p\player_counter = player_count
+			pl_id = player_count
+			x# = EntityX(p\mesh)
+			y# = EntityY(p\mesh)
+			z# = EntityZ(p\mesh)
+			p\x = x
+			p\y = y
+			p\z = z
+			ACTION_ID = 1001
+			S_send_actions_to_all(ACTION_ID,x#,y#,z#,yaw#,pl_id)
+			
+		;SEND TO NEW STREAM: ALL EXIST PLAYERS:
+			For p.player_type = Each player_type
+				;if not eof:
+				If Not Eof(S_inner_stream)
+					;and not self:
+					If p\player_counter &lt;&gt; player_count
+						;action id:
+						PokeInt S_serv_bank,0,1001
+						;x,y,z
+						PokeFloat S_serv_bank,4,p\x
+						PokeFloat S_serv_bank,8,p\y
+						PokeFloat S_serv_bank,12,p\z
+						;id
+						PokeInt S_serv_bank,16,p\player_counter
+						;send
+						WriteBytes S_serv_bank,S_inner_stream,0,PACK_SIZE
+					End If
+				Else
+					Print "client crashed"
+					Delete p
+				End If
+			Next
+	End If
+	
+End Function
+;###########################################################################################
+Function S_request_execute(p.player_type,inner_request)
+;execute request:
+
+	speed# = 0.9
+
+	;request type:
+	Select inner_request
+		;z+
+		Case 1
+			;move server pivot:
+			MoveEntity p\mesh,0,0,speed
+		;z-
+		Case 2
+			MoveEntity p\mesh,0,0,-speed
+		;x+
+		Case 3
+			TurnEntity p\mesh,0,1,0
+		;x-
+		Case 4
+			TurnEntity p\mesh,0,-1,0
+		;y+
+	;	Case 5
+	;		TurnEntity p\mesh,0,1,0
+		;y-
+	;	Case 6
+	;		TurnEntity p\mesh,0,-1,0
+	End Select
+	
+End Function
+;###########################################################################################
+Function S_send_actions_to_all(ACTION_ID,x#,y#,z#,yaw#,pl_id)
+;send actions to all clients:
+
+	For p.player_type = Each player_type
+		If p.player_type &lt;&gt; Null
+			If Not Eof(p\stream)
+				;action:
+				PokeInt S_serv_bank,0,ACTION_ID
+				;x,y,z
+				PokeFloat S_serv_bank,4,x#
+				PokeFloat S_serv_bank,8,y#
+				PokeFloat S_serv_bank,12,z#
+				PokeFloat S_serv_bank,20,yaw#
+				;id
+				PokeInt S_serv_bank,16,pl_id
+				;send:
+				WriteBytes S_serv_bank,p\stream,0,PACK_SIZE
+			Else
+				Print "client crashed"
+				Delete p
+			End If
+		End If
+	Next
+	
+End Function</textarea><br><br>client:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">;//////////////////////////////////////////////////////////////////////
+;//////////////////////////////////////////////////////////////////////
+;CLIENT
+;//////////////////////////////////////////////////////////////////////
+;//////////////////////////////////////////////////////////////////////
+
+;request code (action id):
+	;SERVER &gt; CLIENT
+		;1001 - create player
+		;1004 - update pos
+		
+	;CLIENT &gt; SERVER
+		;1002 - request
+		
+		
+	;global vars:
+	Global game_limit_speed = CreateTimer(60)
+	;
+	Global PACK_SIZE = 536 ;bytes
+	Global PORT = 49001
+	Global IP$ = "localhost" ;set ip here
+	;
+	Global player_created
+
+	Type player_type
+		Field player_counter
+		Field x#,y#,z#
+		Field mesh
+	End Type
+	
+	;global massives:
+	Global C_server_link
+	Global C_client_bank = CreateBank(PACK_SIZE) 
+
+
+	;graphics:
+	Graphics3D 640,480,16,2
+	
+	;3d misc for scene:
+	Global light = CreateLight(1)
+	PositionEntity light,0,10,0
+	Global player_mesh = CreateSphere()
+	HideEntity player_mesh
+	Global box = CreateCube()
+	Global camera = CreateCamera()
+	PositionEntity camera,0,20,-15
+	RotateEntity camera,50,0,0
+	CameraZoom camera,2
+	CameraFogRange camera,2,100
+	CameraFogMode camera,True
+	CameraFogColor camera,150,200,255
+	CameraClsColor camera,150,200,255
+	grass=CreateTexture(64,64,1)
+	SetBuffer TextureBuffer(grass)
+	ClsColor 22,100,22
+	Cls
+	For i=0 To 256
+		Color 0+Rnd(10),50+Rnd(155),0+Rnd(10)
+		Plot Rnd(64),Rnd(64)
+	Next
+	SetBuffer BackBuffer()
+	ScaleTexture grass,3,3  
+	Color 255,255,255
+	ClsColor 0,0,0
+	plane=CreatePlane()
+	EntityTexture plane,grass
+
+
+	;CONNECT TO SERVER:
+	;Print "PRESS ENTER"
+	Repeat
+		;If KeyHit(28);enter
+			C_connect_to_server()
+		;End If
+	Until C_server_link &lt;&gt; 0
+
+
+
+
+;###########################################################################################
+	;loop
+;###########################################################################################
+period = 1000 / 40
+time = MilliSecs() - period
+
+While Not KeyHit(1)
+
+	;waiter:
+	WaitTimer(game_limit_speed)
+	
+	;fractional remainder:
+	Repeat
+		elapsed = MilliSecs() - time
+	Until elapsed
+	ticks=elapsed/period
+	tween#=Float(elapsed Mod period)/Float(period)
+	For k=1 To ticks
+		If k=ticks Then CaptureWorld
+		time=time+period
+			;##########################
+				;
+				calculate_game()
+				;
+			;##########################
+		UpdateWorld
+	Next
+	AntiAlias True
+	RenderWorld tween
+	
+	;wire:
+	If KeyHit(57)
+		wire = 1 - wire
+	End If
+	WireFrame wire
+	
+	;pl.count:
+	i = 0
+	For p.player_type = Each player_type
+		i = i + 1
+	Next
+	Text 10,40,i + " - players"
+	
+	Flip
+Wend
+;###########################################################################################
+Function calculate_game()
+
+	;READ REQUESTS FROM SERVER:
+	If Not Eof(C_server_link)
+		Repeat
+			If ReadAvail(C_server_link) =&gt; PACK_SIZE
+				ReadBytes(C_client_bank,C_server_link,0,PACK_SIZE)
+				;INITIALIZE ME:
+				If player_created = 0
+					;create me:
+					If PeekInt(C_client_bank,0) = 1001
+						;create me:
+						p.player_type = New player_type
+						p\mesh = CopyEntity(player_mesh)
+						anim_entity = p\mesh
+						ShowEntity p\mesh
+						p\player_counter = PeekInt(C_client_bank,16)
+						x# = PeekFloat(C_client_bank,4)
+						y# = PeekFloat(C_client_bank,8)
+						z# = PeekFloat(C_client_bank,12)
+						PositionEntity p\mesh,x,y,z
+						;
+						;player created (me):
+						player_created = 1
+					End If
+					
+				;ALL OTHER ACTIONS:
+				Else
+					;create other players:
+					If PeekInt(C_client_bank,0) = 1001
+						p.player_type = New player_type
+						p\mesh = CopyEntity(player_mesh)
+						ShowEntity p\mesh
+						p\player_counter = PeekInt(C_client_bank,16)
+						x# = PeekFloat(C_client_bank,4)
+						y# = PeekFloat(C_client_bank,8)
+						z# = PeekFloat(C_client_bank,12)
+						PositionEntity p\mesh,x,y,z
+					End If
+					
+					;update pos (me and other):
+					If PeekInt(C_client_bank,0) = 1004
+						id = PeekInt(C_client_bank,16)
+						For p.player_type = Each player_type
+							If p\player_counter = id
+								x# = PeekFloat(C_client_bank,4)
+								y# = PeekFloat(C_client_bank,8)
+								z# = PeekFloat(C_client_bank,12)
+								yaw# = PeekFloat(C_client_bank,20)
+								PositionEntity p\mesh,x,y,z
+								RotateEntity p\mesh,0,yaw,0
+							End If
+						Next
+					End If
+				End If
+			End If
+		Until ReadAvail(C_server_link) &lt; PACK_SIZE
+	Else
+		RuntimeError "server crashed"
+		End 
+	End If
+	
+	;SEND REQUESTS TO SERVER:
+	If player_created = 1
+		;random player motion:
+		SeedRnd MilliSecs()
+		request = Rand(1,4)
+		C_server_request(request)
+			
+		;manual motion:
+	;	If KeyDown(200);z+
+	;		request = 1
+	;		C_server_request(request)
+	;	End If
+	;	If KeyDown(208);z-
+	;		request = 2
+	;		C_server_request(request)
+	;	End If
+	;	If KeyDown(205);x+
+	;		request = 3
+	;		C_server_request(request)
+	;	End If
+	;	If KeyDown(203);x-
+	;		request = 4
+	;		C_server_request(request)
+	;	End If
+	End If
+
+End Function
+;###########################################################################################
+Function C_connect_to_server()
+;connect to server:
+
+	Print "connecting..."
+	C_server_link = OpenTCPStream(IP$,PORT)
+	If Not C_server_link
+		RuntimeError "failed"
+		End
+	End If
+
+End Function
+;###########################################################################################
+Function C_server_request(request)
+;send request:
+
+	If Not Eof(C_server_link)
+		PokeInt C_client_bank,0,1002
+		PokeInt C_client_bank,4,request
+		WriteBytes C_client_bank,C_server_link,0,PACK_SIZE
+	Else
+		RuntimeError "server crashed"
+	End If
+	
+End Function</textarea> <br><br></td></tr></table><br>
+<a name="1241382"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ILonion</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> knock-knock.. <br><br></td></tr></table><br>
+<a name="1241383"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Who's there? :D <br><br></td></tr></table><br>
+<a name="1241385"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ILonion</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> :) <br><br></td></tr></table><br>
+<a name="1241386"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Guy Fawkes</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> :) <br><br></td></tr></table><br>
+<a name="1241671"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Wings</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yea i discovered the 8192  too some yars ago 2005. its per stream at least ;)<br><br>i decided to go for controlling the sending. oranice data in banks. sending a bank of 512 or 1024..<br><br>its a balance in Blitz to code tcpip.<br><br>to Clean the buffer client needs to read data. after client read data server may continue..<br><br>some one sudgest use a dll to turn of this buffer hold thing.. <br><br></td></tr></table><br>
+<a name="1241696"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ILonion</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thank you very much Wings, i've got it! <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

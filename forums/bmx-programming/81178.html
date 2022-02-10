@@ -1,0 +1,131 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Create infinite sized RamStream?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Create infinite sized RamStream?</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Create infinite sized RamStream?</a><br><br>
+<a name="914333"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >plash</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I need to write data into a stream, but not a file, and the data will be of unknown length (there are a multiple number of variable-sized fields which need to be saved.)<br><br>The only way you can create a TRamStream is by using a known/finite size of ram (one that works, that is); is there a way to just *open* some ram and have it change in size as you write to it?<br><br>EDIT: The data will be encrypted after writing to the ramstream, thus the need for it to be in the ram and not on the HD as a temporary file.<br><br>EDIT2: It would probably be easy to do it with a string, but not as fast (imo) as writing variables directly to a stream. <br><br></td></tr></table><br>
+<a name="914340"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Heres something i made many moons ago.<br>Its not thoroughly tested, and it doesnt scale to very large sizes as it reallocates the new size and copies the date over.<br>BUt it should you an idea as to how to do it.<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+'
+' TEST
+'
+Rem
+Framework BRL.Blitz
+
+Import BRL.Stream
+Import BRL.StandardIO
+
+Local stream:TStream = New TMemoryStream
+stream.WriteString( "Hello")
+stream.WriteString( "World")
+stream.WriteString( "~n")
+
+stream.Seek(0)
+Print stream.ReadLine()
+
+Print stream.Size()
+
+Local stream2:TStream = WriteStream( "c:/test.txt")
+stream.Seek(0)
+CopyStream stream, stream2
+stream.Close()
+
+stream2.Close()
+EndRem
+
+
+Type TMemoryStream Extends TStream
+	Const DEFAULT_SEGMENT_SIZE:Int = 512
+	
+	Field Buffer:Byte Ptr
+	Field Offset:Int
+	Field CurrSize:Int
+	Field MaxSize:Int	
+	Field ExtendBuffer:Int = True	
+	Field SegmentSize:Int = DEFAULT_SEGMENT_SIZE
+	
+	Function Create:TMemoryStream( segmentsize:Int = DEFAULT_SEGMENT_SIZE)
+		Local stream:TMemoryStream = New TMemoryStream
+		stream.SegmentSize = segmentsize
+		Return stream
+	EndFunction
+	
+	Method New()
+		MaxSize = SegmentSize
+		Buffer = MemAlloc( MaxSize)	
+	EndMethod
+	
+	Method Delete()
+		Close()
+	EndMethod
+	
+	Method Close()
+		If Buffer &lt;&gt; Null Then
+			MemFree( Buffer)
+			Buffer = Null
+			Offset = 0
+			MaxSize = 0
+			CurrSize = 0
+		EndIf
+	EndMethod
+	
+	Method Eof:Int()
+		Return (Buffer = Null) Or (Offset &gt;= CurrSize)
+	EndMethod
+	
+	Method Pos:Int()
+		Return Offset
+	EndMethod
+	
+	Method Size:Int()
+		Return CurrSize
+	EndMethod
+	
+	Method Seek:Int( pos:Int)
+		If pos &lt; CurrSize Then Offset = pos
+		Return Offset
+	EndMethod
+	
+	Method Read:Int( buf:Byte Ptr, count:Int)
+		Local index:Int = 0
+		While (count &gt; 0) And (Offset &lt; CurrSize)			
+			buf[index] = Buffer[Offset]
+			count :- 1
+			Offset :+ 1
+			index :+ 1
+		Wend
+		Return index
+	EndMethod
+
+	Method Write:Int( buf:Byte Ptr, count:Int)
+		' extend memory if reached eof
+		Local sz:Int = Offset + count
+		If sz &gt;= MaxSize Then
+			If Not ExtendBuffer Then RuntimeError "reached end of stream"
+			Local newsize:Int = MaxSize
+			Repeat 
+				 newsize :+ SegmentSize
+			Until sz &lt; newsize			
+			Buffer = MemExtend( Buffer, MaxSize, newsize)
+			MaxSize = newsize
+		EndIf
+		' write data
+		Local index:Int = 0
+		While (count &gt; 0) And (Offset &lt; MaxSize)			
+			Buffer[Offset] = buf[index]
+			count :- 1
+			Offset :+ 1
+			index :+ 1
+		Wend
+		CurrSize = Offset
+		Return index
+	EndMethod
+EndType
+</textarea> <br><br></td></tr></table><br>
+<a name="914342"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Perturbatio</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Can you use a BankStream? <br><br></td></tr></table><br>
+<a name="914346"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >plash</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh snap.. I always seem to forget about Banks.. Thanks! - I was just about to use grable's code (which works quite well.) <br><br></td></tr></table><br>
+<a name="914451"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Perturbatio</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> np :) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

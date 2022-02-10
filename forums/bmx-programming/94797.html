@@ -1,0 +1,625 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Works on laptop, not on desktop</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Works on laptop, not on desktop</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Works on laptop, not on desktop</a><br><br>
+<a name="1088857"></a>
+
+<a name="1088860"></a>
+
+<a name="1088861"></a>
+
+<a name="1088871"></a>
+
+<a name="1088872"></a>
+
+<a name="1088875"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Scienthsine</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> EDIT: I've been cutting the code down to try to get to the problem, still haven't but this is the code so far:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+'-----------------------------------------------------Includes/Imports
+Import MaxGUI.Drivers
+
+'-----------------------------------------------------Types
+Type TNetwork
+	Field connectionList:TList
+	Field listenSocket:TSocket
+		
+	Field connectCallback:Int(aNetwork:TNetwork,aConnection:TConnection)
+	Field cmdCallback:Int(aNetwork:TNetwork,aConnection:TConnection)
+	
+	Function Create:TNetwork(aListenPort:Int=0)
+		Local t:TNetwork = New TNetwork
+		
+		t.connectionList = New TList
+		
+		'Start listening
+		t.listenSocket = CreateTCPSocket()
+		If BindSocket(t.listenSocket,aListenPort) Then
+			SocketListen(t.listenSocket)
+		Else
+			CloseSocket(t.listenSocket)
+			t.listenSocket = Null
+		EndIf
+		
+		Return t
+	EndFunction
+	
+	Method createConnection:TConnection(aRemoteIP:String)
+		Local t:TSocket = CreateTCPSocket()
+		Local remoteIP:Int
+		Local remotePort:Int
+		
+		If aRemoteIP.contains(":") Then
+			'Port specified in aRemoteIP
+			remoteIP = HostIp(aRemoteIP[0..aRemoteIP.findLast(":")])
+			remotePort = Int(aRemoteIP[aRemoteIP.findLast(":")+1..aRemoteIP.length])
+		EndIf
+		
+		If ConnectSocket(t,remoteIP,remotePort) Then
+			Return createFromSocket(t)
+		Else
+			CloseSocket(t)
+			Return Null
+		EndIf
+	EndMethod
+	
+	Method createFromSocket:TConnection(aSocket:TSocket)
+		Local t:TConnection
+			
+		t = New TConnection
+		t.socket = aSocket
+		t.stream = CreateSocketStream(aSocket)
+		t.link = connectionList.addLast(t)
+		
+		If connectCallback Then connectCallback(Self,t)
+		
+		Return t
+	EndMethod
+	
+	Method manageConnections()
+		Local s:TSocket
+		Local c:TConnection
+		
+		'Accept new connections
+		If listenSocket Then
+			s = SocketAccept(listenSocket)
+			While s
+				createFromSocket(s)
+				s:TSocket = SocketAccept(listenSocket)
+			Wend
+		EndIf
+		
+		'Process Commands
+		For c = EachIn connectionList
+			Local avail:Int
+			
+			avail = SocketReadAvail(c.socket)
+			If c.cmdLen Then
+				If avail &gt;= c.cmdLen Then
+					If cmdCallback Then
+						cmdCallback(Self,c)
+					EndIf
+				EndIf
+				c.cmdLen = 0
+			ElseIf avail &gt;= 4 Then 
+				c.cmdLen = ReadInt(c.stream)
+			EndIf
+		Next
+	EndMethod
+EndType
+
+Type TConnection	
+	Field socket:TSocket
+	Field stream:TSocketStream
+	Field link:TLink
+	
+	Field cmdLen:Int
+	
+	'Storage of user data
+	Field extra:Object
+EndType
+
+
+Type TPlayer		
+	Field name:String
+	Field connection:TConnection
+	Field link:TLink
+	
+	'A Null aConnection parameter should be used for a local player
+	Function Create:TPlayer(aName:String,aConnection:TConnection,aList:TList=Null)
+		Local t:TPlayer = New TPlayer
+		
+		t.name = aName
+		t.connection = aConnection
+		If aList Then t.link = aList.addLast(t)
+		
+		If aConnection Then aConnection.extra = t
+		
+		Return t
+	EndFunction
+EndType
+
+'-----------------------------------------------------Globals
+'GUI
+Global lobbyWindow:TGadget
+Global leftPanel:TGadget
+Global rightPanel:TGadget
+Global chatText:TGadget
+Global chatField:TGadget
+Global chatButton:TGadget
+Global playerListBox:TGadget
+
+Global lobbyNetwork:TNetwork
+Global playerList:TList
+Global localPlayer:TPlayer
+
+'-----------------------------------------------------Init
+'GUI
+lobbyWindow = CreateWindow("Lobby",0,0,500,300,Null,WINDOW_TITLEBAR|WINDOW_RESIZABLE|WINDOW_STATUS|WINDOW_CLIENTCOORDS|WINDOW_CENTER)
+leftPanel = CreatePanel(0,0,400,ClientHeight(lobbyWindow),lobbyWindow)
+rightPanel = CreatePanel(400,0,ClientWidth(lobbyWindow)-400,ClientHeight(lobbyWindow),lobbyWindow)
+chatText = CreateTextArea(0,0,ClientWidth(leftPanel),ClientHeight(leftPanel)-20,leftPanel,TEXTAREA_WORDWRAP|TEXTAREA_READONLY)
+chatField = CreateTextField(0,ClientHeight(leftPanel)-20,ClientWidth(leftPanel)-50,20,leftPanel)
+chatButton = CreateButton("Send",ClientWidth(leftPanel)-50,ClientHeight(leftPanel)-20,50,20,leftPanel,BUTTON_OK)
+playerListBox = CreateListBox(0,20,ClientWidth(rightPanel),ClientHeight(rightPanel)-64,rightPanel)
+
+'Player
+playerList = New TList
+localPlayer = TPlayer.Create("Host",Null,playerList)
+
+'Network
+lobbyNetwork = TNetwork.Create(6969)
+
+lobbyNetwork.connectCallback = connectHandler
+lobbyNetwork.cmdCallback = cmdHandler
+
+If lobbyNetwork.listenSocket Then
+	SetStatusText(lobbyWindow,"Listening on : "+DottedIP(HostIp("localhost"))+":"+SocketLocalPort(lobbyNetwork.listenSocket))
+	SetGadgetShape(lobbyWindow,GadgetX(lobbyWindow)-250,GadgetY(lobbyWindow),500,300)
+Else
+	SetStatusText(lobbyWindow,"Couldn't open listen port, attempting to connect.")
+	localPlayer.name = "Client"
+	SetGadgetShape(lobbyWindow,GadgetX(lobbyWindow)+250,GadgetY(lobbyWindow),500,300)
+	If Not lobbyNetwork.createConnection("127.0.0.1:6969") Then End 'Unable to host or connect
+EndIf
+
+AddGadgetItem(playerListBox,localPlayer.name,GADGETITEM_NORMAL,-1,DottedIP(HostIp("localhost")),localPlayer)
+
+SetGadgetText(chatField,"test")
+
+'-----------------------------------------------------Main Loop
+Repeat
+	'GUI
+	PollEvent()
+	Select EventID()
+		Case EVENT_GADGETACTION
+			Select EventSource()
+				Case chatButton
+					AddTextAreaText(chatText,localPlayer.name+": "+TextFieldText(chatField)+"~n")
+					
+					'Broadcast
+					For Local t:TConnection = EachIn lobbyNetwork.connectionList
+						'TEMP Manual Chat Command Creation
+						WriteInt(t.stream,TextFieldText(chatField).length+4)
+						WriteInt(t.stream,CMD_CHAT)
+						WriteString(t.stream,TextFieldText(chatField))
+					Next
+			EndSelect
+		Case EVENT_APPTERMINATE, EVENT_WINDOWCLOSE
+			End		
+	EndSelect
+	
+	lobbyNetwork.manageConnections()
+Forever
+
+'-----------------------------------------------------Functions
+Const CMD_REPORTNAME:Int	= 1
+Const CMD_CHAT:Int			= 3
+
+Function connectHandler(aNetwork:TNetwork,aConnection:TConnection)
+	Local tempPlayer:TPlayer
+	
+	'Create new player
+	Print("A connection has been made.")
+	tempPlayer = TPlayer.Create("",aConnection,playerList)
+	aConnection.extra = tempPlayer
+	
+	'Report localPlayer name
+	WriteInt(aConnection.stream,localPlayer.name.length+4)
+	WriteInt(aConnection.stream,CMD_REPORTNAME)
+	WriteString(aConnection.stream,localPlayer.name)
+EndFunction
+
+Function cmdHandler(aNetwork:TNetwork,aConnection:TConnection)
+	Local cmd:Int
+	
+	cmd = ReadInt(aConnection.stream)
+	Select cmd
+		Case CMD_REPORTNAME
+			Local tempName:String
+			
+			'Read name
+			tempName = ReadString(aConnection.stream,aConnection.cmdLen-4)
+			
+			'Set player name
+			TPlayer(aConnection.extra).name = tempName
+			
+			'Add to listbox
+			AddGadgetItem(playerListBox,tempName,GADGETITEM_NORMAL,-1,"",aConnection.extra)
+		Case CMD_CHAT
+			AddTextAreaText(chatText,TPlayer(aConnection.extra).name+": "+ReadString(aConnection.stream,aConnection.cmdLen-4)+"~n")
+	EndSelect
+EndFunction
+</textarea><br><br>This is a lobby i'm working on for a rts. It's very very unfinished, and has many changes on the way.<br><br>My problem is that I've been developing on a laptop, and just switched to my desktop. Upon copying the files over and testing, I noticed that the lobby no longer works, it's almost like I'm loosing network traffic. I'm testing by running two instances of the program on the same computer. This example will automatically connect when the second instance is started. It assumes port 6969 is open for listening.<br><br>Anyway, I thought I had a linux vs windows problem since the laptop is only running windows. I booted windows on the desktop, still have the problem. I recompiled the executable on the laptop, and tried it there... all good... that same exe on the desktop fails. There isn't any multithreaded code, but it almost seems like maybe the problem is having multiple processors on the desktop?<br><br>I don't know, I'm getting very frustrated.<br><br>If anyone could give it a try and see what you find. Just compile/launch, then launch another instance, they should connect to each other. Send some messages back and forth several times. Sometimes it fails as early as in the 'report name' command, which is sent immediately after connecting, sometimes it fails after several successful messages.<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1088885"></a>
+
+<a name="1088886"></a>
+
+<a name="1088888"></a>
+
+<a name="1088925"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Scienthsine</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Update:<br>Ok, I've narrowed it down some. If I use a TCP dummy app to connect to my app above, everything works. That is, I always receive the data, and always send the correct data.<br><br>Furthermore, I've discovered that if I change the pollevent to waitevent, and make a timer to give us some 'update' events... everything works. Note however, that I'm using event queues in the actual app...<br><br>Anyway, still haven't figured it out completely... but it's odd that it works on my laptop, but not on either of the desktops, or either os on those desktops...<br><br>edit: Or just adding a delay 1 in the main loop makes it work. I'm not happy with this sort of fix though. I'm seeing actual lost tcp data without it. Considering my game (a rts) needs all data to be reliable, I can't have the possibility of lost data.<br><br>So I really need to figure out what's going on here.<br><br><font class="tiny">Last edited 2011</font><br><br><font class="tiny">Last edited 2011</font><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1088985"></a>
+
+<a name="1088986"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Scienthsine</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Come on, I need some help here...<br><br>I just can't understand why a delay 1 is the difference between working and not. I made a test to see if I could replicate this behavior with a simpler from scratch program... but it seems to work fine. So it's something to do with my program... but why a delay would make it work... and why it works perfectly without the delay on the laptop... I'm at a loss.<br><br>This is the current code that shows the problem:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+'-----------------------------------------------------Includes/Imports
+Import MaxGUI.Drivers
+
+'-----------------------------------------------------Types
+Type TNetwork
+	Field connectionList:TList
+	Field listenSocket:TSocket
+		
+	Field connectCallback:Int(aNetwork:TNetwork,aConnection:TConnection)
+	Field cmdCallback:Int(aNetwork:TNetwork,aConnection:TConnection)
+	
+	Function Create:TNetwork(aListenPort:Int=0)
+		Local t:TNetwork = New TNetwork
+		
+		t.connectionList = New TList
+		
+		'Start listening
+		t.listenSocket = CreateTCPSocket()
+		If BindSocket(t.listenSocket,aListenPort) Then
+			SocketListen(t.listenSocket,5)
+		Else
+			CloseSocket(t.listenSocket)
+			t.listenSocket = Null
+		EndIf
+		
+		Return t
+	EndFunction
+	
+	Method createConnection:TConnection(aRemoteIP:String)
+		Local t:TSocket = CreateTCPSocket()
+		Local remoteIP:Int
+		Local remotePort:Int
+		
+		If aRemoteIP.contains(":") Then
+			'Port specified in aRemoteIP
+			remoteIP = HostIp(aRemoteIP[0..aRemoteIP.findLast(":")])
+			remotePort = Int(aRemoteIP[aRemoteIP.findLast(":")+1..aRemoteIP.length])
+		EndIf
+		
+		If ConnectSocket(t,remoteIP,remotePort) Then
+			Return createFromSocket(t)
+		Else
+			CloseSocket(t)
+			Return Null
+		EndIf
+	EndMethod
+	
+	Method createFromSocket:TConnection(aSocket:TSocket)
+		Local t:TConnection
+			
+		t = New TConnection
+		t.socket = aSocket
+		t.stream = CreateSocketStream(aSocket)
+		t.link = connectionList.addLast(t)
+		
+		If connectCallback Then connectCallback(Self,t)
+		
+		Return t
+	EndMethod
+	
+	Method manageConnections()
+		Local s:TSocket
+		Local c:TConnection
+		
+		'Accept new connections
+		If listenSocket Then
+			s = SocketAccept(listenSocket)
+			While s
+				createFromSocket(s)
+				s:TSocket = SocketAccept(listenSocket)
+			Wend
+		EndIf
+		
+		'Process Commands
+		For c = EachIn connectionList
+			Local avail:Int
+			
+			avail = SocketReadAvail(c.socket)
+			If c.cmdLen Then
+				If avail &gt;= c.cmdLen Then
+					If cmdCallback Then
+						cmdCallback(Self,c)
+					EndIf
+				EndIf
+				c.cmdLen = 0
+			ElseIf avail &gt;= 1 Then 
+				c.cmdLen = ReadByte(c.stream)
+			EndIf
+		Next
+	EndMethod
+EndType
+
+Type TConnection	
+	Field socket:TSocket
+	Field stream:TSocketStream
+	Field link:TLink
+	
+	Field cmdLen:Int
+	
+	'Storage of user data
+	Field extra:Object
+EndType
+
+
+Type TPlayer		
+	Field name:String
+	Field connection:TConnection
+	Field link:TLink
+	
+	'A Null aConnection parameter should be used for a local player
+	Function Create:TPlayer(aName:String,aConnection:TConnection,aList:TList=Null)
+		Local t:TPlayer = New TPlayer
+		
+		t.name = aName
+		t.connection = aConnection
+		If aList Then t.link = aList.addLast(t)
+		
+		If aConnection Then aConnection.extra = t
+		
+		Return t
+	EndFunction
+EndType
+
+'-----------------------------------------------------Globals
+'GUI
+Global lobbyWindow:TGadget
+Global leftPanel:TGadget
+Global rightPanel:TGadget
+Global chatText:TGadget
+Global chatField:TGadget
+Global chatButton:TGadget
+Global playerListBox:TGadget
+
+Global lobbyNetwork:TNetwork
+Global playerList:TList
+Global localPlayer:TPlayer
+
+'-----------------------------------------------------Init
+'GUI
+lobbyWindow = CreateWindow("Lobby",0,0,500,300,Null,WINDOW_TITLEBAR|WINDOW_RESIZABLE|WINDOW_STATUS|WINDOW_CLIENTCOORDS|WINDOW_CENTER)
+leftPanel = CreatePanel(0,0,400,ClientHeight(lobbyWindow),lobbyWindow)
+rightPanel = CreatePanel(400,0,ClientWidth(lobbyWindow)-400,ClientHeight(lobbyWindow),lobbyWindow)
+chatText = CreateTextArea(0,0,ClientWidth(leftPanel),ClientHeight(leftPanel)-20,leftPanel,TEXTAREA_WORDWRAP|TEXTAREA_READONLY)
+chatField = CreateTextField(0,ClientHeight(leftPanel)-20,ClientWidth(leftPanel)-50,20,leftPanel)
+chatButton = CreateButton("Send",ClientWidth(leftPanel)-50,ClientHeight(leftPanel)-20,50,20,leftPanel,BUTTON_OK)
+playerListBox = CreateListBox(0,20,ClientWidth(rightPanel),ClientHeight(rightPanel)-64,rightPanel)
+
+'Player
+playerList = New TList
+localPlayer = TPlayer.Create("Host",Null,playerList)
+
+'Network
+lobbyNetwork = TNetwork.Create(6969)
+
+lobbyNetwork.connectCallback = connectHandler
+lobbyNetwork.cmdCallback = cmdHandler
+
+If lobbyNetwork.listenSocket Then
+	SetStatusText(lobbyWindow,"Listening on : "+DottedIP(HostIp("localhost"))+":"+SocketLocalPort(lobbyNetwork.listenSocket))
+	SetGadgetShape(lobbyWindow,GadgetX(lobbyWindow)-250,GadgetY(lobbyWindow),500,300)
+Else
+	SetStatusText(lobbyWindow,"Couldn't open listen port, attempting to connect.")
+	localPlayer.name = "Client"
+	SetGadgetShape(lobbyWindow,GadgetX(lobbyWindow)+250,GadgetY(lobbyWindow),500,300)
+	If Not lobbyNetwork.createConnection("127.0.0.1:6969") Then End 'Unable to host or connect
+EndIf
+
+AddGadgetItem(playerListBox,localPlayer.name,GADGETITEM_NORMAL,-1,DottedIP(HostIp("localhost")),localPlayer)
+
+SetGadgetText(chatField,"test")
+
+'Global test:TTimer = CreateTimer(10)
+
+'-----------------------------------------------------Main Loop
+Repeat
+	'GUI
+	PollEvent()
+	Select EventID()
+		Case EVENT_GADGETACTION
+			Select EventSource()
+				Case chatButton
+					AddTextAreaText(chatText,localPlayer.name+": "+TextFieldText(chatField)+"~n")
+					
+					'Broadcast
+					For Local t:TConnection = EachIn lobbyNetwork.connectionList
+						'TEMP Manual Chat Command Creation
+						WriteByte(t.stream,TextFieldText(chatField).length+1)
+						WriteByte(t.stream,CMD_CHAT)
+						WriteString(t.stream,TextFieldText(chatField))
+						FlushStream(t.stream)
+					Next
+			EndSelect
+		Case EVENT_APPTERMINATE, EVENT_WINDOWCLOSE
+			End		
+	EndSelect
+	
+	Delay 1
+	
+	lobbyNetwork.manageConnections()
+Forever
+
+'-----------------------------------------------------Functions
+Const CMD_REPORTNAME:Byte	= 1
+Const CMD_CHAT:Byte			= 3
+
+Function connectHandler(aNetwork:TNetwork,aConnection:TConnection)
+	Local tempPlayer:TPlayer
+	
+	'Create new player
+	Print("A connection has been made.")
+	tempPlayer = TPlayer.Create("",aConnection,playerList)
+	aConnection.extra = tempPlayer
+	
+	'Report localPlayer name
+	WriteByte(aConnection.stream,localPlayer.name.length+1)
+	WriteByte(aConnection.stream,CMD_REPORTNAME)
+	WriteString(aConnection.stream,localPlayer.name)
+EndFunction
+
+Function cmdHandler(aNetwork:TNetwork,aConnection:TConnection)
+	Local cmd:Int
+	
+	cmd = ReadByte(aConnection.stream)
+	Select cmd
+		Case CMD_REPORTNAME
+			Local tempName:String
+			
+			'Read name
+			tempName = ReadString(aConnection.stream,aConnection.cmdLen-1)
+			
+			'Set player name
+			TPlayer(aConnection.extra).name = tempName
+			
+			'Add to listbox
+			AddGadgetItem(playerListBox,tempName,GADGETITEM_NORMAL,-1,"",aConnection.extra)
+		Case CMD_CHAT
+			Local TEMP:String
+			TEMP = TPlayer(aConnection.extra).name+": "+ReadString(aConnection.stream,aConnection.cmdLen-1)+"~n"
+			'Print(TEMP)
+			AddTextAreaText(chatText,TEMP)
+			'AddTextAreaText(chatText,TPlayer(aConnection.extra).name+": "+ReadString(aConnection.stream,aConnection.cmdLen-1)+"~n")
+	EndSelect
+EndFunction
+</textarea><br><br>This is the test I made today, which does _NOT_ have this problem...<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+'TCP Data Loss Test
+'tcpLoss.bmx
+'(c)'11 James Newman
+SuperStrict
+'-----------------------------------------------------Imports/Includes
+Import MaxGUI.Drivers
+
+'-----------------------------------------------------Constants
+Const LISTEN_PORT:Int = 6969
+
+'-----------------------------------------------------Globals
+'GUI
+Global window:TGadget
+Global textArea:TGadget
+Global textField:TGadget
+Global button:TGadget
+Global timer:TTimer
+
+'Network
+Global serverSocket:TSocket
+Global socket:TSocket
+Global stream:TSocketStream
+
+'Misc
+Global isServer:Int
+Global avail:Int
+Global dataSize:Int
+
+'-----------------------------------------------------Init
+'GUI
+window = CreateWindow("TCP Loss Example",0,0,500,500,Null,WINDOW_TITLEBAR|WINDOW_STATUS|WINDOW_CLIENTCOORDS|WINDOW_CENTER)
+textArea = CreateTextArea(0,0,ClientWidth(window),ClientHeight(window)-24,window)
+textField = CreateTextField(0,ClientHeight(window)-24,ClientWidth(window)-50,24,window)
+button = CreateButton("Send",ClientWidth(window)-50,ClientHeight(window)-24,50,24,window,BUTTON_OK)
+timer = CreateTimer(10)
+
+ActivateGadget(textArea)
+
+'Network
+serverSocket = CreateTCPSocket()
+socket = CreateTCPSocket()
+If BindSocket(serverSocket,LISTEN_PORT) Then
+	isServer = True
+	SocketListen(serverSocket)
+	SetGadgetShape(window,GadgetX(window)-ClientWidth(window)/2,GadgetY(window),ClientWidth(window),ClientHeight(window))
+	SetStatusText(window,"Server - Listening on port: "+LISTEN_PORT)
+Else
+	BindSocket(socket,0)
+	ConnectSocket(socket,HostIp("127.0.0.1"),LISTEN_PORT)
+	stream = CreateSocketStream(socket)
+	SetGadgetShape(window,GadgetX(window)+ClientWidth(window)/2,GadgetY(window),ClientWidth(window),ClientHeight(window))
+	SetStatusText(window,"Client - Connecting to port: "+LISTEN_PORT)
+EndIf
+If stream Then Print "test"
+
+AddHook(EmitEventHook,eventHook,Null)
+
+'-----------------------------------------------------Main Loop
+Repeat
+	PollSystem()
+	
+	'Delay 1
+	'Network update
+	If isServer Then
+		If Not stream Then
+			socket = SocketAccept(serverSocket)
+			If socket Then	stream = CreateSocketStream(socket)
+		EndIf
+	EndIf
+	If stream Then
+		avail = SocketReadAvail(socket)
+		If dataSize Then
+			If avail &gt;= dataSize Then
+				AddTextAreaText(textArea,ReadString(stream,dataSize)+"~n")
+				dataSize = 0
+			EndIf
+		Else
+			If avail &gt;= 4 Then
+				dataSize = ReadInt(stream)
+			EndIf
+		EndIf
+	EndIf
+Forever
+
+'-----------------------------------------------------Functions
+Function eventHook:Object(aID:Int,aData:Object,aContext:Object)
+	Select TEvent(aData).id
+		Case EVENT_GADGETACTION
+			Select TEvent(aData).source
+				Case button
+					If stream Then
+						WriteInt(stream,GadgetText(textField).length+7)
+						If isServer Then
+							AddTextAreaText(textArea,"Server:"+GadgetText(textField)+"~n")
+							WriteString(stream,"Server:"+GadgetText(textField))
+						Else
+							AddTextAreaText(textArea,"Client:"+GadgetText(textField)+"~n")
+							WriteString(stream,"Client:"+GadgetText(textField))
+						EndIf
+						SetGadgetText(textField,"")
+						ActivateGadget(textField)
+					EndIf
+			EndSelect
+		Case EVENT_TIMERTICK
+			If stream Then
+				WriteInt(stream,11)
+				WriteString(stream,"Timer Event")
+			EndIf
+		Case EVENT_APPTERMINATE, EVENT_WINDOWCLOSE
+			End
+	EndSelect
+EndFunction
+</textarea><br><br>Any help is _greatly_ appreciated.<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1089069"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xlsior</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> How do the specs compare between the laptop and the desktop?<br><br>You say that adding a delay 1 on the desktop works -- is the desktop faster? <br><br></td></tr></table><br>
+<a name="1089075"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Scienthsine</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanls for the reply, i guess blitzmax has kinda bit the dust since i've been away? Forum seems pretty inactive.<br><br>The laptop is about half the speed. Which may be the problem, maybe i have a race condition in there somewhere in respect to the program execution vs the tcp data... but i have yet to spot it.<br><br>Did you try the code? I'd be interested in how it performs on other machines, with and withoutthe delay. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

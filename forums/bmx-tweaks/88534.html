@@ -1,0 +1,109 @@
+<!DOCTYPE html><html lang="en" ><head ><title >OSX: horiz scrolling tweak for bbSystemEmitOSEvent</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >OSX: horiz scrolling tweak for bbSystemEmitOSEvent</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=110" >BlitzMax Module Tweaks</a>/<a href="#bottom" >OSX: horiz scrolling tweak for bbSystemEmitOSEvent</a><br><br>
+<a name="1005380"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >N</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> The current Mac OS implementation of bbSystemEmitOSEvent neglects to handle horizontal scrolling (e.g., trackpad scrolling) when handling the ScrollWheel event.  So, here's a fixed version of the routine:<br><br><b>brl.mod/system.mod/system.macos.m</b><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">void bbSystemEmitOSEvent( NSEvent *event,NSView *view,BBObject *source ){
+	int inView;
+	NSEventType type;
+	NSString *characters;
+	int ev=0,data=0,x=0,y=0,oldMods,mask;
+	float f;
+
+	type=[event type];
+
+	switch( type ){
+	case NSKeyDown:
+		if( data=bbSystemTranslateKey( [event keyCode] ) ){
+			ev=[event isARepeat] ? BBEVENT_KEYREPEAT : BBEVENT_KEYDOWN;
+			bbSystemEmitEvent( ev,source,data,bbSystemTranslateMods(mods),0,0,&amp;bbNullObject );
+		}
+		characters=[event characters];
+		if( [characters length]!=1 ) return;
+		data=[characters characterAtIndex:0];
+		if( data&gt;=0xf700 &amp;&amp; data&lt;=0xf8ff ) return;
+		ev=BBEVENT_KEYCHAR;
+		data=bbSystemTranslateChar( data );
+		break;
+	case NSKeyUp:
+		data=bbSystemTranslateKey( [event keyCode] );
+		if( !data ) return;
+		ev=BBEVENT_KEYUP;
+		break;
+	case NSFlagsChanged:
+		oldMods=mods;
+		mods=[event modifierFlags];
+		deltaMods=mods^oldMods;
+		if( deltaMods &amp; (mask=LSHIFTMASK) ) data=KEY_LSHIFT;
+		else if( deltaMods &amp; (mask=RSHIFTMASK) ) data=KEY_RSHIFT;
+		else if( deltaMods &amp; (mask=LCTRLMASK) ) data=KEY_LCONTROL;
+		else if( deltaMods &amp; (mask=RCTRLMASK) ) data=KEY_RCONTROL;
+		else if( deltaMods &amp; (mask=LALTMASK) ) data=KEY_LALT;
+		else if( deltaMods &amp; (mask=RALTMASK) ) data=KEY_RALT;
+		else if( deltaMods &amp; (mask=LSYSMASK) ) data=KEY_LSYS;
+		else if( deltaMods &amp; (mask=RSYSMASK) ) data=KEY_RSYS;
+		if( !data ) return;
+		ev=(mods &amp; mask) ? BBEVENT_KEYDOWN : BBEVENT_KEYUP;
+		break;
+	case NSLeftMouseDown:
+	case NSRightMouseDown:
+	case NSOtherMouseDown:
+		inView=mouseViewPos( view,&amp;x,&amp;y );
+		if( !inView ) return;
+		setMouseView( view,x,y,source );
+		capturedView=mouseView;
+		ev=BBEVENT_MOUSEDOWN;
+		data=(type==NSLeftMouseDown) ? 1 : (type==NSRightMouseDown ? 2 : 3);
+		break;
+	case NSLeftMouseUp:
+	case NSRightMouseUp:
+	case NSOtherMouseUp:
+		inView=mouseViewPos( view,&amp;x,&amp;y );
+		if( !inView &amp;&amp; !capturedView ) return;
+		capturedView=0;
+		ev=BBEVENT_MOUSEUP;
+		data=(type==NSLeftMouseUp) ? 1 : (type==NSRightMouseUp ? 2 : 3);
+		break;
+	case NSMouseMoved:
+	case NSLeftMouseDragged:
+	case NSRightMouseDragged:
+	case NSOtherMouseDragged:
+		inView=mouseViewPos( view,&amp;x,&amp;y );
+		setMouseView( inView ? view : 0,x,y,source );
+		if( !inView &amp;&amp; !capturedView ) return;
+		ev=BBEVENT_MOUSEMOVE;
+		data=(type==NSLeftMouseDragged) ? 1 : (type==NSRightMouseDragged ? 2 : (type==NSOtherMouseDragged ? 3 : 0));
+		break;
+	case NSScrollWheel:
+		inView=mouseViewPos( view,&amp;x,&amp;y );
+		if( !inView &amp;&amp; view!=capturedView ) return;
+		ev=BBEVENT_MOUSEWHEEL;
+		f=[event deltaX];
+		x=f&gt;0 ? ceil(f) : floor(f);
+		f=[event deltaY];
+		data=y=f&gt;0 ? ceil(f) : floor(f);
+		// remove the 'data=' bit if you don't mind breaking backwards compatibility
+		break;
+	default:
+		return;
+	}
+	bbSystemEmitEvent( ev,source,data,bbSystemTranslateMods(mods),x,y,&amp;bbNullObject );
+}</textarea><br><br>Also, not sure why this puts the delta in the data field in the first place, but I left a comment about the backwards compatibility bit in the code if you don't care about breaking a few things (I'm not sure what those things are, but I'm sure someone has something that would be broken without also making data the Y delta). <br><br></td></tr></table><br>
+<a name="1005399"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Space_guy</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Works very well. <br><br></td></tr></table><br>
+<a name="1101591"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >UByte</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Found this code useful for something I'm working on but I should add the following modification is also needed.<br><br>maxgui.mod/cocoamaxgui.mod/cocoa.macos.m<br><pre class=code>
+static int EmitMouseEvent( NSEvent *event,void *handle ){
+	if(([event type] == NSScrollWheel) &amp;&amp; ([event deltaX] == 0) &amp;&amp; ([event deltaY] == 0)) return 0;
+	if(!HaltMouseEvents) return maxgui_cocoamaxgui_EmitCocoaMouseEvent( event,handle );
+}
+</pre><br><br>Without this tweak horizontal scroll movements are only reported when a vertical scroll occurs. <br><br></td></tr></table><br>
+<a name="1136071"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >shinkiro1</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Has somebody an up to date code of this (first post)?<br><br>It seems some things have changed in this section so I can't apply the tweak. <br><br></td></tr></table><br>
+<a name="1136920"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >shinkiro1</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Bump.<br>I have tried to implement this but it always crashes (because I don't know anything about obj c).<br><br>Could somebody be genrous enough and share an up to date tweak? <br><br></td></tr></table><br>
+<a name="1136932"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Space_guy</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm. I did this a few months back. I dont think much has changed since then or? <br><br></td></tr></table><br>
+<a name="1141103"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >shinkiro1</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well, I couldn't find the exact code which to replace and I fiddled around with it too long.<br>Btw, all of the code is in the public domain anyway, so one can post the whole module code.<br><br>So, could somebody share a working copy please? <br><br></td></tr></table><br>
+<a name="1141571"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >shinkiro1</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Bump again. Is there nobody that could upload a working version?<br>Would really need this. Thanks. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

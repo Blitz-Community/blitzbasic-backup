@@ -1,0 +1,267 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Win32 GDI painting inside</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Win32 GDI painting inside</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Win32 GDI painting inside</a><br><br>
+<a name="594610"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> <textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">'gadget painter module
+Strict
+
+?win32
+
+'external win32 functions
+Extern "win32"
+	Function _SetWindowLong(hwnd:Int,index:Int,newlong:Int) = "SetWindowLongA@12"
+	Function _GetWindowLong(hwnd:Int,index:Int) = "GetWindowLongA@8"
+	Function _CallWindowProc:Int(prevwndfunc:Int,hwnd:Int,msg:Int,wparam:Byte Ptr,lparam:Byte Ptr) = "CallWindowProcA@20"
+	Function _ValidateRect:Int(hwnd:Int,lprect:Byte Ptr) = "ValidateRect@8"
+	Function _GetDc:Int(hwnd:Int) = "GetDC@4"
+	Function _BeginPaint:Int(hwnd:Int,lppaint:Byte Ptr) = "BeginPaint@8"
+	Function _EndPaint:Int(hwnd:Int,lppaint:Byte Ptr) = "EndPaint@8"
+	Function _GetWindowRect:Int(hwnd:Int,lprect:Byte Ptr) = "GetWindowRect@8"
+	Function _CreateCompatibleDc:Int(hdc:Int) = "CreateCompatibleDC@4"
+	Function _CreateCompatibleBitmap:Int(hdc:Int,nwidth:Int,nheight:Int) = "CreateCompatibleBitmap@12"
+	Function _SelectObject:Int(hdc:Int,hgdiobj:Int) = "SelectObject@8"
+	Function _DeleteObject:Int(hobject:Int) = "DeleteObject@4"
+	Function _DeleteDc:Int(hdc:Int) = "DeleteDC@4"
+	Function _ReleaseDc:Int(hwnd:Int,dc:Int) = "ReleaseDC@8"
+	Function _BitBlt:Int(hdcdest:Int,nxdest:Int,nydest:Int,nwidth:Int,nheight:Int,hdcsrc:Int,nxsrc:Int,nysrc:Int,dwrop:Int) = "BitBlt@36"
+	Function _DrawText:Int(hdc:Int,lpstring$z,ncount:Int,lprect:Byte Ptr,uformat:Int) = "DrawTextA@20"
+End Extern
+
+'external constants
+Const _GWL_WNDPROC = -4
+Const _WM_PAINT = 15
+Const _SRCCOPY = 13369376
+
+'external structures
+Type _PAINT
+	Field dc:Int
+	Field erase:Int
+	Field paint:_RECT = New _RECT
+	Field restore:Int
+	Field incupdate:Int
+	Field reserved1:Int
+	Field reserved2:Int
+	Field reserved3:Int
+	Field reserved4:Int
+	Field reserved5:Int
+	Field reserved6:Int
+	Field reserved7:Int
+	Field reserved8:Int
+End Type
+
+Type _RECT
+	Field Left:Int
+	Field top:Int
+	Field Right:Int
+	Field bottom:Int
+End Type
+
+'internal constants
+Const EVENT_WMPAINT = $16000
+
+'globals
+
+'types
+Type Tpaint
+	Global list:TList = CreateList()
+	
+	'objects and handles
+	Field hwnd
+	Field oldproc
+	Field gadget:TGadget
+	Field dc
+	Field gadgetdc
+	Field bufferdc
+	Field bufferbitmap
+	
+	'structs
+	Field paint:_PAINT = New _PAINT
+	Field rect:_RECT = New _RECT
+	
+	'values
+	Field width
+	Field height
+	
+	'flags
+	Field buffered
+	Field painting
+	Field override
+	Field wmpaint
+	
+	'win32 proc function
+	Function Snoop(hwnd,msg,wparam:Byte Ptr,lparam:Byte Ptr)"win32"
+		'check if hwnd record is kept in paint collection
+		Local paint:TPaint = TPaint.FromHwnd(hwnd)
+		If paint
+			'test messages
+			Select msg
+				Case WM_ERASEBKGND
+					'ignore erase background
+				Case _WM_PAINT
+					'paint message
+					paint.wmpaint = True
+					If paint.override
+						'skip blitzmax default action and call wmpaint
+						EmitEvent(CreateEvent(EVENT_WMPAINT,paint.gadget,0,0,0,0,paint))
+						_ValidateRect(paint.hwnd,Null)
+					Else
+						'call blitzmax default
+						Local result = _CallWindowProc(paint.oldproc,hwnd,msg,wparam,lparam)
+						EmitEvent(CreateEvent(EVENT_WMPAINT,paint.gadget,0,0,0,0,paint))
+						_ValidateRect(paint.hwnd,Null)
+						Return result
+					End If
+					paint.wmpaint = False
+				Case WM_SIZE
+					'resize message
+					'delete buffer bitmap
+					If paint.buffered And paint.bufferbitmap 
+						_DeleteObject(paint.bufferbitmap)
+						paint.bufferbitmap = 0
+					End If
+					'call blitzmax default
+					Return _CallWindowProc(paint.oldproc,hwnd,msg,wparam,lparam)
+				Default
+					'call blitzmax default
+					Return _CallWindowProc(paint.oldproc,hwnd,msg,wparam,lparam)
+			End Select
+		End If
+	End Function
+	
+	Function FromHwnd:TPaint(hwnd)
+		For Local paint:TPaint = EachIn TPaint.list
+			If paint.hwnd = hwnd Return paint
+		Next
+	End Function
+	
+	Function Create:Tpaint(gadget:TGadget,override=True,buffered=True)
+		Local paint:TPaint
+		Local hwnd = Query(gadget,QUERY_WIN32HWND)
+
+		'check if paint already exists
+		For	paint = EachIn TPaint.list
+			If paint.hwnd = hwnd Return paint
+		Next
+		
+		'create new paint
+		paint = New TPaint
+		paint.hwnd = hwnd
+		paint.oldproc = _SetWindowLong(hwnd,_GWL_WNDPROC,Int(Byte Ptr(TPaint.Snoop)))
+		paint.gadget = gadget
+		paint.override = override
+		paint.buffered = buffered
+		
+		'add paint to collection
+		TPaint.list.AddLast(paint)
+		
+		'return the paint object
+		Return paint
+	End Function
+	
+	Method Remove()
+		'restore old window proc
+		_SetWindowLong(hwnd,_GWL_WNDPROC,oldproc)
+		'remove hwnd from collection
+		TPaint.list.Remove(Self)
+	End Method
+	
+	Method SetOverride(noverride=True)
+		override = noverride
+	End Method
+	
+	'paint methods
+	'- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+	Method Start()
+		Assert Not painting,"Can't start paint when already painting"
+		
+		'start painting
+		painting = True
+		If wmpaint
+			gadgetdc = _BeginPaint(hwnd,paint)
+		Else
+			gadgetdc = _GetDc(hwnd)
+		End If
+		
+		'get dimensions
+		_GetWindowRect(hwnd,rect)
+		width = Abs(rect.right-rect.left)
+		height = Abs(rect.bottom-rect.top)
+		
+		'setup double buffer
+		If buffered
+			'create buffer bitmap if first time
+			If Not(bufferbitmap) bufferbitmap = _CreateCompatibleBitmap(gadgetdc,width,height)
+			
+			bufferdc = _CreateCompatibleDc(gadgetdc)
+			_SelectObject(bufferdc,bufferbitmap)
+			
+			'set active device context
+			dc = bufferdc
+		Else
+			'set active device context
+			dc = gadgetdc
+		End If
+	End Method
+	
+	Method Finish()
+		Assert painting,"Can't finish paint when not painting"
+		
+		'remove buffer
+		If buffered 
+			_DeleteDc(bufferdc)
+			
+		End If
+		
+		'end painting
+		painting = False
+		If wmpaint
+			_EndPaint(hwnd,paint)
+		Else
+			_ReleaseDc(hwnd,dc)
+		End If
+	End Method
+	
+	Method Flip()
+		Assert painting,"Can't flip when not painting"
+		Assert buffered,"Can't flip when not buffered"
+		
+		_BitBlt(gadgetdc,0,0,width,height,bufferdc,0,0,_SRCCOPY)
+	End Method
+End Type
+?
+
+Local window:TGadget = CreateWindow("test window",250,150,300,300,Null,WINDOW_TITLEBAR | WINDOW_RESIZABLE)
+'Local gadget:TGadget = CreatePanel(0,0,window.ClientWidth(),window.ClientHeight(),window)
+Local paint:TPaint = New TPaint.Create(window)
+
+'gadget.SetColor(255,0,0)
+'gadget.SetLayout(EDGE_ALIGNED,EDGE_ALIGNED,EDGE_ALIGNED,EDGE_ALIGNED)
+
+'temp hook function
+AddHook(EmitEventHook,eventhook,window)
+Function eventhook:Object(id,data:Object,context:Object)
+	Local event:TEvent = TEvent(data)
+	Select event.id
+		Case EVENT_WMPAINT
+			Local paint:TPaint = TPaint(event.extra)
+			
+			paint.Start()
+			Local temp:String = "window width = "+paint.width
+			paint.rect.left = 0
+			paint.rect.right = paint.width
+			paint.rect.top = 0
+			paint.rect.bottom = paint.height
+			_DrawText(paint.dc,temp,temp.length,paint.rect,0)
+			paint.Flip()
+			paint.Finish()
+			Print "WM_PAINT"
+		Default
+			Print event.ToString()
+	End Select
+End Function
+'temp hook function
+
+While True
+	WaitEvent
+Wend
+</textarea><br><br>Just thought I would share this code. Of course it isnt anywhere near finish, but Im sure somone might like to play around a bit.<br><br>Basically it adds an extra processing type that will subclass the gadgets windowproc and watch for painting related messages. Then send blitzMax events to the normal event queue. Works quite well.<br><br>So far in this code sample, a window gets created and tied into the Paint system. Communicates with Blitz event hooks, and paints to the client area. And it is all doulbe buffered :)<br><br>I'll update this topic if and when I get further :) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

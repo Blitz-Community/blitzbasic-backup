@@ -1,0 +1,534 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Particles!</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Simple 2d particles, language=bmx, category=Graphics'><meta name='author' content='matibee'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=1>Graphics</a>/Particles!</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2624.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Particles! by matibee</td><td align="right">2009 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> A simple 2d particle system complete with a useful (though a little cludged together) editor written in MaxGUI.  There's a collection of particle parameters such as alpha,red,green,blue,rotation,scale &amp; weight, and 'factor' values that adjusts each parameter over time.<br><br>eg.  alpha = 1 and alphafactor -1 will fade alpha from 1 to 0 over one second.<br>alpha = 1 and alphafactor = -0.5 will fade it over two seconds.<br><br>Particles are tied to an emitter, which releases particles in 'Bursts'  [doBurst(x,y)].  Emitter parameters include random velocity range and number of particles per burst.  To maintain consistant results over different frame rates the bursts are limited to 20 per second.  So the editor results (timed to run at 20fps) will be the same as your game results no matter how often you call DoBurst.  If you want to override the 20fps limit (useful if you're interpolating the emitter position during one frame), it's as simple as DoBurst(x,y,False).<br><br>Screenshot:  www.matibee.co.uk/temp/particles.jpg<br><br>(I'm not sure how to use the code arc's, so this is an experiment!)...<br><br>The editor code..<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+Import pub.freeprocess 
+Import MaxGui.Drivers
+Include "Particles.bmx"
+
+'==================================================================================================================
+'
+'	Init controls
+'
+Global window:TGadget = CreateWindow:TGadget("Particle Editor",60,60,1050,640,Null,WINDOW_TITLEBAR| WINDOW_CLIENTCOORDS )
+
+Local f$[] = [ 	"Point wieght", "Point scale", "Scale factor", "Rotation factor", ..
+				"Velocity Min", "Velocity Max", "Red", "Red Factor", "Green", "Green factor", ..
+				"Blue", "Blue factor", "Alpha", "Alpha factor", "Burst count", ..
+				"X Handle", "Y Handle", "Image file"   ]
+				
+Local d$[] = [ 	"1.0", "1.0", "-0.2", "720.0", ..
+				"1.0", "2.0", "1.0", "0.0", "1.0", "0.0", ..
+				"1.0", "0.0", "1.0", "-1.0", "20", ..
+				"2", "2", "" ]
+
+Global labeln:TGadget[22]
+Global textLn:TGadget[22]
+
+For Local n:Int = 0 To Len( f ) - 1
+	labeln[n] = CreateLabel:TGadget( f[n],12,20 + n * 24,90,13,window:TGadget,Null)
+	textLn[n] = CreateTextField:TGadget(110,17 + n * 24,90,22,window:TGadget,Null)
+	textLn[n].SetText( d$[n] )
+Next 
+
+Global loadImageButton:TGadget = CreateButton( "..", 204, 424, 30, 24, window:TGadget )
+Global resetButton:TGadget = CreateButton( "Reset / Build", 110, 460, 90, 24, window:TGadget )
+
+Global lab1:TGadget = CreateLabel( "Emitter file..", 8, 490, 60, 20, window:TGadget )
+Global openButton:TGadget = CreateButton( "Open", 8, 510, 80, 24, window:TGadget )
+Global saveButton:TGadget = CreateButton( "Save", 8, 540, 80, 24, window:TGadget )
+Global saveasButton:TGadget = CreateButton( "Save As", 8, 570, 80, 24, window:TGadget )
+
+Global loadBackgroundButton:TGadget = CreateButton( "Load background image", 10, 608, 190, 20, window:TGadget )
+Global gameCanvas:TGadget = CreateCanvas( 240, 20, 800, 600, window:TGadget )
+
+
+Global g_emitterFile$
+Global gImage:TImage
+Global gBackgroundImage:TImage 
+Global g_ImageFile$
+CreateTimer( 20 )
+Global emitMode:Int = False
+
+
+Global mx:Int 				' mouse position
+Global my:Int 
+
+Global emitter:ParticleEmitter
+
+Function buildEmitter()
+	
+	emitter = New ParticleEmitter.Create()
+	
+	emitter.m_fPointWeight 			= textLn[0].GetText().ToFloat()
+	emitter.m_baseParticle.m_fScale 	= textLn[1].GetText().ToFloat()
+	emitter.m_fScaleFactor 			= textLn[2].GetText().ToFloat()
+	emitter.m_fRotationFactor  		= textLn[3].GetText().ToFloat()
+	emitter.m_fVelocityMin 			= textLn[4].GetText().ToFloat()
+	emitter.m_fVelocityMax 			= textLn[5].GetText().ToFloat()
+	emitter.m_baseParticle.m_fRed 	= textLn[6].GetText().ToFloat()
+	emitter.m_fRedFactor 			= textLn[7].GetText().ToFloat()
+	emitter.m_baseParticle.m_fBlue 	= textLn[8].GetText().ToFloat()
+	emitter.m_fBlueFactor 			= textLn[9].GetText().ToFloat()
+	emitter.m_baseParticle.m_fGreen 	= textLn[10].GetText().ToFloat()
+	emitter.m_fGreenFactor 			= textLn[11].GetText().ToFloat()
+	emitter.m_baseParticle.m_fAlpha 	= textLn[12].GetText().ToFloat()
+	emitter.m_fAlphaFactor 			= textLn[13].GetText().ToFloat()
+	emitter.m_iParticlesPerBurst 		= textLn[14].GetText().ToInt()
+	emitter.m_iXHandle				= textLn[15].GetText().ToInt()
+	emitter.m_iYHandle				= textLn[16].GetText().ToInt()
+	
+	Local im:TImage = LoadImage( g_ImageFile$, FILTEREDIMAGE )
+	If ( im ) gImage = im
+	
+	If ( gImage ) 
+		emitter.m_Image = gImage
+		SetImageHandle( gImage, emitter.m_iXHandle, emitter.m_iYHandle )
+	End If 	
+
+End Function  
+
+Function UpdateParams()
+	textLn[17].SetText( g_ImageFile$ )
+	
+	If ( Not emitter ) Return 
+	
+	textLn[0].SetText( emitter.m_fPointWeight )
+	textLn[1].SetText( emitter.m_baseParticle.m_fScale )
+	textLn[2].SetText( emitter.m_fScaleFactor  )
+	textLn[3].SetText( emitter.m_fRotationFactor )
+	textLn[4].SetText( emitter.m_fVelocityMin )
+	textLn[5].SetText( emitter.m_fVelocityMax )
+	textLn[6].SetText( emitter.m_baseParticle.m_fRed )
+	textLn[7].SetText( emitter.m_fRedFactor )
+	textLn[8].SetText( emitter.m_baseParticle.m_fBlue )
+	textLn[9].SetText( emitter.m_fBlueFactor )
+	textLn[10].SetText( emitter.m_baseParticle.m_fGreen )
+	textLn[11].SetText( emitter.m_fGreenFactor )
+	textLn[12].SetText( emitter.m_baseParticle.m_fAlpha )
+	textLn[13].SetText( emitter.m_fAlphaFactor )
+	textLn[14].SetText( emitter.m_iParticlesPerBurst )
+	textLn[15].SetText( emitter.m_iXHandle )
+	textLn[16].SetText( emitter.m_iYHandle )
+End Function 
+	
+
+
+
+Function doSaveAs()
+	Local fn$ = RequestFile( "", "Text Files:txt", True )
+	If ( Len ( fn$ ) ) 
+		g_emitterFile$ = fn$
+		doSave()
+	End If 
+End Function 
+
+Function doSave()
+	If ( emitter )
+		If ( Len( g_emitterFile$ ) = 0 ) 
+			doSaveAs()
+		Else 
+			Local fs:TStream = WriteStream( g_emitterFile$ ) 
+			If ( fs )
+				WriteLine( fs, "point_weight=" + emitter.m_fPointWeight )
+				WriteLine( fs, "point_scale=" + emitter.m_baseParticle.m_fScale )
+				WriteLine( fs, "point_scalefactor=" + emitter.m_fScaleFactor )
+				WriteLine( fs, "point_rotationfactor=" + emitter.m_fRotationFactor )
+				WriteLine( fs, "point_velocity_min=" + emitter.m_fVelocityMin )
+				WriteLine( fs, "point_velocity_max=" + emitter.m_fVelocityMax )
+				WriteLine( fs, "point_red=" + emitter.m_baseParticle.m_fRed )
+				WriteLine( fs, "point_redfactor=" + emitter.m_fRedFactor )
+				WriteLine( fs, "point_green=" + emitter.m_baseParticle.m_fGreen )
+				WriteLine( fs, "point_greenfactor=" + emitter.m_fGreenFactor )
+				WriteLine( fs, "point_blue=" + emitter.m_baseParticle.m_fBlue )
+				WriteLine( fs, "point_bluefactor=" + emitter.m_fBlueFactor )
+				WriteLine( fs, "point_alpha=" + emitter.m_baseParticle.m_fAlpha )
+				WriteLine( fs, "point_alphafactor=" + emitter.m_fAlphaFactor )
+				WriteLine( fs, "emitter_particles_per_burst=" + emitter.m_iParticlesPerBurst )
+				WriteLine( fs, "xhandle=" + emitter.m_iXHandle )
+				WriteLine( fs, "yhandle=" + emitter.m_iYHandle )
+				WriteLine( fs, "image=" + g_ImageFile$ )
+				CloseStream( fs )
+			Else 
+				Notify( "Cannot write file: " + g_emitterFile$ )
+			End If 				
+		End If 
+	Else
+		buildEmitter()
+		doSave()
+	End If 	
+End Function 
+
+'==================================================================================================================
+'
+'	Application loop
+'
+Repeat
+	WaitEvent()
+	Select EventID()
+		Case EVENT_APPTERMINATE
+			End
+		Case EVENT_WINDOWCLOSE
+			Select EventSource()
+				Case window 
+					End
+			End Select
+		Case EVENT_GADGETACTION
+			Select EventSource()
+				Case saveasButton
+					doSaveAs()
+				Case resetButton
+					emitter = Null
+					buildEmitter()
+				Case saveButton
+					doSave()				
+				Case loadImageButton
+					Local fn$ = RequestFile( "" )
+					If ( Len(fn$) )
+						gImage = LoadImage( fn$ )
+						If ( gImage And emitter )
+							emitter.m_Image = gImage
+							SetImageHandle( gImage, emitter.m_iXHandle, emitter.m_iYHandle )
+						End If 
+						g_ImageFile$ = Right( fn$, Len( fn$ ) - fn$.FindLast( "\" ) - 1 )
+						UpdateParams()
+					End If 				
+				Case openButton
+					Local fn$ = RequestFile( "", "Text Files:txt" )
+					If ( Len ( fn$ ) )
+						g_emitterFile$ = fn$
+						emitter = ParticleEmitter.Create( fn$, True )
+						Local fs:TStream = ReadFile( fn$ )
+						If ( fs ) 
+							While ( Not Eof( fs ) )
+								Local a$ = ReadLine( fs )
+								If Left( a$, 5 ) = "image"
+									g_ImageFile$ = Right( a$, Len( a$ ) - a$.FindLast( "=" ) - 1 )
+								End If 
+							Wend 
+						CloseStream( fs )
+						End If 						
+						UpdateParams()
+						buildEmitter()
+					End If 
+				Case loadBackgroundButton
+					Local fn$ = RequestFile( "" )
+					If ( Len(fn$) )
+						gBackgroundImage = LoadImage( fn$ )
+					End If 
+			End Select
+		Case EVENT_GADGETSELECT
+			Select EventSource()
+			End Select
+		Case EVENT_GADGETPAINT
+	          SetGraphics CanvasGraphics( gameCanvas )
+			Cls
+			SetColor( 255,255,255)
+			SetBlend( SOLIDBLEND )
+			SetAlpha( 1.0 )
+			SetScale( 1.0, 1.0 )
+			SetRotation( 0.0 )
+			If ( gBackgroundImage ) DrawImage( gBackgroundImage, 0, 0 )
+			SetBlend ( LIGHTBLEND )
+			If emitter emitter.Draw()
+			Flip 
+		Case EVENT_KEYCHAR
+			If ( emitter ) emitter.DoBurst( mx, my ) ' press a key for a single burst
+		Case EVENT_MOUSEMOVE
+			mx = EventX()
+			my = EventY()
+		Case EVENT_MOUSEDOWN
+			If ( Not emitter ) buildEmitter()
+			If ( Not gImage ) 
+				Notify( "No image loaded" )
+			Else 
+				emitMode = True					' hold the mouse down for continual burst
+			End If 
+		Case EVENT_MOUSEUP
+			emitMode = False
+		Case EVENT_MOUSEENTER
+			Select EventSource()
+				Case gameCanvas 
+					ActivateGadget( gameCanvas )
+			End Select 
+		Case EVENT_TIMERTICK
+			If ( emitMode And emitter ) emitter.DoBurst( mx, my )
+			If ( emitter ) emitter.Update( 0.05 )
+			Local e:TEvent = New TEvent
+			e.source = gameCanvas 
+			e.id = EVENT_GADGETPAINT
+			PostEvent( e )
+		Case EVENT_KEYUP
+			Select EventData() 
+				Case KEY_DELETE
+					emitter = Null 
+				Case KEY_SPACE
+			End Select 
+		End Select
+Forever
+
+</textarea><br><br>The sample code..<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Graphics 800, 600
+
+Include "Particles.bmx"
+
+Local emitter:ParticleEmitter = ParticleEmitter.Create( "fire.txt" )
+
+Local lastTime:Int 
+
+While Not AppTerminate()
+
+	Local timeNow:Int = MilliSecs()
+	emitter.Update( Float(timeNow - lastTime) / 1000.0 )
+	lastTime = timeNow
+	emitter.DoBurst( MouseX(), MouseY() )	
+	
+	Cls
+	SetRotation 0
+	SetScale 1,1
+	SetAlpha 1
+	SetColor 255,255,255
+	DrawText "Particle demo", 0, 0
+	SetBlend LIGHTBLEND
+	emitter.Draw()
+	Flip
+	
+Wend 
+</textarea><br><br>The 'fire.txt' emitter used in the sample<br><pre class=code>
+point_weight=1.00000000
+point_scale=1.00000000
+point_scalefactor=2.00000000
+point_rotationfactor=720.000000
+point_velocity_min=-100.000000
+point_velocity_max=100.000000
+point_red=1.00000000
+point_redfactor=1.00000000
+point_green=1.00000000
+point_greenfactor=-1.00000000
+point_blue=0.000000000
+point_bluefactor=0.000000000
+point_alpha=0.500000000
+point_alphafactor=-0.500000000
+emitter_particles_per_burst=20
+xhandle=8
+yhandle=8
+image=Particle1.tga
+</pre><br><br>some other emitters<br><pre class=code>
+point_weight=10.0000000
+point_scale=0.200000003
+point_scalefactor=1.60000002
+point_rotationfactor=600.000000
+point_velocity_min=-350.000000
+point_velocity_max=350.000000
+point_red=1.00000000
+point_redfactor=0.000000000
+point_green=0.000000000
+point_greenfactor=1.00000000
+point_blue=0.000000000
+point_bluefactor=1.00000000
+point_alpha=1.00000000
+point_alphafactor=-1.00000000
+emitter_particles_per_burst=40
+xhandle=8
+yhandle=8
+image=Particle1.tga
+</pre><br><pre class=code>
+point_weight=40.0000000
+point_scale=1.00000000
+point_scalefactor=-0.200000003
+point_rotationfactor=0.000000000
+point_velocity_min=1.00000000
+point_velocity_max=80.0000000
+point_red=1.00000000
+point_redfactor=0.000000000
+point_green=0.000000000
+point_greenfactor=1.00000000
+point_blue=1.00000000
+point_bluefactor=0.000000000
+point_alpha=1.00000000
+point_alphafactor=-1.00000000
+emitter_particles_per_burst=2
+xhandle=8
+yhandle=8
+image=Particle1.tga
+</pre><br><pre class=code>
+point_weight=10.0000000
+point_scale=1.00000000
+point_scalefactor=-0.200000003
+point_rotationfactor=720.000000
+point_velocity_min=-1.000000000
+point_velocity_max=30.0000000
+point_red=1.00000000
+point_redfactor=0.000000000
+point_green=0.500000000
+point_greenfactor=-0.500000000
+point_blue=0.000000000
+point_bluefactor=0.800000012
+point_alpha=1.00000000
+point_alphafactor=-0.600000024
+emitter_particles_per_burst=2
+xhandle=-2
+yhandle=-2
+image=Particle1.tga
+</pre><br><br>My .tga file can be found here<br> www.matibee.co.uk/temp/Particle1.tga<br><br>It's not the most thorough particle system in the world, but along with the editor, it might serve as a useful learning aid or start point to improve upon.<br><br>Cheers<br>Matt </td></tr><tr ><td class="cell"><pre class="code">Const MAX_PARTICLES_PER_EMITTER%	= 600
+
+
+Type Particle
+	Field m_fAge:Float
+	Field m_fScale:Float
+	Field m_fRotation:Float
+	Field m_fVelocityX:Float
+	Field m_fVelocityY:Float
+	Field m_fRed:Float
+	Field m_fBlue:Float
+	Field m_fGreen:Float
+	Field m_fAlpha:Float
+	Field m_fX:Float
+	Field m_fY:Float
+End Type
+
+
+Type ParticleEmitter
+
+	Field m_freeParticles:TList
+	Field m_liveParticles:TList 
+	
+	Field m_baseParticle:Particle
+	
+	Field m_fPointWeight:Float = 1.0
+	Field m_fScaleFactor:Float = -0.2
+	Field m_fRotationFactor:Float = 720.0
+	Field m_fVelocityMin:Float = 9.0
+	Field m_fVelocityMax:Float = 100.0
+	Field m_fRedFactor:Float = 0.0
+	Field m_fBlueFactor:Float = 0.0
+	Field m_fGreenFactor:Float = 0.0
+	Field m_fAlphaFactor:Float = -1.0
+	
+	Field m_iParticlesPerBurst:Int = 20
+	
+	Field m_Image:TImage
+	Field m_iXHandle:Int, m_iYHandle:Int
+	
+	Field m_lastBurstTime:Int
+	
+	Function Create:ParticleEmitter( strUrl:String = "", IgnoreImage:Int = False )
+		Local emitter:ParticleEmitter = New ParticleEmitter
+		emitter.m_freeParticles = New TList 
+		emitter.m_liveParticles = New TList 
+		emitter.m_baseParticle = New Particle
+		For Local t:Int = 0 To MAX_PARTICLES_PER_EMITTER - 1
+			emitter.m_freeParticles.AddLast( New Particle )
+		Next
+		If ( Len (strUrl) )
+			Local inFile:TStream = ReadFile( strUrl )
+			While ( inFile And Not Eof( inFile ) )
+				'Debugstop
+				Local strLine:String = ReadLine( inFile )
+				If ( Len(strLine) &gt; 0 And Left( strline, 1 ) &lt;&gt; "'" )
+					Local key:String = Left( strLine, Instr( strLine, "=" ) - 1 )
+					Local value:String = Right( strLine, Len( strLine ) - Instr( strLine, "=" ) )
+					If ( key = "point_weight" )
+						emitter.m_fPointWeight = value.ToFloat()
+					Else If ( key = "point_scalefactor" )
+						emitter.m_fScaleFactor = value.ToFloat()
+					Else If ( key = "point_scale" )
+						emitter.m_baseParticle.m_fScale = value.ToFloat()
+					Else If ( key = "point_rotationfactor" )
+						emitter.m_fRotationFactor = value.ToFloat()
+					Else If ( key = "point_velocity_min" )
+						emitter.m_fVelocityMin = value.ToFloat()
+					Else If ( key = "point_velocity_max" )
+						emitter.m_fVelocityMax = value.ToFloat()
+					Else If ( key = "point_redfactor" )
+						emitter.m_fRedFactor = value.ToFloat()
+					Else If ( key = "point_red" )
+						emitter.m_baseParticle.m_fRed = value.ToFloat()
+					Else If ( key = "point_greenfactor" )
+						emitter.m_fGreenFactor = value.ToFloat()
+					Else If ( key = "point_green" )
+						emitter.m_baseParticle.m_fGreen = value.ToFloat()
+					Else If ( key = "point_bluefactor" )
+						emitter.m_fBlueFactor = value.ToFloat()
+					Else If ( key = "point_blue" )
+						emitter.m_baseParticle.m_fBlue = value.ToFloat()
+					Else If ( key = "point_alphafactor" )
+						emitter.m_fAlphaFactor = value.ToFloat()
+					Else If ( key = "point_alpha" )
+						emitter.m_baseParticle.m_fAlpha = value.ToFloat()
+					Else If ( key = "emitter_particles_per_burst" )
+						emitter.m_iParticlesPerBurst = value.ToInt()
+					Else If ( key = "image" And Not IgnoreImage )
+						emitter.m_Image = LoadImage( value, FILTEREDIMAGE )
+					Else If ( key = "xhandle" )
+						emitter.m_iXHandle = value.ToInt()
+					Else If ( key = "yhandle" )
+						emitter.m_iYHandle = value.ToInt()
+					End If				
+				End If
+			End While
+			CloseFile ( inFile )
+			If emitter.m_Image SetImageHandle( emitter.m_Image, emitter.m_iXHandle, emitter.m_iYHandle )
+		End If		
+		Return emitter
+	End Function
+	
+	Method Draw()
+		If ( Not m_Image ) Return 
+		For Local p:Particle = EachIn m_liveParticles
+			SetScale p.m_fScale, p.m_fScale
+			SetRotation p.m_fRotation
+			SetAlpha p.m_fAlpha
+			SetColor( p.m_fRed * 255.0, p.m_fGreen * 255.0, p.m_fBlue * 255.0 )
+			DrawImage( m_Image, p.m_fX, p.m_fY )
+		Next 
+	End Method
+	
+	Method Update( fTime:Float )
+		For Local p:Particle = EachIn m_liveParticles
+			p.m_fAlpha :+ m_fAlphaFactor * fTime
+			p.m_fScale :+ m_fScaleFactor * fTime
+			If ( p.m_fAlpha &lt;= 0 Or p.m_fScale &lt;= 0 )
+				m_freeParticles.AddLast( p )
+				m_liveParticles.Remove( p )
+			Else
+				p.m_fAge :+ fTime
+				p.m_fRotation :+ m_fRotationFactor * fTime
+				p.m_fX :+ p.m_fVelocityX * fTime
+				p.m_fY :+ p.m_fVelocityY * fTime
+				p.m_fVelocityX :- m_fPointWeight * fTime
+				p.m_fVelocityY :- m_fPointWeight * fTime
+				p.m_fY :+ m_fPointWeight * (p.m_fAge * p.m_fAge)
+				p.m_fRed :+ m_fRedFactor * fTime
+				p.m_fBlue :+ m_fBlueFactor * fTime
+				p.m_fGreen :+ m_fGreenFactor * fTime
+			End If 
+		Next 
+		Assert ( m_freeParticles.Count() + m_liveParticles.Count() = MAX_PARTICLES_PER_EMITTER ) 'ensure particles don't exist in both lists!!
+	End Method
+	
+	Method DoBurst( iX:Int, iY:Int, fpsSync:Int = True )
+		If ( fpsSync )
+			Local timeNow:Int = MilliSecs()
+			If ( timeNow - m_lastBurstTime ) &gt;= 20
+				m_lastBurstTime = timeNow
+			Else 
+				Return 
+			End If 
+		EndIf 
+		
+		Local count:Int = m_iParticlesPerBurst
+		For Local p:Particle = EachIn m_freeParticles
+			MemCopy( p, m_baseParticle, SizeOf( Particle ) )
+			p.m_fVelocityX = m_fVelocityMin + ( RndFloat() * ( m_fVelocityMax - m_fVelocityMin ) )
+			p.m_fVelocityY = m_fVelocityMin + ( RndFloat() * ( m_fVelocityMax - m_fVelocityMin ) )
+			p.m_fX = iX
+			p.m_fY = iY
+			m_liveParticles.AddLast( p )
+			m_freeParticles.Remove( p )
+			count :- 1
+			If ( count &lt;= 0 )
+				Return
+			End If
+		Next 
+	End Method
+
+End Type</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >pmc</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> This is great. I'm having some good fun playing with it. Thank you. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >christian223</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Really nice!. I have been playing with it and I really like it, I'm going to use it in my future games, I hopefully. <br><br>I do not have MaxGui though, could you make the editor available in other ways?. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >matibee</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> Sure. The full download is available here...<br><br><a href="http://www.matibee.co.uk/wpsite/?p=15" target="_blank">http://www.matibee.co.uk/wpsite/?p=15</a> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >hub</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> Very nice code.<br>Could you explain more matibee what's the ftime parameter into the update function ? Thanks ! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >matibee</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> The fTime parameter is a floating point delta time of your frame rate.  ie 60 fps = 1/60 or 0.016666. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >hub</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> Many thanks ! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >hub</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> Is there a way to set a time parameter so particules are created for example during 5 seconds (particule age ?). (i use this code to create an explosion). Thanks ! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >matibee</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Is there a way to set a time parameter so particules are created for example during 5 seconds (particule age ?) <br></div><br><br>Not in this system. <br><br>Why not store the time you last called "DoBurst", then call it again 5 seconds later.  This code is more concerned with the behaviour of the particles and updating them rather than controlling the emitters. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

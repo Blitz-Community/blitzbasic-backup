@@ -1,0 +1,153 @@
+<!DOCTYPE html><html lang="en" ><head ><title >GetImagePixels()</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >GetImagePixels()</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >GetImagePixels()</a><br><br>
+<a name="2069800"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> this code takes a path to an image and returns an array of ints compatible with Image.WritePixels.  It utiilizes opengl.gles11.LoadImageData() and some byte-juggling to achieve this.  The average load time on glfw on my old machine for a 256x256 image is 6ms.  On my Nexus S, it's more like 150ms, so there is a non-negligible load time for grabbing images this way.<br><br>The benefits, however, should be obvious.  You have a full set of pixels to manipulate.  Surely this can be optimized later to grab only regions, and I'm guessing that there might be a way to optimize the channel swapping.  I encourage anyone who thinks they can optimize it further to give it a shot<br><br>This code won't run on non-ogl targets, such as XNA, Flash, or HTML5.  Sorry, nothing I can do about that.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import mojo
+Import opengl.gles11
+
+'Notes:
+'1:  You can't write pixels OnCreate().  This will cause a Memory Access Violation.
+'    You'll pull your hair out trying to figure out why.  Just don't do it.
+'2:  LoadImageData appears to load stuff in ABGR8888. WritePixels expects ARGB8888.
+'    Endianess in MY Monkey?  It's more likely than you think. OGL is big-endian.
+'3:  This doesn't work on HTML5, flash, or XNA.  Only pure ogl targets.
+
+Function Main:Int()
+	New Game()
+End Function
+
+Class Game Extends App
+	Field img:Image
+	Field size:Int[2]
+
+	Field data:Int[]
+	Field img2:Image
+	
+	Field Firstload:Bool = True
+
+	Method OnCreate()
+		SetUpdateRate 60
+		
+			Print "Loading image at " + Millisecs() + "ms.."
+			img = LoadImage("sux.png")
+	End Method
+	
+	Method OnUpdate()
+		If KeyHit(KEY_BACK) or KeyHit(KEY_ESCAPE) Then Error("")
+
+		If Firstload
+	
+			data = GetImagePixels("sux.png", size)
+		
+			Local px:Int[4]
+			px = GetColor(data[0])
+			Print "First pixel: " + px[0] + "," + px[1] + "," + px[2] + "," + px[3]
+			
+
+			img2 = CreateImage(size[0], size[1])
+			'Write pixels
+			img2.WritePixels(data, 0, 0, size[0], size[1])
+	
+			Print ""
+			Firstload = False
+		End If
+		
+		If KeyHit(KEY_F12) Or TouchHit(1) Then Firstload = True  'Redo the load, to test speed
+	End Method
+	
+	Method OnRender()
+		Cls(0, 0, 64)
+		DrawImage(img, 0, 0)
+		If img2 &lt;&gt; Null Then DrawImage(img2, MouseX() -img2.Width, MouseY() -img2.Height)
+	End Method
+End Class
+
+
+Function GetColor:Int[] (argb:Int)
+	Local out:Int[4]
+	out[0] = (argb) &amp; $FF
+	out[1] = (argb Shr 8) &amp; $FF
+	out[2] = (argb shr 16) &amp; $FF
+	out[3] = (argb shr 24) &amp; $FF
+	
+	Return out
+End Function
+
+Function GetImagePixels:Int[] (path:String, size:Int[])
+	Local data:Int[]
+	Local db:DataBuffer = LoadImageData("monkey://data/" + path, size)
+	
+	Print "Size:  " + size[0] + "," + size[1]
+	
+	Local timeSpent:Int = Millisecs()
+	
+	'Copy the data buffer into an array.
+	 data = data.Resize(db.Length / 4)  '32-bits = 4 bytes
+
+	'We need to swap bytes of R and B channels around.
+	For Local i:Int = 0 Until db.Length Step 4
+		Local b:Int = db.PeekByte(i + 0) 'B
+		'Local g:Int = db.PeekByte(i + 1) 'G		
+		Local r:Int = db.PeekByte(i + 2) 'R				
+		'Local a:Int = db.PeekByte(i + 3) 'A				
+		
+		'db.PokeBytes(i,[r, g, b, a])  'Extremely slow, don't do it
+		db.PokeByte(i, r)
+		db.PokeByte(i + 2, b)
+		
+		data[i / 4] = db.PeekInt(i)
+	Next
+
+	Print "Operation took " + (Millisecs() -timeSpent) + "ms"
+	
+	Return data
+End Function
+</textarea><br><br>Replace references to "sux.png" with your test image of choice. <br><br></td></tr></table><br>
+<a name="2069762"></a>
+
+<a name="2069760"></a>
+
+<a name="2069765"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Midimaster</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> nice work. I did not know that this is already implemented. I have some questions...<br><br>Mark wrote in the manual, that the resulting pixel format is R-G-B-A and not as you detected A-B-G-R. Did you find a bug?<br><br>If you believe in the detected resulting format A-B-G-R... Why do you swap Byte i+0 and Byte i+2? Wouldn't it be necessary to swap Byte i+1 and i+3? <br><br>Did you really detect A-B-G-R or was it G-R-A-B? Only G-R-A-B would convert to A-R-G-B when you swap bytes i+0 with i+2<br><br>Why do you think the first pixel is at position 20? <br><br></td></tr></table><br>
+<a name="2069799"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> honestly I don't remember, this was coded at 3 in the morning and all I know is that when feeding the data directly from LoadImageData() to WritePixels(), it swaps the blue and red channel.  That sounds like either a compatibility or an endianness issue, I don't know which one and frankly I don't care, either, as long as I get the results I want in the end and not at a hit to performance.<br><br>If it's a bug and not intentional, it's in the internals of the mojo or ogl modules somewhere and beyond my current willingness to hunt down the reason.  There may be a perfectly valid reason why LoadImageData() returns one pixel format and WritePixels expects another.  I suspect maybe WritePixels() is the one that's wrong, here, but w/e.<br><br>Pixel data coming out of LoadImageData() is in the following format, with most significant bit on the left:  B-G-R-A.  You can see for yourself using GetColor on the raw data before the bits are swapped by using the below code.  I haven't tested GetColor on raw ReadPixels() data.  Would you be interested in testing it for me?  :)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Function GetImagePixelsRaw:Int[] (path:String, size:Int[])
+	Local data:Int[]
+	Local db:DataBuffer = LoadImageData("monkey://data/" + path, size)
+	
+	Print "Size:  " + size[0] + "," + size[1]
+	
+	Local timeSpent:Int = Millisecs()
+	
+	'Copy the data buffer into an array.
+	 data = data.Resize(db.Length / 4)  '32-bits = 4 bytes
+
+	'Raw data copy without swapping channels.
+	  db.PeekInts(0, data)
+	
+	Print "Operation took " + (Millisecs() -timeSpent) + "ms"
+	
+	Return data
+End Function
+</textarea> <br><br></td></tr></table><br>
+<a name="2069819"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Mojo puts image data to OpenGL as GL_ABGR. It's an OpenGL thing, suppose to be faster(?).<br><br>and try reading only using ints, then bit shift, faster:<br><pre class=code>
+	For Local i:Int = 0 Until db.Length Step 4
+		Local j:Int = db.PeekInt(i)
+		
+		data[i / 4] = (j &amp; $ff000000) | ((j &amp; $00ff0000) Shr 16) | (j &amp; $0000ff00) | ((j &amp; $000000ff) Shl 16)
+	Next
+</pre> <br><br></td></tr></table><br>
+<a name="2069817"></a>
+
+<a name="2069818"></a>
+
+<a name="2069842"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> very nice, that is indeed faster.  Reduced time to about 50ms on Android, an acceptable time for me. <br><br></td></tr></table><br>
+<a name="2069841"></a>
+
+<a name="2069846"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Midimaster</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> I need something similar at the moment too. So I'm very interested in this. Thank you both!<br><br>But should'nt we have a consistent color format in pixels in Monkey? <br><br>Mark, what was the reason for accepting two different formats? <br><br></td></tr></table><br>
+<a name="2069854"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Gerry Quinn</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> There used to be some reverse of B and R in Windows in the old days, I can't remember the details. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

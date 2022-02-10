@@ -1,0 +1,597 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Notification Center</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Types to send notifications, usually between threads., language=bmx, category=Algorithms'><meta name='author' content='N'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=6>Algorithms</a>/Notification Center</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2474.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Notification Center by N</td><td align="right">2009 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This code is based off the API provided by NSNotificationCenter in Cocoa.  Because I really like Cocoa.  What it does is provides a sort of convenient way to pass messages between threads, as well as a method of notifying objects of changes/that something is happening/your pants are wet without having to tell the notifying object which objects they are and what type they are, since it doesn't matter.<br><br>I tried to make the TNotificationCenter type thread-safe, but given that I'm still new to this whole malarky, there may be things I've missed.  It should hopefully be impossible to cause a deadlock, at least, unless you mess with the center's fields yourself, which you shouldn't be doing.  They say "Restricted" for a reason.<br><br>Anyhow, here's an example, since this came up recently (as of 5/7/09, anyhow). This code loads a pixmap in the background and queues a notification to notify the object (in the main thread) when the image is loaded.<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Import "notification.bmx"
+
+Type th_LoadImageInfo
+	Field url:Object
+	
+	' Thread proc
+	Function th_LoadImageWithPixmap:Object(data:Object)
+		Delay 5000 ' Just so you can see the pretty loading icon
+		
+		' Get the notification center for the main thread
+		Local nc:TNotificationCenter = TNotificationCenter.DefaultCenterForMainThread()
+		Try
+			' Get the info for the image
+			Local info:th_LoadImageInfo = th_LoadImageInfo(data)
+			' Load the pixmap
+			Local pix:TPixmap = LoadPixmap(info.url)
+			' Queue a notification for the other thread
+			nc.EnqueueNotificationWithName("ImageLoadNotification", data, pix)
+		Catch o:Object
+			' Or, if there was an exception, queue that as the notification
+			' and let the main thread deal with it when it gets around to it
+			nc.EnqueueNotificationWithName("ImageLoadNotification", data, o)
+		End Try
+		' Done
+		Return Null
+	End Function
+	
+	Method Load()
+		' Create a thread to load the pixmap
+		TThread.Create(th_LoadImageWithPixmap, Self).Detach()
+	End Method
+End Type
+
+Type Entity
+	Field _image:TImage
+	
+	' Method called when the notification is posted
+	Method ImageLoader:Int(n:TNotification)
+		' Remove Self as an observer of the ImageLoadNotification notification
+		TNotificationCenter.DefaultCenter().RemoveObserver(Self, "ImageLoadNotification")
+		
+		' Check to see if the info passed with the notification is a pixmap
+		If TPixmap(n.UserInfo()) Then
+			' if it is, load the image
+			_image = LoadImage(n.UserInfo())
+		Else
+			' otherwise, it's an exception
+			Throw n.UserInfo()
+		EndIf
+	End Method
+	
+	Method Draw( x:Int, y:Int )
+		If _image Then
+			' Draw the image
+			SetBlend(SOLIDBLEND)
+			SetColor(255,255,255)
+			
+			SetRotation(0)
+			SetOrigin(0,0)
+			SetHandle(0,0)
+			
+			DrawImage(_image,x,y)
+		Else
+			' Draw a loading icon while the image is loading
+			'#region Ugly loading icon code stuff
+			SetHandle(20,20)
+			SetOrigin(x, y)
+			
+			' Draw border circle/inner circle
+			SetBlend(SOLIDBLEND)
+			
+			SetColor(80,80,80)
+			DrawOval(0,0,40,40)
+			
+			SetColor(48,48,48)
+			DrawOval(2,2,36,36)
+			
+			' Draw loading icon thing
+			SetBlend(LIGHTBLEND)
+			SetColor(255,255,255)
+			SetHandle(2, -8)
+			
+			Local time:Int = Int(Millisecs() * .01) Mod 8
+			Local c:Float
+			
+			For Local i:Int = 0 Until 8
+				c = 255-(20+((((time+i) Mod 8)*32)*.859375))
+				
+				SetRotation(i*-45)
+				SetColor(c,c,c)
+				DrawRect(0, 0, 4, 6)
+			Next
+			
+			' Reset
+			SetRotation(0)
+			SetHandle(0, 0)
+			SetOrigin(0, 0)
+			SetBlend(SOLIDBLEND)
+			
+			'#endregion
+		EndIf
+	End Method
+	
+	Method ExecLoadImage()
+		' Thread info/data
+		Local info:th_LoadImageInfo = New th_LoadImageInfo
+		info.url = "image.jpg"
+		' Get the default notification center
+		Local nc:TNotificationCenter = TNotificationCenter.DefaultCenter()
+		' Add Self as an observer of the ImageLoadNotification
+		nc.AddObserver(Self, "ImageLoader", "ImageLoadNotification", info)
+		' Begin loading the image in another thread
+		info.Load()
+	End Method
+End Type
+
+Graphics 800,600,0,0
+'buildopt:threads
+'buildopt:gui
+' ^^^ my special tags for building things
+
+' create an entity and tell it to start loading the image
+Local e:Entity = New Entity
+e.ExecLoadImage()
+
+Local Running:Int = True
+While Running
+	While PollEvent()
+		If CurrentEvent.id = EVENT_APPTERMINATE Or (CurrentEvent.id = EVENT_KEYDOWN And CurrentEvent.data = KEY_ESCAPE) Then
+			Running = False
+		EndIf
+	Wend
+	
+	' Process queued notifications for the current thread
+	TNotificationCenter.Process()
+	
+	' Drawing
+	Cls
+	
+	' draw the entity - it'll either be the loading icon or the image, either
+	' way this thread is still going all the time
+	e.Draw( 400+Sin(Millisecs()*.03)*320, 32 )
+	
+	Flip
+	
+Wend
+
+EndGraphics
+End
+</textarea><br><br>Most of the documentation is contained in the Rem:doc..EndRem blocks (unfortunately, BBDoc doesn't handle them, and my documentation generator isn't finished, so you'll have to make do with reading the code), so for specific details about methods, refer to that.  Generally, though, all you'd normally use are the <i>DefaultCenter</i>, <i>DefaultCenterForMainThread</i>, <i>PostNotificationWithName</i>, and <i>EnqueueNotificationWithName</i> methods.<br><br><b>PUFFINS</b> </td></tr><tr ><td class="cell"><pre class="code">SuperStrict
+
+?Threaded
+' Doesn't really affect anything important to wrap it in ?Threaded..?, but it
+' does remove on addition function call at startup
+Import Brl.Threads
+?
+Import Brl.LinkedList
+Import Brl.Reflection		' For notifying objects
+
+Private
+
+Rem:doc
+	Internal type for storing information about notification observers.
+EndRem
+Type TNotificationObserver {Immutable}
+	Field name$ {ReadOnly}
+	Field observer:Object {ReadOnly}
+	Field invocation:TMethod {ReadOnly}
+	Field forObject:Object {ReadOnly}
+End Type
+
+Public
+
+Type TNotification {Immutable}
+	Field _name:String {ReadOnly}
+	Field _object:Object {ReadOnly}
+	Field _userinfo:Object {ReadOnly}
+	
+	Rem:doc
+		Initializes the notification with a {param:name},
+		{param:associated object|obj}, and {param:user-info object|info}.
+		@param:name The name of the notification.
+		@param:obj The object associated with the notification.
+		@param:info User info that accompanies the notification.
+		@returns The notification.
+	EndRem
+	Method InitWithName:TNotification(name$, obj:Object, info:Object)
+		name = name.Trim()
+		Assert name, "Cannot initialize notification with empty name"
+		_name = name
+		_object = obj
+		_userinfo = info
+		Return Self
+	End Method
+	
+	Rem:doc
+		Makes a copy of the target notification.
+		@return A copy of the target notification.
+	EndRem
+	Method Copy:TNotification()
+		Return New TNotification.InitWithName(_name, _object, _userinfo)
+	End Method
+	
+	Rem:doc
+	Returns the name of the notification.
+	EndRem
+	Method Name$()
+		Return _name
+	End Method
+	
+	Rem:doc
+	Returns the object associated with the notification.
+	EndRem
+	Method AssociatedObject:Object()
+		Return _object
+	End Method
+	
+	Rem:doc
+	Returns the user-info object for the notification.
+	EndRem
+	Method UserInfo:Object()
+		Return _userinfo
+	End Method
+End Type
+
+Global NotificationTypeId:TTypeId = TTypeId.ForName("TNotification")
+
+Public
+
+Rem:doc
+	Notification center type.
+EndRem
+Type TNotificationCenter
+	Field _queue:TList {Restricted}
+	Field _observers:TList {Restricted}
+	
+	?Threaded
+	Global _mainCenterLock:TMutex
+	Global _mainCenter:TNotificationCenter
+	Global _default:TThreadData
+	
+	Field _lock:TMutex {Restricted}
+	
+	?Not Threaded
+	Global _default:TNotificationCenter
+	?
+	
+'#region Instance methods
+	
+	Method New()
+		?Threaded
+		_lock = TMutex.Create()
+		?
+		
+		_queue = New TList
+		_observers = New TList
+	End Method
+	
+	Method Delete()
+		ProcessQueue()
+		?Threaded
+		_lock.Close()
+		?
+	End Method
+	
+	Rem:doc
+		Disposes of the notification center.  You probably don't need to call
+		this for any reason, but it provides a means of potentially expediting
+		the release of a notification center.
+	EndRem
+	Method Dispose()
+		ProcessQueue()
+		?Threaded
+		
+		If _default.GetValue() = Self Then
+			_default.SetValue(Null)
+		EndIf
+		
+		If CurrentThread() = MainThread() Then
+			_mainCenterLock.Lock()
+			If _mainCenter = Self Then
+				_mainCenter = Null
+			EndIf
+			_mainCenterLock.Unlock()
+		EndIf
+		
+		?Not Threaded
+		
+		If _default = Self Then
+			_default = Null
+		EndIf
+		
+		?
+	End Method
+	
+	Rem:doc
+		Makes the target object the default notification center for the
+		current thread.
+	EndRem
+	Method MakeDefault()
+		?Threaded
+		_default.SetValue(Self)
+		?Not Threaded
+		_default = Self
+		?
+	End Method
+	
+	Rem:doc
+		Posts a notification.  This will send the notification to all
+		observers of the {param:notification}.
+		
+		@param:notification The name of the notification.
+		@param:obj The object that spawned the notification, if any.
+		@param:userinfo Any information to be passed along with the
+		notification.  E.g., a map containing information pertinent to the
+		notification.
+	EndRem
+	Method PostNotificationWithName(notification:String, obj:Object=Null, userinfo:Object=Null)
+		PostNotification(New TNotification.InitWithName(notification, obj, userinfo))
+	End Method
+	
+	Rem:doc
+		Posts a notification.  This will send the notification to all
+		observers of the {param:notification}.
+		@param:notification The notification.
+	EndRem
+	Method PostNotification(notification:TNotification)
+		?Threaded
+		_lock.Lock()
+		?
+		Local observers:Object[] = _observers.ToArray()
+		?Threaded
+		_lock.Unlock()
+		?
+		
+		Local assObj:Object = notification.AssociatedObject()
+		Local assName:String = notification.Name()
+		Local invoker:TMethod = Null
+		Local args:Object[1]
+		args[0] = notification
+		For Local o:TNotificationObserver = EachIn observers
+			If (o.forObject &lt;&gt; Null And o.forObject &lt;&gt; assObj) Or (o.name &lt;&gt; Null And o.name &lt;&gt; assName) Then
+				Continue
+			EndIf
+			
+			invoker = o.invocation
+			If invoker Then
+				invoker.Invoke(o.observer,args)
+			Else
+				o.observer.SendMessage(notification, Self)
+			EndIf
+		Next
+	End Method
+	
+	'#region Queueing
+	
+	Rem:doc
+		Posts any notifications currently in the queue.
+	EndRem
+	Method ProcessQueue()
+		?Threaded
+		_lock.Lock()
+		?
+		Local notifications:Object[] = _queue.ToArray()
+		_queue.Clear()
+		?Threaded
+		_lock.Unlock()
+		?
+		
+		For Local n:TNotification = EachIn notifications
+			PostNotification(n)
+		Next
+	End Method
+	
+	Rem:doc
+		Queues a {param:notification} with the notification center.
+		
+		@param:notification The name of the notification.
+		@param:obj The object that spawned the notification, if any.
+		@param:userinfo Any information to be passed along with the
+		notification.  E.g., a map containing information pertinent to the
+		notification.
+	EndRem
+	Method EnqueueNotificationWithName(notification:String, obj:Object=Null, userinfo:Object=Null)
+		?Threaded
+		_lock.Lock()
+		?
+		EnqueueNotification(New TNotification.InitWithName(notification, obj, userinfo))
+		?Threaded
+		_lock.Unlock()
+		?
+	End Method
+	
+	Rem:doc
+		Queues a {param:notification} with the notification center.
+		@param:notification The notification.
+	EndRem
+	Method EnqueueNotification(notification:TNotification)
+		?Threaded
+		_lock.Lock()
+		?
+		_queue.AddLast(notification)
+		?Threaded
+		_lock.Unlock()
+		?
+	End Method
+	
+	'#endregion
+	
+	'#region Observing
+	
+	Rem:doc
+		Adds an {param:observer} for the specified {param:notification} and
+		{param:object|forObject}.
+		
+		@param:observer The observing object.
+		@param:methodName The name of the method that will be invoked for any
+		observed notifications.  If the method cannot be found, notifications
+		are passed to Object.SendMessage as the message, and the notification
+		center as the context object.
+		@param:notification The name of the notification to observe.  If null
+		or empty, the object will observe all notification.
+		@param:forObject The object to observe notifications from.  If null,
+		the observer will receive all notifications.
+		
+		@note Due to the lack of weak references in BlitzMax, observers and
+		any objects they are observing will remain in memory so long as they
+		are observing/being observer.  To ensure you do not leak memory,
+		remove the observer when disposing of objects or when the object no
+		longer needs to observe notifications.
+	EndRem
+	Method AddObserver(observer:Object, methodName:String, notification:String=Null, forObject:Object=Null)
+		Assert observer, "Null observer"
+		
+		methodName = methodName.Trim()
+		Assert methodName.Length, "Empty method name"
+		Local o:TNotificationObserver = New TNotificationObserver
+		
+		o.observer = observer
+		o.forObject = forObject
+		o.name = notification
+		
+		o.invocation = TTypeId.ForObject(observer).FindMethod(methodName)
+		If o.invocation Then
+			' ensure the method only accepts the notification
+			Local args:TTypeId[] = o.invocation.ArgTypes()
+			Assert args.Length=1 And args[0] = NotificationTypeId, ..
+				"Invalid parameters for method ~q"+methodName+"~q; must be "+methodName+"(n:TNotification)"
+		EndIf
+		
+		?Threaded
+		_lock.Lock()
+		?
+		_observers.AddLast(o)
+		?Threaded
+		_lock.Unlock()
+		?
+	End Method
+	
+	Rem:doc
+		Removes an {param:observer} for the specified {param:notification} and
+		{param:object|forObject}.
+		
+		@param:observer The observer.
+		@param:notification The notification being observed.  If null, will
+		match any instance of the observer.
+		@param:forObject The object being observed.  If null, will match any
+		instance of the observer.
+	EndRem
+	Method RemoveObserver(observer:Object, notification:String=Null, forObject:Object=Null)
+		If observer = Null Then Return
+		?Threaded
+		_lock.Lock()
+		?
+		Local observers:Object[] = _observers.ToArray()
+		If notification And forObject Then
+			For Local o:TNotificationObserver = EachIn observers
+				If o.observer &lt;&gt; observer Then
+					Continue
+				EndIf
+				
+				If o.name = notification And o.forObject = forObject Then
+					_observers.Remove(o)
+				EndIf
+			Next
+		ElseIf notification Then
+			For Local o:TNotificationObserver = EachIn observers
+				If o.observer &lt;&gt; observer Then
+					Continue
+				EndIf
+				
+				If o.name = notification Then
+					_observers.Remove(o)
+				EndIf
+			Next
+		ElseIf forObject Then
+			For Local o:TNotificationObserver = EachIn observers
+				If o.observer &lt;&gt; observer Then
+					Continue
+				EndIf
+				
+				If o.forObject = forObject Then
+					_observers.Remove(o)
+				EndIf
+			Next
+		Else
+			For Local o:TNotificationObserver = EachIn observers
+				If o.observer = observer Then
+					_observers.Remove(o)
+				EndIf
+			Next
+		EndIf
+		?Threaded
+		_lock.Unlock()
+		?
+	End Method
+	
+	'#endregion
+	
+'#endregion
+	
+'#region Class methods
+	
+	Rem:doc
+		Internal, do not call.
+		
+		@note There should not be any side-effects from calling this method,
+		but it is not intended to be called more than once, and this module
+		calls it.
+	EndRem
+	Function Initialize()
+		?Threaded
+		If Not _mainCenterLock Then
+			_mainCenterLock = TMutex.Create()
+		EndIf
+		
+		If Not _default Then
+			_default = TThreadData.Create()
+		EndIf
+		?
+		DefaultCenter()
+	End Function
+	
+	Rem:doc
+		Posts queued notifications for the default center of the calling
+		thread.
+	EndRem
+	Function Process()
+		Local center:TNotificationCenter = DefaultCenter()
+		center.ProcessQueue()
+	End Function
+	
+	Rem:doc
+		Gets the default notification center for the calling thread.
+		@return The default notification center for the calling thread.
+	EndRem
+	Function DefaultCenter:TNotificationCenter()
+		?Threaded
+			Local center:TNotificationCenter = TNotificationCenter(_default.GetValue())
+			
+			If center = Null Then
+				center = New TNotificationCenter
+				_default.SetValue(center)
+				
+				If CurrentThread() = MainThread() Then
+					_mainCenterLock.Lock()
+					_mainCenter = center
+					_mainCenterLock.Unlock()
+				EndIf
+			EndIf
+			
+			Return center
+		?Not Threaded
+			If _default = Null Then
+				_default = New TNotificationCenter
+			EndIf
+			Return _default
+		?
+	End Function
+	
+	Rem:doc
+		Gets the default notification center for the main thread.
+		@return The default notification center for the main thread.
+	EndRem
+	Function DefaultCenterForMainThread:TNotificationCenter()
+		?Threaded
+		Return TNotificationCenter._mainCenter
+		?Not Threaded
+		Return TNotificationCenter.DefaultCenter()
+		?
+	End Function
+	
+'#endregion
+End Type
+TNotificationCenter.Initialize()</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_PJ_</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> BMax code <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >N</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Good observation.  Would you like a merit badge? <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_PJ_</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> No, but I would prefer to find BB code when I look under BB code. There's a separate place for the BMax code. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >N</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> What are you, some kind of code racist person?  Against intercode relations?<br><br>Seriously though, complain about something that can a) be fixed and b) matters. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RifRaf</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> it matters because the archives should be organized properly, over time things could get hard to sort.<br><br> So posters should do their part and label them appropriatly as bb or bmx.      Just pay attention next time, and hopefully if things get too confusing by mislabelling the mods will start correcting it.  No need to get rude with someone who was trying to remind you <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ked</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> a) be fixed <br></div><br>+1 for feature <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_PJ_</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Sorry Noel,  my original "BlitzMax Code" comment may have been rather terse, but to be honest, it was not intended as an "attack" merely a useful reminder for any others like myself that had been browsing the archives where this code is listed under .bb<br><br>I appreciate there's no point crying ovber spilt milk, and sure, accidents happen. Though a little consideration when posting would hopefully prevent this from happening in the future. <br><br>Perhaps BMax AND B3D users as opposed to those who own only one of the products don't appreciate so much how annoying it can be when you find code in the archives only to realise it's unuseable. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

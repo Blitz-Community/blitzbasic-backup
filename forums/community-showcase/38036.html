@@ -1,0 +1,1633 @@
+<!DOCTYPE html><html lang="en" ><head ><title >[Very, very] Simple Scripting Engine</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >[Very, very] Simple Scripting Engine</h1><a href="forums.php" >Community Forums</a>/<a href="topics.php?forum=61" >Showcase</a>/<a href="#bottom" >[Very, very] Simple Scripting Engine</a><br><br>
+<a name="420181"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >N</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is a veeeeeeeeeeeery simple scripting engine.  The only real problem so far is the lack of functions to parse scripts and send bytecodes to the call stack for processing.  Most of what I want to fix by now can be resolved through somewhat clever coding.  Though I guess it's hard to be clever when you're bored out of your bloody mind.<br><br>Anyhow, the code:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;; Include "VirtualFileStream.bb"	;; Virtual file stream.  To be used in preprocessing newly loaded scripts.
+
+;#Region PUSH/POP DATA
+	Global PoppedClass% = CreateBank(0)
+	
+	Function PushObject(Bank,Value$,Class%=V_INT)
+		Select Class
+			Case V_INT,V_INTCONST,V_FLOAT,V_STRING
+				PushInt(Bank,Int(Value))
+			Case V_FLOATCONST
+				PushFloat(Bank,Float(Value))
+			Case V_STRINGCONST
+				PushString(Bank,Value)
+			Default
+				PushInt(Bank,Int(Value))
+		End Select
+		PushByte(Bank,Class)
+	End Function
+	
+	Function PopObject$(Bank)
+		Class = PopByte(Bank)
+		PushByte(PoppedClass,Class)
+		
+		Select Class
+			Case V_INT,V_INTCONST,V_FLOAT,V_STRING
+				R$ = PopInt(Bank)
+			Case V_FLOATCONST
+				R$ = PopFloat(Bank)
+			Case V_STRINGCONST
+				R$ = PopString(Bank)
+			Default
+				R$ = PopInt(Bank)
+		End Select
+		
+		Return R$
+	End Function
+	
+	Function PushInt(Bank,Value%)
+		Position = BankSize(Bank)
+		ResizeBank(Bank,Position+4)
+		PokeInt(Bank,Position,Value)
+	End Function
+	
+	Function PopInt(Bank)
+		R = PeekInt(Bank,BankSize(Bank)-4)
+		ResizeBank(Bank,BankSize(Bank)-4)
+		Return R
+	End Function
+	
+	Function PushByte(Bank,Value%)
+		Position = BankSize(Bank)
+		ResizeBank(Bank,Position+1)
+		PokeByte(Bank,Position,Value)
+	End Function
+	
+	Function PopByte(Bank)
+		P = BankSize(Bank)
+		R = PeekByte(Bank,BankSize(Bank)-1)
+		ResizeBank(Bank,BankSize(Bank)-1)
+		Return R
+	End Function
+	
+	Function PushFloat(Bank,Value#)
+		Position = BankSize(Bank)
+		ResizeBank(Bank,Position+4)
+		PokeFloat(Bank,Position,Value)
+		Return Position/4
+	End Function
+	
+	Function PopFloat#(Bank)
+		R# = PeekFloat(Bank,BankSize(Bank)-4)
+		PokeInt(Bank,BankSize(Bank)-4,0)
+		ResizeBank(Bank,BankSize(Bank)-4)
+		Return R#
+	End Function
+	
+	Function PushString(Bank,Text$)
+		Position% = BankSize(Bank)
+		ResizeBank(Bank,BankSize(Bank)+(Len(Text$)+1))
+		PokeByte(Bank,Position,0)
+		For n = 1 To Len(Text$)
+			PokeByte(Bank,Position+n,Asc(Mid(Text$,n,1)))
+		Next
+		Return Position/4
+	End Function
+	
+	Function PopString$(Bank)
+		n = BankSize(Bank)-1
+		Repeat
+			K = PeekByte(Bank,n)
+			If K &gt; 0 Then Text$ = Chr(K)+Text$
+			n = n - 1
+		Until K = 0
+		ResizeBank(Bank,n+1)
+		Return Text$
+	End Function
+	
+	;; Does not work if you've pushed a string onto the bank
+	Function Objects(Bank)
+		Return BankSize(Bank)/5
+	End Function
+	
+	Function PokeString(Bank,Offset,Text$)
+		For n = 1 To Len(Text$)
+			PokeByte Bank,Offset+(n-1),Asc(Mid(Text$,n,1))
+		Next
+		PokeByte Bank,Offset+n,0
+	End Function
+	
+	Function PeekString$(Bank,Offset)
+		For n = 0 To BankSize(Bank)-1
+			A = PeekByte(Bank,Offset+n)
+			If A = 0 Then Exit
+			Value$ = Value$ + Chr(A)
+		Next
+		Return Value$
+	End Function
+;#End Region
+
+;#Region VARIABLE
+	Type Variable
+		Field Name$
+		Field Value$
+		Field Class%
+	End Type
+	
+	;; Datatype bytecodes
+	Const V_FLOAT = %00000001
+	Const V_INT = %00000010
+	Const V_STRING = %00000100
+	Const V_FLOATCONST = %00001000
+	Const V_INTCONST = %00010000
+	Const V_STRINGCONST = %00100000
+	
+	Function Variable$(Name$,Class%,Value$)
+		Name$ = Lower(Trim(Name$))
+		
+		For v.Variable = Each Variable
+			If v\Name = Name$ Then Return Handle(v)
+		Next
+		
+		v.Variable = New Variable
+		v\Name = Name
+		v\Class = Class
+		v\Value = Value
+		Return Handle(v)
+	End Function
+	
+	Function VarName$(ID)
+		v.Variable = Object.Variable(ID)
+		Return v\Name
+	End Function
+	
+	Function VarValue$(ID)
+		v.Variable = Object.Variable(ID)
+		Return v\Value
+	End Function
+	
+	Function VarClass%(ID)
+		v.Variable = Object.Variable(ID)
+		Return v\Class
+	End Function
+	
+	Function GetVariable$(ID$,Class%)
+		Select Class
+			Case V_FLOATCONST,V_INTCONST,V_STRINGCONST
+				Return ID$
+			Case V_FLOAT,V_INT,V_STRING
+				For v.Variable = Each Variable
+					If Handle(v) = ID Then
+						Return v\Value
+					EndIf
+				Next
+		End Select
+		Return ID$
+	End Function
+;#End Region
+
+;#Region TOKENS
+	Const T_CALL = %11001100	;; Binary because it's a bytecode and not a token
+	Const T_PRINT = $100000
+	Const T_LET = $100001
+	Const T_ADD = $100002
+	Const T_SUB = $100003
+	Const T_MUL = $100004
+	Const T_DIV = $100005
+	Const T_MOD = $100006
+	Const T_STRING = $100007
+	Const T_PLOT = $100008
+;#End Region
+
+;; Stacks...
+Global CallStack = CreateBank(0)
+Global VarStack = CreateBank(0)
+Global InStack = CreateBank(0)
+
+MyFloat = Variable("weeblebob",V_FLOAT,3.23456)
+
+;; If I had a function to parse the files, I could process the script and push opcodes onto the callstack.
+;; That said, this is the example 'script'.  A simple script that prints a number multiplied by a variable
+PushObject CallStack,T_PRINT,T_CALL
+PushObject CallStack,MyFloat,V_FLOAT
+PushObject CallStack,T_MUL,T_CALL
+PushObject CallStack,10,V_INTCONST
+
+;; Use the Plot function to create a rect...
+For y = 0 To 24
+	For x = 0 To 24
+		PushObject CallStack,T_PLOT,T_CALL
+		PushObject CallStack,25+x,V_INTCONST
+		PushObject CallStack,25+y,V_INTCONST
+	Next
+Next
+
+S = BankSize(CallStack)
+
+;; Problem here is that this is done purely on a step-by-step basis instead of doing multiplication and division first
+T = MilliSecs()
+While Objects(CallStack) &gt; 0
+	Inst$ = PopObject(CallStack)
+	Class% = PopByte(PoppedClass)
+	
+	Select Class
+		Case T_CALL
+			Select Int(Inst)
+				Case T_ADD
+					Var$ = PopObject(VarStack)
+					Byte = PopByte(PoppedClass)
+					
+					VarB$ = PopObject(CallStack)
+					ByteB = PopByte(PoppedClass)
+					
+					Var$ = GetVariable(Var$,Byte)
+					VarB$ = GetVariable(VarB$,ByteB)
+					
+					PushObject VarStack,Float(VarB) + Float(Var),V_FLOATCONST
+				Case T_MUL
+					Var$ = PopObject(VarStack)
+					Byte = PopByte(PoppedClass)
+					
+					VarB$ = PopObject(CallStack)
+					ByteB = PopByte(PoppedClass)
+					
+					Var$ = GetVariable(Var$,Byte)
+					VarB$ = GetVariable(VarB$,ByteB)
+					
+					PushObject VarStack,Float(VarB) * Float(Var),V_FLOATCONST
+				Case T_DIV
+					Var$ = PopObject(VarStack)
+					Byte = PopByte(PoppedClass)
+					
+					VarB$ = PopObject(CallStack)
+					ByteB = PopByte(PoppedClass)
+					
+					Var$ = GetVariable(Var$,Byte)
+					VarB$ = GetVariable(VarB$,ByteB)
+					
+					PushObject VarStack,Float(VarB) / Float(Var),V_FLOATCONST
+				Case T_SUB
+					Var$ = PopObject(VarStack)
+					Byte = PopByte(PoppedClass)
+					
+					VarB$ = PopObject(CallStack)
+					ByteB = PopByte(PoppedClass)
+					
+					Var$ = GetVariable(Var$,Byte)
+					VarB$ = GetVariable(VarB$,ByteB)
+					
+					PushObject VarStack,Float(VarB) - Float(Var),V_FLOATCONST
+				Case T_MOD
+					Var$ = PopObject(VarStack)
+					Byte = PopByte(PoppedClass)
+					
+					VarB$ = PopObject(CallStack)
+					ByteB = PopByte(PoppedClass)
+					
+					Var$ = GetVariable(Var$,Byte)
+					VarB$ = GetVariable(VarB$,ByteB)
+					
+					PushObject VarStack,Float(VarB) Mod Float(Var),V_FLOATCONST
+				Case T_LET
+					Name$ = GetVariable(PopObject(VarStack),PopByte(PoppedClass))
+					Value$ = PopObject(VarStack)
+					Class% = PopByte(PoppedClass)
+					Value$ = GetVariable(Value,Class)
+					Variable(Name$,Value$,Class)
+				Default
+					PushObject InStack,Int(Inst),T_CALL
+			End Select
+		Default
+			PushObject VarStack,Inst,Class
+	End Select
+Wend
+
+T = MilliSecs() - T
+
+T2 = MilliSecs()
+
+While Objects(InStack) &gt; 0
+	Inst = PopObject(InStack)
+	PopByte PoppedClass
+	Select Int(Inst)
+		Case T_PRINT
+			Var$ = PopObject(VarStack)
+			Byte% = PopByte(PoppedClass)
+			Print GetVariable(Var$,Byte)
+		Case T_PLOT
+			X% = GetVariable(PopObject(VarStack),PopByte(PoppedClass))
+			Y% = GetVariable(PopObject(VarStack),PopByte(PoppedClass))
+			Plot X,Y
+	End Select
+Wend
+
+T2 = MilliSecs() - T2
+
+Print ""
+Print ""
+Print ""
+Print ""
+Print "First loop took "+T
+Print "Second loop took "+T2
+
+FreeBank PoppedClass
+FreeBank CallStack
+FreeBank VarStack
+FreeBank InStack
+
+WaitKey
+</textarea><br><br>No media required.<br><br>If anyone would like to try to help me to improve upon this, I'd be happy.  Of course, this is another open source project of mine. <br><br></td></tr></table><br>
+<a name="420185"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jeremy Alessi</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cool! <br><br></td></tr></table><br>
+<a name="420236"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >N</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Updated code, now there are base functions for tokenizing and parsing a string:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;; Include "VirtualFileStream.bb"	;; Virtual file stream.  To be used in preprocessing newly loaded scripts.
+
+;#Region PUSH/POP DATA
+	Global PoppedClass% = CreateBank(0)
+	
+	Function PushObject(Bank,Value$,Class%=V_INT)
+		Select Class
+			Case V_INT,V_INTCONST,V_FLOAT,V_STRING
+				PushInt(Bank,Int(Value))
+			Case V_FLOATCONST
+				PushFloat(Bank,Float(Value))
+			Case V_STRINGCONST
+				PushString(Bank,Value)
+			Default
+				PushInt(Bank,Int(Value))
+		End Select
+		PushByte(Bank,Class)
+	End Function
+	
+	Function PopObject$(Bank)
+		Class = PopByte(Bank)
+		PushByte(PoppedClass,Class)
+		
+		Select Class
+			Case V_INT,V_INTCONST,V_FLOAT,V_STRING
+				R$ = PopInt(Bank)
+			Case V_FLOATCONST
+				R$ = PopFloat(Bank)
+			Case V_STRINGCONST
+				R$ = PopString(Bank)
+			Default
+				R$ = PopInt(Bank)
+		End Select
+		
+		Return R$
+	End Function
+	
+	Function PushInt(Bank,Value%)
+		Position = BankSize(Bank)
+		ResizeBank(Bank,Position+4)
+		PokeInt(Bank,Position,Value)
+	End Function
+	
+	Function PopInt(Bank)
+		R = PeekInt(Bank,BankSize(Bank)-4)
+		ResizeBank(Bank,BankSize(Bank)-4)
+		Return R
+	End Function
+	
+	Function PushByte(Bank,Value%)
+		Position = BankSize(Bank)
+		ResizeBank(Bank,Position+1)
+		PokeByte(Bank,Position,Value)
+	End Function
+	
+	Function PopByte(Bank)
+		P = BankSize(Bank)
+		R = PeekByte(Bank,BankSize(Bank)-1)
+		ResizeBank(Bank,BankSize(Bank)-1)
+		Return R
+	End Function
+	
+	Function PushFloat(Bank,Value#)
+		Position = BankSize(Bank)
+		ResizeBank(Bank,Position+4)
+		PokeFloat(Bank,Position,Value)
+		Return Position/4
+	End Function
+	
+	Function PopFloat#(Bank)
+		R# = PeekFloat(Bank,BankSize(Bank)-4)
+		PokeInt(Bank,BankSize(Bank)-4,0)
+		ResizeBank(Bank,BankSize(Bank)-4)
+		Return R#
+	End Function
+	
+	Function PushString(Bank,Text$)
+		Position% = BankSize(Bank)
+		ResizeBank(Bank,BankSize(Bank)+(Len(Text$)+1))
+		PokeByte(Bank,Position,0)
+		For n = 1 To Len(Text$)
+			PokeByte(Bank,Position+n,Asc(Mid(Text$,n,1)))
+		Next
+		Return Position/4
+	End Function
+	
+	Function PopString$(Bank)
+		n = BankSize(Bank)-1
+		Repeat
+			K = PeekByte(Bank,n)
+			If K &gt; 0 Then Text$ = Chr(K)+Text$
+			n = n - 1
+		Until K = 0
+		ResizeBank(Bank,n+1)
+		Return Text$
+	End Function
+	
+	;; Does not work if you've pushed a string onto the bank
+	Function Objects(Bank)
+		Return BankSize(Bank)/5
+	End Function
+	
+	Function PokeString(Bank,Offset,Text$)
+		For n = 1 To Len(Text$)
+			PokeByte Bank,Offset+(n-1),Asc(Mid(Text$,n,1))
+		Next
+		PokeByte Bank,Offset+n,0
+	End Function
+	
+	Function PeekString$(Bank,Offset)
+		For n = 0 To BankSize(Bank)-1
+			A = PeekByte(Bank,Offset+n)
+			If A = 0 Then Exit
+			Value$ = Value$ + Chr(A)
+		Next
+		Return Value$
+	End Function
+;#End Region
+
+;#Region VARIABLE
+	Type Variable
+		Field Name$
+		Field Value$
+		Field Class%
+	End Type
+	
+	;; Datatype bytecodes
+	Const V_FLOAT = %00000001
+	Const V_INT = %00000010
+	Const V_STRING = %00000100
+	Const V_FLOATCONST = %00001000
+	Const V_INTCONST = %00010000
+	Const V_STRINGCONST = %00100000
+	
+	Function Variable$(Name$,Class%,Value$)
+		Name$ = Lower(Trim(Name$))
+		
+		For v.Variable = Each Variable
+			If v\Name = Name$ Then Return Handle(v)
+		Next
+		
+		v.Variable = New Variable
+		v\Name = Name
+		v\Class = Class
+		v\Value = Value
+		Return Handle(v)
+	End Function
+	
+	Function VarName$(ID)
+		v.Variable = Object.Variable(ID)
+		Return v\Name
+	End Function
+	
+	Function VarValue$(ID)
+		v.Variable = Object.Variable(ID)
+		Return v\Value
+	End Function
+	
+	Function VarClass%(ID)
+		v.Variable = Object.Variable(ID)
+		Return v\Class
+	End Function
+	
+	Function GetVariable$(ID$,Class%)
+		Select Class
+			Case V_FLOATCONST,V_INTCONST,V_STRINGCONST
+				Return ID$
+			Case V_FLOAT,V_INT,V_STRING
+				For v.Variable = Each Variable
+					If Handle(v) = ID Then
+						Return v\Value
+					EndIf
+				Next
+		End Select
+		Return ID$
+	End Function
+;#End Region
+
+;#Region PARSE
+	;; Spits out a string that is easily parsed
+	Function Parse$(S$)
+;		For i = 1 To 3
+			For n = 1 To Len(S$)
+				j$ = Mid(S$,n,1)
+				
+				For k = 1 To Len(j)
+					If Asc(Mid(j,k,1)) = 34 Then StrOpen = Not StrOpen
+				Next
+				add=0
+				If StrOpen = 0 Then
+;					If Left(j$,1) &lt;&gt; " " And ((Asc(Mid(j$,2,1)) &lt;= 47) Or (Asc(Mid(j$,2,1)) &gt;= 58 And Asc(Mid(j$,2,1)) &lt;= 63) Or Asc(Mid(j,2,1)) = 124 Or Asc(Mid(j,2,1)) = 94)  Then
+;						j$ = Trim(Left(j$,1)) + " " + Right(j$,1)
+;						add = 1
+;					ElseIf Right(j$,1) &lt;&gt; " " And ((Asc(Mid(j$,1,1)) &lt;= 47) Or (Asc(Mid(j$,1,1)) &gt;= 58 And Asc(Mid(j$,1,1)) &lt;= 63) Or Asc(Mid(j,1,1)) = 124 Or Asc(Mid(j,1,1)) = 94)  Then
+;						j$ = Left(j$,1) + " " + Trim(Right(j$,1))
+;						add = 1
+;					EndIf
+					If (Asc(Mid(j$,1,1)) &lt;= 47) Or (Asc(Mid(j$,1,1)) &gt;= 58 And Asc(Mid(j$,1,1)) &lt;= 63) Or Asc(Mid(j,1,1)) = 124 Or Asc(Mid(j,1,1)) = 94 Then
+						j = " "+j+" "
+;						n = n + 
+					EndIf
+				EndIf
+				
+				t$ = t$ + j$
+				
+			Next
+			S$ = t$
+;			t$ = ""
+;		Next
+		StrOpen = 0
+		For i = 1 To Len(S$)
+			c$ = Mid(S$,i,1)
+			
+			If Asc(c$) = 34 Then StrOpen = Not StrOpen
+			
+			If c$ = " " And StrOpen = 0 Then
+				For n = i To Len(S$)
+					l$ = Mid(S$,n,1)
+					If l &lt;&gt; " " Then Exit
+				Next
+				
+				S$ = Left(S$,i-1)+" "+Right(S$,Len(S$)-(n-1))
+			EndIf
+		Next
+
+		Return Trim(Replace(S$,"	"," "))
+	End Function
+;#End Region
+
+;#Region TOKENIZE
+	Type Token
+		Field Text$
+		Field Sep%
+	End Type
+	
+	Const S_WHITEPSPACE% = $3000
+	Const S_DACCESS% = $3001
+	
+	Function Tokenize(S$)
+		For n = 1 To Len(S$)
+			c$ = Mid(S$,n,1)
+			If c$ = " " Or c$ = "." Then
+				For i = n+1 To Len(S$)
+					k$ = Mid(S$,i,1)
+					If k$ = "."  Or K$ = " " Then
+						t.Token = New Token
+						t\Text$ = Mid(S$,n+1,i-(n+1))
+						If c$ = "." Then
+							t\Sep = S_DACCESS
+						Else
+							t\Sep = S_WHITESPACE
+						EndIf
+						count = count + 1
+						Exit
+					EndIf
+				Next
+			EndIf
+		Next
+		Return count
+	End Function
+;#End Region
+
+;#Region TOKENS
+	Const T_CALL = %11001100	;; Binary because it's a bytecode and not a token
+	Const T_PRINT = $100000		;; Print
+	Const T_LET = $100001		;; Let
+	Const T_ADD = $100002		;; Add
+	Const T_SUB = $100003		;; Sub
+	Const T_MUL = $100004		;; Multiply
+	Const T_DIV = $100005		;; Divide
+	Const T_MOD = $100006		;; Mod
+	Const T_STRING = $100007	;; String open/close
+	Const T_PLOT = $100008		;; Plot
+	Const T_UNID = $100009		;; Unidentified
+	Const T_ARGOPEN = $10000A	;; Open argument
+	Const T_ARGCLOSE = $10000B	;; Close argument
+	Const T_SCOPEUP = $10000C		;; Open scope
+	Const T_SCOPEDOWN = $10000D	;; Close scope
+;#End Region
+
+;; Stacks...
+Global CallStack = CreateBank(0)		;; This is the stack that is processed at the start of the 'update'
+Global VarStack = CreateBank(0)		;; All variables that are added, used as arguments, etc. are pushed onto this
+Global InStack = CreateBank(0)		;; Instructions that made it through the call loop
+
+MyFloat = Variable("weeblebob",V_FLOAT,3.23456)
+
+;; If I had a function to parse the files, I could process the script and push opcodes onto the callstack.
+;; That said, this is the example 'script'.  A simple script that prints a number multiplied by a variable
+PushObject CallStack,T_PRINT,T_CALL
+PushObject CallStack,MyFloat,V_FLOAT
+PushObject CallStack,T_MUL,T_CALL
+PushObject CallStack,10,V_INTCONST
+
+;; Use the Plot function to create a rect...
+For y = 0 To 24
+	For x = 0 To 24
+		PushObject CallStack,T_PLOT,T_CALL
+		PushObject CallStack,25+x,V_INTCONST
+		PushObject CallStack,25+y,V_INTCONST
+	Next
+Next
+
+S = BankSize(CallStack)
+
+;; Problem here is that this is done purely on a step-by-step basis instead of doing multiplication and division first
+While Objects(CallStack) &gt; 0
+	Inst$ = PopObject(CallStack)
+	Class% = PopByte(PoppedClass)
+	
+	Select Class
+		Case T_CALL
+			Select Int(Inst)
+				Case T_ADD
+					Var$ = PopObject(VarStack)
+					Byte = PopByte(PoppedClass)
+					
+					VarB$ = PopObject(CallStack)
+					ByteB = PopByte(PoppedClass)
+					
+					Var$ = GetVariable(Var$,Byte)
+					VarB$ = GetVariable(VarB$,ByteB)
+					
+					PushObject VarStack,Float(VarB) + Float(Var),V_FLOATCONST
+				Case T_MUL
+					Var$ = PopObject(VarStack)
+					Byte = PopByte(PoppedClass)
+					
+					VarB$ = PopObject(CallStack)
+					ByteB = PopByte(PoppedClass)
+					
+					Var$ = GetVariable(Var$,Byte)
+					VarB$ = GetVariable(VarB$,ByteB)
+					
+					PushObject VarStack,Float(VarB) * Float(Var),V_FLOATCONST
+				Case T_DIV
+					Var$ = PopObject(VarStack)
+					Byte = PopByte(PoppedClass)
+					
+					VarB$ = PopObject(CallStack)
+					ByteB = PopByte(PoppedClass)
+					
+					Var$ = GetVariable(Var$,Byte)
+					VarB$ = GetVariable(VarB$,ByteB)
+					
+					PushObject VarStack,Float(VarB) / Float(Var),V_FLOATCONST
+				Case T_SUB
+					Var$ = PopObject(VarStack)
+					Byte = PopByte(PoppedClass)
+					
+					VarB$ = PopObject(CallStack)
+					ByteB = PopByte(PoppedClass)
+					
+					Var$ = GetVariable(Var$,Byte)
+					VarB$ = GetVariable(VarB$,ByteB)
+					
+					PushObject VarStack,Float(VarB) - Float(Var),V_FLOATCONST
+				Case T_MOD
+					Var$ = PopObject(VarStack)
+					Byte = PopByte(PoppedClass)
+					
+					VarB$ = PopObject(CallStack)
+					ByteB = PopByte(PoppedClass)
+					
+					Var$ = GetVariable(Var$,Byte)
+					VarB$ = GetVariable(VarB$,ByteB)
+					
+					PushObject VarStack,Float(VarB) Mod Float(Var),V_FLOATCONST
+				Case T_LET
+					Name$ = GetVariable(PopObject(VarStack),PopByte(PoppedClass))
+					Value$ = PopObject(VarStack)
+					Class% = PopByte(PoppedClass)
+					Value$ = GetVariable(Value,Class)
+					Variable(Name$,Value$,Class)
+				Default
+					PushObject InStack,Int(Inst),T_CALL
+			End Select
+		Default
+			PushObject VarStack,Inst,Class
+	End Select
+Wend
+
+While Objects(InStack) &gt; 0
+	Inst = PopObject(InStack)
+	PopByte PoppedClass
+	Select Int(Inst)
+		Case T_PRINT
+			Var$ = PopObject(VarStack)
+			Byte% = PopByte(PoppedClass)
+			Print GetVariable(Var$,Byte)
+		Case T_PLOT
+			X% = GetVariable(PopObject(VarStack),PopByte(PoppedClass))
+			Y% = GetVariable(PopObject(VarStack),PopByte(PoppedClass))
+			Plot X,Y
+	End Select
+Wend
+
+Print ""
+Print ""
+Print ""
+Print ""
+Print "First loop took "+T
+Print "Second loop took "+T2
+Print ""
+Print Tokenize(Parse("n+n=50; n = 25"))
+
+FreeBank PoppedClass
+FreeBank CallStack
+FreeBank VarStack
+FreeBank InStack
+
+WaitKey
+</textarea><br><br>Mind you, there still aren't functions to turn these parsed strings into bytecodes. <br><br></td></tr></table><br>
+<a name="420534"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dragon57</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Very nice Noel! <br><br></td></tr></table><br>
+<a name="420543"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >RifRaf</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> yes, very nice. keep it up <br><br></td></tr></table><br>
+<a name="420588"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >N</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Progress so far, and through this I've only given myself more questions that answers.  Along with a few distortions to my eyesight...<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;; Include "VirtualFileStream.bb"	;; Virtual file stream.  To be used in preprocessing newly loaded scripts.
+
+;#Region PUSH/POP DATA
+	Global PoppedValue$
+	Global PoppedClass%
+	
+	Type Stack
+		Field F.StackObj
+		Field L.StackObj
+		Field Objects
+	End Type
+	
+	Type StackObj
+		Field Parent.Stack
+		Field N.StackObj
+		Field P.StackObj
+		Field Value$
+		Field Class%
+	End Type
+	
+	Function CreateStack()
+		s.Stack = New Stack
+		Return Handle(s)
+	End Function
+	
+	Function PushObject(Stack,Value$,Class%=V_INT,ToFront=0)
+		s.Stack = Object.Stack(Stack)
+		s\Objects = s\Objects + 1
+		i.StackObj = New StackObj
+		If Value = 0 And Class = 0 Then Stop
+		i\Value = Value
+		i\Class = Class
+		i\Parent = s
+		If ToFront = 0 Then
+			If s\F = Null And s\L = Null Then
+				s\F = i
+				s\L = s\F
+			Else
+				Insert i After s\L
+				i\P = s\L
+				s\L\N = i
+				s\L = i
+			EndIf
+		Else
+			If s\F = Null And s\L = Null Then
+				s\F = i
+				s\L = s\F
+			Else
+				Insert i Before s\F
+				i\N = s\F
+				s\F\P = i
+				s\F = i
+			EndIf
+		EndIf
+	End Function
+	
+	Function PopObject$(Stack,FromFront=0)
+		s.Stack = Object.Stack(Stack)
+		s\Objects = s\Objects - 1
+		If FromFront = 0 Then
+			i.StackObj = s\L
+			s\L = i\P
+			If S\L &lt;&gt; Null Then s\L\N = Null
+		Else
+			i.StackObj = s\F
+			s\F = i\N
+			If S\F &lt;&gt; Null Then s\F\P = Null
+		EndIf
+		
+		If s\L = Null Then s\L = s\F
+		If s\F = Null Then s\F = s\L
+		
+		PoppedClass = i\Class
+		PoppedValue = i\Value
+		v$ = i\Value
+		Delete i
+		Return V
+	End Function
+	
+	Function Objects(Stack)
+		s.Stack = Object.Stack(Stack)
+		Return s\Objects
+	End Function
+;#End Region
+
+;#Region VARIABLE
+	Type Variable
+		Field Name$
+		Field Value$
+		Field Class%
+	End Type
+	
+	;; Datatype bytecodes
+	Const V_FLOAT = %00000001
+	Const V_INT = %00000010
+	Const V_STRING = %00000100
+	Const V_FLOATCONST = %00001000
+	Const V_INTCONST = %00010000
+	Const V_STRINGCONST = %00100000
+	
+	Function Variable$(Name$,Class%,Value$)
+		Name$ = Lower(Trim(Name$))
+		
+		For v.Variable = Each Variable
+			If v\Name = Name$ Then : v\Value = Value$ : v\Class = Class : Return Handle(v) : EndIf
+		Next
+		
+		v.Variable = New Variable
+		v\Name = Name
+		v\Class = Class
+		v\Value = Value
+		Return Handle(v)
+	End Function
+	
+	Function VarName$(ID)
+		v.Variable = Object.Variable(ID)
+		Return v\Name
+	End Function
+	
+	Function VarValue$(ID)
+		v.Variable = Object.Variable(ID)
+		Return v\Value
+	End Function
+	
+	Function VarClass%(ID)
+		v.Variable = Object.Variable(ID)
+		Return v\Class
+	End Function
+	
+	Function GetVariable$(ID$,Class%)
+		Select Class
+			Case V_FLOATCONST,V_INTCONST,V_STRINGCONST
+				Return ID$
+			Case V_FLOAT,V_INT,V_STRING
+				For v.Variable = Each Variable
+					If v\Name = Lower(ID) Then
+						Return v\Value
+					EndIf
+				Next
+		End Select
+		Return ID$
+	End Function
+;#End Region
+
+;#Region PARSE
+	;; Spits out a string that is easily parsed
+	Function Parse$(S$)
+;		For i = 1 To 3
+			For n = 1 To Len(S$)
+				j$ = Mid(S$,n,1)
+				
+				For k = 1 To Len(j)
+					If Asc(Mid(j,k,1)) = 34 Then StrOpen = Not StrOpen
+				Next
+				add=0
+				If StrOpen = 0 Then
+;					If Left(j$,1) &lt;&gt; " " And ((Asc(Mid(j$,2,1)) &lt;= 47) Or (Asc(Mid(j$,2,1)) &gt;= 58 And Asc(Mid(j$,2,1)) &lt;= 63) Or Asc(Mid(j,2,1)) = 124 Or Asc(Mid(j,2,1)) = 94)  Then
+;						j$ = Trim(Left(j$,1)) + " " + Right(j$,1)
+;						add = 1
+;					ElseIf Right(j$,1) &lt;&gt; " " And ((Asc(Mid(j$,1,1)) &lt;= 47) Or (Asc(Mid(j$,1,1)) &gt;= 58 And Asc(Mid(j$,1,1)) &lt;= 63) Or Asc(Mid(j,1,1)) = 124 Or Asc(Mid(j,1,1)) = 94)  Then
+;						j$ = Left(j$,1) + " " + Trim(Right(j$,1))
+;						add = 1
+;					EndIf
+					If (Asc(Mid(j$,1,1)) &lt;= 47) Or (Asc(Mid(j$,1,1)) &gt;= 58 And Asc(Mid(j$,1,1)) &lt;= 63) Or Asc(Mid(j,1,1)) = 124 Or Asc(Mid(j,1,1)) = 94 Then
+						j = " "+j+" "
+;						n = n + 
+					EndIf
+				EndIf
+				
+				t$ = t$ + j$
+				
+			Next
+			S$ = t$
+;			t$ = ""
+;		Next
+		StrOpen = 0
+		For i = 1 To Len(S$)
+			c$ = Mid(S$,i,1)
+			
+			If Asc(c$) = 34 Then StrOpen = Not StrOpen
+			
+			If c$ = " " And StrOpen = 0 Then
+				For n = i To Len(S$)
+					l$ = Mid(S$,n,1)
+					If l &lt;&gt; " " Then Exit
+				Next
+				
+				S$ = Left(S$,i-1)+" "+Right(S$,Len(S$)-(n-1))
+			EndIf
+		Next
+
+		Return Trim(Replace(S$,"	"," "))
+	End Function
+;#End Region
+
+;#Region TOKENIZE
+	Type Token
+		Field Text$
+		Field Sep%
+	End Type
+	
+	Const S_WHITEPSPACE% = $3000
+	Const S_DACCESS% = $3001
+	
+	Function Tokenize(S$)
+		For n = 1 To Len(S$)
+			c$ = Mid(S$,n,1)
+			If c$ = " " Or c$ = "." Then
+				For i = n+1 To Len(S$)
+					k$ = Mid(S$,i,1)
+					If k$ = "."  Or K$ = " " Then
+						t.Token = New Token
+						t\Text$ = Mid(S$,n+1,i-(n+1))
+						If c$ = "." Then
+							t\Sep = S_DACCESS
+						Else
+							t\Sep = S_WHITESPACE
+						EndIf
+						count = count + 1
+						Exit
+					EndIf
+				Next
+			EndIf
+		Next
+		Return count
+	End Function
+;#End Region
+
+;#Region TOKENS
+	Const T_CALL = %11001100	;; Binary because it's a bytecode and not a token
+	Const T_PRINT = $100000		;; Print
+	Const T_LET = $100001		;; Let
+	Const T_ADD = $100002		;; Add
+	Const T_SUB = $100003		;; Sub
+	Const T_MUL = $100004		;; Multiply
+	Const T_DIV = $100005		;; Divide
+	Const T_MOD = $100006		;; Mod
+	Const T_STRING = $100007	;; String open/close
+	Const T_PLOT = $100008		;; Plot
+	Const T_UNID = $100009		;; Unidentified
+	Const T_ARGOPEN = $10000A	;; Open argument
+	Const T_ARGCLOSE = $10000B	;; Close argument
+	Const T_SCOPEUP = $10000C		;; Open scope
+	Const T_SCOPEDOWN = $10000D	;; Close scope
+;#End Region
+
+;; Stacks...
+Global CallStack = CreateStack()		;; This is the stack that is processed at the start of the 'update'
+Global VarStack = CreateStack()		;; All variables that are added, used as arguments, etc. are pushed onto this
+Global InStack = CreateStack()		;; Instructions that made it through the call loop
+
+PushObject CallStack,T_LET,T_CALL
+PushObject CallStack,"MYFLOAT",V_STRINGCONST
+PushObject CallStack,16,V_FLOATCONST
+PushObject CallStack,T_PRINT,T_CALL
+PushObject CallStack,"MYFLOAT",V_FLOAT
+PushObject CallStack,T_MUL,T_CALL
+PushObject CallStack,.5,V_FLOATCONST
+
+;; Use the Plot function to create a rect...
+For y = 0 To 7
+	For x = 0 To 7
+		PushObject CallStack,T_PLOT,T_CALL
+		PushObject CallStack,25+x,V_INTCONST
+		PushObject CallStack,25+y,V_INTCONST
+	Next
+Next
+
+While Objects(CallStack)
+	PopObject(CallStack)
+	Inst$ = PoppedValue
+	Class% = PoppedClass
+	DebugLog "$"+Hex(Inst)+": "+Class+"  Remaining: "+Objects(CallStack)
+	
+	Select Class
+		Case T_CALL
+			Select Int(Inst)
+				Case T_LET
+					PopObject(VarStack,1)
+					Name$ = GetVariable(PoppedValue,PoppedClass)
+					PopObject(VarStack,1)
+					Value$ = GetVariable(PoppedValue,PoppedClass)
+					Variable(Name$,Class,Value$)
+				Default
+					PushObject InStack,Inst,T_CALL,1
+			End Select
+		Default
+			PushObject VarStack,Inst,Class,1
+	End Select
+Wend
+
+While Objects(InStack)
+	Inst = PopObject(InStack)
+	Select Int(Inst)
+		Case T_ADD
+			VarB$ = PopObject(VarStack)
+			ByteB = PoppedClass
+			
+			Var$ = PopObject(VarStack)
+			Byte = PoppedClass
+			
+			Var$ = GetVariable(Var$,Byte)
+			VarB$ = GetVariable(VarB$,ByteB)
+			
+			PushObject VarStack,Float(VarB) + Float(Var),V_FLOATCONST
+		Case T_MUL
+			VarB$ = PopObject(VarStack)
+			ByteB = PoppedClass
+			
+			Var$ = PopObject(VarStack)
+			Byte = PoppedClass
+			
+			Var$ = GetVariable(Var$,Byte)
+			VarB$ = GetVariable(VarB$,ByteB)
+			
+			PushObject VarStack,Float(VarB) * Float(Var),V_FLOATCONST
+		Case T_DIV
+			VarB$ = PopObject(VarStack)
+			ByteB = PoppedClass
+			
+			Var$ = PopObject(VarStack)
+			Byte = PoppedClass
+			
+			Var$ = GetVariable(Var$,Byte)
+			VarB$ = GetVariable(VarB$,ByteB)
+			
+			PushObject VarStack,Float(VarB) / Float(Var),V_FLOATCONST
+		Case T_SUB
+			VarB$ = PopObject(VarStack)
+			ByteB = PoppedClass
+			
+			Var$ = PopObject(VarStack)
+			Byte = PoppedClass
+			
+			Var$ = GetVariable(Var$,Byte)
+			VarB$ = GetVariable(VarB$,ByteB)
+			
+			PushObject VarStack,Float(VarB) - Float(Var),V_FLOATCONST
+		Case T_MOD
+			VarB$ = PopObject(VarStack)
+			ByteB = PoppedClass
+			
+			Var$ = PopObject(VarStack)
+			Byte = PoppedClass
+			
+			Var$ = GetVariable(Var$,Byte)
+			VarB$ = GetVariable(VarB$,ByteB)
+			
+			PushObject VarStack,Float(VarB) Mod Float(Var),V_FLOATCONST
+		Case T_PRINT
+			PopObject(VarStack)
+			Var$ = PoppedValue
+			Text 0,0,GetVariable(Var$,PoppedClass)
+		Case T_PLOT
+			X% = GetVariable(PopObject(VarStack),PoppedClass)
+			Y% = GetVariable(PopObject(VarStack),PoppedClass)
+			Plot X,Y
+	End Select
+Wend
+
+FreeBank PoppedClass
+FreeBank CallStack
+FreeBank VarStack
+FreeBank InStack
+
+WaitKey
+</textarea> <br><br></td></tr></table><br>
+<a name="424935"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >N</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Picked it up again and made some changes.  No more crap in the main program, variables, calls, and (binary) operators are handled differently, and the functions for parsing and such are being worked on now.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">;; A simple scripting engine
+;; Written by Noel R. Cower
+;; This source code is public domain
+;; You have the right to do whatever you want with it, regardless of how I feel about it
+;; I'd like it if you added my name to your credits (and if anyone else modifies this, add theirs too, please)- but it's your decision, not mine
+
+;#Region PUSH/POP DATA
+	Global PoppedValue$
+	Global PoppedClass%
+	
+	Type Stack
+		Field F.StackObj
+		Field L.StackObj
+		Field Objects
+	End Type
+	
+	Type StackObj
+		Field Parent.Stack
+		Field N.StackObj
+		Field P.StackObj
+		Field Value$
+		Field Class%
+	End Type
+	
+	Function CreateStack()
+		s.Stack = New Stack
+		Return Handle(s)
+	End Function
+	
+	Function PushObject(Stack,Value$,Class%=V_INT,ToFront=1)
+		s.Stack = Object.Stack(Stack)
+		s\Objects = s\Objects + 1
+		i.StackObj = New StackObj
+		If Value = 0 And Class = 0 Then Stop
+		i\Value = Value
+		i\Class = Class
+		i\Parent = s
+		If ToFront = 0 Then
+			If s\F = Null And s\L = Null Then
+				s\F = i
+				s\L = s\F
+			Else
+				i\P = s\L
+				s\L\N = i
+				s\L = i
+			EndIf
+		Else
+			If s\F = Null And s\L = Null Then
+				s\F = i
+				s\L = s\F
+			Else
+				i\N = s\F
+				s\F\P = i
+				s\F = i
+			EndIf
+		EndIf
+	End Function
+	
+	Function PopObject$(Stack,FromFront=0,RemoveData=1)
+		s.Stack = Object.Stack(Stack)
+		If RemoveData &gt; 0 Then s\Objects = s\Objects - 1
+		If FromFront = 0 Then
+			i.StackObj = s\L
+			If RemoveData &gt; 0 Then
+				s\L = i\P
+				If S\L &lt;&gt; Null Then s\L\N = Null
+			EndIf
+		Else
+			i.StackObj = s\F
+			If RemoveData &gt; 0 Then
+				s\F = i\N
+				If S\F &lt;&gt; Null Then s\F\P = Null
+			EndIf
+		EndIf
+		
+		If s\L = Null Then s\L = s\F
+		If s\F = Null Then s\F = s\L
+		
+		PoppedClass = i\Class
+		PoppedValue = i\Value
+		v$ = i\Value
+		If RemoveData &gt; 0 Then Delete i
+		Return V
+	End Function
+	
+	Function Objects(Stack)
+		s.Stack = Object.Stack(Stack)
+		Return s\Objects
+	End Function
+	
+	Function GetObject$(Stack,Index,RemoveData = 1)
+		s.Stack = Object.Stack(Stack)
+		i.StackObj = s\F
+		Repeat
+			If i = Null Then
+				Return False
+			ElseIf n = Index Then
+				PoppedObject = i\Value
+				PoppedClass = i\Class
+				
+				If RemoveData Then
+					If i\P &lt;&gt; Null Then i\P\N = i\N
+					If i\N &lt;&gt; Null Then i\N\P = i\P
+					s\Objects = s\Objects - 1
+					Delete i
+				EndIf
+				
+				Return PoppedValue
+			EndIf
+			
+			i = i\N
+			n = n + 1
+		Forever
+	End Function
+	
+	Function InsertObject(Stack,Index,Value$="",Class%=V_INT)
+		s.Stack = Object.Stack(Stack)
+		
+		i.StackObj = s\F
+		o.StackObj = New StackObj
+		o\Value$ = Value
+		o\Class% = Class
+		o\Parent = s
+		
+		Repeat
+			If i\N = Null Or n = Index Then
+				ne.StackObj = i\N
+				pr.StackObj = i\P
+				
+				If ne &lt;&gt; Null Then ne\P =  o
+				If pr &lt;&gt; Null Then pr\N = o
+				
+				If ne = Null Then s\L = o
+				If pr = Null Then s\F = o
+				
+				o\N = ne
+				o\P = pr
+				
+				Return True
+			EndIf
+			
+			i = i\N
+			n = n + 1
+		Forever
+	End Function
+	
+	Function FreeStack(Stack)
+		s.Stack = Object.Stack(Stack)
+		
+		Delete s
+		For i.StackObj = Each StackObj
+			If i\Parent = Null Then Delete i
+		Next
+	End Function
+;#End Region
+
+;#Region VARIABLE
+	Type Variable
+		Field Name$
+		Field Value$
+		Field Class%
+	End Type
+	
+	;; Datatype bytecodes
+	Const V_FLOAT = %00000001
+	Const V_INT = %00000010
+	Const V_STRING = %00000100
+	Const V_FLOATCONST = %00001000
+	Const V_INTCONST = %00010000
+	Const V_STRINGCONST = %00100000
+	
+	Function Variable$(Name$,Class%,Value$)
+		Name$ = Lower(Trim(Name$))
+		
+		For v.Variable = Each Variable
+			If v\Name = Name$ Then : v\Value = Value$ : v\Class = Class : Return Handle(v) : EndIf
+		Next
+		
+		v.Variable = New Variable
+		v\Name = Name
+		v\Class = Class
+		v\Value = Value
+		Return Handle(v)
+	End Function
+	
+	Function VarName$(ID)
+		v.Variable = Object.Variable(ID)
+		Return v\Name
+	End Function
+	
+	Function VarValue$(ID)
+		v.Variable = Object.Variable(ID)
+		Return v\Value
+	End Function
+	
+	Function VarClass%(ID)
+		v.Variable = Object.Variable(ID)
+		Return v\Class
+	End Function
+	
+	Function GetVariable$(ID$,Class%)
+		Select Class
+			Case V_FLOAT,V_INT,V_STRING
+				For v.Variable = Each Variable
+					If v\Name = Lower(ID) Then
+						Return v\Value
+					EndIf
+				Next
+			Case T_CALL,T_OP
+				ProcessCall(ID$,Class%)
+				PopObject VarStack
+				Return PoppedValue
+		End Select
+		
+		Return ID$
+	End Function
+;#End Region
+
+;#Region PARSE
+	;; Spits out a string that is easily parsed
+	Function Parse$(S$)
+		For n = 1 To Len(S$)
+			j$ = Mid(S$,n,1)
+			
+			For k = 1 To Len(j)
+				If Asc(Mid(j,k,1)) = 34 Then StrOpen = Not StrOpen
+			Next
+			add=0
+			If StrOpen = 0 Then
+				If (Asc(Mid(j$,1,1)) &lt;= 45) Or (Asc(Mid(j$,1,1)) &gt;= 58 And Asc(Mid(j$,1,1)) &lt;= 63) Or Asc(Mid(j,1,1)) = 124 Or Asc(Mid(j,1,1)) = 94 Or Asc(Mid(j,1,1)) = 34 Or Asc(Mid(j,1,1)) = 39  Then
+					j = " "+j+" "
+				EndIf
+			EndIf
+			
+			t$ = t$ + j$
+			
+		Next
+		S$ = t$
+		
+		StrOpen = 0
+		For i = 1 To Len(S$)
+			c$ = Mid(S$,i,1)
+			
+			If Asc(c$) = 34 Then StrOpen = Not StrOpen
+			
+			If c$ = " " And StrOpen = 0 Then
+				For n = i To Len(S$)
+					l$ = Mid(S$,n,1)
+					If l &lt;&gt; " " Then Exit
+				Next
+				
+				S$ = Left(S$,i-1)+" "+Right(S$,Len(S$)-(n-1))
+			EndIf
+		Next
+
+		Return Trim(Replace(S$,"	"," "))
+	End Function
+;#End Region
+
+;#Region TOKENIZE
+	Function IsNumber(S$,IsNot=1)
+		c = Asc(S)
+		If c &gt; 47 And c &lt; 58 Then Return (Not IsNot)
+		Return IsNot
+	End Function
+	
+	Type Token
+		Field Text$
+		Field Sep%
+	End Type
+	
+	Const S_WHITEPSPACE% = $3000
+	Const S_DACCESS% = $3001
+	Const S_NUMBER% = $3002
+	Const S_STRING%= $3003
+	
+	Function Tokenize(S$)
+		S$ = Parse(S$)
+		
+		For n = 1 To Len(S$)
+			c$ = Mid(S$,n,1)
+			If Asc(c) = 34 Then
+				If StrOpen = 1 Then
+					t.Token = New Token
+					t\Text$ = Mid(S$,LString+1,n-LString-1)
+					t\Sep = S_STRING
+				Else
+					LString = n
+				EndIf
+				StrOpen = Not StrOpen
+			ElseIf c$ = " " Or n = 1 And StrOpen = 0 Then
+				For i = n+1 To Len(S$)
+					k$ = Mid(S$,i,1)
+					If k$ = Chr(34) Then Exit
+					If K$ = " " Or i = Len(S$) Then
+						
+						t.Token = New Token
+						t\Text$ = Trim(Mid(S$,n,i-(n)+1))
+						
+						t\Sep = S_WHITESPACE
+						count = count + 1
+						Exit
+					EndIf
+				Next
+			EndIf
+		Next
+		Return count
+	End Function
+	
+	Function GetTok$()
+		t.Token = First Token
+		If t = Null Then Return
+		tex$ =  t\Text
+		If FreeData Then Delete t
+		Return tex$
+	End Function
+;#End Region
+
+;#Region SCRIPT ENGINE
+	Type Module
+		Field Script$
+		Field Name$
+		Field Stack
+	End Type
+	
+	Global CallStack = CreateStack()		;; This is the stack that is processed at the start of the 'update'
+	Global VarStack = CreateStack()		;; All variables that are added, used as arguments, etc. are pushed onto this
+	Global InStack = CreateStack()		;; Instructions that made it through the call loop
+	
+	Function AddScript(ModuleName$,Script$)
+		If FileType(Script) &lt;&gt; 1 Then Return 0
+		Return 1
+	End Function
+	
+	Function CallProcedure(Module$,Proc$)
+		For m.Module = Each Module
+			If m\Name = Module Or Module = "" Then
+				For n = 0 To Objects(m\Stack)-1
+					v$ = GetObject(m\Stack,n,0)
+					c% = PoppedClass
+					If c = T_PROCOPEN And v$ = Proc$ Then
+						If ProcOpen = 1 Then RuntimeError v+"  "+c+Chr(10)+"Call to T_PROCOPEN when proc already open"
+						ProcOpen = 1
+					EndIf
+					
+					If c = T_PROCCLOSE Then
+						If ProcOpen = 0 Then RuntimeError v+"  "+c+Chr(10)+"Call to T_PROCCLOSE found when no proc open"
+						If ProcReturn = 0 Then PushObject VarStack,-1,V_INT
+						Return
+					EndIf
+					
+					If c = T_RETURN And ProcOpen = 1 Then
+						
+					ElseIf c = T_RETURN And ProcOpen = 0 Then
+						RuntimeError v+"  "+c+Chr(10)+"Call to T_RETURN found when not inside proc"
+					EndIf
+					
+					If ProcOpen Then ProcessCall(v,c)
+				Next
+				Return 1
+			EndIf
+		Next
+		
+		Return 0
+	End Function
+	
+	Function ProcessCall(v$,c%)
+		Select c%
+			Case T_CALL
+				Select v$
+					Case T_PRINT
+						Print GetVariable(PopObject(VarStack),PoppedClass)
+					Case T_PLOT
+						X# = GetVariable(PopObject(VarStack),PoppedClass)
+						Y# = GetVariable(PopObject(VarStack),PoppedClass)
+						R# = GetVariable(PopObject(VarStack),PoppedClass)
+						G# = GetVariable(PopObject(VarStack),PoppedClass)
+						B# = GetVariable(PopObject(VarStack),PoppedClass)
+						Color R,G,B
+						Plot X,Y
+					Case T_INITGRAPHICS
+						W# =  GetVariable(PopObject(VarStack),PoppedClass)
+						H# =  GetVariable(PopObject(VarStack),PoppedClass)
+						BPP% =  GetVariable(PopObject(VarStack),PoppedClass)
+						WIN% =  GetVariable(PopObject(VarStack),PoppedClass)
+						t3D% =  GetVariable(PopObject(VarStack),PoppedClass)
+						If t3D &gt; 0 Then
+							Graphics3D W,H,BPP,WIN+1
+						Else
+							Graphics W,H,BPP,WIN+1
+						EndIf
+						
+					Default
+						CallProcedure("",v$)
+				End Select
+			Case T_OP
+				Select v$
+					Case T_ADD
+						V1# = GetVariable(PopObject(VarStack),PoppedClass)
+						V2# = GetVariable(PopObject(VarStack),PoppedClass)
+						PushObject(VarStack,V2+V1,V_FLOATCONST,0)
+					Case T_SUB
+						V1# = GetVariable(PopObject(VarStack),PoppedClass)
+						V2# = GetVariable(PopObject(VarStack),PoppedClass)
+						PushObject(VarStack,V2-V1,V_FLOATCONST,0)
+					Case T_MOD
+						V1# = GetVariable(PopObject(VarStack),PoppedClass)
+						V2# = GetVariable(PopObject(VarStack),PoppedClass)
+						PushObject(VarStack,V2 Mod V1,V_FLOATCONST,0)
+					Case T_DIV
+						V1# = GetVariable(PopObject(VarStack),PoppedClass)
+						V2# = GetVariable(PopObject(VarStack),PoppedClass)
+						PushObject(VarStack,V2/V1,V_FLOATCONST,0)
+					Case T_MUL
+						V1# = GetVariable(PopObject(VarStack),PoppedClass)
+						V2# = GetVariable(PopObject(VarStack),PoppedClass)
+						PushObject(VarStack,V2*V1,V_FLOATCONST,0)
+				End Select
+		End Select
+	End Function
+	
+	Function UpdateScript()
+	End Function
+;#End Region
+
+;#Region TOKENS
+	Const T_PRINT = $1000						;; Print
+	Const T_LET = $1001							;; Let
+	Const T_ADD = $1002							;; Add
+	Const T_SUB = $1003							;; Sub
+	Const T_MUL = $1004							;; Multiply
+	Const T_DIV = $1005							;; Divide
+	Const T_MOD = $1006							;; Mod
+	Const T_STRING = $1007						;; String open/close
+	Const T_PLOT = $1008							;; Plot
+	Const T_UNID = $1009							;; Unidentified
+	Const T_ARGOPEN = $100A					;; Open argument
+	Const T_ARGCLOSE = $100B				;; Close argument
+	Const T_SCOPEUP = $100C					;; Open scope
+	Const T_SCOPEDOWN = $100D				;; Close scope
+	Const T_PROCOPEN = $100E				;; Proc open
+	Const T_PROCCLOSE = $100F				;; Proc close
+	Const T_RETURN = $1010					;; Return proc
+	Const T_CALL = $1011							;; Proc call
+	Const T_OP = $1012							;; Operator
+	Const T_INITGRAPHICS = $1013			;; Initialize graphics mode
+;#End Region
+
+
+
+
+Variable("GraphicsWidth",V_INT,800)	;; Little variable test
+
+PushObject CallStack,T_INITGRAPHICS,T_CALL			;; Init graphics mode
+PushObject VarStack,"GraphicsWidth",V_INT					;; Width
+PushObject VarStack,600,V_INTCONST					;; Height
+PushObject VarStack,32,V_INTCONST						;; BPP
+PushObject VarStack,1,V_INTCONST						;; Windowed toggle
+PushObject VarStack,0,V_INTCONST						;; 3D toggle
+
+PushObject CallStack,T_PRINT,T_CALL
+PushObject VarStack,"Weeble, my good sir, weeble",V_STRING
+
+For x = 0 To 48
+	For y = 24 To 48
+		;; Push a call to Plot() onto the call stack
+		PushObject CallStack,T_PLOT,T_CALL
+		
+		;; X- with various uneccessary operations
+		PushObject VarStack,T_ADD,T_OP
+		PushObject VarStack,T_ADD,T_OP
+		PushObject VarStack,T_MUL,T_OP
+		PushObject VarStack,3,V_INTCONST
+		PushObject VarStack,x,V_INTCONST
+		PushObject VarStack,24,V_INTCONST
+		PushObject VarStack,y,V_INTCONST
+		
+		;; Y
+		PushObject VarStack,T_MUL,T_OP
+		PushObject VarStack,y,V_INTCONST
+		PushObject VarStack,3,V_INTCONST
+		
+		;; RGB
+		PushObject VarStack,255,V_INTCONST
+		PushObject VarStack,255 * (Float(Y-24)/24),V_INTCONST
+		PushObject VarStack,255 * (1.0 - Float(X)/48),V_INTCONST
+	Next
+Next
+
+SetBuffer BackBuffer()
+
+While Objects(CallStack)
+	;; Pop the call
+	PopObject(CallStack)
+	
+	;; And process it
+	ProcessCall PoppedValue,PoppedClass
+Wend
+
+Flip()
+
+WaitKey</textarea><br><br>Ultimately, this is turning into something I may end up using.  It may even be possible to implement function calls. <br><br></td></tr></table><br>
+<a name="424963"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >wizzlefish</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> What exactly does it do? <br><br></td></tr></table><br>
+<a name="424981"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >N</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well, at the moment (in the version I have on my computer, not the one up there) it allows you to push calls to certain functions onto the call stack and call them.  You can define procedures (functions) outside of Blitz, among other things.  This, when expanded upon and objects such as entities, types, and the like are added, allows you to make a modifiable product without releasing the source code to the engine itself.<br><br>Similar to how Doom 3's game system works- it's all done up in scripts, no more DLLs to screw with.  You could also, by the way, call game logic update functions from within your engine to an external DLL via CallDLL (I finally found a use for that old function). <br><br></td></tr></table><br>
+<a name="428296"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >wizzlefish</td><td align="right"><font class=tiny>(Posted 2004)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm still confused.... <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

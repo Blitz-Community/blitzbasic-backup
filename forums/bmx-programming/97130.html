@@ -1,0 +1,467 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Lock Free Multi-Threading</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Lock Free Multi-Threading</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Lock Free Multi-Threading</a><br><br>
+<a name="1126373"></a>
+
+<a name="1126374"></a>
+
+<a name="1126375"></a>
+
+<a name="1126376"></a>
+
+<a name="1126377"></a>
+
+<a name="1126378"></a>
+
+<a name="1126379"></a>
+
+<a name="1126380"></a>
+
+<a name="1126382"></a>
+
+<a name="1126383"></a>
+
+<a name="1126388"></a>
+
+<a name="1126390"></a>
+
+<a name="1126399"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi all,<br><br>I've been messing with some multithreading for a while now via lots of research and thousands of code examples. It's said that using Mutex locking puts other threads into a 'wait state' that want to use the locked data, which effectively pauses that thread until the lock becomes free. This gets compounded when other threads want to access the data and each one has to wait in turn. Anyway there are lots of articles to read on google if you want burn your grey matter :P<br><br>Lock free multithreading will still be able to lock some data but it doesn't block other threads from running ( putting them in a wait state ) while the data is locked. I've ported a small piece of code that creates a basic stack suitable for lock free multi-threading that uses an Atomic lock. This lock is done in hardware in the CPU(s) so there aren't any Mutexes in the code to halt any threads. The stack can then be safely accessed by multiple threads, pushing and popping items on and off the stack without breaking the stack linkage that would normally happen during multithreading if no lock or protection is put on the data. The example pushes and pops 10000 string based integers ( only because its easy to test for errors using the integer as an index ) on to the stack. As items are pushed onto the stack the code is also trying to pop them off, because of multithreading the stack entry will seem to be accessed at random which would normally cause a linkage break without data protection.<br><br>This is just the first basic building block of writing lock free multithread code and before I go any further with this multithreading endeavour - this sort of thing needs some kind of field testing.. so if you have the time I'd appreciate it if you could run the code and maybe scrutinize it for any errors or if there are any bugs in there which is causing the code to run correctly or incorrectly.<br><br>I've yet to test this for the <a href="http://en.wikipedia.org/wiki/ABA_problem" target="_blank">ABA Scenario</a>, so it may be not flawless at this stage.<br><br>ps. In the TStack type... If you unRem the standard Push/Pop (Lines 15 and 34) and uncomment Lines 36 and 56, then you will see what happens when accessing the stack without some sort of protection on the stack data. If it 'seems' to work ok with the standard methods then keep running it, it will break unexpectedly as per usual multithread variable access problems.<br><br>Remember to build the code with 'Threaded Build' ticked on.<br>It should be Windows,Mac and Linux compatible due to using 'native' blitz code.<br><br>EDITED for punctuality.<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+Extern
+Function bbAtomicCAS(target:Object Var,old_value:Object,new_value:Object)
+EndExtern
+
+Type TNode	
+	Field _next:TNode
+	Field _item:Object
+EndType
+
+Type TStack	
+	Field _head:TNode = New TNode
+	
+	Rem
+	'These Push and Pop are UNSAFE for multi-threading - uncomment to try
+	Method Push(item:Object)
+		Local node:TNode = New TNode
+		
+		node._item = item
+		node._next = _head._next
+		_head._next = node
+	EndMethod
+	
+	Method Pop:Object()
+		Local node:TNode
+		
+		node = _head._next
+		If node = Null Return Null
+		_head._next = node._next
+
+		Return node._item
+	EndMethod
+	EndRem
+
+	'Rem
+	'These Methods ARE SAFE for multi-threading
+	Method Push(item:Object)
+		Local node:TNode = New TNode
+		node._item = item
+		
+		Repeat
+			node._next = _head._next
+		Until bbAtomicCAS(_head._next,node._next,node)
+	EndMethod
+
+	Method Pop:Object()
+		Local node:TNode
+		
+		Repeat
+			node = _head._next
+			If node = Null Return Null
+		Until bbAtomicCAS(_head._next,node,node._next)
+		Return node._item
+	EndMethod
+	'EndRem
+EndType
+
+Const topValue = 10000
+
+Type TPusher
+	Field _stack:TStack
+	
+	Method Create:TPusher(Stack:TStack)
+		_stack = Stack
+		Return Self
+	EndMethod
+	
+	Function Execute:Object(obj:Object)
+		Local pusher:TPusher = TPusher(obj)
+		For Local i = 0 Until topValue
+			pusher._stack.Push(String(i))
+		Next
+	EndFunction
+EndType
+
+Type TPopper
+	Field _stack:TStack
+	Field _pusherThread:TThread
+	
+	Method Create:TPopper(Stack:TStack,pusherThread:TThread)
+		_stack = Stack
+		_pusherThread = pusherThread
+		Return Self
+	EndMethod
+	
+	Function Execute:Object(obj:Object)
+		Local popper:TPopper = TPopper(obj)
+		
+		Local poppedValues[topValue]
+		Local poppedInt:Object
+		
+		Repeat
+			'we're using a shared stack, so try Popping some values
+			'while they are pushed on by the other thread
+			'Ultimately :- I want to try to break the stack heirachy
+			poppedInt = popper._stack.Pop() 
+			
+			If poppedInt &lt;&gt; Null
+				Local val = Int(String(poppedInt))
+				If poppedValues[val]
+					Print val+" has been popped before!"
+				EndIf
+				poppedValues[val]=True
+			EndIf
+		Until poppedInt = Null
+
+		WaitThread popper._pusherThread
+		Print "Pusher is now finished"
+	
+		'Pop off any remaining in the stack
+		Repeat
+			poppedInt = popper._stack.Pop()
+
+			If poppedInt &lt;&gt; Null
+				Local val = Int(String(poppedInt))
+				If poppedValues[val]
+					Print val+" has been popped before!"
+				EndIf
+				poppedValues[val]=True
+			EndIf
+		Until poppedInt = Null
+
+		'Check the stack for any values not pushed in correctly
+		Print "Checking output"
+		For Local i = 0 Until topValue
+			If Not poppedValues[i]
+				Print i+" is missing!"
+			EndIf
+		Next
+	EndFunction
+EndType
+
+Type Code
+	Field _pusher:TPusher
+	Field _popper:TPopper
+	Field _stack:TStack
+	
+	Field _pusherThread:TThread
+	Field _popperThread:TThread
+	
+	Method Run()
+		Print "Create the shared stack"
+		_stack = New TStack
+		
+		Print "Create the threads"
+		_pusher = New TPusher.Create(_stack)
+		_pusherThread = CreateThread(_pusher.Execute,_pusher)
+		
+		_popper = New TPopper.Create(_stack,_pusherThread)
+		_popperThread = CreateThread(_popper.Execute,_popper)
+		
+		WaitThread _popperThread
+		
+		Print "Done"
+	EndMethod
+EndType
+
+Local Program:Code = New Code
+Program.Run
+</textarea><br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1126400"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Noobody</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Code looks pretty good, although it does suffer from the ABA problem.<br>In the Push method, New TNode might return an object address that has been previously used for another TNode (which has been released in the meantime). Depending on how unlucky your threads time their context switch, one thread might Push without any of the other threads seeing it.<br>This scenario is unlikely in BMax, since objects don't get released immediately when they fall out of scope, but it could still happen in a heavily multi-threaded environment with lots of accesses to the shared datastructure.<br><br>One of the other issues is that in a scenario with lots of threads and a lot of modifications to the stack, some of your threads will suffer from resource starvation, since your datastructure is only lock-free and not wait-free (there is no guaranteed per-thread progress).<br>However, wait-free datastructures are not easy to come by, since it is very hard to prove they're actually wait-free. Even more so in BMax, since there is no way of enforcing memory fences and not much is known about the compiler's tendency to do instruction reordering.<br><br>One thing I don't understand is why you're using bbAtomicCAS and not BMax's own CompareAndSwap. Is there an advantage to using the extern function? <br><br></td></tr></table><br>
+<a name="1126409"></a>
+
+<a name="1126410"></a>
+
+<a name="1126413"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hiya,<br><br>Thanks for looking over the code.<br><br>Its been a bit of a brain ache to even get my head around the whole lock-free multithread paradigm but I think I've got it, and yes 'wait-free' is another ball game that I wouldn't even waste time attempting :D<br><br>I'll attempt to come up with a solution for the ABA problem before moving on. We'll see as this is already taking up more time than I thought it would, maybe incorporate some kind of counter, or time acquisition into the data. I don't know just yet, there are a couple of 'not-so-easy' options.<br><br><div class="quote"> <br>One thing I don't understand is why you're using bbAtomicCAS and not BMax's own CompareAndSwap. Is there an advantage to using the extern function?<br> <br></div><br>CompareAndSwap uses integers by default and the compiler was complaining when using Objects. I was converting the address to an integer but it was ugly and unnecassary compared with just changing the parameters type in the bbAtomicCAS. There's no other reason.<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1126626"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Azathoth</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> In the Push method, New TNode might return an object address that has been previously used for another TNode (which has been released in the meantime). <br></div>Can you elaborate? I don't understand why this would be a problem as long as the old object no longer exists. <br><br></td></tr></table><br>
+<a name="1126721"></a>
+
+<a name="1126722"></a>
+
+<a name="1126723"></a>
+
+<a name="1126726"></a>
+
+<a name="1126727"></a>
+
+<a name="1126728"></a>
+
+<a name="1126731"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> I think the problem that Noobody is referring to with the Push method would only occur in a <b>non-GC</b> environment.<br> <br>This example uses a stack size of 100000 and 100 threads (are these really created?? seems so ) to push items onto the stack simultaneously, I've changed the values in the 'item' to account for the indexing after all the pushing. There isn't any data lost at all. This example is to prove that the stack linkage holds up. If any item linkage was lost due to ABA then the integer value wouldn't be in the stack and, after the 'popping', the value wouldn't be in 'poppedValues[]' array or maybe it would have been put into the array but not removed from the stack itself. This would show up in the last check in the 'Checking output' section of code.<br><br>Again, feel free to check it and correct me if I'm doing something wrong that's making it work correctly.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Strict
+
+Extern
+Function bbAtomicCAS(target:Object Var,old_value:Object,new_value:Object)
+EndExtern
+
+Type TNode	
+	Field _next:TNode
+	Field _item:Object
+EndType
+
+Type TStack	
+	Field _head:TNode = New TNode
+	
+	Rem
+	'These Push and Pop are UNSAFE for multi-threading - uncomment to try
+	Method Push(item:Object)
+		Local node:TNode = New TNode
+		
+		node._item = item
+		node._next = _head._next
+		_head._next = node
+	EndMethod
+	
+	Method Pop:Object()
+		Local node:TNode
+		
+		node = _head._next
+		If node = Null Return Null
+		_head._next = node._next
+
+		Return node._item
+	EndMethod
+	EndRem
+
+	'Rem
+	'These Methods ARE SAFE for multi-threading
+	Method Push(item:Object)
+		Local node:TNode = New TNode
+		node._item = item
+		
+		Repeat
+			node._next = _head._next
+		Until bbAtomicCAS(_head._next,node._next,node)		
+	EndMethod
+
+	Method Pop:Object()
+		Local node:TNode
+		
+		Repeat
+			node = _head._next
+			If node = Null Return Null
+		Until bbAtomicCAS(_head._next,node,node._next)
+		Return node._item
+	EndMethod
+	'EndRem
+EndType
+
+
+
+
+Const topValue = 100000
+Const numPushers = 100
+
+Type TPusher
+	Field _stack:TStack
+	Field _index
+	
+	Method Create:TPusher(Stack:TStack,index)
+		_index = index
+		_stack = Stack
+		Return Self
+	EndMethod
+	
+	Function Execute:Object(obj:Object)
+		Local pusher:TPusher = TPusher(obj)
+		For Local i = 0 Until topValue/numPushers
+			pusher._stack.Push(String(i + pusher._index))
+		Next
+	EndFunction
+EndType
+
+Type TPopper
+	Field _stack:TStack
+	Field _pusherThread:TThread[]
+	
+	Method Create:TPopper(Stack:TStack,pusherThread:TThread[])
+		_stack = Stack
+		_pusherThread = pusherThread
+		Return Self
+	EndMethod
+	
+	Function Execute:Object(obj:Object)
+		Local popper:TPopper = TPopper(obj)
+		
+		Local poppedValues[topValue]
+		Local poppedInt:Object
+
+		Repeat
+			'we're using a shared stack, so try Popping some values
+			'while they are pushed on by the other thread
+			'Ultimately :- I want to try to break the stack heirachy
+			poppedInt = popper._stack.Pop()
+
+			If poppedInt &lt;&gt; Null
+				Local val = Int(String(poppedInt))
+				If poppedValues[val]
+					Print val+" has been popped before!"
+				EndIf
+				poppedValues[val]=True
+			EndIf
+		Until poppedInt = Null
+		
+		For Local i = 0 Until numPushers
+			WaitThread popper._pusherThread[i]
+		Next
+		Print "Pushers are now finished"
+
+		'Pop off any remaining in the stack
+		Repeat
+			poppedInt = popper._stack.Pop()
+
+			If poppedInt &lt;&gt; Null
+				Local val = Int(String(poppedInt))
+				If poppedValues[val]
+					Print val+" has been popped before!"
+				EndIf
+				poppedValues[val]=True
+			EndIf
+		Until poppedInt = Null
+
+		'Check the poppedValues for any values not pushed/popped correctly
+		Print "Checking output"
+		For Local i = 0 Until topValue
+			If Not poppedValues[i]
+				Print i+" is missing!"
+			EndIf
+		Next
+	EndFunction
+EndType
+
+Type Code
+	Field _pusher:TPusher[numPushers]
+	Field _popper:TPopper
+	Field _stack:TStack
+	
+	Field _pusherThread:TThread[numPushers]
+	Field _popperThread:TThread
+	
+	Method Run()
+		Print "Create the shared stack"
+		_stack = New TStack
+		
+		Print "Create the threads"
+		For Local i = 0 Until numPushers
+			_pusher[i] = New TPusher.Create(_stack,(topValue/numPushers) * i)
+			_pusherThread[i] = CreateThread(_pusher[i].Execute,_pusher[i])
+		Next
+		
+		_popper = New TPopper.Create(_stack,_pusherThread)
+		_popperThread = CreateThread(_popper.Execute,_popper)
+		
+		WaitThread _popperThread		
+		Print "Done"
+	EndMethod
+EndType
+
+Local Program:Code = New Code
+Program.Run
+</textarea><br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1126763"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Noobody</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Azathoth: The New operator allocates space for an object on the heap and returns the corresponding memory address. If an object is released and another object is allocated on the heap, it will usually be placed at the same address as the previous object, since a block with matching size has already been allocated.<br><br>The problem is that CompareAndSwap compares object addresses to determine whether the object has changed in the meantime. If the object has indeed changed, but has the same address in memory (because the old one was released and the new one happened to be allocated at the same address), CompareAndSwap won't be able to see that and swaps anyway.<br><br><br>After revisiting col's code, however, it became clear that producing a scenario where one object would be freed, reallocated and then used in a CAS is impossible to construct, since all objects used in the CAS are at least referenced once at all times (and thus not collected).<br>I'm not sure whether the ABA problem completely disappears in garbage collected languages, but at least in this case, the GC prevents it from happening. <br><br></td></tr></table><br>
+<a name="1126779"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Noobody<br><br>You're correct.<br><br><div class="quote"> <br>would only occur in a non-GC environment.<br> <br></div><br>I'll explain myself a little better with what I meant with this statement...<br><br>I was referring solely to my example and the code logic used for the 'Push' method and the fact it's protected by the BMax garbage collector. This wouldn't be the case if say you did a direct port to native c/c++ using the exact same code logic - it would suffer serious ABA issues.<br><br>It's not a garbage collected language that prevents the ABA scenario - I'm sure it's so very possible with a different code logic. <br><br></td></tr></table><br>
+<a name="1126786"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Azathoth</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> The problem is that CompareAndSwap compares object addresses to determine whether the object has changed in the meantime. If the object has indeed changed, but has the same address in memory (because the old one was released and the new one happened to be allocated at the same address), CompareAndSwap won't be able to see that and swaps anyway. <br></div>But doesn't this imply the old object is still referenced? <br><br></td></tr></table><br>
+<a name="1126963"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Noobody</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> But doesn't this imply the old object is still referenced?  <br></div><br>From a user perspective, you released your object - it's completely gone for all you know. Then, somewhere else in your code and in another thread, an object is allocated using New. Again, from the user perspective, this object is completely different from the one that was allocated before. But if it ends up with the same memory address, CompareAndSwap won't see the difference and proceed to swap.<br><br>To quote Wikipedia: <div class="quote"> A common case of the ABA problem is encountered when implementing a lock-free data structure. If an item is removed from the list, deleted, and then a new item is allocated and added to the list, it is common for the allocated object to be at the same location as the deleted object due to optimization. A pointer to the new item is thus sometimes equal to a pointer to the old item which is an ABA problem. <br></div><br>But apparently I've spent too much time with unmanaged languages, since this scenarion can't occur in a garbage collected language such as BMax - as long as there's still a reference to an object around, it won't be reclaimed. <br><br></td></tr></table><br>
+<a name="1126972"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm currently working on an implementation of the <a href="http://en.wikipedia.org/wiki/Queue_(data_structure)" target="_blank">Queue</a> data structure, this has its own problems due to moving data at both ends of the queue, which has to happen atomically at the exact same time, which is impossible. But I know the 'lock-free queue' can be done with some clever logic.<br><br>These are 2 basic data structures that can be strategically used in a multi-thread renderer. We'll see... <br><br></td></tr></table><br>
+<a name="1128118"></a>
+
+<a name="1128119"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> The Queue implementation. Just needs some good quality testing code ;-)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Extern
+Function bbAtomicCAS(target:Object Var,old_value:Object,new_value:Object)
+EndExtern
+
+Type TNode	
+	Field _next:TNode
+	Field _item:Object
+EndType
+
+Type TQueue
+	Field _head:TNode
+	Field _tail:TNode
+
+	Method New()
+		_head = New TNode
+		_tail = _head
+	EndMethod
+	
+	Method Enqueue(item:Object)
+		Local oldTail:TNode
+		Local oldTailNext:TNode
+		
+		Local newNode:TNode = New TNode
+		newNode._item = item
+		
+		Local newNodeWasAdded
+		While Not newNodeWasAdded
+			oldTail = _tail
+			oldTailNext = oldTail._next
+			
+			If _tail = oldTail
+				If oldTailNext = Null
+					newNodeWasAdded = bbAtomicCAS(_tail._next,Null,newNode)
+				Else
+					bbAtomicCAS(_tail,oldTail,oldTailNext)
+				EndIf
+			EndIf
+		Wend
+		
+		bbAtomicCAS(_tail,oldTail,newNode)
+	EndMethod
+	
+	Method Dequeue:Object()
+		Local result:Object
+		Local oldHead:TNode
+
+		Local haveAdvancedHead
+		While Not haveAdvancedHead
+			oldHead = _head
+			Local oldTail:TNode = _tail
+			Local oldHeadNext:TNode = oldHead._next
+			
+			If oldHead = _head
+				If oldHead = oldTail
+					If oldHeadNext = Null 'nothing to Dequeue
+						Return Null
+					EndIf
+					
+					bbAtomicCAS(_tail,oldTail,oldHeadNext)
+				Else 'head and tail are different
+					result = oldHeadNext._item
+					haveAdvancedHead = bbAtomicCAS(_head,oldHead,oldHeadNext)
+				EndIf
+			EndIf
+		Wend
+		Return result
+	EndMethod
+EndType
+</textarea><br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

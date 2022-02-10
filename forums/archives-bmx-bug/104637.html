@@ -1,0 +1,135 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Reflection isn't able to find Final methods</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Reflection isn't able to find Final methods</h1><a href="forums.php" >Archives Forums</a>/<a href="topics.php?forum=105" >BlitzMax Bug Reports</a>/<a href="#bottom" >Reflection isn't able to find Final methods</a><br><br>
+<a name="1269488"></a>
+
+<a name="1269490"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Uncomment either of the Final declarations in the code below:<br><br><pre class=code>Import BRL.Reflection
+SuperStrict
+
+Type a Abstract
+	Method foo()
+	End Method
+End Type
+
+Type b Extends a 'Final
+	Method bar() 'Final
+	End Method
+End Type
+
+Local obj:b= New b
+
+Local id:TTypeId = TTypeId.ForObject(obj)
+For Local m:TMethod = EachIn id.EnumMethods()
+	Print m.name() + ": " + m._index
+Next
+</pre><br><br>...and you'll find that the indexing is all messed up. The app will crash if it tries to invoke this.<br><br>My guess is that this is somehow related to Max emitting direct function references instead of pointer calls for Final methods, but this surely shouldn't also be applied to the debug information that reflection queries to get offsets? Reflection doesn't care whether the method in question is being optimized <i>elsewhere</i> in the code... it needs a pointer either way.<br><br>(How has this gone unnoticed for so long? Does nobody use Final types?) <br><br></td></tr></table><br>
+<a name="1269550"></a>
+
+<a name="1269551"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here's the details of <b>b</b> with and without Final..<br><br>Non-Final<br><pre class=code>
+_12:
+	dd	2
+	dd	_13
+	dd	6
+	dd	_8
+	dd	_9
+	dd	16
+	dd	6
+	dd	_10
+	dd	_9
+	dd	20
+	dd	6
+	dd	_14
+	dd	_9
+	dd	52
+	dd	0
+	align	4
+</pre><br><br>and with Final<br><pre class=code>
+_12:
+	dd	2
+	dd	_13
+	dd	6
+	dd	_8
+	dd	_9
+	dd	_bb_b_New
+	dd	6
+	dd	_10
+	dd	_9
+	dd	_bb_b_Delete
+	dd	6
+	dd	_14
+	dd	_9
+	dd	_bb_b_bar
+	dd	0
+	align	4
+</pre><br><br>Although interestingly, Invoke() in TMethod does do a check on _index to determine if it is a valid index or a reference :<br><pre class=code>
+	Method Invoke:Object( obj:Object,args:Object[] )
+		If _index&lt;65536
+			Return _Call( bbRefMethodPtr( obj,_index ),_typeId,obj,args,_argTypes )
+		EndIf
+		Return _Call( Byte Ptr(_index),_typeId,obj,args,_argTypes )
+	End Method
+</pre><br><br>So it appears it is all by design.<br><br>Since _index is an internal variable, you wouldn't be using it anyway :-)<br><br>Where is it crashing for you?<br><br>Works fine for me when I invoke the method using :<br><pre class=code>
+m.Invoke(obj, Null)
+</pre> <br><br></td></tr></table><br>
+<a name="1269560"></a>
+
+<a name="1269561"></a>
+
+<a name="1269562"></a>
+
+<a name="1269564"></a>
+
+<a name="1269565"></a>
+
+<a name="1269566"></a>
+
+<a name="1269567"></a>
+
+<a name="1269568"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Using this minor modification (so it actually tries):<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Import BRL.Reflection
+SuperStrict
+
+Type a Abstract
+	Method foo()
+	End Method
+End Type
+
+Type b Extends a 'Final
+	Method bar() 'Final
+		Print "in bar"
+	End Method
+End Type
+
+Local obj:b= New b
+
+Local id:TTypeId = TTypeId.ForObject(obj)
+For Local m:TMethod = EachIn id.EnumMethods()
+	Print m.name() + ": " + m._index
+Next
+
+TTypeId.ForObject(obj).FindMethod("bar").Invoke(obj, Null)</textarea><br><br>I get this output:<br><br><pre class=code>New: 16
+Delete: 20
+foo: 48
+New: 16
+Delete: 20
+bar: 52
+in bar</pre><br><br>...which changes to this if I uncomment Final:<br><br><pre class=code>New: 16
+Delete: 20
+foo: 48
+New: 10573
+Delete: 10615
+bar: 10652</pre><br><br>(...<i>boom</i>) In debug mode the offsets are in the 20k-range instead, to much the same effect. No other settings I have found affect this noticeably.<br><br>This is on a clean install of BlitzMax on OSX. I didn't test Invoke on my Windows box yesterday (only the offset printing, not having noticed that Invoke does actually do a Final check; wasn't paying enough attention), and it actually works fine on that machine after all. Linux doesn't have this problem either (<i>hah</i>). I guess I'll install it again on OSX and see if it persists in case I somehow screwed up the installation.<br><br>EDIT: behaviour persists on a completely fresh install. Unzip -&gt; build modules -&gt; paste -&gt; run -&gt; boom. <br><br></td></tr></table><br>
+<a name="1269608"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes, it appears to be a mistaken assumption that a function pointer will never have an address below 0x10000, which on OS X appears to be a possibility. <br><br></td></tr></table><br>
+<a name="1269658"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> GAH I <i>nearly</i> found a fix for this...<br><br>The -sectalign option to lld allows one to specify the alignment of a section, so I added this line after line 280 of bmk_util.bmx:<br><br><pre class=code>cmd:+" -Wl,-sectalign,__TEXT,__text,0x10000"</pre><br><br>...reasoning that since it can't place code at 0, a minimum alignment of 0x10000 will mean that all code is emitted above that point.<br><br>This is what it says in response:<br><br><div class="quote"> ld: argument for -sectalign must be less than or equal to 0x8000 <br></div><br><br>Using the maximum value of 0x8000 does move the code, but not enough - it puts it at around 35k for the above example. <br><br></td></tr></table><br>
+<a name="1269690"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> A fix would be to do away with indexes altogether :-) <br><br></td></tr></table><br>
+<a name="1269710"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Indeed. But that requires changing the compiler to emit consistent class descriptions (unless there's some reason why the Final optimization needs to apply anywhere other than at actual method call sites?).<br><br>I have no idea what I was thinking with -sectalign actually... modifying bmk only is no better than changing BRL.Mod or swapping out the compiler as far as compatibility with other existing users goes. They've either patched their installation or they haven't, so that wasn't really any kind of useful solution. <br><br></td></tr></table><br>
+<a name="1269723"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote">  unless there's some reason why the Final optimization needs to apply anywhere other than at actual method call sites? <br></div><br>I've no idea why it's done differently for Final, since, as you say, it's up to the compiler to decide what you can extend or override. I don't see why it can't be indexes for Final types either. <br><br></td></tr></table><br>
+<a name="1276905"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >marksibly_v2</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> A fix for this is to change _index&lt;65536 to _index&lt;4096 in reflection.bmx<br><br>According to 'man ld', this will be safe because 32 bit apps have a 4K 'page zero' which will always cause an error when read. This can be changed via ld options, but it seems like a good default anyway.<br><br>This does mean vftbl indices have to be &lt;4K, but this allows for up to 1000-ish methods which is quite a lot!<br><br>I probably did it this way so final methods called be called directly without going via the vftbl, ie: if the compiler knows that the static type contains a reference to a final method, it doesn't have to use indirection to call the method.<br><br>In the case of final methods that don't override anything, there may not even be a vftbl slot 'allocated' for them, although it probably would have been cleaner to do so anyway. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

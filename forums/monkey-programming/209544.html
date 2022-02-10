@@ -1,0 +1,1239 @@
+<!DOCTYPE html><html lang="en" ><head ><title >experimenting with splay trees</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >experimenting with splay trees</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=507" >Monkey Programming</a>/<a href="#bottom" >experimenting with splay trees</a><br><br>
+<a name="2099679"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Heya fellas,<br><br>In preparation for a fork of angelfont which has better support for unicode (amongst other things), I decided to port a splay tree implementation over to Monkey.  I chose <a href="http://algs4.cs.princeton.edu/33balanced/SplayBST.java.html" target="_blank">this one</a> by Josh Israel, since it was easy for me to read and didn't require a lot of extra work to make it "match" the canonical style Mark used for Maps.<br><br>For those who aren't familiar with splay trees, they're a form of binary search tree which is self-optimizing -- fetches from the tree perform a 'splay' operation which over time puts your most frequently-accessed elements closer to the root so that there is less cycles used to fetch those elements over time.  For certain operations (such as, for example, fetching char information from a potentially very large unicode charset where at runtime you'll usually only be accessing a specific subset, but accessing it frequently), this type of tree may provide significant performance benefits.<br><br>However, in practice, the implementation I went with seems much less than optimal.  The number of splay operations done on a large tree seems to give my computer a big headache on large but reasonably-sized trees.  Particularly, at around a tree size of 5900 elements, this code ends up blowing the call stack on both desktop and html5 targets due to too much recursion.<br><br><a href="https://gist.github.com/nobuyukinyuu/6555bf12d3da849d68cb" target="_blank">https://gist.github.com/nobuyukinyuu/6555bf12d3da849d68cb</a><br><br>I never took any cs or programming courses in school, so I'm afraid that binary search trees are something I don't have a really good grasp on.  What are the best practices here?  How many things in this implementation are suboptimal in addition to the recursion?  etc.  Any comments would be appreciated :) <br><br></td></tr></table><br>
+<a name="2099678"></a>
+
+<a name="2099748"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>The problem with splay trees is that the situations where they truly provide an advantage aren't as common as the description suggests. In particular if your dataset is static and your comparison function is cheap then it's unlikely that a splay tree will be able to beat a standard balanced tree implementation like Monkey's standard map. The reason is that splaying has a cost that you're paying per access and if comparisons are cheap then that cost is way more than the few comparisons you save from having items nearer the top of the tree. You can offset this effect by only splaying if a fetch goes deep or if you fetch the same thing twice in a row etc. but it all gets very situation specific.<br><br>So, if your intended usage involves an integer key and a fixed dataset for font image lookups then I doubt splay trees will help you. If your comparison function is more expensive and/or your dataset is volatile (like a cache) then they might be worth trying out.<br><br>Anyway, I hacked in some iterative code to fix your implementations call-stack issue and had a play to verify my thinking. The code is below if it's of any use to you.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import mojo
+'#CPP_GC_MODE=0
+ 
+Function Main:Int()
+	New Game()
+End Function
+ 
+Class Game Extends App
+	Const NUM_VALUES = 1000000  'Number of values each tree will contain in this test.
+	Const FETCH_AMT = 10     'Amount of gets done each fetch cycle.
+	Const REPEATS = 10000	'number of times to repeat the fetch group
+		
+	Field a:= New IntMap&lt;String&gt;
+	Field b:= New IntSplayTree&lt;String&gt;
+ 
+	Field fetchVals:Int[]
+	Field mapFetchTime:Float
+	Field splayFetchTime:Float
+	Field numTests:Int = 1
+	
+	Const NUM_SAMPLES:Int = 600 
+	Field sampleStartIndex = 0
+	Field mapSamples:Float[] = New Float[NUM_SAMPLES]
+	Field splaySamples:Float[] = New Float[NUM_SAMPLES]
+	Const GRAPH_Y_HEIGHT:Int = 300
+	Field yScale:Float
+	
+	Method OnCreate:Int()
+		SetUpdateRate 3
+				
+		'Load up the trees with some values.
+		Local time = Millisecs()
+		For Local i:Int = 0 Until NUM_VALUES
+			a.Set(i, "KeyValue " + i)
+		End
+		time = Millisecs() - time
+		Print("Map insert time: " + time)
+		
+		time = Millisecs()
+		For Local i:Int = 0 Until NUM_VALUES
+			b.Set(i, "KeyValue " + i)
+		End
+		time = Millisecs() - time
+		Print("Splay insert time: " + time)
+		
+		'Validate that the inserts succeeded.
+		Print("Map size: " + a.Count())
+		Print("Splay size: " + b.Size())
+		'Print b.Height()
+		
+		'Prepare a set of values to fetch.
+		fetchVals = fetchVals.Resize(FETCH_AMT)
+		For Local i:Int = 0 Until FETCH_AMT
+			fetchVals[i] = Int(Rnd(NUM_VALUES)) '"KeyValue " + Int(Rnd(NUM_VALUES))
+		End
+		
+		'Now, let's fetch these values a few times from our trees.
+		time = Millisecs()
+		For Local j:Int = 0 Until REPEATS
+			For Local i:Int = 0 Until FETCH_AMT
+				Local val:= a.Get(fetchVals[i])
+			End
+		End
+		time = Millisecs() - time
+		mapFetchTime += time
+		Print("Initial Map fetch time: " + time)
+ 
+		time = Millisecs()
+		For Local j:Int = 0 Until REPEATS
+			For Local i:Int = 0 Until FETCH_AMT
+				Local val:= b.Get(fetchVals[i])
+				'Print val
+				'If (val.Compare("KeyValue " + fetchVals[i]) &lt;&gt; 0)
+				'	Error val
+				'End
+			End
+		End
+		time = Millisecs() - time
+		splayFetchTime += time
+		Print("Initial Splay fetch time: " + time)
+		
+		mapSamples[0] = mapFetchTime
+		splaySamples[0] = splayFetchTime
+		yScale = Float(GRAPH_Y_HEIGHT)/Max(mapFetchTime,splayFetchTime)
+	End
+	
+	Method OnUpdate:Int()
+		
+		numTests += 1
+		
+		'Fetch a couple of values from the trees and display how long it took to do this.  As time progresses, the splay tree should become more efficient.
+		Local time = Millisecs()
+		For Local j:Int = 0 Until REPEATS
+			For Local i:Int = 0 Until FETCH_AMT
+				Local val:= a.Get(fetchVals[i])
+			End
+		End
+		time = Millisecs() - time
+		mapFetchTime += time
+		mapSamples[numTests] = time
+		
+		time = Millisecs()
+		For Local j:Int = 0 Until REPEATS
+			For Local i:Int = 0 Until FETCH_AMT
+				Local val:= b.Get(fetchVals[i])
+				'If (val.Compare("KeyValue " + fetchVals[i]) &lt;&gt; 0)
+				'	Error val
+				'End
+			End
+		End
+		time = Millisecs() - time
+		splaySamples[numTests] = time
+		splayFetchTime += time
+				
+	End
+	
+	Method OnRender:Int()
+		Cls()
+		
+		DrawText("Mean Map fetch time:   " + FloatToString(mapFetchTime/numTests,2), 8, 8)
+		DrawText("Mean Splay fetch time: " + FloatToString(splayFetchTime/numTests,2), 8, 32)
+				
+		Local xBase:Int = 20
+		Local yBase:Int = 400
+		
+		For Local i:Int = 0 Until NUM_SAMPLES 
+			SetColor(48,48,248)
+			DrawPoint(xBase + i, yBase - Int(mapSamples[ Wrap(sampleStartIndex+i,0,NUM_SAMPLES) ] * yScale))
+			SetColor(16,248,16)
+			DrawPoint(xBase + i, yBase - Int(splaySamples[ Wrap(sampleStartIndex+i,0,NUM_SAMPLES) ] * yScale))
+		End
+		
+		SetColor(255,255,255)
+		DrawLine(xBase-1,yBase+1,xBase-1,yBase-GRAPH_Y_HEIGHT-1)
+		DrawLine(xBase-1,yBase+1,xBase+NUM_SAMPLES+1,yBase+1)
+		 
+	End
+	
+	Function FloatToString:String( f:Float, decimals:Int)
+		Local retString:String = String(f)
+		Local dp:Int = retString.FindLast(".")
+    
+		If dp = -1
+			dp = retString.Length
+		End
+    
+		dp += decimals+1
+    
+		If dp &gt; retString.Length
+			dp = retString.Length
+		End
+    
+		retString = retString[0..dp]
+    
+		Return retString
+
+	End
+	
+	Function Wrap:Int( value:Int, low:Int, high:Int )
+		Local range:Int = 1+high-low
+			
+		If value &gt; high
+			Return low + (value-low) Mod range
+		ElseIf value &lt; low
+			Return high - (high-value) Mod range
+		End
+			
+		Return value
+	End
+End
+ 
+#THRESHOLD = False
+ 
+Class SplayTree&lt;K, V&gt;
+ 
+	'This method MUST be implemented by subclasses of SplayTree...
+	Method Compare( lhs:K,rhs:K ) Abstract
+ 
+	Method Clear:Void()
+		root = Null
+		elementCount = 0
+	End
+	
+	Method IsEmpty:Bool()
+		Return root=Null
+	End
+ 
+	Method Contains:Bool(key:K)
+		Return (Get(key) &lt;&gt; null)
+	End
+ 
+	Field findCompares:Int = 0
+	Field splayThreshold:Int = 0
+	
+	Method Find:Node&lt;K, V&gt;(key:K)
+		findCompares = 0
+		Local found:Bool = False
+		Local currNode:Node&lt;K, V&gt; = root
+		
+		While ( Not found)
+			Local cmp:Int = Compare(key, currNode.key)
+			findCompares += 1
+			If (cmp &lt; 0)
+				If (currNode.left = Null)
+					Return Null
+				Else
+					currNode = currNode.left
+				End
+			ElseIf(cmp &gt; 0)
+				If (currNode.right = Null)
+					Return Null
+				Else
+					currNode = currNode.right
+				End
+			Else
+				found = True
+			End
+		End
+		
+		Return currNode
+	End
+	
+	' return value associated with the given key
+	' If no such value, return null
+	Method Get:V(key:K)
+		
+		Local node:Node&lt;K, V&gt; = Find(key)
+		
+		If (node &lt;&gt; Null)
+#if THRESHOLD
+			If (findCompares &gt; splayThreshold)
+				Splay(node)
+			End
+#else
+			Splay(node)
+#end
+			Return node.value		
+		End
+		
+	End
+ 
+	Method Insert:Node&lt;K, V&gt;(key:K, value:V)
+	
+		Local insertNode:Node&lt;K,V&gt; = New Node&lt;K, V&gt;(key, value)
+		
+		If (root = Null)
+			root = insertNode
+			Return root
+		End If
+		
+		Local inserted:Bool = False
+		Local currNode:Node&lt;K, V&gt; = root
+		
+		While ( Not inserted)
+			Local cmp:Int = Compare(key, currNode.key)
+			
+			If (cmp &lt; 0)
+				If (currNode.left = Null)
+					currNode.left = insertNode
+					insertNode.parent = currNode
+					inserted = True
+					elementCount += 1
+				Else
+					currNode = currNode.left
+				End
+			ElseIf(cmp &gt; 0)
+				If (currNode.right = Null)
+					currNode.right = insertNode
+					insertNode.parent = currNode
+					inserted = True
+					elementCount += 1
+				Else
+					currNode = currNode.right
+				End
+			Else
+				currNode.value = value
+				inserted = True
+			End
+		End
+		
+#if THRESHOLD
+		splayThreshold = Min(3, Int(Log(elementCount) * 1.442695 * 0.25))
+#end		
+		Return insertNode
+	End
+	
+	'*************************************************************************
+	'*  Splay insertion
+	'*************************************************************************
+	Method Set:Void(key:K, value:V)
+		
+		Local insertedNode:Node&lt;K, V&gt; = Insert(key, value)
+		
+		Splay(insertedNode)
+		
+	End
+	
+	'*************************************************************************
+	'*  Splay deletion
+	'*************************************************************************/
+	' * This Splays the key, then does a slightly modified Hibbard deletion on
+	' * the root (If it is the node to be deleted; If it is not, the key was
+	' * not in the tree). The modification is that rather than swapping the
+	' * root (call it node A) with its successor, it's successor (call it Node B)
+	' * is moved to the root position by Splaying for the deletion key in A's
+	' * right subtree. Finally, A's right child is made the new root's right
+	' * child.
+	' *
+	Method Remove:Void(key:K)
+		If (root = null) then Return ' empty tree
+		
+		root = Splay(root, key)
+ 
+		Local cmp:Int = Compare(key, root.key)
+		
+		If (cmp = 0)
+			If root.left = Null
+				root = root.right
+			Else
+				Node x = root.right
+				root = root.left
+				Splay(root, key)
+				If (x &lt;&gt; Null)
+					x.parent = root
+				End
+				root.right = x
+			End If
+			
+			root.parent = Null
+			elementCount -= 1
+		End If
+		' else: it wasn't in the tree to remove
+#if THRESHOLD
+		splayThreshold = Min(3, Int(Log(elementCount) * 1.442695 * 0.25))
+#end		
+	End
+	
+	'   /*************************************************************************
+	'	*  helper functions
+	'	*************************************************************************/
+ 
+	' height of tree (1-node tree has height 0)
+	Method Height:Int()
+		Return Height(root)
+	End
+	
+	Method Size:Int()
+		Return Size(root)
+	End
+ 
+	
+	Private
+ 
+	Field elementCount:Int
+	
+	Method Height(x:Node&lt;K, V&gt;)
+		If x = Null Then Return - 1
+		Return 1 + Max(Height(x.left), Height(x.right))
+	End
+	
+	Method Size:Int(x:Node&lt;K, V&gt;)
+		Local count:Int = 0
+		Local parentStack:Stack&lt;Node&lt;K, V&gt;&gt; = New Stack&lt;Node&lt;K, V&gt;&gt;()
+		Local currNode:Node&lt;K, V&gt; = x
+		
+		While ( Not parentStack.IsEmpty() Or currNode &lt;&gt; Null)
+			If (currNode &lt;&gt; Null)
+				parentStack.Push(currNode)
+				currNode = currNode.left
+			Else
+				currNode = parentStack.Pop()
+				count += 1
+				currNode = currNode.right
+			End
+		End
+		Return count
+	End
+		
+	
+	Method Splay:Void(x:Node&lt;K, V&gt;)
+		While (x.parent &lt;&gt; Null)
+			If (x.parent.parent = Null)
+				If (x.parent.left = x)
+					rotateRight(x.parent)
+				Else
+					rotateLeft(x.parent)
+				End
+			ElseIf(x.parent.left = x And x.parent.parent.left = x.parent)
+				rotateRight(x.parent.parent)
+				rotateRight(x.parent)
+			ElseIf(x.parent.right = x And x.parent.parent.right = x.parent)
+				rotateLeft(x.parent.parent)
+				rotateLeft(x.parent)
+			ElseIf(x.parent.left = x And x.parent.parent.right = x.parent)
+				rotateRight(x.parent)
+				rotateLeft(x.parent)
+			Else
+				rotateLeft(x.parent)
+				rotateRight(x.parent)
+			End
+		End
+	End
+	
+	'************************************************************************
+	'* Splay function
+	'* **********************************************************************/
+	' Splay key in the tree rooted at Node h. If a node with that key exists,
+	'   it is Splayed to the root of the tree. If it does not, the last node
+	'   along the search path for the key is Splayed to the root.
+	Method Splay:Node&lt;K, V&gt;(h:Node&lt;K,V&gt;, key:K)
+		If (h = Null) Then Return Null
+ 
+		Local cmp1:Int = Compare(key, h.key)
+ 
+		If (cmp1 &lt; 0)
+			' key not in tree, so we're done
+			If h.left = Null Then Return h
+			
+			Local cmp2:Int = Compare(key, h.left.key)
+			If (cmp2 &lt; 0)
+				h.left.left = Splay(h.left.left, key)
+				h = rotateRight(h)
+			ElseIf (cmp2 &gt; 0)
+				h.left.right = Splay(h.left.right, key)
+				If (h.left.right &lt;&gt; Null) Then h.left = rotateLeft(h.left)
+			End If
+			
+			If h.left = Null Then Return h Else Return rotateRight(h)
+ 
+		ElseIf(cmp1 &gt; 0)
+			' key not in tree, so we're done
+			If h.right = Null Then Return h
+ 
+			Local cmp2:Int = Compare(key, h.right.key)
+			If (cmp2 &lt; 0)
+				h.right.left  = Splay(h.right.left, key)
+				If (h.right.left &lt;&gt; null)
+					h.right = rotateRight(h.right)
+				End
+			ElseIf(cmp2 &gt; 0)
+				h.right.right = Splay(h.right.right, key)
+				h = rotateLeft(h)
+			End If
+			
+			If h.right = Null Then Return h Else Return rotateLeft(h)
+ 
+		Else
+			Return h
+		End If
+	End
+ 
+	
+	Method rotateRight:Node&lt;K, V&gt;(h:Node&lt;K, V&gt;)
+		Local x:Node&lt;K, V&gt; = h.left
+		
+		If (x &lt;&gt; Null)
+			h.left = x.right
+			x.right = h
+			x.parent = h.parent
+		End
+		
+		If (h.left &lt;&gt; Null)
+			h.left.parent = h
+		End
+		
+		h.parent = x
+		
+		If (x.parent = Null)
+			root = x
+		ElseIf(x.parent.left = h)
+			x.parent.left = x
+		Else
+			x.parent.right = x
+		End
+		Return x
+	End
+ 
+	Method rotateLeft:Node&lt;K, V&gt;(h:Node&lt;K, V&gt;)
+		Local x:Node&lt;K, V&gt; = h.right
+		
+		If (x &lt;&gt; Null)
+			h.right = x.left
+			x.left = h
+			x.parent = h.parent
+		End
+		
+		If (h.right &lt;&gt; Null)
+			h.right.parent = h
+		End
+		
+		h.parent = x
+		
+		If (x.parent = Null)
+			root = x
+		ElseIf(x.parent.left = h)
+			x.parent.left = x
+		Else
+			x.parent.right = x
+		End
+		
+		Return x
+	End
+ 
+	
+	Field root:Node&lt;K, V&gt;
+	
+End
+ 
+ 
+'Private
+ 
+Class Node&lt;K, V&gt;
+	Field key:K				   ' key
+	Field value:V				 ' associated data
+	Field left:Node, right:Node   ' left and right subtrees
+	Field parent:Node
+ 
+	Method New(key:K, value:V)
+		Self.key   = key
+		Self.value = value
+	End
+End
+ 
+ 
+'Helper versions...
+ 
+Class IntSplayTree&lt;V&gt; Extends SplayTree&lt;Int, V&gt;
+	Method Compare(lhs:Int, rhs:Int)
+		Return lhs-rhs
+	End
+End
+ 
+Class FloatSplayTree&lt;V&gt; Extends SplayTree&lt;Float,V&gt;
+	Method Compare(lhs:Float, rhs:Float)
+		If lhs&lt;rhs Return -1
+		Return lhs&gt;rhs
+	End
+End
+ 
+Class StringSplayTree&lt;V&gt; Extends SplayTree&lt;String,V&gt;
+	Method Compare(lhs:String, rhs:String)
+		Return lhs.Compare( rhs )
+	End
+End
+</textarea> <br><br></td></tr></table><br>
+<a name="2099749"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> hey, thanks a lot man :)<br><br>It's all very interesting stuff.  I was hoping that someone could get it to work iteratively, and I agree that the splay cost probably outweighs the traversal cost if it's done on every operation.  The idea originally was if I could wrap my head around it, to modify / extend the class to basically do what you've done and only splay if the traversal height goes above a certain level, since only a few characters are usually used in a character set at one time, and they're fetched frequently by existing AngelFont code (this is okay in the existing version, because it only supports ascii and all chars are in an array).  <br><br>That being said, the character map for an international font set, even one that supports CJK, might not exceed 12000 characters, so I'm wondering if there'd be any gain at all if the splay operation stops at a certain point?  Traversing &gt;5 levels deep consistently over time might be less efficient than monkey's Map (red-black tree).  I guess I just wouldn't know without some real world tests.<br><br>I had concerns about efficiency when adapting AngelFont to support unicode for <a href="https://github.com/nobuyukinyuu/monkey-utf8" target="_blank">this project</a>, which is why I added a few "ifs" in there to handle ascii the same way as the original, but with all extended characters using a Map.  At the time I did it, I was under the belief that the lookup cost for a decent-sized international charset would eat a lot into a game's frame budget, and it was something that kept me from incorporating that support into <a href="https://github.com/nobuyukinyuu/angelfont-tryouts" target="_blank">angelfont-tryouts</a>.<br><br>Would you mind me taking the work you've done and putting it up on GitHub?  I'll probably add/change a few more things to make it more in sync with Map's methods, maybe throw in some ObjectEnumerators or something. <br><br></td></tr></table><br>
+<a name="2099756"></a>
+
+<a name="2099757"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> It's easy enough to test your scenario with the code above. Plug in 12000 elements, a reasonable number for the total characters accesses by an app (&lt;100 for English, certainly) and crank the repeats to a few thousand so the timing has something to work with. For me on HTML5 the splay tree performance is 6x slower than the map even with thresholding turned on.<br><br>If you really felt the need to optimise lookups then I'd suggest either generating a secondary cache map or just some sort of lookup table. However, and I know this tends to annoy people when I say this in performance threads, it probably will make no noticeable difference, especially when talking about text where the rendering is generally far more expensive than any lookup will be.<br><br>As for the code, use it however you like. It's mostly just a conversion of the wikipedia sample code and some trivial bits from my util libs. <br><br></td></tr></table><br>
+<a name="2099767"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Results are what's important, I don't think I have to worry about lookup times when using a Map most likely :)<br><br>probably gonna have to figure out how to do a Remove non-recursively, since I apparently never even tested the code (it wouldn't even compile anyway since I missed a declare line when porting, whoops!) <br><br></td></tr></table><br>
+<a name="2099776"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here's a version with a delete. I've also manufactured a scenario where the splay tree does eventually beat out the map. It's not your scenario unfortunately.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Import mojo
+'#CPP_GC_MODE=0
+ 
+Function Main:Int()
+	New Game()
+End Function
+
+#STRING_KEY = True
+ 
+Class Game Extends App
+	Const NUM_VALUES = 20000  'Number of values each tree will contain in this test.
+	Const FETCH_AMT = 100     'Amount of gets done each fetch cycle.
+	Const REPEATS = 200	'number of times to repeat the fetch group
+	
+	Const DELETES_AND_INSERTS:Int = 200
+		
+#if STRING_KEY
+	Field testMap:= New StringMap&lt;String&gt;
+	Field testSplay:= New StringSplayTree&lt;String&gt;
+ 
+	Field fetchKeys:String[]
+	Field deletes:String[]
+#else
+	Field testMap:= New IntMap&lt;String&gt;
+	Field testSplay:= New IntSplayTree&lt;String&gt;
+ 
+	Field fetchKeys:Int[]
+	Field deletes:Int[]
+#end
+	
+	Field fetchVals:String[]
+		
+	Field mapFetchTime:Float
+	Field splayFetchTime:Float
+	Field numTests:Int = 1
+	
+	Const NUM_SAMPLES:Int = 500
+	Field sampleStartIndex = 0
+	Field mapSamples:Float[] = New Float[NUM_SAMPLES]
+	Field splaySamples:Float[] = New Float[NUM_SAMPLES]
+	Const GRAPH_Y_HEIGHT:Int = 300
+	Field maxTime:Float
+	Field yScale:Float
+	
+	Method OnCreate:Int()
+		SetUpdateRate 3
+		
+		'Load up the trees with some values.
+		Local time = Millisecs()
+		For Local i:Int = 0 Until NUM_VALUES
+			testMap.Set(i, "KeyValue " + i)
+		End
+		time = Millisecs() - time
+		Print("Map insert time: " + time)
+		
+		time = Millisecs()
+		For Local i:Int = 0 Until NUM_VALUES
+			testSplay.Set(i, "KeyValue " + i)
+		End
+		time = Millisecs() - time
+		Print("Splay insert time: " + time)
+		
+		'Validate that the inserts succeeded.
+		Print("Map size: " + testMap.Count())
+		Print("Splay size: " + testSplay.Size())
+		'Print testSplay.Height()
+		
+		deletes = deletes.Resize(DELETES_AND_INSERTS)
+		
+		'Prepare testMap set of values to fetch.
+		fetchKeys = fetchKeys.Resize(FETCH_AMT)
+		
+		For Local i:Int = 0 Until FETCH_AMT
+#if STRING_KEY
+			fetchKeys[i] = "KeyValue " + Int(Rnd(NUM_VALUES))
+#else
+			fetchKeys[i] = Int(Rnd(NUM_VALUES))
+#end
+		End
+		
+		'Now, let's fetch these values testMap few times from our trees.
+		time = Millisecs()
+		For Local j:Int = 0 Until REPEATS
+			For Local i:Int = 0 Until FETCH_AMT
+				Local val:= testMap.Get(fetchKeys[i])
+			End
+		End
+		time = Millisecs() - time
+		mapFetchTime += time
+		Print("Initial Map fetch time: " + time)
+ 
+		time = Millisecs()
+		For Local j:Int = 0 Until REPEATS
+			For Local i:Int = 0 Until FETCH_AMT
+				Local val:= testSplay.Get(fetchKeys[i])
+				'Print val
+				'If (val.Compare("KeyValue " + fetchKeys[i]) &lt;&gt; 0)
+				'	Error val
+				'End
+			End
+		End
+		time = Millisecs() - time
+		splayFetchTime += time
+		Print("Initial Splay fetch time: " + time)
+		
+		mapSamples[0] = mapFetchTime
+		splaySamples[0] = splayFetchTime
+		maxTime = Max(mapFetchTime,splayFetchTime)
+		yScale = Float(GRAPH_Y_HEIGHT)/maxTime
+	End
+	
+	Method OnUpdate:Int()
+		
+		numTests += 1
+		
+		For Local i:Int = 0 Until DELETES_AND_INSERTS
+			Local index:Int = Int(Rnd(NUM_VALUES))
+#if STRING_KEY
+			deletes[i] = "KeyValue " + index 
+#else
+			deletes[i] = index
+#end
+		End
+		
+		'Fetch testMap couple of values from the trees and display how long it took to do this.  As time progresses, the splay tree should become more efficient.
+		Local time = Millisecs()
+		For Local i:Int = 0 Until DELETES_AND_INSERTS
+			Local key := deletes[i]
+			testMap.Remove(key)
+			testMap.Insert(key, "KeyValue " + key)
+		End
+		For Local j:Int = 0 Until REPEATS			
+			For Local i:Int = 0 Until FETCH_AMT
+				Local val:= testMap.Get(fetchKeys[i])
+			End
+		End
+		time = Millisecs() - time
+		mapFetchTime += time
+		mapSamples[numTests mod NUM_SAMPLES] = time
+		
+		time = Millisecs()
+		For Local i:Int = 0 Until DELETES_AND_INSERTS
+			Local key := deletes[i]
+			testSplay.Delete(key)
+			testSplay.Set(key, "KeyValue " + key, False)
+		End
+		
+		For Local j:Int = 0 Until REPEATS
+			For Local i:Int = 0 Until FETCH_AMT
+				Local val:= testSplay.Get(fetchKeys[i])
+				'If (val.Compare("KeyValue " + fetchKeys[i]) &lt;&gt; 0)
+				'	Error val
+				'End
+			End
+		End
+		time = Millisecs() - time
+		splaySamples[numTests mod NUM_SAMPLES] = time
+		splayFetchTime += time
+		
+		If( numTests / NUM_SAMPLES &gt;= 1 )
+			sampleStartIndex = (sampleStartIndex + 1) Mod NUM_SAMPLES
+		End
+				
+		maxTime = Max(maxTime,(Max(mapSamples[numTests mod NUM_SAMPLES],splaySamples[numTests mod NUM_SAMPLES])))
+		yScale = Float(GRAPH_Y_HEIGHT)/maxTime
+		If( testMap.Count() &lt;&gt; testSplay.Size() )
+			Error "Datasets out of sync"
+		End
+	End
+	
+	Method OnRender:Int()
+		Cls()
+		
+		DrawText("Mean Map fetch time:   " + FloatToString(mapFetchTime/numTests,2), 8, 8)
+		DrawText("Mean Splay fetch time: " + FloatToString(splayFetchTime/numTests,2), 8, 32)
+				
+		Local xBase:Int = 20
+		Local yBase:Int = 400
+		
+		For Local i:Int = 0 Until NUM_SAMPLES
+			SetColor(48,48,248)
+			DrawPoint(xBase + i, yBase - Int(mapSamples[ (sampleStartIndex+i) mod NUM_SAMPLES ] * yScale))
+			SetColor(16,248,16)
+			DrawPoint(xBase + i, yBase - Int(splaySamples[ (sampleStartIndex+i) mod NUM_SAMPLES ] * yScale))
+		End
+		
+		SetColor(255,255,255)
+		DrawLine(xBase-1,yBase+1,xBase-1,yBase-GRAPH_Y_HEIGHT-1)
+		DrawLine(xBase-1,yBase+1,xBase+NUM_SAMPLES+1,yBase+1)
+		 
+	End
+	
+	Function FloatToString:String( f:Float, decimals:Int)
+		Local retString:String = String(f)
+		Local dp:Int = retString.FindLast(".")
+    
+		If dp = -1
+			dp = retString.Length
+		End
+    
+		dp += decimals+1
+    
+		If dp &gt; retString.Length
+			dp = retString.Length
+		End
+    
+		retString = retString[0..dp]
+    
+		Return retString
+
+	End
+	
+	Function Wrap:Int( value:Int, low:Int, high:Int )
+		Local range:Int = 1+high-low
+			
+		If value &gt; high
+			Return low + (value-low) Mod range
+		ElseIf value &lt; low
+			Return high - (high-value) Mod range
+		End
+			
+		Return value
+	End
+End
+ 
+#THRESHOLD = True
+ 
+Class SplayTree&lt;K, V&gt;
+ 
+	'This method MUST be implemented by subclasses of SplayTree...
+	Method Compare( lhs:K,rhs:K ) Abstract
+ 
+	Method Clear:Void()
+		root = Null
+		elementCount = 0
+	End
+	
+	Method IsEmpty:Bool()
+		Return root=Null
+	End
+ 
+	Method Contains:Bool(key:K)
+		Return (Get(key) &lt;&gt; null)
+	End
+ 
+	Field findCompares:Int = 0
+	Field splayThreshold:Int = 0
+	
+	Method Find:Node&lt;K, V&gt;(key:K)
+		findCompares = 0
+		Local found:Bool = False
+		Local currNode:Node&lt;K, V&gt; = root
+		
+		While ( Not found)
+			Local cmp:Int = Compare(key, currNode.key)
+			findCompares += 1
+			If (cmp &lt; 0)
+				If (currNode.left = Null)
+					Return Null
+				Else
+					currNode = currNode.left
+				End
+			ElseIf(cmp &gt; 0)
+				If (currNode.right = Null)
+					Return Null
+				Else
+					currNode = currNode.right
+				End
+			Else
+				found = True
+			End
+		End
+		
+		Return currNode
+	End
+	
+	' return value associated with the given key
+	' If no such value, return null
+	Method Get:V(key:K)
+		
+		Local node:Node&lt;K, V&gt; = Find(key)
+		
+		If (node &lt;&gt; Null)
+			#if THRESHOLD
+			If (findCompares &gt; splayThreshold)
+				Splay(node)
+			End
+			#else
+			Splay(node)
+			#end
+			Return node.value
+		End
+		
+	End
+ 
+	Method Insert:Node&lt;K, V&gt;(key:K, value:V, splay:Bool = True)
+	
+		Local insertNode:Node&lt;K,V&gt; = New Node&lt;K, V&gt;(key, value)
+		
+		If (root = Null)
+			root = insertNode
+			Return root
+		End If
+		
+		Local inserted:Bool = False
+		Local currNode:Node&lt;K, V&gt; = root
+		
+		While ( Not inserted)
+			Local cmp:Int = Compare(key, currNode.key)
+			
+			If (cmp &lt; 0)
+				If (currNode.left = Null)
+					currNode.left = insertNode
+					insertNode.parent = currNode
+					inserted = True
+					elementCount += 1
+				Else
+					currNode = currNode.left
+				End
+			ElseIf(cmp &gt; 0)
+				If (currNode.right = Null)
+					currNode.right = insertNode
+					insertNode.parent = currNode
+					inserted = True
+					elementCount += 1
+				Else
+					currNode = currNode.right
+				End
+			Else
+				currNode.value = value
+				inserted = True
+			End
+		End
+		
+		#if THRESHOLD
+		splayThreshold = Min(3, Int(Log(elementCount) * 1.442695 * 0.25))
+		#end
+		Return insertNode
+	End
+	
+	'*************************************************************************
+	'*  Splay insertion
+	'*************************************************************************
+	Method Set:Void(key:K, value:V, splay:Bool = True)
+		
+		Local insertedNode:Node&lt;K, V&gt; = Insert(key, value)
+		
+		If( splay )
+			Splay(insertedNode)
+		End
+		
+	End
+	
+	Method Replace:Void( u:Node&lt;K,V&gt;, v:Node&lt;K,V&gt; )
+		If( u.parent = Null ) 
+			root = v
+		ElseIf( u = u.parent.left ) 
+			u.parent.left = v
+		Else 
+			u.parent.right = v
+		End
+		
+		If( v &lt;&gt; Null ) 
+			v.parent = u.parent
+		End
+	End
+	
+	Method FindMinimum:Node&lt;K,V&gt;( root:Node&lt;K,V&gt; )
+		Local currNode:Node&lt;K,V&gt; = root
+		
+		While currNode.left &lt;&gt; Null
+			currNode = currNode.left
+		End
+		
+		Return currNode
+	End
+
+	Method Delete( key:K )
+		Local z:Node&lt;K,V&gt; = Find( key )
+	
+		If( z = Null ) 
+			Return
+		End
+ 
+		Splay( z )
+ 
+		If( z.left = Null )
+			Replace( z, z.right )
+		ElseIf( z.right = Null ) 
+			Replace( z, z.left )
+		Else 
+			Local y:Node&lt;K,V&gt; = FindMinimum( z.right )
+			If( y.parent &lt;&gt; z ) 
+				Replace( y, y.right )
+				y.right = z.right
+				y.right.parent = y
+			End
+			
+			Replace( z, y )
+			y.left = z.left
+			y.left.parent = y
+		End
+ 
+ 		elementCount -= 1
+#if THRESHOLD
+		splayThreshold = Min(3, Int(Log(elementCount) * 1.442695 * 0.25))
+#end
+	End
+	
+	'*************************************************************************
+	'*  Splay deletion
+	'*************************************************************************/
+	' * This Splays the key, then does testMap slightly modified Hibbard deletion on
+	' * the root (If it is the node to be deleted; If it is not, the key was
+	' * not in the tree). The modification is that rather than swapping the
+	' * root (call it node A) with its successor, it's successor (call it Node B)
+	' * is moved to the root position by Splaying for the deletion key in A's
+	' * right subtree. Finally, A's right child is made the new root's right
+	' * child.
+	' *
+	Method Remove:Void(key:K)
+		If (root = null) then Return ' empty tree
+		
+		root = Splay(root, key)
+ 
+		Local cmp:Int = Compare(key, root.key)
+		
+		If (cmp = 0)
+			If root.left = Null
+				root = root.right
+			Else
+				Node x = root.right
+				root = root.left
+				Splay(root, key)
+				If (x &lt;&gt; Null)
+					x.parent = root
+				End
+				root.right = x
+			End If
+			
+			root.parent = Null
+			elementCount -= 1
+		End If
+		' else: it wasn't in the tree to remove
+		#if THRESHOLD
+		splayThreshold = Min(3, Int(Log(elementCount) * 1.442695 * 0.25))
+		#end
+	End
+	
+	'   /*************************************************************************
+	'	*  helper functions
+	'	*************************************************************************/
+ 
+	' height of tree (1-node tree has height 0)
+	Method Height:Int()
+		Return Height(root)
+	End
+	
+	Method Size:Int()
+		Return Size(root)
+	End
+ 
+	
+	Private
+ 
+	Field elementCount:Int
+	
+	Method Height(x:Node&lt;K, V&gt;)
+		If x = Null Then Return - 1
+		Return 1 + Max(Height(x.left), Height(x.right))
+	End
+	
+	Method Size:Int(x:Node&lt;K, V&gt;)
+		Local count:Int = 0
+		Local parentStack:Stack&lt;Node&lt;K, V&gt;&gt; = New Stack&lt;Node&lt;K, V&gt;&gt;()
+		Local currNode:Node&lt;K, V&gt; = x
+		
+		While ( Not parentStack.IsEmpty() Or currNode &lt;&gt; Null)
+			If (currNode &lt;&gt; Null)
+				parentStack.Push(currNode)
+				currNode = currNode.left
+			Else
+				currNode = parentStack.Pop()
+				count += 1
+				currNode = currNode.right
+			End
+		End
+		Return count
+	End
+		
+	
+	Method Splay:Void(x:Node&lt;K, V&gt;)
+		While (x.parent &lt;&gt; Null)
+			If (x.parent.parent = Null)
+				If (x.parent.left = x)
+					rotateRight(x.parent)
+				Else
+					rotateLeft(x.parent)
+				End
+			ElseIf(x.parent.left = x And x.parent.parent.left = x.parent)
+				rotateRight(x.parent.parent)
+				rotateRight(x.parent)
+			ElseIf(x.parent.right = x And x.parent.parent.right = x.parent)
+				rotateLeft(x.parent.parent)
+				rotateLeft(x.parent)
+			ElseIf(x.parent.left = x And x.parent.parent.right = x.parent)
+				rotateRight(x.parent)
+				rotateLeft(x.parent)
+			Else
+				rotateLeft(x.parent)
+				rotateRight(x.parent)
+			End
+		End
+	End
+	
+	'************************************************************************
+	'* Splay function
+	'* **********************************************************************/
+	' Splay key in the tree rooted at Node h. If testMap node with that key exists,
+	'   it is Splayed to the root of the tree. If it does not, the last node
+	'   along the search path for the key is Splayed to the root.
+	Method Splay:Node&lt;K, V&gt;(h:Node&lt;K,V&gt;, key:K)
+		If (h = Null) Then Return Null
+ 
+		Local cmp1:Int = Compare(key, h.key)
+ 
+		If (cmp1 &lt; 0)
+			' key not in tree, so we're done
+			If h.left = Null Then Return h
+			
+			Local cmp2:Int = Compare(key, h.left.key)
+			If (cmp2 &lt; 0)
+				h.left.left = Splay(h.left.left, key)
+				h = rotateRight(h)
+			ElseIf (cmp2 &gt; 0)
+				h.left.right = Splay(h.left.right, key)
+				If (h.left.right &lt;&gt; Null) Then h.left = rotateLeft(h.left)
+			End If
+			
+			If h.left = Null Then Return h Else Return rotateRight(h)
+ 
+		ElseIf(cmp1 &gt; 0)
+			' key not in tree, so we're done
+			If h.right = Null Then Return h
+ 
+			Local cmp2:Int = Compare(key, h.right.key)
+			If (cmp2 &lt; 0)
+				h.right.left  = Splay(h.right.left, key)
+				If (h.right.left &lt;&gt; null)
+					h.right = rotateRight(h.right)
+				End
+			ElseIf(cmp2 &gt; 0)
+				h.right.right = Splay(h.right.right, key)
+				h = rotateLeft(h)
+			End If
+			
+			If h.right = Null Then Return h Else Return rotateLeft(h)
+ 
+		Else
+			Return h
+		End If
+	End
+ 
+	
+	Method rotateRight:Node&lt;K, V&gt;(h:Node&lt;K, V&gt;)
+		Local x:Node&lt;K, V&gt; = h.left
+		
+		If (x &lt;&gt; Null)
+			h.left = x.right
+			x.right = h
+			x.parent = h.parent
+		End
+		
+		If (h.left &lt;&gt; Null)
+			h.left.parent = h
+		End
+		
+		h.parent = x
+		
+		If (x.parent = Null)
+			root = x
+		ElseIf(x.parent.left = h)
+			x.parent.left = x
+		Else
+			x.parent.right = x
+		End
+		Return x
+	End
+ 
+	Method rotateLeft:Node&lt;K, V&gt;(h:Node&lt;K, V&gt;)
+		Local x:Node&lt;K, V&gt; = h.right
+		
+		If (x &lt;&gt; Null)
+			h.right = x.left
+			x.left = h
+			x.parent = h.parent
+		End
+		
+		If (h.right &lt;&gt; Null)
+			h.right.parent = h
+		End
+		
+		h.parent = x
+		
+		If (x.parent = Null)
+			root = x
+		ElseIf(x.parent.left = h)
+			x.parent.left = x
+		Else
+			x.parent.right = x
+		End
+		
+		Return x
+	End
+ 
+	
+	Field root:Node&lt;K, V&gt;
+	
+End
+ 
+ 
+'Private
+ 
+Class Node&lt;K, V&gt;
+	Field key:K				   ' key
+	Field value:V				 ' associated data
+	Field left:Node, right:Node   ' left and right subtrees
+	Field parent:Node
+ 
+	Method New(key:K, value:V)
+		Self.key   = key
+		Self.value = value
+	End
+End
+ 
+ 
+'Helper versions...
+ 
+Class IntSplayTree&lt;V&gt; Extends SplayTree&lt;Int, V&gt;
+	Method Compare(lhs:Int, rhs:Int)
+		Return lhs-rhs
+	End
+End
+ 
+Class FloatSplayTree&lt;V&gt; Extends SplayTree&lt;Float,V&gt;
+	Method Compare(lhs:Float, rhs:Float)
+		If lhs&lt;rhs Return -1
+		Return lhs&gt;rhs
+	End
+End
+ 
+Class StringSplayTree&lt;V&gt; Extends SplayTree&lt;String,V&gt;
+	Method Compare(lhs:String, rhs:String)
+		Return lhs.Compare( rhs )
+	End
+End
+</textarea> <br><br></td></tr></table><br>
+<a name="2099817"></a>
+
+<a name="2099818"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> haha, doin' all the work for me, huh?<br><br>The second example is kinda weird.  I'm starting to trim and rename functions since it's  becoming a bit of a mess.  The old recursive Splay() isn't used anymore, so that's the first to go.  I've also renamed Insert() to Set(), changed its output type, moved several methods to Private, and renamed Delete() to Remove() while deleting the old Remove(). <br><br>In your second example, you're doing an insert/remove cycle, but it should be noted that in the code provided, it appears that SplayTree.Insert() as it was would never splay because Splay() was never called anywhere in the method().  This has been fixed.  Furthermore, Map.Insert() is depreciated and is just a call to Set(), so .... :)  <br><br>Here's the code so far after an initial cleanup:  <a href="https://github.com/nobuyukinyuu/monkey-splaytree" target="_blank">https://github.com/nobuyukinyuu/monkey-splaytree</a> <br><br></td></tr></table><br>
+<a name="2099816"></a>
+
+<a name="2099819"></a>
+
+<a name="2099820"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sure, I was just hacking around so I left old code lying about. The not splaying on insert is intentional, although I must have pasted older code as I changed Set to have a splay option. It only makes sense to splay on insert if you expect retrievals of recently inserted elements. <br><br></td></tr></table><br>
+<a name="2099821"></a>
+
+<a name="2099822"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> by the way, do you know if there are "canonical" best practices for ObjectEnumerators?  I personally don't care if the tree gets traversed in any particular order, but it seems that the existing containers spit out objects in a sorted order, whereas traversing the splay tree in a similar fashion to Find() would seem likely to spit out elements in semi-last-accessed order.  I'm not aware that anyone should expect EachIn to return the values from any container in any particular order; was just asking if you know if this is just something most people assume that most containers will do.  Obviously expecting that seems incompatible with the way a splay tree is structured. <br><br></td></tr></table><br>
+<a name="2099824"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nope. People make all sorts of assumptions about how collections should be enumerated. I tend to think that the default should be whatever is cheapest unless the collection makes explicit claims about being sorted. I tend to write in order enumerators for ordered trees though. <br><br></td></tr></table><br>
+<a name="2099888"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nobuyuki</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cool.  Allright, I've updated the source code with enumerators.  Using EachIn on the tree itself produces a Stack&lt;Node&lt;K,V&gt;&gt; for the duration of the traversal.  In addition, the usual enumerator overhead applies, including extra objects created to allow eachIn to work on .Keys() and .Values(). <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

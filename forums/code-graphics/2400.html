@@ -1,0 +1,891 @@
+<!DOCTYPE html><html lang="en" ><head ><title >DrawBank</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Draw image directly from bank, language=bb, category=Graphics'><meta name='author' content='BlitzSupport'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=1>Graphics</a>/DrawBank</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2400.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >DrawBank by BlitzSupport</td><td align="right">2009 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> I couldn't find a previous example of this, oddly enough, though someone's surely done it. Not much use for real time games, but may come in handy for... other stuff.<br><br>If anyone can speed this up then please post here! (I get about 10 milliseconds for the <i>boing.png</i> image from BlitzMax "RockOut", on an Intel Core2Duo 6300 @ 1.86 GHz with Geforce 7600 GS, and about 330 milliseconds for any image that completely fills the screen without a mask.)<br><br>EDIT: Added background mask hack/fix and trivial, worthless optimisations. </td></tr><tr ><td class="cell"><pre class="code">f$ = "boing.png"
+
+Graphics 1024, 768, 0, 2
+
+; IMPORTANT! Required by DrawBank!
+
+Global GW = GraphicsWidth ()
+Global GH = GraphicsHeight ()
+Global DB_RGB
+
+SetDrawBankMask 255, 0, 255
+
+Function SetDrawBankMask (r, g, b)
+
+	tempbuffer = GraphicsBuffer ()
+	temp = CreateImage (1, 1)
+
+	SetBuffer ImageBuffer (temp)
+
+	Plot 0, 0: GetColor 0, 0
+	tr = ColorRed ()
+	tg = ColorGreen ()
+	tb = ColorBlue ()
+
+	Color r, g, b: Plot 0, 0: GetColor 0, 0
+	r = ColorRed ()
+	g = ColorGreen ()
+	b = ColorBlue ()
+
+	FreeImage temp
+
+	DB_RGB = ((r Shl 16) + (g Shl 8) + b) Or ~$00FFFFFF
+
+	SetBuffer tempbuffer
+
+	Color tr, tg, tb
+	
+End Function
+
+Function DrawBank (bank, x, y, width, height, center = 0, masked = True)
+	
+	; Centre image on screen if required...
+	
+	If center
+		x = x - width / 2
+		y = y - height / 2
+	EndIf
+	
+	; Alpha mask...
+	
+	mask = ((r Shl 16) + (g Shl 8) + b) Or ~$00FFFFFF
+
+	; Scan across image...
+	
+	For w = 0 To width - 1
+
+		; x-position plus current 'pixel' NOT off right of screen?
+
+		If x + w &lt; GW
+
+			; Not off left of screen?
+			
+			If x + w &gt; -1
+
+				; Scan down image...
+				
+				For h = 0 To height - 1
+
+					; Not off bottom of screen?
+					
+					If y + h &lt; GH
+	
+						; Not off top of screen?
+						
+						If y + h &gt; -1
+
+							; Get current value in bank...
+							
+							argb = PeekInt (bank, pointer)
+							
+							; Assuming most cases use transparent mask...
+							
+							If argb &lt;&gt; DB_RGB
+								WritePixelFast x + w, y + h, argb
+							Else
+								; User wants mask drawn...
+								If Not masked
+									WritePixelFast x + w, y + h, argb
+								EndIf
+							EndIf
+							
+							; Move to next value in bank (argb = 4 bytes = integer, hence PeekInt above)...
+							
+							pointer = pointer + 4
+
+						Else
+							
+							; Off top of screen, so skip all pixels until on screen...
+							
+							h = h + (-y) - 1
+							pointer = pointer + (h Shl 2) + 4
+							
+						EndIf	
+
+					Else
+						
+						; Off bottom of screen, stop drawing this column...
+						
+						pointer = pointer + (height - h) Shl 2
+						Exit
+					
+					EndIf
+					
+				Next
+
+			Else
+				
+				; Off left of screen, so skip all pixels until on screen...
+				
+				pointer = pointer + (height - h) Shl 2
+				
+			EndIf
+
+		Else
+			
+			; Off right of screen, so stop drawing...
+			
+			Exit
+			
+		EndIf
+		
+	Next
+	
+End Function
+
+Function ImageToBank (bufferImage)
+
+	; Slightly modified from http://www.blitzbasic.com/codearcs/codearcs.php?code=396
+	; By Perturbatio
+	
+	bankImage = CreateBank ()
+	
+	bufOldBuffer = GraphicsBuffer ()
+		
+	SizeOfImage = ImageWidth (bufferImage) * ImageHeight (bufferImage)
+	
+	ResizeBank bankImage, (SizeOfImage * 4)
+	
+	SetBuffer ImageBuffer (bufferImage)
+	LockBuffer ImageBuffer (bufferImage)
+
+	For iLoopX = 0 To ImageWidth (bufferImage) - 1
+		For iLoopY = 0 To ImageHeight (bufferImage) - 1
+			PokeInt bankImage, ibankPointer, ReadPixelFast (iLoopX, iLoopY)
+			iBankPointer = iBankPointer + 4
+		Next
+	Next
+
+	UnlockBuffer ImageBuffer (bufferImage)
+	SetBuffer bufOldBuffer
+	
+	Return bankImage
+	
+End Function
+
+; Test...
+
+ClsColor 64, 96, 128
+
+SetBuffer BackBuffer ()
+
+image = LoadImage (f$)
+
+width = ImageWidth (image)
+height = ImageHeight (image)
+
+bank = ImageToBank (image)
+FreeImage image
+
+Repeat
+
+	Cls
+	
+	mx = MouseX ()
+	my = MouseY ()
+	
+	If KeyDown (203) Then xs# = xs - 0.1
+	If KeyDown (205) Then xs = xs + 0.1
+	If KeyDown (200) Then ys# = ys - 0.1
+	If KeyDown (208) Then ys = ys + 0.1
+
+	If mx &lt;&gt; lastx
+		x# = mx
+		xs = 0
+	Else
+		x = x + xs
+	EndIf
+	
+	If my &lt;&gt; lasty
+		y# = my
+		ys = 0
+	Else
+		y = y + ys
+	EndIf
+	
+	lastx = mx
+	lasty = my
+	
+	LockBuffer BackBuffer ()
+	
+		ms = MilliSecs ()
+		DrawBank bank, x, y, width, height, 1
+		ticks = MilliSecs () - ms
+	
+	UnlockBuffer BackBuffer ()
+
+	Text 20, 20, ticks
+
+	Flip
+	
+Until KeyHit (1)
+
+End</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Matty</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> I draw from banks all the time in my 2D games, though have my own routines (which I'd be willing to share if they were tidy enough), and even on an older PC if it's done right can still be very quick - for the right sorts of graphics, and it saves on video memory since you are simply pixelplotting from system memory. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Good point regarding video memory, and I suppose it's fine for board/grid-based games...<br><br>I tried another angle on this by pre-calculating the rectangle to be scanned 'inside' the bank, skipping tons of If/Then checks within the nested loops, and I got a staggering increase of... well, zero per-cent.<br><br>Looks like this is limited more by the actual drawing rather than the plotting algorithm...<br><br>EDIT: Oops, background mask was failing on different bit-depth screens. Ungodly hack added -- <i>SetDrawBankMask (r, g, b)</i>!<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+f$ = "boing.png"
+
+Graphics 1024, 768, 0, 2
+
+; IMPORTANT! Required by DrawBank!
+
+Global GW = GraphicsWidth ()
+Global GH = GraphicsHeight ()
+Global DB_RGB
+
+SetDrawBankMask 255, 0, 255
+
+Function SetDrawBankMask (r, g, b)
+
+	tempbuffer = GraphicsBuffer ()
+	temp = CreateImage (1, 1)
+
+	SetBuffer ImageBuffer (temp)
+
+	Plot 0, 0: GetColor 0, 0
+	tr = ColorRed ()
+	tg = ColorGreen ()
+	tb = ColorBlue ()
+
+	Color r, g, b: Plot 0, 0: GetColor 0, 0
+	r = ColorRed ()
+	g = ColorGreen ()
+	b = ColorBlue ()
+
+	FreeImage temp
+
+	DB_RGB = ((r Shl 16) + (g Shl 8) + b) Or ~$00FFFFFF
+
+	SetBuffer tempbuffer
+
+	Color tr, tg, tb
+	
+End Function
+
+Function DrawBank (bank, x, y, width, height, center = 0, masked = True)
+
+	; Centre image on screen if required...
+
+	If center
+		x = x - width / 2
+		y = y - height / 2
+	EndIf
+
+	;---------------------------------------------------------------------------
+	; Check where edges are on screen. leftx/rightx and topy/bottomy describe
+	; a rectangle within the bank 'texture'...
+	;---------------------------------------------------------------------------
+
+	; Left edge (all edges are checked similarly)...
+	
+	If x &gt; -1
+
+		; On screen? If not, exit function...
+		
+		If x &gt; GW - 1
+			Return
+		Else
+			leftx = 0 ; Otherwise, use left edge of bank...
+		EndIf
+
+	Else
+
+		; Off left of screen, so go this many pixels 'into' the bank...
+
+		leftx = 0 - x
+
+	EndIf
+
+	; Right edge...
+
+	If x + width &gt; 0
+		If x + width &gt; GW
+			rightx = GW - x
+		Else
+			rightx = width
+		EndIf
+	Else
+		Return
+	EndIf
+
+	; Top edge...
+
+	If y &gt; -1
+		If y &gt; GH - 1
+			Return
+		Else
+			topy = 0
+		EndIf
+	Else
+		topy = 0 - y
+	EndIf
+
+	; Bottom edge...
+
+	If y + height &gt; 0
+		If y + height &gt; GH
+			bottomy = GH - y
+		Else
+			bottomy = height
+		EndIf
+	Else
+		Return
+	EndIf
+
+	; Set start of texture, 'into' the bank...
+	
+	pointer = pointer + leftx * height Shl 2 ; (x Shl 2) = (x * 4)
+
+	; Scan across image...
+
+	For w = leftx To rightx - 1
+	
+		xw = x + w
+
+		; Move pointer 'down' by top offset...
+		
+		pointer = pointer + topy Shl 2
+
+		; Scan down image...
+		
+		For h = topy To bottomy - 1
+
+			; Get current value in bank...
+			
+			argb = PeekInt (bank, pointer)
+			
+			; Assuming most cases use background mask...
+			
+			If argb &lt;&gt; DB_RGB
+			
+				WritePixelFast xw, y + h, argb
+				
+			Else
+			
+				; User wants mask drawn...
+				
+				If Not masked
+					WritePixelFast xw, y + h, argb
+				EndIf
+				
+			EndIf
+			
+			; Move to next value in bank (argb = 4 bytes = integer, hence PeekInt above)...
+			
+			pointer = pointer + 4
+
+		Next
+
+		; Jump remainder of 'pixels' off bottom...
+		
+		pointer = pointer + (height - bottomy) Shl 2 ; Ah, good old trial-and-error...
+
+	Next
+
+End Function
+
+Function ImageToBank (bufferImage)
+
+	; Slightly modified from <a href="http://www.blitzbasic.com/codearcs/codearcs.php?code=396" target="_blank">http://www.blitzbasic.com/codearcs/codearcs.php?code=396</a>
+	; By Perturbatio
+	
+	bankImage = CreateBank ()
+	
+	bufOldBuffer = GraphicsBuffer ()
+		
+	SizeOfImage = ImageWidth (bufferImage) * ImageHeight (bufferImage)
+	
+	ResizeBank bankImage, (SizeOfImage * 4)
+	
+	SetBuffer ImageBuffer (bufferImage)
+	LockBuffer ImageBuffer (bufferImage)
+
+	For iLoopX = 0 To ImageWidth (bufferImage) - 1
+		For iLoopY = 0 To ImageHeight (bufferImage) - 1
+			PokeInt bankImage, ibankPointer, ReadPixelFast (iLoopX, iLoopY)
+			iBankPointer = iBankPointer + 4
+		Next
+	Next
+
+	UnlockBuffer ImageBuffer (bufferImage)
+	SetBuffer bufOldBuffer
+	
+	Return bankImage
+	
+End Function
+
+; Test...
+
+ClsColor 64, 96, 128
+
+SetBuffer BackBuffer ()
+
+image = LoadImage (f$)
+
+width = ImageWidth (image)
+height = ImageHeight (image)
+
+bank = ImageToBank (image)
+FreeImage image
+
+Repeat
+
+	Cls
+	
+	mx = MouseX ()
+	my = MouseY ()
+
+	shifted = KeyDown (42)
+
+	If shifted
+		xs# = 0
+		ys# = 0
+		If KeyHit (203) Then x# = x - 1
+		If KeyHit (205) Then x = x + 1
+		If KeyHit (200) Then y# = y - 1
+		If KeyHit (208) Then y = y + 1
+	Else
+		If KeyDown (203) Then xs = xs - 0.1
+		If KeyDown (205) Then xs = xs + 0.1
+		If KeyDown (200) Then ys = ys - 0.1
+		If KeyDown (208) Then ys = ys + 0.1
+	EndIf
+	
+	If mx &lt;&gt; lastx
+		x = mx
+		xs = 0
+	Else
+		x = x + xs
+	EndIf
+	
+	If my &lt;&gt; lasty
+		y = my
+		ys = 0
+	Else
+		y = y + ys
+	EndIf
+	
+	lastx = mx
+	lasty = my
+
+	LockBuffer BackBuffer ()
+	
+		ms = MilliSecs ()
+		DrawBank bank, x, y, width, height, 1
+		ticks = MilliSecs () - ms
+	
+	UnlockBuffer BackBuffer ()
+
+	Text 20, 20, ticks
+
+	Flip
+	
+Until KeyHit (1)
+
+End
+</textarea> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DareDevil</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Hi! have optimized all function and organize<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+f$ = "boing.png"
+
+Graphics 1024, 768, 0, 2
+
+
+Function BankImage_SetMask(a_BankImage, r, g, b)
+	Local l_IdBank = 3*4
+	PokeInt a_BankImage, l_IdBank,((r Shl 16) + (g Shl 8) + b) Or ~$00FFFFFF
+End Function
+
+Function BankImage_SetAlpha(a_BankImage, Alpha%=0 )
+	Local l_IdBank = 4*4
+	PokeInt a_BankImage, l_IdBank, Alpha Shl 8
+End Function
+
+Function BankImage_Draw(a_BankImage, x, y, center = False,  a_Masked = False)
+	
+	; ===&gt;
+	Local l_LoopX%, l_LoopY%, l_ARGB%
+	Local l_IdBank%, l_IdBankXa%, l_IdBankXb%, l_IdBankYa%, l_IdBankYb%;
+	Local l_PX%, l_PY%;
+	; ===&gt;
+	Local l_ImgWidth%		= PeekInt (a_BankImage, l_IdBank) : l_IdBank = l_IdBank + 4
+	Local l_ImgHeight%	= PeekInt (a_BankImage, l_IdBank) : l_IdBank = l_IdBank + 4
+	Local l_ColorMask%	= PeekInt (a_BankImage, l_IdBank) : l_IdBank = l_IdBank + 4
+	Local l_Alpha%			= PeekInt (a_BankImage, l_IdBank) : l_IdBank = l_IdBank + 4
+	Local GW% = GraphicsWidth()-1
+	Local GH% = GraphicsHeight()-1
+	Local l_OffsetBankY = l_ImgWidth*4
+	; ===&gt;
+	; 
+	Local l_StXa%, l_StXb%,l_StYa%,l_StYb%
+	If (center) Then 
+		l_StXa% = x - (l_ImgWidth /2)
+		l_StXb% = x + (l_ImgWidth /2) - 1
+		l_StYa% = y - (l_ImgHeight/2)
+		l_StYb% = y + (l_ImgHeight/2) - 1 
+	Else
+		l_StXa% = x 
+		l_StXb% = x + l_ImgWidth  - 1
+		l_StYa% = y 
+		l_StYb% = y + l_ImgHeight - 1 
+	EndIf
+	; ===&gt;
+	; image overscreen 
+	If ((l_StXa &gt; GW ) Or (l_StYa &gt; GH ) Or (l_StXb &lt; 0  ) Or (l_StYb &lt; 0  )) Then Return
+	; ===&gt;
+	If (l_StXa &lt; 0 ) Then l_IdBankXa = Abs(l_StXa)*4							: l_StXa% = 0; Abs(l_StXa)*4
+	If (l_StYa &lt; 0 ) Then l_IdBankYa = Abs(l_StYa)*l_OffsetBankY	: l_StYa% = 0; Abs(l_StYa)*l_OffsetBankY
+	If (l_StXb &gt;=GW) Then l_IdBankXb = (l_StXb-GW)*4 : l_StXb = GW
+	If (l_StYb &gt;=GH) Then l_StYb = GH
+	; ===&gt;
+	l_IdBank = l_IdBank + l_IdBankXa+l_IdBankYa
+	If (a_Masked) Then
+		Local l_color% = 0
+		; ===&gt;
+		For l_LoopY = l_StYa To l_StYb;l_ImgHeight - 1
+			; ===&gt;
+			For l_LoopX = l_StXa To l_StXb
+				; ===&gt;
+				l_color = PeekInt( a_BankImage, l_IdBank)
+				If(l_color&lt;&gt;l_ColorMask) Then WritePixelFast l_LoopX, l_LoopY, l_color;+l_Alpha
+				l_IdBank = l_IdBank + 4
+				; ===&gt;
+			Next
+			; ===&gt;
+			l_IdBank = l_IdBank + (l_IdBankXb+l_IdBankXa)
+			; ===&gt;
+		Next
+		; ===&gt;
+	Else
+		; ===&gt;
+		For l_LoopY = l_StYa To l_StYb;l_ImgHeight - 1
+			; ===&gt;
+			For l_LoopX = l_StXa To l_StXb
+				; ===&gt;
+				WritePixelFast l_LoopX, l_LoopY, PeekInt(a_BankImage, l_IdBank);+l_Alpha
+				l_IdBank = l_IdBank + 4
+				; ===&gt;
+			Next
+			; ===&gt;
+			l_IdBank = l_IdBank + (l_IdBankXb+l_IdBankXa)
+			; ===&gt;
+		Next
+		; ===&gt;
+	EndIf
+	
+	
+	
+	
+	
+	
+	
+	; ===&gt;
+	;l_StXa = 0 : l_StYa=0
+	; ===&gt;
+	; 
+;	If (a_Masked) Then
+;		Local l_color% = 0
+;		; ===&gt;
+;		; Scan across image...
+;		For l_LoopY = l_StYa To l_StYb;l_ImgHeight - 1
+;			l_IdBank = l_LoopY * l_BankY + l_IdBankX + l_IdBankY
+;			; ===&gt;
+;			For l_LoopX = l_StXa To l_StXb
+;				; ===&gt;
+;				l_color = PeekInt( a_BankImage, l_IdBank)
+;				If(l_color&lt;&gt;l_ColorMask) Then WritePixelFast l_LoopX+x, l_LoopY+y, l_color
+;				l_IdBank = l_IdBank + 4
+;				; ===&gt;
+;			Next
+;			; ===&gt;
+;		Next
+;	Else
+		; ===&gt;
+		; Scan across image...
+;	For l_LoopY = l_StYa To l_StYb;l_ImgHeight - 1
+;			; ===&gt;
+;		l_IdBank = 16+(l_LoopY * l_OffsetBankY) ;+ l_IdBankY + l_IdBankX; + 16
+;			; ===&gt;
+;			For l_LoopX = l_StXa To l_StXb
+;				; ===&gt;
+;				WritePixelFast l_LoopX, l_LoopY, PeekInt (a_BankImage, l_IdBank)+l_Alpha
+;				l_IdBank = l_IdBank + 4
+;				; ===&gt;
+;			Next
+;			; ===&gt;
+;		Next
+;	EndIf
+	; ===&gt;
+End Function
+
+Function BankImage_Load(Filename$)
+	; ===&gt;
+	Local l_BufferImage = LoadImage (Filename)
+	; ===&gt;
+	; Slightly modified from Code Archives entry 396 by Perturbatio!
+	Local l_ImgWidth%			= ImageWidth (l_BufferImage)
+	Local l_ImgHeight%		= ImageHeight(l_BufferImage)
+	Local l_SizeOfImage%	= l_ImgWidth * l_ImgHeight * 4 ; il 4 e il contenitore del colore ARGB
+	Local l_SizeVariable%	= 4*4;
+	Local l_BankImage%   	= CreateBank (l_SizeOfImage+l_SizeVariable)
+	Local l_ColorMask%		= 0
+	Local l_Alpha%				= 0
+	; ===&gt;
+	Local l_OldBuffer% = GraphicsBuffer ()
+	Local l_LoopX, l_LoopY, l_IdBank;
+	; ===&gt;
+	SetBuffer ImageBuffer (l_BufferImage)
+	LockBuffer ImageBuffer (l_BufferImage)
+	PokeInt l_BankImage, l_IdBank, l_ImgWidth	: l_IdBank = l_IdBank + 4	; Store Variable Width
+	PokeInt l_BankImage, l_IdBank, l_ImgHeight: l_IdBank = l_IdBank + 4	; Store Variable Height
+	PokeInt l_BankImage, l_IdBank, l_ColorMask: l_IdBank = l_IdBank + 4	; Store Variable Color Mask
+	PokeInt l_BankImage, l_IdBank, l_Alpha		: l_IdBank = l_IdBank + 4	; Store Variable Alpha
+	; ===&gt;
+	For l_LoopY = 0 To l_ImgHeight - 1
+		For l_LoopX = 0 To l_ImgWidth - 1
+			PokeInt l_BankImage, l_IdBank, ReadPixelFast( l_LoopX, l_LoopY)
+			l_IdBank = l_IdBank + 4
+		Next
+	Next
+	; ===&gt;
+	UnlockBuffer ImageBuffer (l_BufferImage)
+	SetBuffer l_OldBuffer
+	; ===&gt;
+	FreeImage l_BufferImage
+	; ===&gt;
+	Return l_BankImage
+	; ===&gt;
+End Function
+
+; Test...
+
+ClsColor 64, 96, 128
+
+SetBuffer BackBuffer ()
+
+
+Local bank = BankImage_Load(f$)
+Local ScreenMW% = GraphicsWidth() *.5
+Local ScreenMH% = GraphicsHeight()*.5
+
+Local  ticks#, ticksAdd#, cnt#
+
+Repeat
+	
+	Cls
+	
+	mx = MouseX ()
+	my = MouseY ()
+	
+	If KeyDown (203) Then xs# = xs - 0.1
+	If KeyDown (205) Then xs# = xs + 0.1
+	If KeyDown (200) Then ys# = ys - 0.1
+	If KeyDown (208) Then ys# = ys + 0.1
+	
+	
+	If KeyDown (57) Then Stop
+	
+	If mx &lt;&gt; lastx
+		x# = mx
+		xs = 0
+	Else
+		x = x + xs
+	EndIf
+	
+	If my &lt;&gt; lasty
+		y# = my
+		ys = 0
+	Else
+		y = y + ys
+	EndIf
+	
+	lastx = mx
+	lasty = my
+	LockBuffer BackBuffer ()
+	
+	ms = MilliSecs ()
+	;DrawBank bank, x, y, 1,128,128,128,True
+	BankImage_SetMask	( bank, 0, 0, 0)
+	;BankImage_Draw		( bank, GraphicsWidth()*.5, GraphicsHeight()*.5, True, True)
+	BankImage_Draw		( bank, x, y, True, True)
+	ticks = MilliSecs () - ms
+	;===&gt;
+	If (ticksAdd&lt;10000) Then
+		ticksAdd = ticksAdd + ticks
+		cnt=cnt+1
+	EndIf
+	;===&gt;
+	UnlockBuffer BackBuffer ()
+	
+	Local l_Line=10
+	Local l_InterLine = 15
+	
+	Color 255,0,0
+	If ticks&gt;0 Then 
+		Text 20, l_Line, "Ms: " + Float(Int(ticks)) + " FPS: " + Float(Int((1000.0*100.0)/ticks))/100														: l_Line = l_Line+l_InterLine
+		Text 20, l_Line, "Statistic Time for 10 seconds"																																				: l_Line = l_Line+l_InterLine
+		Text 20, l_Line, "Midle time"																																														: l_Line = l_Line+l_InterLine
+		Text 20, l_Line, "Ms: " + Float(Int(100.0*ticksAdd/cnt))/100.0 + " FPS: " + Float(Int(1000.0/(ticksAdd/cnt)*100))/100.0	: l_Line = l_Line+l_InterLine
+	Else
+		Text 20, l_Line, "Ms: " + Float(Int(ticks)) + " FPS: " + 0										: l_Line = l_Line+l_InterLine
+		Text 20, l_Line, "Statistic Time for 10 seconds"															: l_Line = l_Line+l_InterLine
+		Text 20, l_Line, "Midle time"																									: l_Line = l_Line+l_InterLine
+		Text 20, l_Line, "Ms: " + Float(Int(100.0*ticksAdd/cnt))/100.0 + " FPS: " + 0	: l_Line = l_Line+l_InterLine
+	EndIf
+	Color 255,255,255
+	
+	Flip
+	
+Until KeyHit (1)
+
+End
+
+</textarea> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Wow, that's excellent. You got boing.png from 10-12 ms down to 2-3 ms! I also tried a picture larger than the display, which took 300+ ms before, and now takes only 23 ms!<br><br><div class="quote"> <br><i>Me:</i> Looks like this is limited more by the actual drawing rather than the plotting algorithm...<br> <br></div><br>Boy, do I feel stupid...<br><br>However, there's one minor problem, which I addressed in my update: if you use a non-zero RGB mask (eg. 255, 0, 255) then the results may be wrong in full-screen mode.<br><br>For example, your code works fine with <i>Graphics w, h, 0, 2</i>, but with <i>Graphics w, h</i> Blitz will choose the fastest bit-depth, which is 16 in my case, and the mask colours are then incorrect when you read them back, so the mask is drawn when it shouldn't be. (You can test this by forcing the full-screen bit-depth.)<br><br>I'm sure it's possible to calculate the correct values for 16/24/32-bit, rather than using my clumsy pixel read/write routine.<br><br>Anyway, many thanks for your contribution, which I'll be trying to understand!<br><br>Please could you consider declaring your code as Public Domain so that people can use it without worry or restriction? <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DareDevil</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Pleace test the modify function <br><br>Thanks!<br><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Function BankImage_SetMask(a_BankImage, r, g, b)
+	Local l_IdBank = 3*4
+	;===&gt;
+	If (r&lt;0  ) Then r=0
+	If (r&gt;255) Then r=255
+	;===&gt;
+	If (g&lt;0  ) Then g=0
+	If (g&gt;255) Then g=255
+	;===&gt;
+	If (b&lt;0  ) Then b=0
+	If (b&gt;255) Then b=255
+	;===&gt;
+	Select GraphicsDepth() 
+		;===&gt;
+		Case 16
+			PokeInt a_BankImage, l_IdBank,(((r Shl 16) + (g Shl 8) + b) Shl 16) Or ~$FFFF
+		;===&gt;
+		Case 24
+			PokeInt a_BankImage, l_IdBank,(((r Shl 16) + (g Shl 8) + b) Shl  8) Or ~$FFFFFF
+		;===&gt;
+		Default; 32Bit
+			PokeInt a_BankImage, l_IdBank, ((r Shl 16) + (g Shl 8) + b) Or ~$00FFFFFF
+		;===&gt;
+	End Select
+End Function
+
+Function BankImage_SetAlpha(a_BankImage, Alpha%=0 )
+	;===&gt;
+	Local l_IdBank = 4*4
+	;===&gt;
+	If (Alpha&lt;0  ) Then Alpha=0
+	If (Alpha&gt;255) Then Alpha=255
+	;===&gt;
+	Select GraphicsDepth() 
+		;===&gt;
+		Case 16
+			PokeInt a_BankImage, l_IdBank, (Alpha Shr 4) Shr 12
+		;===&gt;
+		Case 24
+			PokeInt a_BankImage, l_IdBank,0
+		;===&gt;
+		Default ; 32Bit
+			PokeInt a_BankImage, l_IdBank, Alpha Shl 24
+		;===&gt;
+	End Select
+	;===&gt;
+End Function</textarea> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DareDevil</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> PS: the modify and all code is public domain ;)<br><br>good work <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Hi DareDevil,<br><br>Thanks very much! I found a couple of minor problems in the last update:<br><br><pre class=code>
+Function BankImage_SetMask(a_BankImage, r, g, b)
+	Local l_IdBank = 3*4
+
+; Should be...
+
+Function BankImage_SetMask(a_BankImage, r, g, b)
+	Local l_IdBank = 2*4 ; CORRECT = 2*4
+</pre><br><br><pre class=code>
+Function BankImage_SetAlpha(a_BankImage, Alpha%=0 )
+	;===&gt;
+	Local l_IdBank = 4*4
+
+; Should be...
+
+Function BankImage_SetAlpha(a_BankImage, Alpha%=0 )
+	;===&gt;
+	Local l_IdBank = 3*4 ; CORRECT = 3*4
+</pre><br><br>A slightly more difficult problem is that the mask still doesn't work in 16-bit mode here. After a lot of trial-and-error, it seems to me that you <i>have</i> to use my plot/read pixel method to get the correct RGB values. This is because you can't tell what exact display mode is being used: for example, plotting 255, 0, 255 in 16-bit mode, then reading back, gives 248, 0, 248 for me.<br><br>It seems that I am probably being given an RGB565 mode in 16-bit depth, ie. 5 red bits, 6 green bits and 5 blue bits (so 255, 0, 255 becomes 248, 0, 248). I'm not totally sure, but I think this depends on the graphics card/drivers, but you may get a different 16-bit format instead of RGB565 on a different graphics card, and you can't tell how to read the bits since you don't know the RGB format.<br><br>Since there's no way to tell what RGB format you have from within Blitz, I think you have to use the plot/read method for now to determine the correct mask values. I think I'll have a look at the Blitz3D SDK source and see if I can get any ideas... <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DareDevil</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> I had forgotten the format rgb 555 and 565, of your system  plot and read are more effective<br><br>;) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Perturbatio</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> I wrote this: <a href="/codearcs/codearcs.php?code=396" >ImageToBank, BankToImage functions</a> Many, many moons ago (when I first started using B3D I think).<br><br>It's vaguely in the same vein. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Perturbatio: I know -- I ripped ImageToBank off and credited you -- thanks! (See above.)<br><br>On the subject of determining the backbuffer format, I think I'm getting somewhere, as I've just managed to create a PureBasic DLL that gets the DirectDraw DDSURFACEDESC2 information, which includes some useful stuff:<br><br><pre class=code>
+dwHeight.l
+dwWidth.l
+dwRefreshRate.l
+ddpfPixelFormat.DDPIXELFORMAT
+</pre><br><br>It correctly gets width/height/refresh rate (only in full-screen?), and I think I can get the correct mask information from the pixel format structure, though that's a job for another day...<br><br>If anyone has PB 4 and wants to try it (sorry, I don't have FTP at the moment, and it's really not worth a download anyway), this is what I've got so far... not much, but it seems to work!<br><br><pre class=code>
+; Blitz test code (in same folder as dd7test.dll)...
+
+Graphics 640, 480, 0, 1
+result = Test (SystemProperty ("DirectDraw7"))
+Print result
+</pre><br><br><pre class=code>
+; Blitz dd7test.decls file (plain text) -&gt; goes in Blitz\userlibs folder...
+
+.lib "dd7test.dll"
+
+Test% (device)
+</pre><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+; PureBasic 4 code (compile as 'Shared DLL'):
+
+Structure DDCOLORKEY 
+  dwColorSpaceLowValue.l 
+  dwColorSpaceHighValue.l 
+EndStructure 
+
+Structure DDPIXELFORMAT 
+  dwSize.l 
+  dwFlags.l 
+  dwFourCC.l 
+  dwRGBBitCount.l 
+  dwRBitMask.l 
+  dwGBitMask.l 
+  dwBBitMask.l 
+  dwRGBAlphaBitMask.l 
+EndStructure 
+
+Structure DDSCAPS 
+  dwCaps.l 
+EndStructure 
+
+Structure DDSCAPS2 
+  dwCaps.l 
+  dwCaps2.l 
+  dwCaps3.l 
+  dwCaps4.l 
+EndStructure 
+
+Structure DDSURFACEDESC2 
+  dwSize.l 
+  dwFlags.l 
+  dwHeight.l 
+  dwWidth.l 
+  lPitch.l 
+  dwBackBufferCount.l 
+  dwRefreshRate.l 
+  dwAlphaBitDepth.l 
+  dwReserved.l 
+  lpSurface.l 
+  ddckCKDestOverlay.DDCOLORKEY 
+  ddckCKDestBlt.DDCOLORKEY 
+  ddckCKSrcOverlay.DDCOLORKEY 
+  ddckCKSrcBlt.DDCOLORKEY 
+  ddpfPixelFormat.DDPIXELFORMAT 
+  ddsCaps.DDSCAPS2 
+  dwTextureStage.l 
+EndStructure 
+
+ProcedureDLL Test (IDD.IDirectDraw7)
+
+	test.DDSURFACEDESC2
+	test\dwSize = SizeOf (DDSURFACEDESC2)
+	
+	result = IDD\GetDisplayMode(@test)
+	
+	MessageRequester ("Test", "Screen size: " + Str (test\dwWidth) + " x " + Str (test\dwHeight) + " @ " + Str (test\dwRefreshRate) + " Hz")
+	
+	ProcedureReturn test\dwWidth
+
+EndProcedure
+
+DataSection 
+  IID_IDirectDraw7: 
+    Data.l $15e65ec0 
+    Data.w $3b9c, $11d2 
+    Data.b $b9, $2f, $00, $60, $97, $97, $ea, $5b 
+EndDataSection  
+</textarea> <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

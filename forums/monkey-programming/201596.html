@@ -1,0 +1,310 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Any restrictions on SaveState()?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Any restrictions on SaveState()?</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=507" >Monkey Programming</a>/<a href="#bottom" >Any restrictions on SaveState()?</a><br><br>
+<a name="2014822"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GfK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm having ongoing problems with this, using HTML5/Chrome, though I'm not sure if other targets are affected<br><br>SaveState() works fine in any test code I come up with, but when I'm using my filesystem (which is part of Diddy now), odd things start to happen.<br><br>First off, the file structure is thus; A file header "MKYDATA".  After that I have an Integer which indicates the number of 'files' that have been saved (using some bit-shifting and converting to strings).  After that comes the file data; length of filename (Int), filename itself (String), length of file data (Int), file data itself (String).<br><br>This all works fine.... if I hit Refresh in the browser it'll work all day long, until I've closed the browser and reopened it.  After that, LoadState only contains "MKDATA" and then indicates one file (Which is correct!), but the file data is gone.  Why?!<br><br>Now, the way I'm converting from an Int to a String, is to split the Int into its four component bytes, and convert each of those to a single String character (potentially anything from 0-255).  Doing it this way means that an Int will always be stored in four bytes.<br><br>I cannot see any errors in my code at all (except for a few calls to Set which maybe should have been Insert - these haven't been changed in Diddy yet).  So my only other guess is that SaveState does not like  or support characters beyond a certain range.  I've done a load of tests on this though and cannot find evidence to support the theory.<br><br>I would really like some advice on any limitations SaveState might have, as well as finding out whether it supports Unicode or not.  (That is a HUGE problem, if so).<br><br>Test code:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Strict
+
+Import filesystem
+
+Function Main:Int()
+	New testApp
+	Return 0	
+End Function
+
+Class testApp Extends App
+	Field fileHandler:FileSystem
+
+		Method OnCreate:Int()
+			Self.fileHandler = New FileSystem
+			Local stream:FileStream
+			Local n:int
+			stream = Self.fileHandler.WriteFile("test.bin")
+			For n = 0 to 255
+				stream.WriteInt(n)
+			Next
+			
+			Self.fileHandler.SaveAll()
+			Self.fileHandler.ListDir()
+			
+			stream = Self.fileHandler.ReadFile("test.bin")
+			if stream
+				For n = 0 to 255
+					Print String(stream.ReadInt())
+				Next
+			EndIf
+			Return 0
+		End Method
+End Class</textarea><br><br>filesystem.monkey<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Strict
+Import mojo
+
+Class FileSystem Extends DataConversion
+Private
+	Field _header:String = "MKYDATA"
+	Field fileData:String
+	Field index:StringMap&lt;FileStream&gt;
+Public
+	
+	Method New()
+		Self.LoadAll()
+	End
+	
+	Method WriteFile:FileStream(filename:String)
+		Local f:FileStream = new FileStream
+		f.filename = filename.ToLower()
+		f.fileptr = 0
+		Self.index.Insert(f.filename.ToLower(),f)
+		Return f	
+	End
+	
+	Method ReadFile:FileStream(filename:String)
+		filename = filename.ToLower()
+		Local f:FileStream
+		f = Self.index.ValueForKey(filename)
+		f.fileptr = 0
+		Return f
+	End
+	
+	Method FileExists:Bool(filename:String)
+		filename = filename.ToLower()
+		if Self.index.Contains(filename)
+			Return True
+		Else
+			Return False
+		End
+		Return False
+	End
+	
+	Method ListDir:Void()
+		Local filename:String
+		Local stream:FileStream
+		Print "Directory Listing:"
+		For filename = EachIn Self.index.Keys()
+			stream = Self.index.ValueForKey(filename)
+			Print filename + "   " + stream.data.Length()+" byte(s)."
+		Next
+	End
+	
+	Method DeleteFile:Void(filename:String)
+		filename = filename.ToLower()
+		if Self.index.Contains(filename)
+			Self.index.Remove(filename)
+		End
+	End
+	
+	Method SaveAll:Void()
+		Local f:FileStream
+		Self.fileData = Self._header'header
+		self.fileData+= Self.IntToString(Self.index.Count())'number of files in index
+		if Self.index.Count() &gt; 0
+			For f = EachIn Self.index.Values()
+				'store filename
+				Self.fileData+= Self.IntToString(f.filename.Length())
+				if f.filename.Length() &gt; 0
+					Self.fileData+= f.filename
+				End
+				'store data
+				Self.fileData+= Self.IntToString(f.data.Length())
+				if f.data.Length() &gt; 0
+					Self.fileData+= f.data
+				End
+			Next
+		End
+		SaveState(Self.fileData)
+	End
+	
+	Method LoadAll:Void()
+		Local numFiles:Int
+		Local stream:FileStream
+		Local len:Int
+		Local ptr:Int
+		Self.fileData = LoadState()
+		Print "Loaded data: " + Self.fileData
+		self.index = New StringMap&lt;FileStream&gt;
+		if Self.fileData.Length() &gt; 0
+			if Self.fileData.StartsWith(Self._header)
+				Self.index.Clear()
+				ptr+=Self._header.Length()
+				numFiles = Self.StringToInt(Self.fileData[ptr..ptr+4])
+				ptr+=4
+				Print "numFiles: " + numFiles
+				if numFiles &gt; 0				
+					For Local n:Int = 1 to numFiles
+						stream = New FileStream
+						'filename
+						len = Self.StringToInt(Self.fileData[ptr..ptr+4])
+						Print "Filename length " + n + ": " + len
+						ptr+=4
+						if len &gt; 0
+							stream.filename = Self.fileData[ptr..ptr+len]
+							ptr+=len
+						End
+						Print "Filename " + n + ": " + stream.filename
+						'data
+						len = Self.StringToInt(Self.fileData[ptr..ptr+4])
+						ptr+=4
+						if len &gt; 0
+							stream.data = Self.fileData[ptr..ptr+len]
+							ptr+=len
+						End
+						Print "Filedata length " + n + ": " + len
+						Print "Filedata " + n + ": " + stream.data
+						Self.index.Insert(stream.filename,stream)
+					Next
+				End
+			End
+				Print "***********************"
+		Else
+			SaveState("")'save empty file and indicate no files stored
+		End
+	End
+End
+
+
+
+Class FileStream Extends DataConversion
+	Field filename:String
+	Field fileptr:Int
+Private
+	Field data:String
+Public
+	
+	Method ReadInt:Int()
+		Local result:string
+		result = Self.data[Self.fileptr..self.fileptr+4]
+		Self.fileptr+=4
+		Return Self.StringToInt(result)
+	End
+	
+	Method WriteInt:Void(val:Int)
+		Self.data+=Self.IntToString(val)
+	End
+	
+	Method ReadString:String()
+		Local result:String
+		Local strLen:Int = self.StringToInt(self.data[self.fileptr..self.fileptr+4])
+		Self.fileptr+=4
+		if strLen &gt; 0
+			result = Self.data[Self.fileptr..self.fileptr+strLen]
+			Self.fileptr+=strLen
+		End
+		Return result
+	End
+	
+	Method WriteString:Void(val:String)
+		Self.data+=Self.IntToString(val.Length())
+		if val.Length() &gt; 0
+			Self.data+=val
+		End
+	End
+	
+	Method ReadFloat:Float()
+		Local result:float
+		Local s:String
+		Local strLen:Int = self.StringToInt(self.data[self.fileptr..self.fileptr+4])
+		Self.fileptr+=4
+		s = Self.data[Self.fileptr..self.fileptr+strLen]
+		result = Self.StringToFloat(s)
+		Self.fileptr+=strLen
+		Return result
+	End
+	
+	Method WriteFloat:Void(val:Float)
+		Local s:String = self.FloatToString(val)
+		Self.data+=Self.IntToString(s.Length())
+		Self.data+=s
+	End
+	
+	Method ReadBool:Bool()
+		Local result:Bool
+		result = Bool(Self.data[Self.fileptr])
+		Self.fileptr+=1
+		Return result
+	End Method
+	
+	Method WriteBool:Void(val:Bool)
+		Self.data+=String.FromChar(val)
+	End Method	
+End
+
+Class DataConversion
+	Method IntToString:String(val:Int)
+		Local result:String
+		result = String.FromChar((val) &amp; $FF)
+		result+= String.FromChar((val Shr 8) &amp; $FF)
+		result+= String.FromChar((val Shr 16) &amp; $FF)
+		result+= String.FromChar((val Shr 24) &amp; $FF)
+		Return result
+	End
+
+	Method FloatToString:String(val:Float)
+		Return String(val)
+	End		
+	
+	Method StringToInt:Int(val:String)
+		Local result:Int
+		result = (val[0])
+		result|= (val[1] Shl 8)
+		result|= (val[2] Shl 16)
+		result|= (val[3] Shl 24)
+		Return result
+	End
+	
+	
+	Method StringToFloat:Float(val:String)
+		Return Float(val)
+	End		
+End</textarea><br><br>If you run this code, it will create and save one file called "test.bin", of 1024 bytes.  Hit the Refresh button in Chrome, and it will reload the data (As it already exists).<br><br>Now close the browser (but NOT MServer) and run the program again.  It loads the header, and reports that there is one file, but the filename and filedata for the file are both empty.  Where's it gone?!  How can the file data be gone but the MKYDATA header and filecount are still there???<br><br>I've been trying to solve this since yesterday morning, not helped by the fact that we've had six power outages in the last 24 hours due to the crappy weather.  Its doing my head in now. <br><br></td></tr></table><br>
+<a name="2014821"></a>
+
+<a name="2014820"></a>
+
+<a name="2014819"></a>
+
+<a name="2014818"></a>
+
+<a name="2014823"></a>
+
+<a name="2014824"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GfK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just doing more testing and can confirm I have the exact same problem on my Mac (Lion).  Also tested in IE9, where SaveState does not seem to work at all. <br><br></td></tr></table><br>
+<a name="2014825"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Floyd</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Wild guess, but is the saved 'state' being treated the way strings are in C/C++? If so then this string ends at the first zero character ( byte? ). This would probably be within the bytes that encode the number of files. If you are doing this little-endian style then the number of files would read back correctly, but then end of string character is next.<br><br>What I mean is suppose there is one file. You would read the MKYDATA successfully. But the file count of 1 would be encoded as characters 1 0 0 0. You could read the 1, but the next 0 signals the end of the state string. <br><br></td></tr></table><br>
+<a name="2014826"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> The data is still there, it seems that it's not read in because the string is considered to be null terminated. It looks like the string read after a browser restart goes through a different code path.<br><br>You may have to work out how to store values without using a character code of 0. <br><br></td></tr></table><br>
+<a name="2014827"></a>
+
+<a name="2014828"></a>
+
+<a name="2014829"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GfK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> You may have to work out how to store values without using a character code of 0. <br></div><br><br>Hmmm... that's not going to be possible, is it?  Unless I store Ints that have been cast to strings but I don't really fancy that route.  Any suggestions?<br><br>*scurries away to test*<br><br>[edit] Oh, and just to clarify, I know I shouldn't develop for HTML5 - I'm only doing so because I don't like Monk (or any of the bodged text editor alternatives) therefore I can't code and test on my Mac.  That and its got the shortest build time. <br><br></td></tr></table><br>
+<a name="2014830"></a>
+
+<a name="2014831"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes it's possible but less efficient than it otherwise would be. Here's a messy implementation.<br><br><pre class=code>
+    Method IntToString:String(val:Int)
+        Local result:String
+        result = String.FromChar($F000 | ((val Shr 20) &amp; $0FFF) )
+        result += String.FromChar($F000 | ((val Shr 8) &amp; $0FFF))
+        result += String.FromChar($F000 | (val &amp; $00FF))
+        Return result
+    End
+        
+    Method StringToInt:Int(val:String,ind:Int)
+        Return ((val[ind]&amp;$0FFF) Shl 20) | ((val[ind+1]&amp;$0FFF) Shl 8) |(val[ind+2]&amp;$00FF)
+    End
+</pre><br><br>Just remember to change all your offsets to be three chars per integer rather than the four you were using or the two if you had changed to use my  version. <br><br></td></tr></table><br>
+<a name="2014832"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GfK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> So that will never store a zero anywhere? I'll give that a try.<br><br>I'm generally not very bright on this kind of stuff.  Any chance you could explain how/why it works?  I don't wan't to just copy/paste the code - I'd quite like to understand the logic behind it. <br><br></td></tr></table><br>
+<a name="2014837"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Okay, well the previous version split the 32-bit integer across two 16-bit char-codes (or yours above puts one byte in each of four char-codes). In order to ensure we don't have a zero char-code the new code is spreading the 32-bit integer across three char-codes and simply setting the first four spare bits of each char-code to 1 -- so even if the integer is zero, all the characters will be non-zero. The string to int process just reverses this and discards the extra bits and recombines the integer.<br><br>There's probably a smarter way to do it but it's way past my bedtime so it'll do for now. <br><br></td></tr></table><br>
+<a name="2014834"></a>
+
+<a name="2014835"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GfK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ahh, I see!  Thanks for that.<br><br>One more thing - in your code your StringToInt() method has an index parameter.  Why?  Wouldn't it be just the same if you hard-coded it to read chars 0, 1 and 2 of the string?  Or is there some reason you didn't do it that way? <br><br></td></tr></table><br>
+<a name="2014836"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> It avoids having to slice the input string all the time. You just pass the string and the starting index. <br><br></td></tr></table><br>
+<a name="2014838"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GfK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks, all working now! <br><br></td></tr></table><br>
+<a name="2014846"></a>
+
+<a name="2014848"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GfK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm.... actually it does still seem to be introducing zeros occasionally.  Think it's my code, though.... <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

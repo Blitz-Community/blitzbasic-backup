@@ -1,0 +1,411 @@
+<!DOCTYPE html><html lang="en" ><head ><title >FTP Client</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='an example of an FTP Client with BlitzMax, language=bmx, category=Networking'><meta name='author' content='Dirk Krause'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=4>Networking</a>/FTP Client</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2090.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >FTP Client by Dirk Krause</td><td align="right">2007 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Unfortunately far from complete or clean, but it's working on both Mac and win32. It shouldn't be hard to extend this to all possible FTP commands, but these were basically the one that I needed.<br><br>Everything happens in main, remember to change the credentials before using. </td></tr><tr ><td class="cell"><pre class="code">Strict 
+
+' http://tools.ietf.org/html/rfc959
+
+
+Global Server_Host:String
+Global Server_IP:Int
+Global Server_Port:Int
+Global Server_User:String
+Global Server_pwd:String
+
+Global Server_Socket:TSocket
+Global Server_SocketStream:TSocketStream
+Global Server_Stream:TStream
+
+
+
+Global isConnected:Int  = False
+Global isAborting:Int = False
+Global pasvPort:Int
+Global currentLine:String
+
+Function message(s:String)
+	Print s
+EndFunction
+
+Function messageOut(s:String)
+	message "OUT: " + s
+EndFunction
+
+Function messageIn(s:String)
+	message "IN:  " + s
+EndFunction
+
+Function messageSys(s:String)
+	message "SYS: " + s
+EndFunction
+
+Function messageDebug(s:String)
+	message "DBG: " + s
+EndFunction
+
+Function writeToServer(line:String)
+	If Server_Stream And SocketConnected(Server_Socket)
+		messageOut line
+		WriteLine(Server_Stream, line)
+	Else
+		message "You are not connected yet"
+	EndIf
+EndFunction
+
+
+Function receiveLineFromServer:String()
+	' time in milliseconds until timeout
+	Local threshold:Int = 3000
+	
+	Local start:Int = MilliSecs()
+	Local now:Int = 0
+
+	Local data:String
+	If Server_Stream And SocketConnected(Server_Socket)
+		While Not SocketReadAvail(Server_Socket) And ( (now - start) &lt; threshold )
+			now = MilliSecs()
+		Wend
+		If (now - start) &lt; threshold
+			If SocketReadAvail(Server_Socket)&gt;0
+		        data = ReadLine(Server_Stream)
+			EndIf
+	        If(data&lt;&gt;"")
+				messageIn data
+				currentLine = data
+				Return ""+data
+	        EndIf 
+		Else
+			messageSys "TIMEOUT in receiveLineFromServer"
+			isAborting = True
+		EndIf
+	EndIf
+EndFunction
+	
+Function send:String(s:String)
+	writeToServer(s)
+	Return receiveLineFromServer()
+EndFunction
+
+
+Function getDataAsText(p:Int)
+	Local dataSocket:TSocket = CreateTCPSocket()
+	Local dataSocketStream:TSocketStream
+	Local dataStream:TStream
+
+	messageDebug "trying to transfer some text on port " + String(p)
+	If ConnectSocket( dataSocket, Server_IP, p)
+		dataSocketStream = CreateSocketStream(dataSocket, True)
+		dataStream       = OpenStream(dataSocketStream)
+		If dataStream
+			While Not Eof(dataStream)
+				messageSys ReadLine(dataStream)
+			Wend
+			messageDebug "transferring some text"
+			CloseStream(dataStream)
+		Else
+			messageSys "stream failed"
+		EndIf
+		CloseSocket(dataSocket)
+	Else
+		messageSys "socket failed"
+	EndIf
+EndFunction
+
+
+Function getDataAsFile(p:Int, filename:String)
+	Local dataSocket:TSocket = CreateTCPSocket()
+	Local dataSocketStream:TSocketStream
+	Local dataStream:TStream
+	Local fileStream:TStream
+	
+	messageSys "trying to receive some data on port " + String(p)
+	If ConnectSocket( dataSocket, Server_IP, p)
+		dataSocketStream = CreateSocketStream(dataSocket, True)
+		dataStream       = OpenStream(dataSocketStream)
+		If dataStream
+			fileStream=WriteStream(filename)
+			CopyStream(dataSocketStream,fileStream)
+			messageSys "succesfully received file "+filename
+		Else
+			messageSys "stream failed"
+		EndIf
+	Else
+		messageSys "socket failed"
+	EndIf
+EndFunction
+
+
+Function sendDataAsFile(p:Int, filename:String)
+	Local dataSocket:TSocket = CreateTCPSocket()
+	Local dataSocketStream:TSocketStream
+	Local dataStream:TStream
+	Local fileStream:TStream
+	
+	messageSys "trying to send some data on port " + String(p)
+	If ConnectSocket( dataSocket, Server_IP, p)
+		dataSocketStream = CreateSocketStream(dataSocket, True)
+		dataStream       = OpenStream(dataSocketStream)
+		If dataStream
+			fileStream=ReadStream(filename)
+			CopyStream(fileStream, dataSocketStream)
+			messageSys "succesfully transfered file "+filename
+		Else
+			messageSys "stream failed"
+		EndIf
+	Else
+		messageSys "socket failed"
+	EndIf
+EndFunction
+
+
+
+Function _stringSplit:String[](text:String, separator:String)
+	Local splitArray:String[]
+	Local fieldCount:Int = 1
+	
+	' how many elements ?
+	Local loc:Int = text.find(separator)
+	While loc &gt;= 0
+		loc = text.find(separator, loc + 1)
+		fieldCount:+1
+	Wend
+	
+	' set the array with the calculated size
+	splitArray = New String[fieldCount]
+	
+	fieldcount = 0
+	While True
+		loc = text.find(separator)
+		If loc &gt;= 0 Then
+			splitArray[fieldCount] = text[..loc]
+			text = text[loc+1..]
+		Else
+			splitArray[fieldCount] = text
+			Exit
+		End If
+		fieldCount:+1
+	Wend
+	
+	Return splitArray
+End Function
+
+Function getPort(tempStr:String)
+	Local tempArray:String[]
+	tempArray = _stringSplit(tempStr, "(" )
+	
+	tempStr = tempArray[Len(tempArray) - 1]
+	tempStr= tempStr[0..Len(tempStr)-1]
+	tempArray= _stringSplit(tempStr, "," )
+	
+	Return Int(tempArray[Len(tempArray) - 2])*256 + Int(tempArray[Len(tempArray) - 1])
+EndFunction
+
+Function checkResult(s:String)
+	If s = "331" And currentLine[0..Len(s)] = "220"
+		' if we dont look for 220, get the rest of them
+		While currentLine[0..Len(s)] = "220"
+			messageDebug "receiving more to get rid of the 220's"
+			receiveLineFromServer()
+		Wend
+	EndIf
+
+	If currentLine[0..Len(s)] &lt;&gt; s 
+		messageDebug "check ("+s+") is wrong, got "+currentLine[0..Len(s)]+" ...aborting"
+		isAborting = True
+	Else
+		messageDebug "check is ok ("+s+")."
+		isAborting = False
+	EndIf
+EndFunction
+
+Function sendQuit()
+	send("quit")
+EndFunction
+
+Function sendCwd(foldername:String)
+	If Not isAborting
+		send("cwd "+foldername)
+		checkResult("250")
+	Else
+		messageDebug "... aborting sendCwd "+foldername
+	EndIf
+EndFunction
+
+Function sendRename(oldFilename:String, newFilename:String)
+	If Not isAborting
+		send("rnfr "+oldFilename)
+		checkResult("350")
+	Else
+		messageDebug "... aborting sendRename "+oldFilename
+	EndIf
+	If Not isAborting
+		send("rnto "+newFilename)
+		checkResult("250")
+	Else
+		messageDebug "... aborting sendRename "+newFilename
+	EndIf
+EndFunction
+
+Function sendCredentials()
+	If Not isAborting
+		send("user " + Server_User)
+		checkResult("331")
+		send("pass " + Server_pwd)
+		checkResult("230")
+		send("type i")
+		checkResult("200")
+	Else
+		messageDebug "... aborting sendCredentials"
+	EndIf
+EndFunction
+
+Function sendList()
+	If Not isAborting
+		pasvPort = getPort(send("pasv"))
+		checkResult("227")
+		writeToServer("list")
+		getDataAsText(pasvPort)
+		receiveLineFromServer()
+		checkResult("150")
+		receiveLineFromServer
+		checkResult("226")
+	Else
+		messageDebug "... aborting sendlist"
+	EndIf
+EndFunction
+
+Function sendGetData(filename:String)
+	If Not isAborting
+		pasvPort = getPort(send("pasv"))
+		checkResult("227")
+		writeToServer("retr "+filename)
+		getDataAsFile(pasvPort, filename)
+		receiveLineFromServer()
+		checkResult("150")
+		receiveLineFromServer
+		checkResult("226")
+	Else
+		messageDebug "... aborting sendgetdata"
+	EndIf
+EndFunction
+
+Function sendStoreData(filename:String)
+	If Not isAborting
+		pasvPort = getPort(send("pasv"))
+		checkResult("227")
+		writeToServer("stor "+filename)
+		sendDataAsFile(pasvPort, filename)
+		receiveLineFromServer()
+		checkResult("150")
+		receiveLineFromServer
+		checkResult("226")
+	Else
+		messageDebug "... aborting sendstoredata"
+	EndIf
+EndFunction
+
+Function main()
+	
+	' CHANGE THIS!
+	Server_Host = "localhost"
+	Server_IP   = HostIp(Server_Host)
+	Server_Port = 21
+	Server_User = "user"
+	Server_pwd  = "password"
+	
+		
+	If Server_IP = 0
+		messageSys "could not resolve servername ... are you online??"
+	EndIf
+		
+	If Server_Stream CloseStream(Server_SocketStream)
+	If Server_Socket CloseSocket(Server_Socket)
+
+	Server_Socket = CreateTCPSocket()
+	
+	If ConnectSocket( Server_Socket, Server_IP, Server_Port)
+		Server_SocketStream = CreateSocketStream(Server_Socket, True)
+		Server_Stream       = OpenStream(Server_SocketStream)
+		messageSys "connect ok"
+		isConnected = True
+		receiveLineFromServer()
+		checkResult("220")
+	Else
+		message "couldnt connect to " +  Server_Host
+		isConnected = False
+	EndIf
+	
+	If isConnected
+
+		sendCredentials()
+		sendList()
+		sendCwd("files")
+
+		sendRename("ddd.mp3", "ccc.mp3")
+
+		sendRename("ccc.mp3", "ddd.mp3")
+
+		sendList()
+		sendGetData("ddd.mp3")
+
+		sendStoreData("test.mp3")
+
+		sendQuit()
+	EndIf
+EndFunction
+
+main</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Grey Alien</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for this, very handy.  There were some differences on my server that meant I had to change sendList() to this:<br><br><pre class=code>
+Function sendList%()
+	If Not isAborting
+		pasvPort = getPort(send("pasv"))
+		checkResult("227")
+		writeToServer("list")
+		getDataAsText(pasvPort)
+		receiveLineFromServer()
+		checkResult("150")
+		receiveLineFromServer
+		checkResult("226")
+		receiveLineFromServer
+		checkResult("226")
+		Return 1
+	Else
+		messageDebug "... aborting sendlist"
+		Return 0
+	EndIf
+EndFunction
+</pre><br><br>Basically it has to receive TWO lots of 226.<br><br>Also sendStoreData() was failing for two reasons:<br><br>1) It calls sendDataAsFile which was not closing the socket, and so my server never sent the 226 success messages.  So I changed it to this:<br><br><pre class=code>
+	Local dataSocket:TSocket = CreateTCPSocket()
+	Local dataSocketStream:TSocketStream
+	Local dataStream:TStream
+	Local fileStream:TStream
+	
+	messageSys "trying to send some data on port " + String(p)
+	If ConnectSocket( dataSocket, Server_IP, p)
+		dataSocketStream = CreateSocketStream(dataSocket, True)
+		dataStream       = OpenStream(dataSocketStream)
+		If dataStream
+			fileStream=ReadStream(filename)
+			CopyStream(fileStream, dataSocketStream)
+			messageSys "succesfully transfered file "+filename
+		Else
+			messageSys "stream failed"
+		EndIf
+		CloseSocket(dataSocket)
+	Else
+		messageSys "socket failed"
+	EndIf
+</pre><br><br>2) It needs to receive TWO lots 226 as follows:<br><br><pre class=code>
+Function sendStoreData(filename:String)
+	If Not isAborting
+		pasvPort = getPort(send("pasv"))
+		checkResult("227")
+		writeToServer("stor "+filename)
+		sendDataAsFile(pasvPort, filename)
+		receiveLineFromServer()
+		checkResult("150")
+		receiveLineFromServer
+		checkResult("226")
+		receiveLineFromServer
+		checkResult("226")
+	Else
+		messageDebug "... aborting sendstoredata"
+	EndIf
+EndFunction
+</pre><br><br>Possibly other things are broken on my server too but I didn't test sendRename() or GetData() (which uses getDataAsFile() and that doesn't have a CloseSocket either, but I think maybe it's supposed to). <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ThePict</td><td align="right"><font class=tiny>2011</font></td></tr></table></td></tr><tr ><td class="posttext"> A real newby question here. <br><br>Will these functions do Uploading and Downloading of files like the FTP functions for BB did? <br><br>If this is the case then I am a lot nearer rewriting my game in BMax. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

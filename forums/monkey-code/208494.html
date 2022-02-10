@@ -1,0 +1,426 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Download File</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Download File</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >Download File</a><br><br>
+<a name="2087315"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pharmhaus</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I tried to use both streams and httprequest to download a file but they both got kinda stuck in the process or misinterpreted the file length resulting in corrupted files.<br>maybe it's just me, but it all felt so unintuitive that i had to fix things a little bit.<br>anyway, if someone else is looking for a way to download files, here it is :)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+#If TARGET&lt;&gt;"glfw" And TARGET&lt;&gt;"android" And TARGET&lt;&gt;"ios" And TARGET&lt;&gt;"stdcpp"
+#Error "Invalid target!"
+#Endif
+
+Strict
+
+Import brl.filestream
+Import brl.tcpstream
+
+Function Main:int()
+	Local h:= New HappyApp
+	h.Run()
+	Return 0
+End
+
+Class HappyApp Implements IOnDownloadUpdate
+
+	Method Run:Void()
+		
+		'Local D:= New AsyncDownload("dsfghjkhgf", Self, 1024) ' Invalid link
+		Local D:= New AsyncDownload("http://stilldrinking.org/blog_images/code-horror.gif", Self, 1024) ' Valid link
+		
+		While D.Finished = False
+			UpdateAsyncEvents()
+		Wend
+		
+		Print "finished... writing file"
+		
+		Local buf:DataBuffer = D.File
+		
+		If buf Then		
+			Local s:FileStream = FileStream.Open("C:\test.gif", "w")
+			s.WriteAll(buf, 0, buf.Length)
+			s.Close()
+		EndIf
+		
+	End
+	
+	Method DownloadUpdate:Void(D:AsyncDownload)
+		Print "Totalsize:" + D.Size
+		Print "Percentage: " + D.Percentage + "%"
+		Print "Remaining Bytes: " + D.Remaining
+	
+		If D.Finished
+			Print "Download completed!"
+		EndIf
+		
+		If D.Alive = False Then
+			Print "Download failed..."
+		EndIf
+		
+		If D.Remaining = 0
+			Print "No bytes remaining"
+		EndIf
+		
+		Print "~r~n"
+	End
+End
+
+Class AsyncDownload Implements IOnReceiveComplete, IAsyncEventSource
+	Private
+	
+	'///// Dataconnection
+	Field socket:Socket
+	Field stream:TcpStream
+	Field Buffer:DataBuffer
+	Field chunksize:Int		' how much to download per round
+	
+	'///// Download Info
+	Field host:String		' name of the host
+	Field file:String		' path of the file
+	Field filesize:int		' number of bytes to download
+	Field downloaded:Int 	' Number of bytes already download
+	
+	'///// Callback
+	Field Callback:IOnDownloadUpdate
+	
+	Public
+	
+	Method UpdateAsyncEvents:Void()
+		RemoveAsyncEventSource(Self)
+		If Callback Then Callback.DownloadUpdate(Self)
+		If filesize = -1 Then
+			filesize = 0
+		EndIf
+	End Method
+
+	
+	Method New(url:String, onUpdate:IOnDownloadUpdate, chunksize:int = 1024)
+		'Fix the URL so that everything will work properly
+		url = url.Replace("http://", "")
+		Local in:String = "."
+		Local slashPos:Int = url.Find("/")
+		
+		'Initialize Connection
+		socket = New Socket
+		stream = New TcpStream(socket)
+		Self.chunksize = chunksize
+		Callback = onUpdate
+		
+		'seperate the file from the address
+		If slashPos &lt;&gt; - 1
+			host = url[0 .. slashPos]
+			file = url[slashPos ..]
+		Else
+			filesize = -1
+			stream.Close()
+			socket = Null
+			AddAsyncEventSource(Self)
+			Return
+		EndIf
+		
+		'connect to the address
+	    If not (stream.Connect(host, 80)) Then
+			filesize = -1
+			stream.Close()
+			socket = Null
+			AddAsyncEventSource(Self)
+			Return
+		EndIf
+		
+		'Send a request to Download the File....
+		stream.WriteLine "GET " + file + " HTTP/1.0"
+	    stream.WriteLine "Host: " + host
+	    stream.WriteLine ""
+		
+		'Wait until the Server sends us all the information about the file, like size
+		While in &lt;&gt; ""
+			in = stream.ReadLine()
+			If in.Find("Content-Length:") &lt;&gt; - 1 Then
+				filesize = Int(in[15 ..].Trim())
+			EndIf
+		Wend
+		
+		Buffer = New DataBuffer(filesize)
+		
+		'Start the async part...
+		DownloadChunk()
+	End
+	
+	Method DownloadChunk:Void()
+		If (filesize - downloaded) &gt; chunksize Then
+			socket.ReceiveAllAsync(Buffer, downloaded, chunksize, Self)
+		Else
+			socket.ReceiveAllAsync(Buffer, downloaded, (filesize - downloaded), Self)
+		EndIf
+	End
+	
+	Method OnReceiveComplete:Void(data:DataBuffer, offset:Int, count:Int, source:Socket)
+		downloaded += count
+		If Callback Then Callback.DownloadUpdate(Self)
+		If downloaded &lt; filesize Then
+			DownloadChunk()
+		Else
+			stream.Close()
+		EndIf
+	End
+	
+	Method Size:int() Property
+		Return filesize
+	End
+	
+	Method Remaining:Int() Property
+		Return (filesize - downloaded)
+	End
+	
+	Method Percentage:Int() Property
+		If filesize &lt;= 0 Then
+			Return 0
+		Else
+			Return float(downloaded) / float(filesize) * 100
+		EndIf
+	End
+	
+	Method Finished:Bool() Property
+		Return (filesize = downloaded)
+	End
+	
+	Method File:DataBuffer() Property
+		Return Buffer
+	End
+	
+	Method Alive:Bool() Property
+		Return (socket &lt;&gt; Null)
+	End
+End
+
+Interface IOnDownloadUpdate
+
+	Method DownloadUpdate:Void(D:AsyncDownload)
+
+End
+
+</textarea> <br><br></td></tr></table><br>
+<a name="2087313"></a>
+
+<a name="2087312"></a>
+
+<a name="2092926"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >EdzUp</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> excellent just what I was looking for :D <br><br></td></tr></table><br>
+<a name="2092934"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nikoniko</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I am sorry - where is update() method? <br><br></td></tr></table><br>
+<a name="2092962"></a>
+
+<a name="2092963"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pharmhaus</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> It uses the async socket methods and is updated by calling UpdateAsyncEvents() in you main loop (wont work without).<br>This has the advantage that you application can do other things while donwloading (Reading the header is not async but shouldnt cause much of an overhead).<br>You can detect changes in progress by providing a "onUpdate:IOnDownloadUpdate" for the "New" method.<br>In the above example this is the HappyApp itself. Whenever a progress in download has been made the "DownloadUpdate" Method of HappyApp is called automatically.<br>This is the mainloop in the above example:<br><pre class=code>
+While D.Finished = False
+	UpdateAsyncEvents()
+Wend
+</pre> <br><br></td></tr></table><br>
+<a name="2092968"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >nikoniko</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> I see, you don't use mojo<br><br>Your code is working if change path to store file<br><br><pre class=code>		Local s:FileStream = FileStream.Open("monkey://data/test.gif", "w")</pre> <br><br></td></tr></table><br>
+<a name="2092972"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >EdzUp</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> I made some changes to the code for a project I am working on, seeing as levels are gonna be a few thousand bytes it works fine :)<br><br>Heres the code:<br><pre class=code>
+'
+'	Updater.monkey - Originally coded by Pharmhaus, modified by EdzUp
+'	Programmed by Pharmhaus, modified by: Ed 'EdzUp' Upton
+'
+
+#If TARGET&lt;&gt;"glfw" And TARGET&lt;&gt;"android" And TARGET&lt;&gt;"ios" And TARGET&lt;&gt;"stdcpp"
+	#Error "Invalid target!"
+#Endif
+
+Strict
+
+Import brl.filestream
+Import brl.tcpstream
+
+Class UpdaterClass Implements IOnDownloadUpdate
+	Method Check:String( url:String )		
+		Local D:= New AsyncDownload( url, Self, 1024 ) ' Valid link
+		
+		While D.Finished = False
+			UpdateAsyncEvents()
+		Wend
+		
+		Print "finished... writing file"
+		
+		Local buf:DataBuffer = D.File
+		
+		If buf Then
+			Return( buf.PeekString( 0 ) )
+		Endif		
+		
+		Return( "" )
+	End	
+
+	Method Download:Void( url:String, targetfile:String )		
+		Local D:= New AsyncDownload( url, Self, 1024 ) ' Valid link
+		
+		While D.Finished = False
+			UpdateAsyncEvents()
+		Wend
+		
+		Print "finished... writing file"
+		
+		Local buf:DataBuffer = D.File
+		
+		If buf Then		
+			Local s:FileStream = FileStream.Open( targetfile, "w" )
+			s.WriteAll(buf, 0, buf.Length)
+			s.Close()
+		Endif
+		
+	End	
+
+	Method DownloadUpdate:Void( D:AsyncDownload )
+		Print "Totalsize:" + D.Size
+		Print "Percentage: " + D.Percentage + "%"
+		Print "Remaining Bytes: " + D.Remaining
+	
+		If D.Finished
+			Print "Download completed!"
+		Endif
+		
+		If D.Alive = False Then
+			Print "Download failed..."
+		Endif
+		
+		If D.Remaining = 0
+			Print "No bytes remaining"
+		Endif
+		
+		Print "~r~n"
+	End
+End
+
+Global Update:UpdaterClass = New UpdaterClass
+
+Interface IOnDownloadUpdate
+	Method DownloadUpdate:Void(D:AsyncDownload)
+End
+
+Class AsyncDownload Implements IOnReceiveComplete, IAsyncEventSource
+	Private
+	
+	'///// Dataconnection
+	Field socket:Socket
+	Field stream:TcpStream
+	Field Buffer:DataBuffer
+	Field chunksize:Int		' how much to download per round
+	
+	'///// Download Info
+	Field host:String		' name of the host
+	Field file:String		' path of the file
+	Field filesize:Int		' number of bytes to download
+	Field downloaded:Int 	' Number of bytes already download
+	
+	'///// Callback
+	Field Callback:IOnDownloadUpdate
+	
+	Public
+	
+	Method UpdateAsyncEvents:Void()
+		RemoveAsyncEventSource(Self)
+		If Callback Then Callback.DownloadUpdate(Self)
+		If filesize = -1 Then
+			filesize = 0
+		EndIf
+	End Method
+
+	
+	Method New(url:String, onUpdate:IOnDownloadUpdate, chunksize:int = 1024)
+		'Fix the URL so that everything will work properly
+		url = url.Replace("http://", "")
+		Local in:String = "."
+		Local slashPos:Int = url.Find("/")
+		
+		'Initialize Connection
+		socket = New Socket
+		stream = New TcpStream(socket)
+		Self.chunksize = chunksize
+		Callback = onUpdate
+		
+		'seperate the file from the address
+		If slashPos &lt;&gt; - 1
+			host = url[0 .. slashPos]
+			file = url[slashPos ..]
+		Else
+			filesize = -1
+			stream.Close()
+			socket = Null
+			AddAsyncEventSource(Self)
+			Return
+		EndIf
+		
+		'connect to the address
+	    If not (stream.Connect(host, 80)) Then
+			filesize = -1
+			stream.Close()
+			socket = Null
+			AddAsyncEventSource(Self)
+			Return
+		Endif
+		
+		'Send a request to Download the File....
+		stream.WriteLine "GET " + file + " HTTP/1.0"
+	    stream.WriteLine "Host: " + host
+	    stream.WriteLine ""
+		
+		'Wait until the Server sends us all the information about the file, like size
+		While in &lt;&gt; ""
+			in = stream.ReadLine()
+			If in.Find("Content-Length:") &lt;&gt; - 1 Then
+				filesize = Int(in[15 ..].Trim())
+			EndIf
+		Wend
+		
+		Buffer = New DataBuffer(filesize)
+		
+		'Start the async part...
+		DownloadChunk()
+	End
+	
+	Method DownloadChunk:Void()
+		If (filesize - downloaded) &gt; chunksize Then
+			socket.ReceiveAllAsync(Buffer, downloaded, chunksize, Self)
+		Else
+			socket.ReceiveAllAsync(Buffer, downloaded, (filesize - downloaded), Self)
+		Endif
+	End
+	
+	Method OnReceiveComplete:Void(data:DataBuffer, offset:Int, count:Int, source:Socket)
+		downloaded += count
+		If Callback Then Callback.DownloadUpdate(Self)
+		If downloaded &lt; filesize Then
+			DownloadChunk()
+		Else
+			stream.Close()
+		Endif
+	End
+	
+	Method Size:Int() Property
+		Return filesize
+	End
+	
+	Method Remaining:Int() Property
+		Return (filesize - downloaded)
+	End
+	
+	Method Percentage:Int() Property
+		If filesize &lt;= 0 Then
+			Return 0
+		Else
+			Return Float(downloaded) / Float(filesize) * 100
+		Endif
+	End
+	
+	Method Finished:Bool() Property
+		Return (filesize = downloaded)
+	End
+	
+	Method File:DataBuffer() Property
+		Return Buffer
+	End
+	
+	Method Alive:Bool() Property
+		Return (socket &lt;&gt; Null)
+	End
+End
+</pre><br><br>Basically you can use:<br>Update.Check( url ) to return a string which contains a version number for example on my website I have version.txt that holds 0.1b(alpha) this is returned by the function<br>If its different from the game I can call Update.Download( url, target file) to download the files :)<br><br>All of this can be added by simply just including the file as a import and calling the Update methods :).<br><br>I would like to thank Pharmhaus for the original code with a little adjustment it works perfectly for what I want it for :) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,71 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Unusual array behavior apparently due to MemMove</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Unusual array behavior apparently due to MemMove</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Unusual array behavior apparently due to MemMove</a><br><br>
+<a name="1260151"></a>
+
+<a name="1260152"></a>
+
+<a name="1260153"></a>
+
+<a name="1260154"></a>
+
+<a name="1260156"></a>
+
+<a name="1260157"></a>
+
+<a name="1260158"></a>
+
+<a name="1260159"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pineapple</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I wrote a method which is meant to shift elements in an object array (called "buffer") to the left or right by some distance using MemMove. OBJECT_POINTER_SIZE is a constant assigned the value 4, since an object pointer is 4 bytes long.<br><br><pre class=code>    method shift( index%, count%, distance% )
+        local copysource@ ptr = byte ptr(buffer) + (index * OBJECT_POINTER_SIZE)
+        local copydest@ ptr = copysource + (distance * OBJECT_POINTER_SIZE)
+        local copysize% = count * OBJECT_POINTER_SIZE
+        memmove( copydest, copysource, copysize )
+    end method</pre><br><br>Sometimes, using this method results in apparently patternless (but consistent between executions of identical code) corruption of the array. For example, I stringified the array twice in a row with no operations between. The result was correct (identical strings) if I removed one method call significantly earlier in the program that would perform a shift, otherwise the console looked like this. Note the alteration of the third member. By commenting out various other lines I found that the member overwritten would change, but it would always become occupied by the object at index 0.<br><br><pre class=code>list: 1,2,A,B,C,E,F,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,a,b,c,d
+list: 1,2,1,B,C,E,F,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,a,b,c,d</pre><br><br>Why is this happening, and how can I fix it? I'm using 1.50 on OSX Mavericks. <br><br></td></tr></table><br>
+<a name="1260166"></a>
+
+<a name="1260167"></a>
+
+<a name="1260168"></a>
+
+<a name="1260169"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is just a wild guess (without so much as opening the IDE), but -<br><br>If you copy or overwrite object pointers using raw memory operations, BlitzMax will not be updating the reference counts for each object as it normally does. If the reference counts become out of sync, you might encounter serious problems.<br><br>In this case, say you have an array of size 10 populated with objects. You shift it right by one. The refcount for object [0] is now too low by one, because it's been copied unknown to the GC into [1]; the refcount for the previous inhabitant of [9] is also too high by one and the object will probably leak.<br><br>Now my <b>guess</b> is that if something happens to clear the array, object [0] will be freed too early because it has two references in the array but only one was counted. The object's memory will then be reused for a new object (Max pools small instances). However, there's still one "live" reference to the old object floating around somewhere in the program - because it was off-by-one - and that reference now "magically" points to some object completely unrelated to what it originally aimed at because the memory has been reused ahead of schedule.<br><br>A related guess is that this is why an operation much earlier in the program is affecting this array via spooky-action-at-a-distance; objects from that array have presumably gone through some reference inc/dec cycles and had the chance to suffer for their incorrect refcount. <br><br></td></tr></table><br>
+<a name="1260170"></a>
+
+<a name="1260171"></a>
+
+<a name="1260172"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I (personally) wouldn't be moving BBArray contents around internally from BlitzMax. If you really want to do hacky stuff like this, you are safer doing it C where you have complete control.<br><br>Note that copying objects like this will not auto-magically increase the refs of the copied objects. (depending on which GC you are using - there are two available, and I can't, off the top of my head, remember which is used for threaded and non-threaded).<br><br>Presumably you are also ensuring index + distance + count &lt; array.length ?<br><br>&lt;edit&gt;<br>Like what Yasha said ;-)<br>&lt;/edit&gt; <br><br></td></tr></table><br>
+<a name="1260176"></a>
+
+<a name="1260177"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pineapple</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> There shouldn't be any issues as a result of array length. And what's the next-best way to handle this after rewriting everything in C? Have I any better options than iterating and moving each element individually? <br><br></td></tr></table><br>
+<a name="1260178"></a>
+
+<a name="1260179"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Have I any better options than iterating and moving each element individually? <br></div><br>That would be the safest way :-)<br><br>Objects are not like Ints and friends. You can happily memmove blocks of ints and things around without any worries. However, due to the garbage-collector, you need to be careful to handle Objects correctly. Doing things with their pointers is not considered "correct" unless you know what you are doing. <br><br></td></tr></table><br>
+<a name="1260181"></a>
+
+<a name="1260183"></a>
+
+<a name="1260184"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> If you're only concerned about syntactic brevity and not performance, you should be able to work out something equally short using slices (and the fact that arrays can use the + operator). This will be slower though as it involves allocating new array objects.<br><br>If you really need performance, I guess you could work something out to correct the refcounts before the shift? But you really don't want to be playing with that stuff. It's hidden so that it can change in future (e.g. your code would break if you moved over to Brucey's compiler).<br><br>If you can change the types of object, you might also have some success replacing the array of object types with a memory buffer (probably not an array, <a href="/posts.php?topic=104099" target="_blank">extern type arrays are horribly broken in 1.50</a>) of extern types. This would be totally untracked by Max, with nothing to corrupt (but you do then need to manage the memory yourself somehow). This requires some C-level programming knowledge too, but at least it's a stable and official interface. <br><br></td></tr></table><br>
+<a name="1260185"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pineapple</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks much for the explanations. I'm trying to write substitutes for BlitzMax's native data structures and so performance is a priority, which is why I was hoping I could offload it onto simpler memory operations. I'm also wanting to have it written all in BlitzMax itself. So I'm settling for making friends with a for loop. (The aforementioned code was involved in an arraylist's insertion and removal methods.) Someday I need to find a different language to prefer working in. <br><br></td></tr></table><br>
+<a name="1260200"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote">  Someday I need to find a different language to prefer working in.  <br></div><br>Is there anything in particular you are struggling to accomplish with BlitzMax? <br><br></td></tr></table><br>
+<a name="1260254"></a>
+
+<a name="1260255"></a>
+
+<a name="1260256"></a>
+
+<a name="1260258"></a>
+
+<a name="1260259"></a>
+
+<a name="1260260"></a>
+
+<a name="1260261"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pineapple</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> I love BlitzMax's native libraries and its community (especially you - I can always count on you to help with my more confusing issues, you rock), I appreciate the ease of project management and compiling. No need for makefiles, forward declarations, or worrying over importing the same thing multiple times makes me happy. And since I've been developing with it for so long, making anything interesting in another language entails rewriting half of my personal BlitzMax libraries and convenience functions and such.<br><br>But its syntax could be denser, it could offer method inlining, multiple inheritance, operator overloading, templates, macros, more fleshed out preprocessor directives, actual constructors, cleaner generators, a less opaque GC, it could use normal operators. Having = instead of == and &lt;&gt; instead of != for example drives me up the wall. Not having a ternary operator, too. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,1551 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Verlet help</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Verlet help</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=119" >MiniB3D Module</a>/<a href="#bottom" >Verlet help</a><br><br>
+<a name="1111903"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I need some help from you guys... I was trying to port some old blitz3D code to miniB3D, which was a small verlet engine.<br><br>After porting everything - I could notice some of the cubes are "twitching" while others seems to behave normally... I have no idea why - I suspect it's the AlignToVector function...<br><br>On Blitz3D, everything works normally.<br><br>Below the miniB3d code: (quite large!)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+Import sidesign.minib3d
+
+Const VP_MAXPOINTS% = 20		'Extend these as far as necessary
+Const VP_MAXLINKS%  = 53
+
+Type verlet					'Verlet points
+    Global list:TList=CreateList()
+
+	Field cx#,cy#,cz#		'Current position
+	Field ox#,oy#,oz#		'Previous position
+	Field radius#			'Collision radius
+	Field pivot:TPivot		'3D entity (necessary For Collisions with non-VPhysics entities)
+	Field collided%			'True If verlet is in contact with another verlet Or B3D entity
+End Type
+
+Type vlink		'VLinks
+    Global list:TList=CreateList()
+
+	Field p1:verlet
+	Field p2:verlet
+	Field minlength#
+	Field maxlength#
+	Field offset#		'The actual distance between p1 And p2, To pass on To child link
+	Field parent:vlink	'Copy the length of another link (prevents rotation of hinges)
+End Type
+
+Type vpe		'Physics entities
+    Global list:TList=CreateList()
+
+	Field state%					'0=Inactive, no Collisions' 1=Active, VPhysics interactions
+	Field ptype	%					'Type of primitive: 1=single point, 2=cube, 3=ragdoll, 4=fabric
+	Field points%					'Number of VPoints
+	Field p:verlet[VP_MAXPOINTS]	'List of VPoints
+	Field links%					'Numver of VLinks
+	Field l:vlink[VP_MAXLINKS]		'List of VLinks
+	Field radius#
+	Field mesh:TMesh				'The mesh itself
+End Type
+
+
+Global VP_FPS#=25		'Fixed timestep For physics
+
+Global airres#=0.985	'Air resistance (ie: slowdown when ver.collided=False)
+Global colres#=0.8		'Ground resistance (ie: slowdown when ver.collided=True)
+Global gravity#=0.25
+
+Global physicstype%=2	' B3D Collsion Type of physics objects
+Global colType%=3		' collision type of static objects
+
+Graphics3D 800,600,0,2
+Global camera:TCamera=CreateCamera()
+
+PositionEntity camera,0,100,-100
+
+Local light:TLight = CreateLight()
+RotateEntity light,90,0,0
+
+Local ground:TMesh=CreateCube()
+ScaleMesh ground, 130,1,130
+MoveEntity ground,0,-1,0
+EntityColor ground,0,0,255
+EntityType ground,colType
+
+PointEntity camera, ground
+
+Local block:TMesh=CreateCube()
+ScaleEntity block,20,5,20
+EntityType block,colType
+
+Local cmesh:TMesh=CreateSphere()
+PositionEntity cmesh,20,30,0
+ScaleEntity cmesh,7,7,7
+EntityColor cmesh, 255,0,0
+
+Local t2:vpe=CreateVCube(cmesh,3.9,3.9,3.9, 4)
+
+Local count%=0
+Local countZ%=-40
+Local cubeMesh:TMesh=CreateCube()
+
+For Local f%=0 To 59
+	Local dmesh:TMesh=TMesh(CopyEntity(cubeMesh))
+    PositionEntity dmesh, -80 + count * 20,15+30, countZ
+    count=count+1
+    If count&gt;9 Then
+       count=0
+       countZ=countZ+20
+    End If
+	ScaleEntity dmesh,7,7,7
+	EntityColor dmesh,0,255,0
+	Local t1:vpe=CreateVCube(dmesh,4,4,4, 4.1)
+Next
+
+Local fps%=0
+Local phystime#=1000.0/VP_FPS
+Local ctime%=MilliSecs()
+Local accum#=0
+
+Local SC_FPS%=60	'Desired framerate
+Local rtime%=Floor(1000.0/SC_FPS)
+Local limited%=True
+Local render_time%=MilliSecs()
+Local frames%=0
+
+Collisions physicstype,colType,2,2
+
+While Not KeyDown(KEY_ESCAPE)
+	Local dtime%=(MilliSecs()-ctime)
+	accum=accum+(MilliSecs()-ctime)
+	ctime=MilliSecs()
+	
+	While accum&gt;=phystime	'This is the update loop For ALL time-dependent functions, Not just physics
+		
+		UpdateVP
+	
+		'Forces need To stay within this loop
+		ApplyForce(t2,(KeyDown(KEY_RIGHT)-KeyDown(KEY_LEFT))/2.0,4*KeyHit(KEY_SPACE),(KeyDown(KEY_UP)-KeyDown(KEY_DOWN))/2.0)
+			
+		IntegrateVP 3
+
+    	UpdateWorld 0
+		
+		accum=accum-phystime
+	Wend
+
+	If MilliSecs()-render_time=&gt;1000 Then 
+	   fps=frames
+	   frames=0
+	   render_time=MilliSecs()
+	Else 
+	   frames=frames+1
+	End If
+	
+	RenderWorld 'accum/phystime
+	
+	BeginMax2D()
+	 DrawText "FPS: "+fps,0,30
+	EndMax2D()
+
+	Delay (rtime-(MilliSecs()-ctime))-(limited+1)
+	'Insert VWait Parameter Here
+	Flip 0 'limited
+Wend
+
+End
+
+
+Function AddVerlet:verlet(ent:TEntity,x#,y#,z#,r#)		'Places the VPoint at x,y,z relative To entity
+	Local ver:verlet=New verlet
+	
+	ver.cx#=EntityX(ent,1)+x
+	ver.ox#=ver.cx#
+	ver.cy#=EntityY(ent,1)+y
+	ver.oy#=ver.cy#
+	ver.cz#=EntityZ(ent,1)+z
+	ver.oz#=ver.cz#
+	ver.radius#=r
+	
+	ver.pivot=CreatePivot()
+	PositionEntity ver.pivot,ver.cx,ver.cy,ver.cz,1
+	ResetEntity ver.pivot	'Make sure it doesn't collide with anything before things begin
+	EntityRadius ver.pivot,r
+	EntityType ver.pivot,physicstype
+	
+	ListAddLast verlet.list, ver
+	
+	Return ver
+End Function
+
+Function FreeVerlet(ver:verlet)
+	For Local link:vlink=EachIn vlink.list
+		If link.p1=ver Or link.p2=ver Then ListRemove vlink.list, link; link=Null
+	Next
+	ver=Null
+End Function
+
+Function LinkVerlets:vlink(v1:verlet,v2:verlet,forced#=0,maxlen#=0,p:vlink=Null)	'p=Handle(parent:vlink), because Null isn't a constant
+	Local link:vlink=New vlink
+	link.p1=v1
+	link.p2=v2
+	
+	Local dx#=v1.cx-v2.cx
+	Local dy#=v1.cy-v2.cy
+	Local dz#=v1.cz-v2.cz
+	Local length#=Sqr(dx*dx+dy*dy+dz*dz)
+	
+	If forced=0
+		link.minlength=length
+	Else
+		link.minlength=forced
+	EndIf
+	
+	link.maxlength=link.minlength
+	If maxlen&gt;0 Then link.maxlength=maxlen
+	If maxlen&lt;0 Then link.maxlength=length	'In Case the starting positions are the Max length
+	
+	If p=Null
+		link.parent=Null
+	Else
+		link.parent=p
+	EndIf
+	
+	ListAddLast vlink.list, link
+	
+	Return link
+End Function
+
+Function UnlinkVerlets(v1:verlet,v2:verlet)
+	For Local link:vlink=EachIn vlink.list
+		If (link.p1=v1 And link.p2=v2) Or (link.p1=v2 And link.p2=v1)
+			'Delete link
+			ListRemove vlink.list, link
+			link=Null
+		EndIf
+	Next
+End Function
+
+Function CreateVPoint:vpe(mesh:TMesh,x#=0,y#=0,z#=0,radius#=1,yradius#=0)
+	Local point:vpe=New vpe
+	point.state=1
+	point.mesh=mesh
+	point.ptype=1
+	point.points=1
+	point.links=0
+	
+	point.p[1]=AddVerlet(mesh,x,y,z,radius)
+	
+	ListAddLast vpe.list, point
+	
+	'Adjust the Y radius here If desired - For characters
+	
+	Return point
+End Function
+
+Function CreateVCube:vpe(mesh:TMesh,xs#=1,ys#=1,zs#=1,rs#=1)
+	Local cube:vpe=New vpe
+	cube.state=1
+	cube.mesh=mesh
+	cube.ptype=2
+	cube.points=9
+	cube.links=30
+	
+	cube.p[1]=AddVerlet(mesh, xs, ys, zs,rs)
+	cube.p[2]=AddVerlet(mesh,-xs, ys, zs,rs)
+	cube.p[3]=AddVerlet(mesh,-xs, ys,-zs,rs)
+	cube.p[4]=AddVerlet(mesh, xs, ys,-zs,rs)
+	cube.p[5]=AddVerlet(mesh, xs,-ys, zs,rs)
+	cube.p[6]=AddVerlet(mesh,-xs,-ys, zs,rs)
+	cube.p[7]=AddVerlet(mesh,-xs,-ys,-zs,rs)
+	cube.p[8]=AddVerlet(mesh, xs,-ys,-zs,rs)
+
+	cube.l[1]=LinkVerlets(cube.p[1],cube.p[2])
+	cube.l[2]=LinkVerlets(cube.p[2],cube.p[3])
+	cube.l[3]=LinkVerlets(cube.p[3],cube.p[4])
+	cube.l[4]=LinkVerlets(cube.p[4],cube.p[1])
+	cube.l[5]=LinkVerlets(cube.p[5],cube.p[6])
+	cube.l[6]=LinkVerlets(cube.p[6],cube.p[7])
+	cube.l[7]=LinkVerlets(cube.p[7],cube.p[8])
+	cube.l[8]=LinkVerlets(cube.p[8],cube.p[5])
+	cube.l[9]=LinkVerlets(cube.p[1],cube.p[5])
+	cube.l[10]=LinkVerlets(cube.p[2],cube.p[6])
+	cube.l[11]=LinkVerlets(cube.p[3],cube.p[7])
+	cube.l[12]=LinkVerlets(cube.p[4],cube.p[8])
+
+	cube.l[13]=LinkVerlets(cube.p[2],cube.p[4])
+	cube.l[14]=LinkVerlets(cube.p[2],cube.p[5])
+	cube.l[15]=LinkVerlets(cube.p[3],cube.p[6])
+	cube.l[16]=LinkVerlets(cube.p[3],cube.p[8])
+	cube.l[17]=LinkVerlets(cube.p[4],cube.p[5])
+	cube.l[18]=LinkVerlets(cube.p[6],cube.p[8])
+	cube.l[19]=LinkVerlets(cube.p[2],cube.p[8])
+	cube.l[20]=LinkVerlets(cube.p[4],cube.p[6])
+	cube.l[21]=LinkVerlets(cube.p[1],cube.p[7])
+	cube.l[22]=LinkVerlets(cube.p[3],cube.p[5])
+	
+	Local cs#=xs
+	If cs&lt;ys Then cs=ys		'Fit the centre point To the smallest dimension
+	If cs&lt;zs Then cs=zs
+	cs=cs+rs				'Then add corner radius To fill out the sides
+	cube.p[9]=AddVerlet(mesh,0,0,0,cs)
+	
+	cube.l[23]=LinkVerlets(cube.p[1],cube.p[9])
+	cube.l[24]=LinkVerlets(cube.p[7],cube.p[9])
+	cube.l[25]=LinkVerlets(cube.p[3],cube.p[9])
+	cube.l[26]=LinkVerlets(cube.p[5],cube.p[9])
+	cube.l[27]=LinkVerlets(cube.p[2],cube.p[9])
+	cube.l[28]=LinkVerlets(cube.p[8],cube.p[9])
+	cube.l[29]=LinkVerlets(cube.p[4],cube.p[9])
+	cube.l[30]=LinkVerlets(cube.p[6],cube.p[9])
+	
+	ListAddLast vpe.list, cube
+	
+	Return cube
+End Function
+
+Function FreeVEntity(ent:vpe)
+	For Local v%=1 To ent.points
+		FreeVerlet(ent.p[v])
+	Next
+	ent=Null
+End Function
+
+Function HideVEntity(ent:vpe,hidemesh%=False)
+	For Local v%=1 To ent.points
+		HideEntity ent.p[v].pivot
+	Next
+	ent.state=False
+	If hidemesh Then HideEntity ent.mesh
+End Function
+
+Function ShowVEntity(ent:vpe)
+	For Local v%=1 To ent.points
+		ShowEntity ent.p[v].pivot
+	Next
+	ent.state=True
+	ShowEntity ent.mesh
+End Function
+
+Function SetColType(ent:vpe,ctype%)
+	For Local v%=1 To ent.points
+		EntityType ent.p[v].pivot,ctype
+	Next
+End Function
+
+Function ApplyForce(ent:vpe,x#,y#,z#)
+	If ent.state
+		For Local v%=1 To ent.points
+			Local ver:verlet=ent.p[v]
+			ver.cx=ver.cx+x
+			ver.cy=ver.cy+y
+			ver.cz=ver.cz+z
+		Next
+	EndIf
+End Function
+
+Function SetForce(ent:vpe,x#,y#,z#)
+	If ent.state
+		For Local v%=1 To ent.points
+			Local ver:verlet=ent.p[v]
+			ver.ox=ver.cx
+			ver.oy=ver.cy
+			ver.oz=ver.cz
+			ver.cx=ver.cx+x
+			ver.cy=ver.cy+y
+			ver.cz=ver.cz+z
+		Next
+	EndIf
+End Function
+
+Function ApplyPointForce(ver:verlet,x#,y#,z#)
+	ver.cx=ver.cx+x
+	ver.cy=ver.cy+y
+	ver.cz=ver.cz+z
+End Function
+
+Function SetPointForce(ver:verlet,x#,y#,z#)
+	ver.ox=ver.cx
+	ver.oy=ver.cy
+	ver.oz=ver.cz
+	ver.cx=ver.cx+x
+	ver.cy=ver.cy+y
+	ver.cz=ver.cz+z
+End Function
+
+Function MoveVerlet(ver:verlet,x#,y#,z#,n%=1,r%=1)
+	ver.cx=ver.cx+x
+	ver.cy=ver.cy+y
+	ver.cz=ver.cz+z
+	If n
+		ver.ox=ver.cx
+		ver.oy=ver.cy
+		ver.oz=ver.cz
+	Else
+		ver.ox=ver.cx+x
+		ver.oy=ver.cy+y
+		ver.oz=ver.cz+z
+	EndIf
+	PositionEntity ver.pivot,ver.cx,ver.cy,ver.cz
+	If r Then ResetEntity ver.pivot
+End Function
+
+Function MoveVEntity(ent:vpe,x#,y#,z#,n%=1,r%=1)
+	For Local v%=1 To ent.points
+		Local ver:verlet=ent.p[v]
+		ver.cx=ver.cx+x
+		ver.cy=ver.cy+y
+		ver.cz=ver.cz+z
+		If n
+			ver.ox=ver.cx
+			ver.oy=ver.cy
+			ver.oz=ver.cz
+		Else
+			ver.ox=ver.cx+x
+			ver.oy=ver.cy+y
+			ver.oz=ver.cz+z
+		EndIf
+		PositionEntity ver.pivot,ver.cx,ver.cy,ver.cz
+		If r Then ResetEntity ver.pivot
+	Next
+	TranslateEntity ent.mesh,x,y,z,1
+End Function
+
+Function PositionVerlet(ver:verlet,x#,y#,z#,n%=1)
+	If n
+		ver.ox=x
+		ver.oy=y
+		ver.oz=z
+	Else
+		ver.ox=x-(ver.cx-ver.ox)
+		ver.oy=y-(ver.cy-ver.oy)
+		ver.oz=z-(ver.cz-ver.oz)
+	EndIf
+	ver.cx=x
+	ver.cy=y
+	ver.cz=z
+	PositionEntity ver.pivot,ver.cx,ver.cy,ver.cz
+	ResetEntity ver.pivot
+End Function
+
+Function PositionVEntity(ent:vpe,x#,y#,z#,n%=1)
+	For Local v%=1 To ent.points
+		Local ver:verlet=ent.p[v]
+		If n
+			ver.ox=x
+			ver.oy=y
+			ver.oz=z
+		Else
+			ver.ox=x-(ver.cx-ver.ox)
+			ver.oy=y-(ver.cy-ver.oy)
+			ver.oz=z-(ver.cz-ver.oz)
+		EndIf
+		ver.cx=x+(ver.cx-EntityX(ent.mesh,1))
+		ver.cy=y+(ver.cy-EntityY(ent.mesh,1))
+		ver.cz=z+(ver.cz-EntityZ(ent.mesh,1))
+		PositionEntity ver.pivot,ver.cx,ver.cy,ver.cz
+		ResetEntity ver.pivot
+	Next
+	PositionEntity ent.mesh,x,y,z,1
+End Function
+
+Function IntegrateVP(itns%)
+	Local dx#,dy#,dz#,length#,diff#
+
+	For Local vb:vpe=EachIn vpe.list
+	If vb.state		'Proceed If vb is activated
+	For Local v%=2 To vb.points
+		Local ver:verlet=vb.p[v]
+		Local drag#=airres
+		If ver.collided Then drag=colres
+		
+		Local xvel#=(ver.cx-ver.ox)*drag
+		If Abs(xvel)&lt;0.02 Then xvel=0	'Remove tiny errors that cause things To spin without forces:::
+		ver.ox=ver.cx
+		ver.cx=ver.cx+xvel
+
+		Local yvel#=(ver.cy-ver.oy)*drag
+		If Abs(yvel)&lt;0.02 Then yvel=0
+		ver.oy=ver.cy
+		ver.cy=ver.cy+yvel-gravity
+		
+		Local zvel#=(ver.cz-ver.oz)*drag
+		If Abs(zvel)&lt;0.02 Then zvel=0	':::which actually speeds up simulation
+		ver.oz=ver.cz
+		ver.cz=ver.cz+zvel
+		
+		'Collisions
+		ver.collided=False
+		Local dx#, dy#,dz#, dd#, tr#
+		
+		For Local vt:vpe=EachIn vpe.list
+			If vt&lt;&gt;vb And vt.state		'Check that vt is also activated
+				For Local v2%=1 To vt.points Step 2
+					Local vet:verlet=vt.p[v2]
+					dx = ver.cx-vet.cx
+					dy = ver.cy-vet.cy
+					dz = ver.cz-vet.cz
+					dd = (dx*dx+dy*dy+dz*dz)
+					tr = (ver.radius+vet.radius) * (ver.radius+vet.radius)
+					If dd&lt;tr	'If the verlets are nearer together than their combined radii
+					    dd=Sqr(dd)
+                        tr=(ver.radius+vet.radius) 
+						Local ddt#=dd-tr
+						Local ddx#=ddt*(dx/dd)
+						Local ddy#=ddt*(dy/dd)
+						Local ddz#=ddt*(dz/dd)
+						
+						ver.cx=ver.cx-ddx
+						ver.cy=ver.cy-ddy
+						ver.cz=ver.cz-ddz
+						
+						vet.cx=vet.cx+ddx
+						vet.cy=vet.cy+ddy
+						vet.cz=vet.cz+ddz
+						
+						ver.collided=True
+					EndIf
+				Next
+			EndIf
+		Next
+			
+		'Screen boundaries
+		If ver.cx&lt;=-100 Then ver.cx=-100
+		If ver.cz&lt;=-100 Then ver.cz=-100
+		If ver.cx&gt;=100 Then ver.cx=100
+		If ver.cy&gt;=100 Then ver.cy=100
+		If ver.cz&gt;=125 Then ver.cz=125
+	Next
+	EndIf	'State
+	Next	'vpe
+
+	For Local vb:vpe=EachIn vpe.list
+		If vb.state		'Proceed If vb is activated
+		    Local dx#, dy#, dz#
+			For Local loop% = 1 To itns	'iterations
+				For Local link%=1 To vb.links
+					Local c:vlink=vb.l[link]
+					dx =c.p2.cx - c.p1.cx
+					dy =c.p2.cy - c.p1.cy
+					dz =c.p2.cz - c.p1.cz
+					
+					length=(dx*dx+dy*dy+dz*dz)	'distance between p1 And p2
+			
+					If length&gt;0
+					    length=Sqr(length)
+						If c.parent=Null
+							diff=0
+							c.offset=length
+							If length&lt;c.minlength Then 
+							   diff=(length-c.minlength)/length
+							   c.offset=c.minlength	'vector length minus vlink length
+							Else
+							   If length&gt;c.maxlength Then 
+							      diff=(length-c.maxlength)/length
+							      c.offset=c.maxlength
+							    End If
+							End If
+						Else
+							diff=(length-c.parent.offset)/length	'Snap To length of parent
+						EndIf
+					EndIf
+			
+					'dx=dx/Float(2.0)
+					'dy=dy/Float(2.0)
+					'dz=dz/Float(2.0)	'find the midpoint
+					
+					Local diffx#=diff*dx*0.5
+					Local diffy#=diff*dy*0.5
+					Local diffz#=diff*dz*0.5
+			
+					c.p1.cx=c.p1.cx+diffx '* 0.5
+					c.p1.cy=c.p1.cy+diffy '* 0.5
+					c.p1.cz=c.p1.cz+diffz '* 0.5
+			
+					c.p2.cx=c.p2.cx-diffx '* 0.5
+					c.p2.cy=c.p2.cy-diffy '* 0.5
+					c.p2.cz=c.p2.cz-diffz '* 0.5
+				Next	'VLinks
+			Next	'Iterations
+		EndIf	'State
+        
+	Next	'vpe
+	
+	For Local ver:verlet=EachIn verlet.list
+		PositionEntity ver.pivot,ver.cx,ver.cy,ver.cz,1
+	Next
+End Function
+
+Function UpdateVP()
+	For Local ver:verlet=EachIn verlet.list
+		If CountCollisions(ver.pivot)
+			ver.cx=EntityX(ver.pivot,1)
+			ver.cy=EntityY(ver.pivot,1)
+			ver.cz=EntityZ(ver.pivot,1)
+			ver.collided=True
+		EndIf
+	Next
+
+	For Local body:vpe=EachIn vpe.list
+		If body.state
+			If body.ptype=1
+				If body.mesh&lt;&gt;Null Then PositionEntity body.mesh,body.p[1].cx,body.p[1].cy,body.p[1].cz
+			EndIf
+			If body.ptype=2
+				Local mx#=(body.p[3].cx+body.p[5].cx)/Float(2.0)
+				Local my#=(body.p[3].cy+body.p[5].cy)/Float(2.0)
+				Local mz#=(body.p[3].cz+body.p[5].cz)/Float(2.0)
+				PositionEntity body.mesh,mx,my,mz,1	
+				AlignToVector2 body.mesh,(body.p[1].cx+body.p[3].cx)/Float(2.0)-mx, (body.p[1].cy+body.p[3].cy)/Float(2.0)-my, (body.p[1].cz+body.p[3].cz)/Float(2.0)-mz,2 ',1
+				AlignToVector2 body.mesh,(body.p[4].cx+body.p[5].cx)/Float(2.0)-mx, (body.p[4].cy+body.p[5].cy)/Float(2.0)-my, (body.p[4].cz+body.p[5].cz)/Float(2.0)-mz,3 ',1
+			EndIf
+		EndIf
+	Next
+End Function
+
+Function AlignToVector2(ent:TEntity, vx:Float,vy:Float,vz:Float,axis%=1, rate#=1)
+	If axis&lt;1 Or axis&gt;3 Then Return
+
+	Local dd# = Magnitude(vx,vy,vz)
+	If dd &lt; 0.0001 Then Return
+	
+	vx = vx / dd
+	vy = vy / dd
+	vz = vz / dd	
+
+	Local m:TMatrix = TMatrix.Create()	
+	RotateEntity ent,0,0,0,1
+			
+	'get world axis	
+	Local ax#, ay#, az#
+	If (axis=1) Then ax=1; ay=0; az=0
+	If (axis=2) Then ax=0; ay=1; az=0
+	If (axis=3) Then ax=0; ay=0; az=1
+	
+ 	'get transformation matrix from org. axis to new one
+	m.FromToRotation(ax,ay,az, vx,vy,vz)
+	TurnEntity ent, 180+m.getPitch(), -180+m.getYaw(), m.getRoll()
+	
+End Function
+
+'Version 18 june 23:58
+Type TMatrix
+
+	Field grid#[4,4]
+	
+	Function Create:TMatrix()
+	
+		Local m:TMatrix = New TMatrix
+		m.LoadIdentity()
+		Return m
+		
+	End Function
+	
+	Method LoadIdentity()
+	
+		MemClear (Varptr(grid[0,0]), SizeOf(grid))
+
+		grid[0,0]=1.0 
+		grid[1,1]=1.0 
+		grid[2,2]=1.0 
+		grid[3,3]=1.0
+		
+	End Method
+	
+	Rem bbdoc: Gets the current pitch of the matrix
+	End Rem
+	Method GetPitch#()
+
+		Local x# = grid[2,0]
+		Local y# = grid[2,1]
+		Local z# = grid[2,2]
+		Return -ATan2( y, Sqr( x*x+z*z ) )
+		
+	End Method
+
+	Rem bbdoc: Gets the current yaw of the matrix
+	End Rem
+	Method GetYaw#()
+	
+		Local x# = grid[2,0]
+		Local z# = grid[2,2]	
+		Return ATan2( x,z )
+		
+	End Method
+	
+	Rem bbdoc: Gets the current roll of the matrix
+	End Rem
+	Method GetRoll#()
+	
+		Local iy# = grid[0,1]
+		Local jy# = grid[1,1]
+		Return ATan2( iy, jy )
+	
+	End Method
+	
+	
+'-----------------------------------------------------------------------------------------------------------------------------------
+'											FromToRotation()
+'-----------------------------------------------------------------------------------------------------------------------------------
+Rem
+ * A Function For creating a rotation matrix that rotates a vector called
+ * "from" into another vector called "to".
+ * Input : from[3], To[3] which both must be *normalized* non-zero vectors
+ * Output: mtx[3][3] -- a 3x3 matrix in colum-major form
+ * Authors: Tomas Möller, John Hughes
+ *          "Efficiently Building a Matrix to Rotate One Vector to Another"
+ *          Journal of Graphics Tools, 4(4):1-4, 1999
+EndRem
+	Method FromToRotation:TMatrix(ix#,iy#,iz#, jx#,jy#,jz#)
+
+	  Local hvx#, hvz#, hvxy#, hvxz#, hvyz#
+	  Local dotu#, dotv#, dotuv#
+	  Local u#[3], v#[3]
+	  Local c1#,c2#,c3#
+	  Local x0#,x1#,x2#
+	  Local e#, h#
+	  Local i:Int, j:Int
+	
+	  'v = cross(from, To)
+	  v[0] = iy * jz - iz * jy
+	  v[1] = iz * jx - ix * jz
+	  v[2] = ix * jy - iy * jx
+	
+	  'e = DOT(from, To);
+	  e = ix * jx + iy * jy + iz * jz
+	
+	  If (Abs(e) &gt; 1.0 - 0.000001) Then     '/* "from" And "to"-vector almost parallel */
+	  
+	    x0# = Abs(ix)
+	    x1# = Abs(iy)
+	    x2# = Abs(iz)
+	
+	    If (x0 &lt; x1)
+	      If (x0 &lt; x2)
+	        x0 = 1.0 
+	 	    x1 = 0.0 
+	        x2 = 0.0
+	      Else
+	        x2 = 1.0 
+	        x0 = 0.0 
+	        x1 = 0.0
+	      End If    
+	    Else
+	      If (x1 &lt; x2)
+	        x1 = 1.0
+	        x0 = 0.0
+	        x2 = 0.0
+	      Else
+	        x2 = 1.0
+	        x0 = 0.0
+	        x1 = 0.0
+	 	 End If
+	    End If
+	
+	    u[0] = x0 - ix 
+	    u[1] = x1 - iy
+	    u[2] = x2 - iz
+	
+	    v[0] = x0 - jx
+	    v[1] = x1 - jy
+	    v[2] = x2 - jz
+	
+	    dotu#  = u[0] * u[0] + u[1] * u[1] + u[2] * u[2]
+	    dotv#  = v[0] * v[0] + v[1] * v[1] + v[2] * v[2]
+	    dotuv# = u[0] * v[0] + u[1] * v[1] + u[2] * v[2]
+	
+	    If dotu &lt;&gt; 0 Then c1# = 2.0 / dotu Else c1# = 10000
+	    If dotv &lt;&gt; 0 Then c2# = 2.0 / dotv Else c2# = 10000
+	    c3# = c1 * c2 * dotuv#
+	
+          For i:Int = 0 To 2
+	      For j:Int = 0 To 2
+		   grid[j,i] = - c1 * u[i] * u[j] ..
+		               - c2 * v[i] * v[j] ..
+		               + c3 * v[i] * u[j]
+	      Next
+	      grid[i,i] = grid[i,i] + 1.0;
+	    Next
+		  
+	  Else  ' the most common Case, unless "from"="to", Or "from"=-"to" */
+	
+	    h = 1.0/(1.0 + e)      '/* optimization by Gottfried Chen */
+	    hvx = h * v[0]
+	    hvz = h * v[2]
+	    hvxy = hvx * v[1]
+	    hvxz = hvx * v[2]
+	    hvyz = hvz * v[1]
+	    grid[0,0] = e + hvx * v[0]
+	    grid[1,0] = hvxy - v[2]
+	    grid[2,0] = hvxz + v[1]
+	
+	    grid[0,1] = hvxy + v[2]
+	    grid[1,1] = e + h * v[1] * v[1]
+	    grid[2,1] = hvyz - v[0]
+	
+	    grid[0,2] = hvxz - v[1]
+	    grid[1,2] = hvyz + v[0]
+	    grid[2,2] = e + hvz * v[2]
+	
+	  End If
+	
+	  grid[3,0] = 0
+	  grid[3,1] = 0
+	  grid[3,2] = 0
+	  grid[0,3] = 0
+      grid[1,3] = 0
+      grid[2,3] = 0
+      grid[3,3] = 1
+		
+	End Method
+
+End Type
+
+
+Rem bbdoc: Gets the magnitude of the vector
+End Rem
+Function Magnitude#( x#, y#, z# )
+	Return Sqr( x*x + y*y + z*z )
+End Function
+</textarea><br><br>And below, the original code, on Blitz3D:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Const VP_MAXPOINTS = 20		;Extend these as far as necessary
+Const VP_MAXLINKS = 52
+
+Type verlet		;Verlet points
+	Field cx#,cy#,cz#	;Current position
+	Field ox#,oy#,oz#	;Previous position
+	Field radius#		;Collision radius
+	Field pivot			;3D entity (necessary for collisions with non-VPhysics entities)
+	Field collided		;True if verlet is in contact with another verlet or B3D entity
+End Type
+
+Type vlink		;VLinks
+	Field p1.verlet
+	Field p2.verlet
+	Field minlength#
+	Field maxlength#
+	Field offset#		;The actual distance between p1 and p2, to pass on to child link
+	Field parent.vlink	;Copy the length of another link (prevents rotation of hinges)
+End Type
+
+Type vpe		;Physics entities
+	Field state			;0=Inactive, no collisions; 1=Active, VPhysics interactions
+	Field ptype			;Type of primitive. 1=single point, 2=cube, 3=ragdoll, 4=fabric
+	Field points		;Number of VPoints
+	Field p.verlet[VP_MAXPOINTS]	;List of VPoints
+	Field links			;Numver of VLinks
+	Field l.vlink[VP_MAXLINKS]	;List of VLinks
+	Field radius#
+	Field mesh			;The mesh itself
+End Type
+
+
+Global gwidth=1024,gheight=768
+Global VP_FPS#=25		;Fixed timestep for physics
+
+Global airres#=0.985	;Air resistance (ie. slowdown when ver\collided=False)
+Global colres#=0.8		;Ground resistance (ie. slowdown when ver\collided=True)
+Global gravity#=0.25
+Global physicstype=1	;B3D Collsion Type of physics objects
+
+
+Graphics3D gwidth,gheight,32,2
+;SetBuffer BackBuffer()
+;Include "Includes\Draw3Dz.bb"
+
+
+;Scene
+camera=CreateCamera();:PositionEntity camera,0,30,-100
+PositionEntity camera,0,100,-200
+light = CreateLight()
+RotateEntity light,90,0,0
+ground=CreateCube()
+ScaleMesh ground, 130,1,130
+MoveEntity ground,0,-1,0
+EntityColor ground,0,0,255:EntityType ground,2
+
+PointEntity camera, ground
+
+block=CreateCube():ScaleEntity block,20,5,20
+EntityType block,2
+
+cmesh=CreateSphere()
+PositionEntity cmesh,20,30,0
+ScaleEntity cmesh,7,7,7
+EntityColor cmesh, 255,0,0
+t2.vpe=CreateVCube(cmesh,3.9,3.9,3.9, 3.8)
+
+count=0
+countZ=-40
+cubeMesh=CreateCube()
+For f=1 To 90
+	dmesh=CopyEntity(cubeMesh) ;CreateCube()
+    PositionEntity dmesh, -80 + count * 20,15+30, countZ
+    count=count+1
+    If count&gt;9 Then
+       count=0
+       countZ=countZ+20
+    End If
+	ScaleEntity dmesh,7,7,7
+	EntityColor dmesh,0,255,0
+	t1.vpe=CreateVCube(dmesh,4,4,4, 4)
+Next
+
+;Cls
+;UpdateWorld
+;RenderWorld
+;Flip
+;WaitKey
+
+phystime#=1000.0/VP_FPS
+ctime=MilliSecs()
+accum#=0
+
+SC_FPS=60	;Desired framerate
+rtime=Floor(1000.0/SC_FPS)
+limited=True
+
+Collisions physicstype,2,2,2
+
+While Not KeyDown(1)
+	dtime=(MilliSecs()-ctime)
+	accum=accum+(MilliSecs()-ctime)
+	ctime=MilliSecs()
+	
+	While accum&gt;=phystime	;This is the update loop for ALL time-dependent functions, not just physics
+		;CaptureWorld	;The most important thing! Instant-movement should happen before this
+		
+		UpdateVP
+	
+		;Forces need to stay within this loop
+		ApplyForce(t2,(KeyDown(205)-KeyDown(203))/2.0,4*KeyHit(57),(KeyDown(200)-KeyDown(208))/2.0)
+			
+		IntegrateVP 3
+
+    	UpdateWorld 0
+		
+		accum=accum-phystime
+	Wend
+
+	If MilliSecs()-render_time=&gt;1000 Then fps=frames:frames=0:render_time=MilliSecs():Else frames=frames+1
+	
+	RenderWorld ;accum/phystime
+	Text 0,30,"FPS: "+fps
+
+	Delay (rtime-(MilliSecs()-ctime))-(limited+1)
+	;Insert VWait Parameter Here
+	Flip 0 ;limited
+Wend
+
+;DrawFree3D
+End
+
+
+Function AddVerlet.verlet(ent%,x#,y#,z#,r#)		;Places the VPoint at x,y,z relative to entity
+	ver.verlet=New verlet
+;	ver\vbody=ent
+	
+	ver\cx#=EntityX(ent,1)+x:ver\ox#=ver\cx#
+	ver\cy#=EntityY(ent,1)+y:ver\oy#=ver\cy#
+	ver\cz#=EntityZ(ent,1)+z:ver\oz#=ver\cz#
+	ver\radius#=r
+	
+;	ver\pivot=CreateSphere(8)
+;	ScaleEntity ver\pivot,r,r,r		;Remove this later
+	ver\pivot=CreatePivot()
+	PositionEntity ver\pivot,ver\cx,ver\cy,ver\cz,1
+	ResetEntity ver\pivot	;Make sure it doesn't collide with anything before things begin
+	EntityRadius ver\pivot,r
+	EntityType ver\pivot,physicstype
+	
+	Return ver
+End Function
+
+Function FreeVerlet(ver.verlet)
+	For link.vlink=Each vlink
+		If link\p1=ver Or link\p2=ver Then Delete link
+	Next
+	Delete ver
+End Function
+
+Function LinkVerlets.vlink(v1.verlet,v2.verlet,forced#=0,maxlen#=0,p=0)	;p=Handle(parent.vlink), because Null isn't a constant
+	Local link.vlink=New vlink
+	link\p1=v1
+	link\p2=v2
+	
+	Local dx#=v1\cx-v2\cx
+	Local dy#=v1\cy-v2\cy
+	Local dz#=v1\cz-v2\cz
+	Local length#=Sqr(dx*dx+dy*dy+dz*dz)
+	
+	If forced=0
+		link\minlength=length
+	Else
+		link\minlength=forced
+	EndIf
+	
+	link\maxlength=link\minlength
+	If maxlen&gt;0 Then link\maxlength=maxlen
+	If maxlen&lt;0 Then link\maxlength=length	;In case the starting positions are the max length
+	
+	If p=0
+		link\parent=Null
+	Else
+		link\parent=Object.vlink(p)
+	EndIf
+	Return link
+End Function
+
+Function UnlinkVerlets(v1.verlet,v2.verlet)
+	For link.vlink=Each vlink
+		If (link\p1=v1 And link\p2=v2) Or (link\p1=v2 And link\p2=v1)
+			Delete link
+		EndIf
+	Next
+End Function
+
+Function CreateVPoint.vpe(mesh,x#=0,y#=0,z#=0,radius#=1,yradius#=0)
+	point.vpe=New vpe
+	point\state=1
+	point\mesh=mesh
+	point\ptype=1
+	point\points=1
+	point\links=0
+	
+	point\p[1]=AddVerlet(mesh,x,y,z,radius)
+	
+	;Adjust the Y radius here if desired - for characters
+	
+	Return point
+End Function
+
+Function CreateVCube.vpe(mesh,xs#=1,ys#=1,zs#=1,rs#=1)
+	cube.vpe=New vpe
+	cube\state=1
+	cube\mesh=mesh
+	cube\ptype=2
+	cube\points=9
+	cube\links=30
+	
+	cube\p[1]=AddVerlet(mesh, xs, ys, zs,rs)
+	cube\p[2]=AddVerlet(mesh,-xs, ys, zs,rs)
+	cube\p[3]=AddVerlet(mesh,-xs, ys,-zs,rs)
+	cube\p[4]=AddVerlet(mesh, xs, ys,-zs,rs)
+	cube\p[5]=AddVerlet(mesh, xs,-ys, zs,rs)
+	cube\p[6]=AddVerlet(mesh,-xs,-ys, zs,rs)
+	cube\p[7]=AddVerlet(mesh,-xs,-ys,-zs,rs)
+	cube\p[8]=AddVerlet(mesh, xs,-ys,-zs,rs)
+
+	cube\l[1]=LinkVerlets(cube\p[1],cube\p[2]):cube\l[2]=LinkVerlets(cube\p[2],cube\p[3])
+	cube\l[3]=LinkVerlets(cube\p[3],cube\p[4]):cube\l[4]=LinkVerlets(cube\p[4],cube\p[1])
+	cube\l[5]=LinkVerlets(cube\p[5],cube\p[6]):cube\l[6]=LinkVerlets(cube\p[6],cube\p[7])
+	cube\l[7]=LinkVerlets(cube\p[7],cube\p[8]):cube\l[8]=LinkVerlets(cube\p[8],cube\p[5])
+	cube\l[9]=LinkVerlets(cube\p[1],cube\p[5]):cube\l[10]=LinkVerlets(cube\p[2],cube\p[6])
+	cube\l[11]=LinkVerlets(cube\p[3],cube\p[7]):cube\l[12]=LinkVerlets(cube\p[4],cube\p[8])
+
+	cube\l[13]=LinkVerlets(cube\p[2],cube\p[4]):cube\l[14]=LinkVerlets(cube\p[2],cube\p[5])
+	cube\l[15]=LinkVerlets(cube\p[3],cube\p[6]):cube\l[16]=LinkVerlets(cube\p[3],cube\p[8])
+	cube\l[17]=LinkVerlets(cube\p[4],cube\p[5]):cube\l[18]=LinkVerlets(cube\p[6],cube\p[8])
+	cube\l[19]=LinkVerlets(cube\p[2],cube\p[8]):cube\l[20]=LinkVerlets(cube\p[4],cube\p[6])
+	cube\l[21]=LinkVerlets(cube\p[1],cube\p[7]):cube\l[22]=LinkVerlets(cube\p[3],cube\p[5])
+	
+	cs#=xs
+	If cs&lt;ys Then cs=ys		;Fit the centre point to the smallest dimension
+	If cs&lt;zs Then cs=zs
+	cs=cs+rs				;Then add corner radius to fill out the sides
+	cube\p[9]=AddVerlet(mesh,0,0,0,cs)
+	
+	cube\l[23]=LinkVerlets(cube\p[1],cube\p[9]):cube\l[24]=LinkVerlets(cube\p[7],cube\p[9])
+	cube\l[25]=LinkVerlets(cube\p[3],cube\p[9]):cube\l[26]=LinkVerlets(cube\p[5],cube\p[9])
+	cube\l[27]=LinkVerlets(cube\p[2],cube\p[9]):cube\l[28]=LinkVerlets(cube\p[8],cube\p[9])
+	cube\l[29]=LinkVerlets(cube\p[4],cube\p[9]):cube\l[30]=LinkVerlets(cube\p[6],cube\p[9])
+	
+	Return cube
+End Function
+
+;Function CreateVCloth.vpe()
+;End Function
+
+Function CreateRagdoll.vpe(body)
+	rd.vpe=New vpe
+	rd\state=1
+	rd\mesh=body
+	rd\ptype=3
+	rd\points=19
+	rd\links=52
+
+	rd\p[1]=AddVerlet(body,0,27,0,1.5)		;Head
+	rd\p[2]=AddVerlet(body,-3.32,23.5,0,1.1)	;Shoulders
+	rd\p[3]=AddVerlet(body,3.32,23.5,0,1)
+	rd\p[4]=AddVerlet(body,-1.64,15.8,1,1.2)	;Hips
+	rd\p[5]=AddVerlet(body,1.64,15.8,1,1.2)
+	rd\p[6]=AddVerlet(body,-1.64,15.8,-1,1.2)
+	rd\p[7]=AddVerlet(body,1.64,15.8,-1,1.2)
+
+	rd\p[8]=AddVerlet(body,-8.6,23,0,0.8)	;Arms
+	rd\p[9]=AddVerlet(body,-8.6,24,0,0.8)
+	rd\p[10]=AddVerlet(body,-13.6,23.5,0,0.6)
+	rd\p[11]=AddVerlet(body,8.6,23,0,0.8)
+	rd\p[12]=AddVerlet(body,8.6,24,0,0.8)
+	rd\p[13]=AddVerlet(body,13.6,23.5,0,0.6)
+
+	rd\p[14]=AddVerlet(body,-2,7.8,0,1.1)	;Legs
+	rd\p[15]=AddVerlet(body,-1.2,7.8,0,1.1)
+	rd\p[16]=AddVerlet(body,-1.6,0,0,1)
+	rd\p[17]=AddVerlet(body,2,7.8,0,1.1)
+	rd\p[18]=AddVerlet(body,1.2,7.8,0,1.1)
+	rd\p[19]=AddVerlet(body,1.6,0,0,1)
+
+	rd\l[1]=LinkVerlets(rd\p[1],rd\p[2],3,-1):rd\l[2]=LinkVerlets(rd\p[1],rd\p[3],3,-1)
+	rd\l[3]=LinkVerlets(rd\p[2],rd\p[3])
+	rd\l[4]=LinkVerlets(rd\p[2],rd\p[4]):rd\l[5]=LinkVerlets(rd\p[3],rd\p[5])
+	rd\l[6]=LinkVerlets(rd\p[2],rd\p[6]):rd\l[7]=LinkVerlets(rd\p[3],rd\p[7])
+	rd\l[8]=LinkVerlets(rd\p[4],rd\p[6]):rd\l[9]=LinkVerlets(rd\p[5],rd\p[7])
+	rd\l[10]=LinkVerlets(rd\p[4],rd\p[5]):rd\l[11]=LinkVerlets(rd\p[6],rd\p[7])
+	rd\l[12]=LinkVerlets(rd\p[4],rd\p[7]):rd\l[13]=LinkVerlets(rd\p[5],rd\p[6])
+	rd\l[14]=LinkVerlets(rd\p[2],rd\p[5]):rd\l[15]=LinkVerlets(rd\p[2],rd\p[7])
+	rd\l[16]=LinkVerlets(rd\p[3],rd\p[4]):rd\l[17]=LinkVerlets(rd\p[3],rd\p[6])
+	rd\l[18]=LinkVerlets(rd\p[1],rd\p[6],11.5,-1):rd\l[19]=LinkVerlets(rd\p[1],rd\p[7],11.5,-1)
+
+	rd\l[20]=LinkVerlets(rd\p[2],rd\p[8]):rd\l[21]=LinkVerlets(rd\p[2],rd\p[9])
+	rd\l[22]=LinkVerlets(rd\p[8],rd\p[10]):rd\l[23]=LinkVerlets(rd\p[9],rd\p[10])
+	rd\l[24]=LinkVerlets(rd\p[3],rd\p[9],6,-1):rd\l[25]=LinkVerlets(rd\p[2],rd\p[10],5,-1)
+	rd\l[26]=LinkVerlets(rd\p[8],rd\p[9]):rd\l[27]=LinkVerlets(rd\p[11],rd\p[12])
+	rd\l[28]=LinkVerlets(rd\p[3],rd\p[11]):rd\l[29]=LinkVerlets(rd\p[3],rd\p[12])
+	rd\l[30]=LinkVerlets(rd\p[11],rd\p[13]):rd\l[31]=LinkVerlets(rd\p[12],rd\p[13])
+	rd\l[32]=LinkVerlets(rd\p[2],rd\p[12],6,-1):rd\l[33]=LinkVerlets(rd\p[3],rd\p[13],5,-1)
+
+	rd\l[34]=LinkVerlets(rd\p[4],rd\p[14]):rd\l[35]=LinkVerlets(rd\p[4],rd\p[15])
+	rd\l[36]=LinkVerlets(rd\p[14],rd\p[16]):rd\l[37]=LinkVerlets(rd\p[15],rd\p[16])
+	rd\l[38]=LinkVerlets(rd\p[14],rd\p[15]):rd\l[39]=LinkVerlets(rd\p[6],rd\p[16],7,15.6)
+	rd\l[40]=LinkVerlets(rd\p[6],rd\p[14],8,10):rd\l[41]=LinkVerlets(rd\p[6],rd\p[15],8,10,Handle(rd\l[40]))
+	rd\l[42]=LinkVerlets(rd\p[5],rd\p[17]):rd\l[43]=LinkVerlets(rd\p[5],rd\p[18])
+	rd\l[44]=LinkVerlets(rd\p[17],rd\p[19]):rd\l[45]=LinkVerlets(rd\p[18],rd\p[19])
+	rd\l[46]=LinkVerlets(rd\p[17],rd\p[18]):rd\l[47]=LinkVerlets(rd\p[7],rd\p[19],7,15.6)
+	rd\l[48]=LinkVerlets(rd\p[7],rd\p[17],8,10):rd\l[49]=LinkVerlets(rd\p[7],rd\p[18],8,10,Handle(rd\l[48]))
+	rd\l[50]=LinkVerlets(rd\p[15],rd\p[18],2,12)
+	rd\l[51]=LinkVerlets(rd\p[5],rd\p[15],7,14):rd\l[52]=LinkVerlets(rd\p[4],rd\p[18],8,14)
+	
+	Return rd
+End Function
+
+Function FreeVEntity(ent.vpe)
+	For v=1 To ent\points
+		FreeVerlet(ent\p[v])
+	Next
+	Delete ent
+End Function
+
+Function HideVEntity(ent.vpe,hidemesh=False)
+	For v=1 To ent\points
+		HideEntity ent\p[v]\pivot
+	Next
+	ent\state=False
+	If hidemesh Then HideEntity ent\mesh
+End Function
+
+Function ShowVEntity(ent.vpe)
+	For v=1 To ent\points
+		ShowEntity ent\p[v]\pivot
+	Next
+	ent\state=True
+	ShowEntity ent\mesh
+End Function
+
+Function SetColType(ent.vpe,ctype)
+	For v=1 To ent\points
+		EntityType ent\p[v]\pivot,ctype
+	Next
+End Function
+
+Function ApplyForce(ent.vpe,x#,y#,z#)
+	If ent\state
+		For v=1 To ent\points
+			ver.verlet=ent\p[v]
+			ver\cx=ver\cx+x
+			ver\cy=ver\cy+y
+			ver\cz=ver\cz+z
+		Next
+	EndIf
+End Function
+
+Function SetForce(ent.vpe,x#,y#,z#)
+	If ent\state
+		For v=1 To ent\points
+			ver.verlet=ent\p[v]
+			ver\ox=ver\cx
+			ver\oy=ver\cy
+			ver\oz=ver\cz
+			ver\cx=ver\cx+x
+			ver\cy=ver\cy+y
+			ver\cz=ver\cz+z
+		Next
+	EndIf
+End Function
+
+Function ApplyPointForce(ver.verlet,x#,y#,z#)
+	ver\cx=ver\cx+x
+	ver\cy=ver\cy+y
+	ver\cz=ver\cz+z
+End Function
+
+Function SetPointForce(ver.verlet,x#,y#,z#)
+	ver\ox=ver\cx
+	ver\oy=ver\cy
+	ver\oz=ver\cz
+	ver\cx=ver\cx+x
+	ver\cy=ver\cy+y
+	ver\cz=ver\cz+z
+End Function
+
+Function MoveVerlet(ver.verlet,x#,y#,z#,n=1,r=1)
+	ver\cx=ver\cx+x
+	ver\cy=ver\cy+y
+	ver\cz=ver\cz+z
+	If n
+		ver\ox=ver\cx
+		ver\oy=ver\cy
+		ver\oz=ver\cz
+	Else
+		ver\ox=ver\cx+x
+		ver\oy=ver\cy+y
+		ver\oz=ver\cz+z
+	EndIf
+	PositionEntity ver\pivot,ver\cx,ver\cy,ver\cz
+	If r Then ResetEntity ver\pivot
+End Function
+
+Function MoveVEntity(ent.vpe,x#,y#,z#,n=1,r=1)
+	For v=1 To ent\points
+		ver.verlet=ent\p[v]
+		ver\cx=ver\cx+x
+		ver\cy=ver\cy+y
+		ver\cz=ver\cz+z
+		If n
+			ver\ox=ver\cx
+			ver\oy=ver\cy
+			ver\oz=ver\cz
+		Else
+			ver\ox=ver\cx+x
+			ver\oy=ver\cy+y
+			ver\oz=ver\cz+z
+		EndIf
+		PositionEntity ver\pivot,ver\cx,ver\cy,ver\cz
+		If r Then ResetEntity ver\pivot
+	Next
+	TranslateEntity ent\mesh,x,y,z,1
+End Function
+
+Function PositionVerlet(ver.verlet,x#,y#,z#,n=1)
+	If n
+		ver\ox=x
+		ver\oy=y
+		ver\oz=z
+	Else
+		ver\ox=x-(ver\cx-ver\ox)
+		ver\oy=y-(ver\cy-ver\oy)
+		ver\oz=z-(ver\cz-ver\oz)
+	EndIf
+	ver\cx=x
+	ver\cy=y
+	ver\cz=z
+	PositionEntity ver\pivot,ver\cx,ver\cy,ver\cz
+	ResetEntity ver\pivot
+End Function
+
+Function PositionVEntity(ent.vpe,x#,y#,z#,n=1)
+	For v=1 To ent\points
+		ver.verlet=ent\p[v]
+		If n
+			ver\ox=x
+			ver\oy=y
+			ver\oz=z
+		Else
+			ver\ox=x-(ver\cx-ver\ox)
+			ver\oy=y-(ver\cy-ver\oy)
+			ver\oz=z-(ver\cz-ver\oz)
+		EndIf
+		ver\cx=x+(ver\cx-EntityX(ent\mesh,1))
+		ver\cy=y+(ver\cy-EntityY(ent\mesh,1))
+		ver\cz=z+(ver\cz-EntityZ(ent\mesh,1))
+		PositionEntity ver\pivot,ver\cx,ver\cy,ver\cz
+		ResetEntity ver\pivot
+	Next
+	PositionEntity ent\mesh,x,y,z,1
+End Function
+
+Function IntegrateVP(itns%)
+	Local dx#,dy#,dz#,length#,diff#
+
+	For vb.vpe=Each vpe
+	If vb\state		;Proceed if vb is activated
+	For v=2 To vb\points
+		ver.verlet=vb\p[v]
+		drag#=airres
+		If ver\collided Then drag=colres
+		
+		xvel#=(ver\cx-ver\ox)*drag
+		If Abs(xvel)&lt;0.02 Then xvel=0	;Remove tiny errors that cause things to spin without forces...
+		ver\ox=ver\cx
+		ver\cx=ver\cx+xvel
+
+		yvel#=(ver\cy-ver\oy)*drag
+		If Abs(yvel)&lt;0.02 Then yvel=0
+		ver\oy=ver\cy
+		ver\cy=ver\cy+yvel-gravity
+		
+		zvel#=(ver\cz-ver\oz)*drag
+		If Abs(zvel)&lt;0.02 Then zvel=0	;...which actually speeds up simulation
+		ver\oz=ver\cz
+		ver\cz=ver\cz+zvel
+		
+		;Collisions
+		ver\collided=False
+		For vt.vpe=Each vpe
+			If vt&lt;&gt;vb And vt\state		;Check that vt is also activated
+				For v2=1 To vt\points Step 2
+					vet.verlet=vt\p[v2]
+					dx#=ver\cx-vet\cx
+					dy#=ver\cy-vet\cy
+					dz#=ver\cz-vet\cz
+					dd#=(dx*dx+dy*dy+dz*dz)
+					tr#=(ver\radius+vet\radius) * (ver\radius+vet\radius)
+					If dd&lt;tr	;If the verlets are nearer together than their combined radii
+					    dd=Sqr(dd)
+                        tr#=(ver\radius+vet\radius) 
+						ddt#=dd-tr
+						ddx#=ddt*(dx/dd)
+						ddy#=ddt*(dy/dd)
+						ddz#=ddt*(dz/dd)
+						
+						ver\cx=ver\cx-ddx
+						ver\cy=ver\cy-ddy
+						ver\cz=ver\cz-ddz
+						
+						vet\cx=vet\cx+ddx
+						vet\cy=vet\cy+ddy
+						vet\cz=vet\cz+ddz
+						
+						ver\collided=True
+					EndIf
+				Next
+			EndIf
+		Next
+			
+		;Screen boundaries
+		If ver\cx&lt;=-100 Then ver\cx=-100
+		If ver\cz&lt;=-100 Then ver\cz=-100
+		If ver\cx&gt;=100 Then ver\cx=100
+		If ver\cy&gt;=100 Then ver\cy=100
+		If ver\cz&gt;=125 Then ver\cz=125
+	Next
+	EndIf	;State
+	Next	;vpe
+
+	For vb.vpe=Each vpe
+		If vb\state		;Proceed if vb is activated
+			For loop = 1 To itns	;iterations
+				For link=1 To vb\links
+					c.vlink=vb\l[link]
+					dx=c\p2\cx - c\p1\cx
+					dy=c\p2\cy - c\p1\cy
+					dz=c\p2\cz - c\p1\cz
+					
+					length=(dx*dx+dy*dy+dz*dz)	;distance between p1 and p2
+			
+					If length&gt;0
+					    length=Sqr(length)
+						If c\parent=Null
+							diff=0
+							c\offset=length
+							If length&lt;c\minlength Then 
+							   diff=(length-c\minlength)/length:c\offset=c\minlength	;vector length minus vlink length
+							Else
+							   If length&gt;c\maxlength Then diff=(length-c\maxlength)/length:c\offset=c\maxlength
+							End If
+						Else
+							diff=(length-c\parent\offset)/length	;Snap to length of parent
+						EndIf
+					EndIf
+			
+					;dx=dx/2.0
+					;dy=dy/2.0
+					;dz=dz/2.0	;find the midpoint
+					
+					diffx#=diff*(dx)
+					diffy#=diff*(dy)
+					diffz#=diff*(dz)
+			
+					c\p1\cx=c\p1\cx+diffx * 0.5
+					c\p1\cy=c\p1\cy+diffy * 0.5
+					c\p1\cz=c\p1\cz+diffz * 0.5
+			
+					c\p2\cx=c\p2\cx-diffx * 0.5
+					c\p2\cy=c\p2\cy-diffy * 0.5
+					c\p2\cz=c\p2\cz-diffz * 0.5
+				Next	;VLinks
+			Next	;Iterations
+		EndIf	;State
+        
+	Next	;vpe
+	
+	For ver.verlet=Each verlet
+		PositionEntity ver\pivot,ver\cx,ver\cy,ver\cz
+	Next
+End Function
+
+Function UpdateVP()
+	For ver.verlet=Each verlet
+		If CountCollisions(ver\pivot)
+			ver\cx=EntityX(ver\pivot)
+			ver\cy=EntityY(ver\pivot)
+			ver\cz=EntityZ(ver\pivot)
+			ver\collided=True
+		EndIf
+	Next
+;	For c.vlink = Each vlink
+;		PositionEntity c\mesh,c\p1\cx,c\p1\cy,c\p1\cz,1
+;		PointEntity c\mesh,c\p2\pivot
+;	Next
+
+	For body.vpe=Each vpe
+		If body\state
+			If body\ptype=1
+				If body\mesh&lt;&gt;0 Then PositionEntity body\mesh,body\p[1]\cx,body\p[1]\cy,body\p[1]\cz
+			EndIf
+			If body\ptype=2
+				mx#=(body\p[3]\cx+body\p[5]\cx)/2
+				my#=(body\p[3]\cy+body\p[5]\cy)/2
+				mz#=(body\p[3]\cz+body\p[5]\cz)/2
+				PositionEntity body\mesh,mx,my,mz	
+				AlignToVector body\mesh,(body\p[1]\cx+body\p[3]\cx)/2-mx,(body\p[1]\cy+body\p[3]\cy)/2-my,(body\p[1]\cz+body\p[3]\cz)/2-mz,2,1
+				AlignToVector body\mesh,(body\p[4]\cx+body\p[5]\cx)/2-mx,(body\p[4]\cy+body\p[5]\cy)/2-my,(body\p[4]\cz+body\p[5]\cz)/2-mz,3,1
+			EndIf
+		EndIf
+	Next
+End Function
+</textarea><br><br>Can anyone help me out on this one??? I'm trying to find the problem the whole night... and it's morning already and I got no clue where it is =( <br><br></td></tr></table><br>
+<a name="1111915"></a>
+
+<a name="1111916"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ha! That physics code looks familiar!<br><br>I wouldn't have said "twitching" so much as "rotating around the wrong axis". I would certainly suspect AlignToVector as well, especially given which cubes are affected (it seems to be most reproducible with cubes falling off the edge of the block; i.e. those that go through a 90 degree rotation, which I think the Euler-based miniB3D doesn't like).<br><br>Have you tried it with the mythical matrix-based miniB3D?<br><br>However, I'd also suggest either using a different VP lib as your base, if you haven't yet full internalised and understood it, or to make a few changes to this one. This particular implementation has all sorts of rubbish in it like constraints with variable lengths, which was intended to be the beginning of a "joint" system (and basically adds complexity for no great gain in anything) - there could be any number of errors in that (starting with the obvious error of trying to force the idea of "joints" into a VP system).<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1111924"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >simonh</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> AlignToVector doesn't work 100% with standard minib3d I'm afraid. <br><br></td></tr></table><br>
+<a name="1111989"></a>
+
+<a name="1111990"></a>
+
+<a name="1111991"></a>
+
+<a name="1111992"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Works great! Wow!<br><br>I am using the minib3d 'small differences' version, which is nice and stable and uses Warner's internal matrix for TEntity. If you use this version, you may need to avoid the double TMatrix Type.<br><br>So I made the following changes and it is very nice:<br><br><pre class=code>
+Function AlignToVector2(ent:TEntity, vx:Float,vy:Float,vz:Float,axis%=1, rate#=1)
+	If axis&lt;1 Or axis&gt;3 Then Return
+
+	Local dd# = Magnitude(vx,vy,vz)
+	If dd &lt; 0.0001 Then Return
+	
+	vx = vx / dd
+	vy = vy / dd
+	vz = vz / dd	
+	
+	RotateEntity ent,0,0,0,1
+			
+	'get world axis	
+	Local ax#, ay#, az#
+	If (axis=1) Then ax=1; ay=0; az=0
+	If (axis=2) Then ax=0; ay=1; az=0
+	If (axis=3) Then ax=0; ay=0; az=1
+	
+ 	'get transformation matrix from org. axis to new one
+	Local m:TMatrix = New TMatrix	
+	m = FromToRotation(ax,ay,az, vx,vy,vz)
+	ent.mat.Multiply(m)
+
+	
+End Function
+</pre><br><br>Basically it was that your result was going back through Euler transformations, where you could just apply the Rotation Matrix to the entity and get a better result.<br><br>I also didn't use the "axis" parameter to the AlignToVector2() function. Just left it to default=1 seemed to give smoother results.<br><pre class=code>
+AlignToVector2 body.mesh,(body.p[1].cx+body.p[3].cx)/Float(2.0)-mx, (body.p[1].cy+body.p[3].cy)/Float(2.0)-my, (body.p[1].cz+body.p[3].cz)/Float(2.0)-mz',2 ',1
+AlignToVector2 body.mesh,(body.p[4].cx+body.p[5].cx)/Float(2.0)-mx, (body.p[4].cy+body.p[5].cy)/Float(2.0)-my, (body.p[4].cz+body.p[5].cz)/Float(2.0)-mz',3 ',1
+
+</pre><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1111993"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> fun to pile them up in the loop:<br>PositionEntity dmesh,  (Rnd()*20-10),15+30 + count*8, countZ + (Rnd()*20-10) <br><br></td></tr></table><br>
+<a name="1112073"></a>
+
+<a name="1112081"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nope - that didn't work either. <br><br>Here the cubes from time to time just spin fast in the wrong direction, even with the "matrix" code, even ignoring the axis on the AlignToVector (which shouldn't be ignored btw)...<br><br>Edit: even trying the "smallfixes" version, the result is the same :(<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1112099"></a>
+
+<a name="1112101"></a>
+
+<a name="1112103"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, in my opinion, those cubes that spin to align to the world vector (1,0,0 axis=1) are doing what they're suppose to. I think the problem lies in the implementation, not euler rotations.<br><br>EDIT:<br>studying it more, it looks like the thought is to take the unit vector, by getting the point between the vertices of the cube, and aligning to that.<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1112105"></a>
+
+<a name="1112106"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> it looks like the thought is to take the unit vector, by getting the point between the vertices of the cube, and aligning to that <br></div><br><br>That was the original idea, yes. Whether it was done correctly... I leave to you to tell me.<br><br>In hindsight that method is probably a really poor way to do things; I can't help but feel there must be some much more generic way to get the orientation of any arbitrary group of three points (thus not constraining it to cubes - this might also help a bit with jointed structures), as long as you know their starting position relative to each other.<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1112124"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SLotman</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> I gave up on that for now... I'm trying something with Newton, but without much success either :/<br><br>I've got collisions working, I can rotate and move stuff around using NewtonSetVelocity... but no matter how much I try, I can't get objects to fall :/ <br><br></td></tr></table><br>
+<a name="1112187"></a>
+
+<a name="1112191"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, I dove deeper.<br><br>All the equations look good. I simplified everything (code below) since we are getting an axis-angle rotation matrix, so we only need one "align to vector" routine, which gets our new "up" vector. No need for two that I can tell.<br><br>Here's my thought: we're also using miniB3D collisions, so I wonder if those collisions are causing problems to our rotations. <br><br>Is it possible to use verlet physics for everything or is the triangle-triangle intersection critical to the functionality? I'd have to investigate more.<br> <br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Function UpdateVP()
+	Local avgx#=0, avgy#=0, avgz#=0, cnt%=0
+	For Local ver:verlet=EachIn verlet.list
+		If CountCollisions(ver.pivot)
+			ver.cx=EntityX(ver.pivot,1)
+			ver.cy=EntityY(ver.pivot,1)
+			ver.cz=EntityZ(ver.pivot,1)
+			ver.collided=True
+
+		EndIf
+	Next
+
+	Local x:Float, y:Float, z:Float
+	For Local body:vpe=EachIn vpe.list
+		If body.state 
+			If body.ptype=1
+				If body.mesh&lt;&gt;Null Then PositionEntity body.mesh,body.p[1].cx,body.p[1].cy,body.p[1].cz
+			EndIf
+			If body.ptype=2
+				Local mx#=(body.p[3].cx+body.p[5].cx)*0.5
+				Local my#=(body.p[3].cy+body.p[5].cy)*0.5
+				Local mz#=(body.p[3].cz+body.p[5].cz)*0.5
+				PositionEntity body.mesh,mx,my,mz,1
+					
+				''we only need to compare against our "up" vector, 0,1,0 for axis-angle rotation
+				AlignToVector2 body.mesh,(body.p[1].cx+body.p[3].cx)*0.5-mx, (body.p[1].cy+body.p[3].cy)*0.5-my, (body.p[1].cz+body.p[3].cz)*0.5-mz,2
+				'AlignToVector2 body.mesh,(body.p[4].cx+body.p[5].cx)*0.5-mx, (body.p[4].cy+body.p[5].cy)*0.5-my, (body.p[4].cz+body.p[5].cz)*0.5-mz,1
+				'AlignToVector2 body.mesh,(body.p[2].cx+body.p[5].cx)*0.5-mx, (body.p[2].cy+body.p[5].cy)*0.5-my, (body.p[2].cz+body.p[5].cz)*0.5-mz,3
+				
+
+			EndIf
+		EndIf
+	Next
+End Function
+
+Function AlignToVector2(ent:TEntity, vx:Float,vy:Float,vz:Float,axis%=1, rate#=1)
+	If axis&lt;1 Or axis&gt;3 Then Return
+
+	Local dd# = Magnitude(vx,vy,vz)
+	If dd &lt; 0.0001 Then Return
+	
+	'get axis to get our angle from	
+	Local ax#, ay#, az#
+	If (axis=1) Then ax=1.0; ay=0; az=0
+	If (axis=2) Then ax=0; ay=1.0; az=0
+	If (axis=3) Then ax=0; ay=0; az=1.0
+
+	vx = vx / dd
+	vy = vy / dd
+	vz = vz / dd	
+
+ 	'get transformation matrix from org. axis to new one
+	Local m:TMatrix = New TMatrix
+
+	m = FromToRotation(ax,ay,az, vx,vy,vz)
+	ent.mat.Multiply(m)
+	
+End Function
+</textarea><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1112194"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Is it possible to use verlet physics for everything or is the triangle-triangle intersection critical to the functionality? <br></div><br><br>...you just gave me a wonderful idea, thanks!<br><br><br>If you're unfamiliar with this method of simulating physics, a good read can be found here: <a href="http://www.gamasutra.com/resource_guide/20030121/jacobson_01.shtml" target="_blank">http://www.gamasutra.com/resource_guide/20030121/jacobson_01.shtml</a><br><br>There are several points to consider about the system:<br><br>1) "Verlet integration" refers to the way the points' momentum is represented, in terms of its previous position and current position.<br><br>2) Combining a simplified Verlet integration with point-and-constraint meshes gives mass, collision response, rotation etc. more or less for free. A cleverly designed physics mesh theoretically wouldn't even need additional properties on the models. This particular implementation doesn't feature additional properties, which is good (for speed) and bad (for everything else). The need to faff about with AlignToVector is an unfortunate consequence of the fact that although the rotation is implicit, and thus "free", it's also <i>only</i> implicit and the points have no rotation of their own. A more sensible plan would, as you observed, use a rotation matrix instead which can be easily built around arbitrary pairs of points (even subsections of the complete mesh - much easier way to handle joints).<br><br>3) -<br><div class="quote"> is the triangle-triangle intersection critical to the functionality? <br></div><br>The builtin collisions are only there to let it interact with non-physics scenery objects like the central block. Since the physics objects themselves only use sphere collisions between points (a cube is just eight largish spheres, which is why they'll never stack), they use a simple square root method between each other. If you wanted to use the system for anything practical though, you'd probably need some way to define collision polygons on the physics objects. At the time it was not clear how to do this.<br><br>4) In the presented implementation, each point loops over all other points to test for collisions. <i>This is very bad!</i> It pushes processing the scene into O(n^2) territory. <i>Any</i> usable physics system needs to use some kind of octree or hashspace instead to avoid this (otherwise, for anything more than a trivially small number of cubes, a "full" physics engine would give massively better performance - not much point in this "lightweight" method then).<br><br><br>...and now, back to coherence: <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

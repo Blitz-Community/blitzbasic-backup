@@ -1,0 +1,3069 @@
+<!DOCTYPE html><html lang="en" ><head ><title >mmx image blending benchmark</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >mmx image blending benchmark</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >mmx image blending benchmark</a><br><br>
+<a name="1158191"></a>
+
+<a name="1158192"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >zzz</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi, im curious to see how this code performs on various machines. It is related to a small project im considering starting.<br><br>Windows only because of the assembly code involved. Im not sure how things work on the mac and linux side, so cant do much about that.<br><br>The files need to be in the same directory. It will save the resulting blended images as png's, so take a look and check if they all look the same (they should).<br><br>Please post your results :)<br><br>EDIT: threading involved, so make sure to enable that!<br><br>something.bmx<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+Framework BRL.Pixmap
+Import BRL.StandardIO
+Import BRL.BMPLoader
+Import BRL.JPGLoader
+Import BRL.PNGLoader
+Import BRL.Threads
+Import BRL.Retro
+
+Import "blend.s"
+'Import "threadedworker.bmx"
+'Include "blend/blend.bmx"
+
+Const SAVERESULT:Int=True
+Const SMALL:Int=False'loading only
+Const GENERATE:Int=True
+Const ITER:Int=4
+Const THREADSNUM:Int=20
+
+Const PIXWIDTH:Int=4000
+Const PIXHEIGHT:Int=4000
+
+Extern
+
+	Function CPU_Vendor(str:Byte Ptr)
+	Function MMX_Support:Int()
+	Function MMX_Blend(source1:Byte Ptr, source2:Byte Ptr, target:Byte Ptr, factor:Byte Ptr, width:Int, pitch:Int, start:Int, length:Int)
+
+End Extern
+
+'Graphics(320, 200, 0, 0)
+
+' /////////////////////////////////////////////////////////////////////////////
+
+' load master copy
+
+Local vendor:Byte[12]
+CPU_Vendor(Varptr vendor[0])
+
+WriteStdout "~nCPU Vendor: "
+For Local i:Int=0 To vendor.length-1
+	WriteStdout Chr(vendor[i])
+Next
+WriteStdout "~n"
+
+Local mmx:Int=MMX_Support()
+If mmx Then
+	WriteStdout "MMX Supported~n"
+Else
+	WriteStdout "MMX Not supported~n"
+EndIf
+
+WriteStdout "~nPerforming "+ITER+" iterations on "+PIXWIDTH+", "+PIXHEIGHT+" pixmaps.~n"
+
+Local image:TPixmap
+
+If GENERATE Then
+	'create a pixmap with a bunch of horizontal bars, random colors
+	WriteStdout "~ncreating custom pixmap.."
+	image=CreatePixmap(PIXWIDTH, PIXHEIGHT, PF_RGBA8888)
+	If image=Null Then
+		Print "failed to create pixmap"
+		End
+	EndIf
+	
+	For Local y:Int=0 To PixmapWidth(image)-1
+		For Local x:Int=0 To PixmapHeight(image)-1
+			
+			Local r:Int
+			Local g:Int
+			Local b:Int
+			
+			Select True
+				Case x&gt;=0 And x&lt;PIXWIDTH/4
+					r=255
+					g=0
+					b=0
+				Case x&gt;=PIXWIDTH/4 And x&lt;PIXWIDTH/2
+					r=0
+					g=255
+					b=0
+				Case x&gt;=PIXWIDTH/2 And x&lt;PIXWIDTH/2+PIXWIDTH/4
+					r=0
+					g=0
+					b=255
+				Case x&gt;=PIXWIDTH/2+PIXWIDTH/4
+					r=255
+					g=255
+					b=255
+			End Select
+			
+			Local pix:Int=255 Shl 24 + r Shl 16 + g Shl 8 + b
+			WritePixel(image, x, y, pix)
+		
+		Next
+	Next
+	SavePixmapPNG(image, "source.png")
+	WriteStdout "done!~n"
+Else
+	If SMALL Then
+		image = LoadPixmap("data/source-small.png")
+	Else
+		image = LoadPixmap("data/source.png")
+	EndIf
+	If image=Null Then
+		Print "failed to load image.."
+		End
+	EndIf
+	image = ConvertPixmap(image, PF_RGBA8888)
+EndIf
+
+Local temp1:TPixmap
+Local temp2:TPixmap
+Local temp3:TPixmap
+
+Local ms:Long
+Local ms_acc:Long
+Local basetime:Double
+Local memin:Double
+Local memout:Double
+
+'WriteStdout "~nMaster copy of image loaded.~n"
+'WriteStdout "Calculating memory footprint.."
+
+Local mem_footprint:Int = PixmapPitch(image)*PixmapHeight(image)*4
+
+'WriteStdout " "+mem_footprint+" bytes.~n"
+
+' /////////////////////////////////////////////////////////////////////////////
+
+' blend test
+
+'WriteStdout "~nTesting blend routine~n"
+
+If image&lt;&gt;Null Then
+	temp1 = CopyPixmap(image)
+EndIf
+
+If GENERATE Then
+	'create a vertical gradient
+	WriteStdout "creating custom pixmap.."
+	temp2=CreatePixmap(PIXWIDTH, PIXHEIGHT, PF_RGBA8888)
+	If temp2=Null Then
+		Print "failed to create pixmap"
+		End
+	EndIf
+	For Local y:Int=0 To PixmapHeight(temp2)-1
+		Local value:Int=(Float(y)/Float(PixmapHeight(temp2)))*255.0
+		'Print value
+		For Local x:Int=0 To PixmapWidth(temp2)-1
+			Local pix:Int=value Shl 16 + value Shl 8 + value
+			WritePixel(temp2, x, y, pix)
+		Next
+	Next
+	SavePixmapPNG(temp2, "blend.png")
+	WriteStdout "done!~n"
+Else
+	If SMALL Then
+		temp2 = LoadPixmap("data/blendshape-small.png")
+	Else
+		temp2 = LoadPixmap("data/blendshape.png")
+	EndIf
+EndIf
+
+If temp1=Null Or temp2=Null Then
+	Print "failed to set up temp sources.."
+	End
+EndIf
+
+temp2 = ConvertPixmap(temp2, PF_RGBA8888)
+
+' ///////////////////////////////////////////
+
+' test 0, reference, straightforward singlethreaded blitzmax code
+
+ms_acc=0
+For Local i:Int=1 To ITER
+
+	ms=MilliSecs()
+	temp3=StandardBlend(temp1, temp2, 0.5)
+	ms=MilliSecs()-ms
+	
+	ms_acc:+ms
+	
+Next
+
+'ms_acc:/10
+ms=ms_acc
+basetime=ms
+
+memin=mem_footprint*ITER*2
+memin:/1073741824
+memin:*(1000.0/Float(ms))
+memout=mem_footprint*ITER
+memout:/1073741824
+memout:*(1000.0/Float(ms))
+
+WriteStdout "~nReference blend function: "+ms+" ms. ("+Left(String((basetime/basetime)), 5)+"x)"
+WriteStdout " memory: "+Left(String(memin), 5)+"/"+Left(String(memout), 5)+" GB/s~n"
+
+If SAVERESULT Then
+	Print "Saving result to blend_reference.png"
+	If temp3&lt;&gt;Null Then
+		SavePixmapPNG(temp3, "blend_reference.png")
+	EndIf
+	Print "Done"
+EndIf
+
+' test 1, blitzmax code, singlethreaded
+
+ms_acc=0
+For Local i:Int=1 To ITER
+
+	ms=MilliSecs()
+	temp3 = ThreadedBlend(temp1, temp2, 0.5, 1, FUNC_FLOAT)
+	ms=MilliSecs()-ms
+
+	ms_acc:+ms
+
+Next
+
+'ms_acc:/10
+ms=ms_acc
+
+memin=mem_footprint*ITER*2
+memin:/1073741824
+memin:*(1000.0/Float(ms))
+memout=mem_footprint*ITER
+memout:/1073741824
+memout:*(1000.0/Float(ms))
+
+WriteStdout "~nSingle thread blitzmax blend: "+ms+" ms. ("+Left(String((basetime/ms)), 5)+"x)"
+WriteStdout " memory: "+Left(String(memin), 5)+"/"+Left(String(memout), 5)+" GB/s~n"
+
+If SAVERESULT Then
+	Print "Saving result to blend_stbmx.png"
+	If temp3&lt;&gt;Null Then
+		SavePixmapPNG(temp3, "blend_stbmx.png")
+	EndIf
+	Print "Done"
+EndIf
+
+' test 2, blitzmax code, multithreaded
+
+ms_acc=0
+For Local i:Int=1 To ITER
+
+	ms=MilliSecs()
+	temp3 = ThreadedBlend(temp1, temp2, 0.5, THREADSNUM, FUNC_FLOAT)
+	ms=MilliSecs()-ms
+	
+	ms_acc:+ms
+	
+Next
+
+'ms_acc:/10
+ms=ms_acc
+
+memin=mem_footprint*ITER*2
+memin:/1073741824
+memin:*(1000.0/Float(ms))
+memout=mem_footprint*ITER
+memout:/1073741824
+memout:*(1000.0/Float(ms))
+
+WriteStdout "~nMultithreaded blitzmax blend: "+ms+" ms. ("+Left(String((basetime/ms)), 5)+"x)"
+WriteStdout " memory: "+Left(String(memin), 5)+"/"+Left(String(memout), 5)+" GB/s~n"
+
+If SAVERESULT Then
+	Print "Saving result to blend_mtbmx.png"
+	If temp3&lt;&gt;Null Then
+		SavePixmapPNG(temp3, "blend_mtbmx.png")
+	EndIf
+	Print "Done"
+EndIf
+
+If mmx=0 Then
+	WriteStdout "~nMMX is not supported. Stopping here..~n"
+	End
+EndIf
+
+' test 3, mmx code, single threaded
+
+ms_acc=0
+For Local i:Int=1 To ITER
+
+	ms=MilliSecs()
+	temp3 = ThreadedBlend(temp1, temp2, 0.5, 1, FUNC_SSE)
+	ms=MilliSecs()-ms
+	
+	ms_acc:+ms
+	
+Next
+
+'ms_acc:/10
+ms=ms_acc
+
+memin=mem_footprint*ITER*2
+memin:/1073741824
+memin:*(1000.0/Float(ms))
+memout=mem_footprint*ITER
+memout:/1073741824
+memout:*(1000.0/Float(ms))
+
+WriteStdout "~nSinglethreaded MMX blend: "+ms+" ms. ("+Left(String((basetime/ms)), 5)+"x)"
+WriteStdout " memory: "+Left(String(memin), 5)+"/"+Left(String(memout), 5)+" GB/s~n"
+
+If SAVERESULT Then
+	Print "Saving result to blend_stmmx.png"
+	If temp3&lt;&gt;Null Then
+		SavePixmapPNG(temp3, "blend_stmmx.png")
+	EndIf
+	Print "Done"
+EndIf
+
+' test 4, mmx code, multithreaded
+
+ms_acc=0
+For Local i:Int=1 To ITER
+
+	ms=MilliSecs()
+	temp3 = ThreadedBlend(temp1, temp2, 0.5, THREADSNUM, FUNC_SSE)
+	ms=MilliSecs()-ms
+
+	ms_acc:+ms
+	
+Next
+
+'ms_acc:/10
+ms=ms_acc
+
+memin=mem_footprint*ITER*2
+memin:/1073741824
+memin:*(1000.0/Float(ms))
+memout=mem_footprint*ITER
+memout:/1073741824
+memout:*(1000.0/Float(ms))
+
+
+WriteStdout "~nMultithreaded MMX blend: "+ms+" ms. ("+Left(String((basetime/ms)), 5)+"x)"
+WriteStdout " memory: "+Left(String(memin), 5)+"/"+Left(String(memout), 5)+" GB/s~n"
+
+If SAVERESULT Then
+	Print "Saving result to blend_mtmmx.png"
+	If temp3&lt;&gt;Null Then
+		SavePixmapPNG(temp3, "blend_mtmmx.png")
+	EndIf
+	Print "Done"
+EndIf
+
+' /////////////////////////////////////////////////////////////////////////////
+
+' done with testing
+
+'EndGraphics()
+End
+
+' #####################################################################################################################
+' blend.bmx
+
+Rem
+
+	pure blitzmax threaded image blending routine.
+
+End Rem
+
+Const FUNC_FLOAT:Int=1
+Const FUNC_SSE:Int=2
+
+Const LINES:Int=64
+
+'straightforward singlethreaded blend for speed comparison
+
+Function StandardBlend:TPixmap(source1:TPixmap, source2:TPixmap, factor:Float)
+
+	' sanity checks
+	
+	If PixmapFormat(source1)&lt;&gt;PF_RGBA8888 Or PixmapFormat(source2)&lt;&gt;PF_RGBA8888 Then
+		Print "invalid pixmap formats"
+		Return Null
+	EndIf
+	
+	If PixmapWidth(source1)&lt;&gt;PixmapWidth(source2) Or PixmapHeight(source1)&lt;&gt;PixmapHeight(source2) Then
+		Print "image size must match"
+		Return Null
+	EndIf
+	
+	If factor&lt;0.0 Then factor=0.0
+	If factor&gt;1.0 Then factor=1.0
+	
+	Local target:TPixmap=CreatePixmap(PixmapWidth(source1), PixmapHeight(source1), PF_RGBA8888)
+	
+	Local invfactor:Float=1.0-factor
+	
+	Local ptr1:Byte Ptr=PixmapPixelPtr(source1)
+	Local ptr2:Byte Ptr=PixmapPixelPtr(source2)
+	Local ptrt:Byte Ptr=PixmapPixelPtr(target)
+	
+	'WriteStdout "aligned?~n"
+	'WriteStdout Int(ptr1)+" ("+(Int(ptr1) Mod 16)+")~n"
+	'WriteStdout PixmapPitch(source1)+" pitch, suspect some kind of alignment..~n"
+	
+	For Local y:Int=0 To PixmapHeight(source1)-1
+	
+		Local totalpitch:Int=PixmapPitch(source1)*y
+		
+		For Local x:Int=0 To PixmapWidth(source1)-1
+		
+			Local offset:Int=totalpitch+x*4
+		
+			ptrt[offset+0] = (factor*ptr1[offset+0]) + (invfactor * ptr2[offset+0])
+			ptrt[offset+1] = (factor*ptr1[offset+1]) + (invfactor * ptr2[offset+1])
+			ptrt[offset+2] = (factor*ptr1[offset+2]) + (invfactor * ptr2[offset+2])
+			ptrt[offset+3] = (factor*ptr1[offset+3]) + (invfactor * ptr2[offset+3])
+		
+		Next
+	Next
+	
+	'done
+
+	Return target
+
+End Function
+
+Function ThreadedBlend:TPixmap(source1:TPixmap, source2:TPixmap, factor:Float, threads:Int, func:Int=FUNC_FLOAT)
+
+	' sanity checks
+	
+	If PixmapFormat(source1)&lt;&gt;PF_RGBA8888 Or PixmapFormat(source2)&lt;&gt;PF_RGBA8888 Then
+		Print "invalid pixmap formats"
+		Return Null
+	EndIf
+	
+	If PixmapWidth(source1)&lt;&gt;PixmapWidth(source2) Or PixmapHeight(source1)&lt;&gt;PixmapHeight(source2) Then
+		Print "image size must match"
+		Return Null
+	EndIf
+	
+	If factor&lt;0.0 Then factor=0.0
+	If factor&gt;1.0 Then factor=1.0
+	
+	If threads&lt;1 Then threads=1
+	If threads&gt;64 Then threads=64 'not useful with more in any way i can think of, enough to max out a 4 cpu box
+	
+	' create target pixmap
+	
+	Local target:TPixmap=CreatePixmap(PixmapWidth(source1), PixmapHeight(source1), PF_RGBA8888)
+	
+	' worker
+	
+	Local worker:TThreadedWorker=New TThreadedWorker
+	
+	worker.Init(threads)
+	'WriteStdout "~nusing "+threads+" thread(s)~n"
+	
+	If func=FUNC_FLOAT Then
+		'WriteStdout "using float~n"
+		worker.SetFunction(BlendFunctionFloat)
+	EndIf
+	If func=FUNC_SSE Then
+		'WriteStdout "using mmx~n"
+		worker.SetFunction(BlendFunctionSSE)
+	EndIf
+	
+	'create data entries
+	
+	'WriteStdout "adding data entries.."
+	Local datacount:Int=0
+	
+	If threads=1 Then
+	
+		Local data:TBlendData=TBlendData.Create(source1, source2, target, factor, 0, PixmapHeight(source1)-1)
+		worker.add(data)
+		datacount:+1
+	
+	Else
+	
+		Local y:Int=0
+		Repeat
+		
+			If y&gt;=PixmapHeight(source1)-1 Then
+				Exit
+			EndIf
+		
+			Local inc:Int=lines
+			If y+lines&gt;=PixmapHeight(source1) Then
+				inc=PixmapHeight(source1)-y-1
+			EndIf
+		
+			Local data:TBlendData=TBlendData.Create(source1, source2, target, factor, y, inc)
+			worker.Add(data)
+			datacount:+1
+			
+			y:+inc
+		
+		Forever
+		
+	EndIf
+	
+	'WriteStdout "("+datacount+" entries)~n"
+	
+	'blend
+	
+	worker.Start()
+	worker.Finish()
+	
+	' done
+	
+	Return target
+
+End Function
+
+Type TBlendData
+
+	Field factor:Float
+	Field width:Int
+	Field pitch:Int
+	Field start:Int 'starting y line for work
+	Field rows:Int 'number of y lines to blend
+	Field ptr1:Byte Ptr
+	Field ptr2:Byte Ptr
+	Field ptr_target:Byte Ptr
+
+	Function Create:TBlendData(psource1:TPixmap, psource2:TPixmap, ptarget:TPixmap, pfactor:Float, pstart:Int, prows:Int)
+	
+		Local this:TBlendData = New TBlendData
+		
+		this.factor = pfactor
+		this.width = PixmapWidth(psource1)
+		this.pitch = PixmapPitch(psource1)
+		this.start = pstart
+		this.rows = prows
+		this.ptr1 = PixmapPixelPtr(psource1)
+		this.ptr2 = PixmapPixelPtr(psource2)
+		this.ptr_target = PixmapPixelPtr(ptarget)
+		
+		Return this
+	
+	End Function
+
+End Type
+
+Function BlendFunctionFloat:Object(o:Object)
+
+	Local data:TBlendData = TBlendData(o)
+	
+	'WriteStdout data.start+", "+data.rows+"~n" 'debug
+	
+	Local inv_factor:Float = 1.0 - data.factor
+	
+	' integer equivalents
+	Local ifactor:Int=Int(255.0*data.factor)
+	Local iinvfactor:Int=Int(255.0*(1.0-data.factor))
+	
+	For Local y:Int=data.start To data.start+data.rows
+	
+		For Local x:Int=0 To data.width-1
+	
+			Local offset:Int=y*data.pitch+x*4
+			
+			Rem
+			
+			f * a + (1.0 - f) * b
+			
+			do above with bytes, no division?
+			guess shifting is the way to go, normalizing the equation
+			for 255-&gt;256 for lossless quality
+			
+			End Rem
+			
+			data.ptr_target[offset+0] = (data.factor * data.ptr1[offset+0]) + (inv_factor * data.ptr2[offset+0])
+			data.ptr_target[offset+1] = (data.factor * data.ptr1[offset+1]) + (inv_factor * data.ptr2[offset+1])
+			data.ptr_target[offset+2] = (data.factor * data.ptr1[offset+2]) + (inv_factor * data.ptr2[offset+2])
+			data.ptr_target[offset+3] = (data.factor * data.ptr1[offset+3]) + (inv_factor * data.ptr2[offset+3])
+	
+		Next
+	Next
+	
+	Return Null
+
+End Function
+
+Function BlendFunctionSSE:Object(o:Object)
+
+	Local data:TBlendData = TBlendData(o)
+	
+	'transform factor to 4byte integer values
+	Local ifac:Int = Int(data.factor*255.0)
+	Local fac:Int = ifac + (ifac Shl 8) + (ifac Shl 16) + (ifac Shl 24)
+	'Print Bin(fac)
+	
+	MMX_Blend(data.ptr1, data.ptr2, data.ptr_target, Varptr fac, data.width, data.pitch, data.start, data.rows)
+	
+	Return Null
+
+End Function
+
+' ##############################################################################################
+' threadedworker.bmx
+
+Type TThreadedWorkerInterface
+
+	Field instance:TThreadedWorker
+	Field data:Object
+	Field id:Int
+	Field func:Object(po:Object)
+	Field internal:Int=False
+
+End Type
+
+Type TThreadedWorkerData
+
+	Field mutex:TMutex
+	Field processed:Int
+	Field data:Object
+
+	Function Create:TThreadedWorkerData(pdata:Object)
+	
+		Local this:TThreadedWorkerData=New TThreadedWorkerData
+		
+		this.mutex=CreateMutex()
+		this.processed=False
+		this.data=pdata
+		
+		Return this
+	
+	End Function
+
+End Type
+
+Function ThreadedWorkerFunction:Object(po:Object)
+
+	Local interface:TThreadedWorkerInterface=TThreadedWorkerInterface(po)
+	
+	If interface.internal Then
+	
+		Repeat
+		
+			Local no_data:Int=True
+			
+			For Local o:TThreadedWorkerData = EachIn interface.instance.data
+				If TryLockMutex(o.mutex)=True Then
+					If o.processed=False Then
+					
+						interface.instance.func(o.data)
+						
+						o.processed=True
+						no_data=False
+						
+					EndIf
+					UnlockMutex(o.mutex)
+				EndIf
+			Next
+			
+			If no_data Then
+				Exit
+			EndIf
+		
+			Delay 1
+		
+		Forever
+	
+		UnlockMutex(interface.instance.mutex[interface.id])
+		Return Null
+	
+	Else
+	
+		'LockMutex(interface.instance.mutex[interface.id])
+	
+		interface.func(interface.data)
+	
+		UnlockMutex(interface.instance.mutex[interface.id])
+		Return Null
+		
+	EndIf
+
+End Function
+
+Type TThreadedWorker
+
+	Field func:Object(param:Object)
+	Field data:TList
+
+	Field threads:Int
+	Field mutex:TMutex[]
+
+	Method Init:Int(pthreads:Int)
+	
+		?debug
+		WriteStdout "initializing worker ("+pthreads+" threads).."
+		?
+	
+		Self.threads=pthreads
+		Self.mutex = New TMutex[Self.threads]
+		
+		For Local i:Int=0 To Self.mutex.length-1
+			Self.mutex[i]=CreateMutex()
+		Next
+		
+		?debug
+		WriteStdout "done!~n"
+		?
+		
+		Return True
+	
+	End Method
+	
+	Method Wait:Int()
+	
+		?debug
+		WriteStdout "waiting for vacant thread.."
+		?
+	
+		Repeat
+		
+			Local vacant:Int=False
+		
+			For Local i:Int=0 To Self.mutex.length-1
+				If TryLockMutex(Self.mutex[i])=True Then
+					UnlockMutex(Self.mutex[i])
+					vacant=True
+				EndIf
+			Next
+		
+			If vacant Then
+				Exit
+			EndIf
+		
+			Delay 1
+		
+		Forever
+		
+		?debug
+		WriteStdout "found!~n"
+		?
+		
+		Return True
+	
+	End Method
+	
+	Method Dispatch:Int(pfunc:Object(po:Object), po:Object)
+	
+		?debug
+		WriteStdout "attempting to dispatch new thread.."
+		?
+	
+		For Local i:Int=0 To Self.mutex.length-1
+			If TryLockMutex(Self.mutex[i])=True Then
+				
+				Local interface:TThreadedWorkerInterface=New TThreadedWorkerInterface
+				
+				interface.instance=Self
+				interface.data=po
+				interface.id=i
+				interface.func=pfunc
+				interface.internal=False
+				
+				CreateThread(ThreadedWorkerFunction, interface)
+				'UnlockMutex(Self.mutex[i]) 'let thread unlock mutex when done instead
+				
+				?debug
+				WriteStdout "succeeded!~n"
+				?
+				
+				Return True
+			
+			EndIf
+		Next
+		
+		?debug
+		WriteStdout "failed~n"
+		?
+		
+		Return False
+	
+	End Method
+	
+	Method Start:Int()
+	
+		?debug
+		WriteStdout "processing of internal data.."
+		?
+	
+		If Self.func=Null Or Self.data=Null Then
+		
+			?debug
+			WriteStdout "missing function/data..~n"
+			?
+			Return False
+			
+		EndIf
+		
+		For Local i:Int=0 To Self.mutex.length-1
+			If TryLockMutex(Self.mutex[i])=True Then
+			
+				Local interface:TThreadedWorkerInterface=New TThreadedWorkerInterface
+				
+				interface.instance=Self
+				interface.data=Null
+				interface.id=i
+				interface.func=Null
+				interface.internal=True
+				
+				CreateThread(ThreadedWorkerFunction, interface)
+				
+				?debug
+				WriteStdout "~nthread ("+(i+1)+") launched!"
+				?
+			
+			EndIf
+		Next
+		
+		?debug
+		WriteStdout "done!~n"
+		?
+		
+		Return True
+	
+	End Method
+	
+	'wait for threads to finish. if no internal data is used, just
+	'wait for all threads to clear. otherwise also check that all
+	'data has been processed
+	
+	Method Finish:Int()
+	
+		?debug
+		WriteStdout "waiting for worker to finish.."
+		?
+	
+		If Self.func&lt;&gt;Null And Self.data&lt;&gt;Null Then
+			
+			?debug
+			WriteStdout " (internal data) "
+			?
+			
+			'wait for all data to be progressed, and all mutexes
+			'to become unlocked
+			
+			Repeat
+			
+				Local done:Int=True
+				
+				For Local o:TThreadedWorkerData=EachIn Self.data
+					If TryLockMutex(o.mutex)=True Then
+						If o.processed=False Then
+							done=False
+							UnlockMutex(o.mutex)
+							Exit
+						EndIf
+						UnlockMutex(o.mutex)
+					Else
+						done=False
+						Exit
+					EndIf
+				Next
+				
+				If done Then
+					Exit
+				EndIf
+				
+				Delay 1
+				
+			Forever
+			
+			?debug
+			WriteStdout "data has been processed.."
+			?
+			
+			Repeat
+			
+				Local done:Int=True
+			
+				For Local i:Int=0 To Self.mutex.length-1
+					If TryLockMutex(Self.mutex[i])=True Then
+						UnlockMutex(Self.mutex[i])
+					Else
+						done=False
+						Exit
+					EndIf
+				Next
+			
+				If done Then
+					Exit
+				EndIf
+			
+				Delay 1
+			
+			Forever
+			
+			?debug
+			WriteStdout "threads finished! "
+			?
+			
+			?debug
+			WriteStdout "done!~n"
+			?
+			
+			Return True
+			
+		Else
+			
+			?debug
+			WriteStdout " (external data) "
+			?
+			
+			'just wait for all mutexes to become unlocked
+			
+			Repeat
+			
+				Local done:Int=True
+				
+				For Local i:Int=0 To Self.mutex.length-1
+					If TryLockMutex(Self.mutex[i])=True Then
+						UnlockMutex(Self.mutex[i])
+					Else
+						done=False
+						Exit
+					EndIf
+				Next
+			
+				If done Then
+					Exit
+				EndIf
+			
+				Delay 1
+			
+			Forever
+			
+			?debug
+			WriteStdout "done!~n"
+			?
+			
+			Return True
+			
+		EndIf
+	
+	End Method
+
+	'set function to be used to process internal data
+
+	Method SetFunction:Int(pfunction:Object(po:Object))
+	
+		Self.func = pfunction
+		Return True
+		
+	End Method
+
+	'add new internal data entry to worker
+
+	Method Add:Int(po:Object)
+	
+		If Self.data=Null Then
+			Self.data=New TList
+		EndIf
+		
+		Local data:TThreadedWorkerData=TThreadedWorkerData.Create(po)
+		Self.data.AddLast(data)
+		
+		Return True
+	
+	End Method
+
+End Type
+
+</textarea><br><br>blend.s<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+	; mmx optimisation attempt for image blend function. mmx should in theory allow me to do 2 whole
+	; pixel blends a time, and it would be quite nice if that really did work.
+	
+	; code assumes pixmap pitch is always a ^2 value.. which accordingly to the module source
+	; is correct.
+	
+	; need to have some way to check for mmx availability (cpuid i guess), even though it can be
+	; assumed to be present on pretty much anything being used on a pc today.
+	
+	; Function SSE_Blend(source1:Byte Ptr, source2:Byte Ptr, target:Byte Ptr, factor:Byte Ptr, width:Int, pitch:Int, start:Int, length:Int)
+	
+	format MS COFF
+	section '.text' code readable executable
+	
+	public _CPU_Vendor
+	_CPU_Vendor:
+	
+		push ebp
+		mov ebp, esp
+		
+		pusha
+		
+		xor eax, eax
+		cpuid
+		
+		mov dword eax, [ebp+8]
+		mov dword [eax], ebx
+		
+		add eax, 4
+		mov dword [eax], edx
+		
+		add eax, 4
+		mov dword [eax], ecx
+		
+		popa
+		
+		mov esp, ebp
+		pop ebp
+	
+		ret
+	
+	public _MMX_Support
+	_MMX_Support:
+	
+		push ebp
+		mov ebp, esp
+		
+		;pusha
+		
+		push ebx
+		push ecx
+		push edx
+		
+		mov eax, 1
+		cpuid
+		
+		and edx, 8388608
+		mov eax, edx
+		;mov eax, 0
+		
+		pop edx
+		pop ecx
+		pop ebx
+		
+		;popa
+		
+		mov esp, ebp
+		pop ebp
+		
+		ret
+	
+	public _MMX_Blend
+	_MMX_Blend:
+	
+		push 		ebp
+		mov 		ebp, esp
+		
+		pusha
+		
+		; first some mmx stuff that only needs to be done once. unpack factor and calculate inverse factor
+		
+		pxor 		mm5, mm5 			; clear mm5. used as padding when unpacking bytes-&gt;words later on
+		
+		mov 		dword eax, [ebp+20]	; load factor pointer from stack
+		
+		movd		mm6, [eax]			; load factor into mm3	
+		punpcklbw 	mm6, mm5			; repack bytes-&gt;words
+		movq 		mm7, mm6			; copy mm3 to mm6
+		psrlw 		mm7, 7				; shift mm6 so &gt;127 = 1
+		paddw 		mm6, mm7			; add mm6 to mm3 (range increased from 0-255 to 0-256)
+		
+		pcmpeqw 	mm7, mm7			; set word components to high
+		psrlw 		mm7, 15				; shift words to 1
+		psllw 		mm7, 8				; shift words to 256
+		psubw 		mm7, mm6			; subtract mm3 from mm4 (256 - factor)
+		
+		; loop through pixels 
+		
+		mov 		dword eax, [ebp+36]	; load length param to edx
+		mov 		edx, eax
+		
+	y_loop:								; Y LOOP length-&gt;0 + start loop until length-start val goes to zero
+		
+		push 		edx
+		
+		mov 		dword eax, [ebp+32]	; load and add start to edx for current Y value
+		add 		edx, eax	
+			
+		mov 		dword eax, [ebp+28]	; load pitch and multiply with edx for Y*pitch value. move result to edx
+		mul 		dword edx
+		mov 		edx, eax
+		
+		mov 		dword eax, [ebp+24]	; load width into ecx
+		mov 		ecx, eax
+		;shl 		ecx, 2				; multiply ecx with 4(?) for proper width (in bytes.... this shouldnt be done here)
+		shr			ecx, 1				; divide ecx with 2 since well be doing 2 pixels a time
+		
+	x_loop:								; X LOOP width-&gt;0
+			
+		push		ecx
+				
+		;shl 		ecx, 2				; multiply with 4 (32bit pixels)
+		shl			ecx, 3				; multiply with 8 (2x32 bit pixels)
+		add 		ecx, edx			; ecx should now be offset for current pixel (y*pitch+x)
+				
+		; experimental routine.. this assumes surface pixel pitch is always a multiple of 2..
+		; mm5 - padding, mm6 - factor, mm7 - inverse factor
+		; mm1/mm2 - source1 , mm3/mm4 - source2
+		
+		mov			dword eax, [ebp+8]	; source1 surface
+		add			eax, ecx			; add offset
+		movq		mm1, [eax]			; move 2 pixel data to mm1
+		
+		movd		eax, mm1			; move low pixel from mm1 to mm2 and shift down high pixel in mm1
+		movd		mm2, eax
+		psrlq		mm1, 32	
+		
+		punpcklbw 	mm1, mm5
+		punpcklbw	mm2, mm5
+		
+		mov 		dword eax, [ebp+12]	; source2 surface
+		add			eax, ecx			; add offset
+		movq		mm3, [eax]			; move 2 pixel data to mm2
+				
+		movd		eax, mm3			; move low pixel from mm3 to mm4 and shift down high pixel in mm3
+		movd 		mm4, eax
+		psrlq		mm3, 32
+		
+		punpcklbw	mm3, mm5
+		punpcklbw 	mm4, mm5
+		
+		; blend source1 low and source2 low
+		
+		pmullw		mm2, mm6
+		pmullw		mm4, mm6
+		paddw		mm2, mm4
+		psrlw		mm2, 8
+		
+		; blend source1 high and source2 high
+		
+		pmullw		mm1, mm6
+		pmullw		mm3, mm6
+		paddw		mm1, mm3
+		psrlw		mm1, 8
+			
+		; repack to bytes
+		
+		packuswb	mm1, mm1
+		packuswb	mm2, mm2
+			
+		; store result.. thought id save time on doing a single 2*4 byte write a time, but nope
+		; avoid additional overhead and just write the two pixels separately
+		
+		mov			dword eax, [ebp+16]
+		add			eax, ecx
+		movd		[eax], mm2
+		add			eax, 4
+		movd		[eax], mm1
+				
+		; orignal routine below
+			
+		;mov 		dword eax, [ebp+8]	; source1 surface pointer
+		;add 		eax, ecx			; add offset
+		;movd 		mm1, [eax]			; move pixel to mmx register
+			
+		;mov 		dword eax, [ebp+12]	; load pixel from source2
+		;add 		eax, ecx
+		;movd 		mm2, [eax]
+								
+		;punpcklbw 	mm1, mm5			; unpack mm1 to byte-&gt;word spacing
+		;punpcklbw 	mm2, mm5			; unpack mm2 to byte-&gt;word spacing
+				
+		;pmullw 	mm1, mm3			; multiply source1*factor
+		;pmullw 	mm2, mm4			; multiply source2*inversefactor
+		;paddw 		mm1, mm2			; add mm2 to mm1
+		;psrlw 		mm1, 8				; shift mm1 (division by 256)
+				
+		;packuswb 	mm1, mm1			; pack mm1 and save it to target surface
+		;mov 		eax, [ebp+16]
+		;add 		eax, ecx
+		;movd 		[eax], mm1
+			
+		pop 		ecx					; restore x loop/ecx counter
+			
+		dec 		ecx					; x loop return
+		jnz 		x_loop		
+		
+		pop 		edx					;  restore y loop/edx counter
+		
+		dec 		edx					; y loop return
+		jnz 		y_loop
+		
+		emms							; clear/restore fpu stack
+		
+		popa
+		
+		mov 		esp, ebp
+		pop 		ebp
+	
+		ret
+</textarea><br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1158193"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >zzz</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> My own results on a phenom 2 x6 at 2,8Ghz<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+CPU Vendor: AuthenticAMD
+MMX Supported
+
+Performing 4 iterations on 4000, 4000 pixmaps.
+
+creating custom pixmap..done!
+creating custom pixmap..done!
+
+Reference blend function: 5792 ms. (1.000x) memory: 0.329/0.164 GB/s
+Saving result to blend_reference.png
+Done
+
+Single thread blitzmax blend: 6109 ms. (0.948x) memory: 0.312/0.156 GB/s
+Saving result to blend_stbmx.png
+Done
+
+Multithreaded blitzmax blend: 1223 ms. (4.735x) memory: 1.559/0.779 GB/s
+Saving result to blend_mtbmx.png
+Done
+
+Singlethreaded MMX blend: 644 ms. (8.993x) memory: 2.961/1.480 GB/s
+Saving result to blend_stmmx.png
+Done
+
+Multithreaded MMX blend: 170 ms. (34.07x) memory: 11.21/5.609 GB/s
+Saving result to blend_mtmmx.png
+Done
+</textarea> <br><br></td></tr></table><br>
+<a name="1158197"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here are my results. The speeds seem quite variable -- the first test varies by a whole second! (There's nothing heavy running in the background.)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+CPU Vendor: GenuineIntel
+MMX Supported
+
+Performing 4 iterations on 4000, 4000 pixmaps.
+
+creating custom pixmap..done!
+creating custom pixmap..done!
+
+Reference blend function: 5228 ms. (1.000x) memory: 0.364/0.182 GB/s
+Saving result to blend_reference.png
+Done
+
+Single thread blitzmax blend: 5156 ms. (1.013x) memory: 0.369/0.184 GB/s
+Saving result to blend_stbmx.png
+Done
+
+Multithreaded blitzmax blend: 1277 ms. (4.093x) memory: 1.493/0.746 GB/s
+Saving result to blend_mtbmx.png
+Done
+
+Singlethreaded MMX blend: 575 ms. (9.092x) memory: 3.317/1.658 GB/s
+Saving result to blend_stmmx.png
+Done
+
+Multithreaded MMX blend: 405 ms. (12.90x) memory: 4.709/2.354 GB/s
+Saving result to blend_mtmmx.png
+Done
+
+Process complete
+
+</textarea><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+CPU Vendor: GenuineIntel
+MMX Supported
+
+Performing 4 iterations on 4000, 4000 pixmaps.
+
+creating custom pixmap..done!
+creating custom pixmap..done!
+
+Reference blend function: 5897 ms. (1.000x) memory: 0.323/0.161 GB/s
+Saving result to blend_reference.png
+Done
+
+Single thread blitzmax blend: 5862 ms. (1.005x) memory: 0.325/0.162 GB/s
+Saving result to blend_stbmx.png
+Done
+
+Multithreaded blitzmax blend: 1605 ms. (3.674x) memory: 1.188/0.594 GB/s
+Saving result to blend_mtbmx.png
+Done
+
+Singlethreaded MMX blend: 529 ms. (11.14x) memory: 3.605/1.802 GB/s
+Saving result to blend_stmmx.png
+Done
+
+Multithreaded MMX blend: 349 ms. (16.89x) memory: 5.465/2.732 GB/s
+Saving result to blend_mtmmx.png
+Done
+
+Process complete
+
+
+
+
+
+--
+
+
+
+
+
+CPU Vendor: GenuineIntel
+MMX Supported
+
+Performing 4 iterations on 4000, 4000 pixmaps.
+
+creating custom pixmap..done!
+creating custom pixmap..done!
+
+Reference blend function: 4991 ms. (1.000x) memory: 0.382/0.191 GB/s
+Saving result to blend_reference.png
+Done
+
+Single thread blitzmax blend: 5936 ms. (0.840x) memory: 0.321/0.160 GB/s
+Saving result to blend_stbmx.png
+Done
+
+Multithreaded blitzmax blend: 1317 ms. (3.789x) memory: 1.448/0.724 GB/s
+Saving result to blend_mtbmx.png
+Done
+
+Singlethreaded MMX blend: 506 ms. (9.863x) memory: 3.769/1.884 GB/s
+Saving result to blend_stmmx.png
+Done
+
+Multithreaded MMX blend: 375 ms. (13.30x) memory: 5.086/2.543 GB/s
+Saving result to blend_mtmmx.png
+Done
+
+Process complete
+
+</textarea> <br><br></td></tr></table><br>
+<a name="1158227"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> for linux the ".s"-file has to get configured with:<br>format ELF<br>instead of format MS COFF<br><br>But afterwards you get errors - complaining about missing functions -&gt; the 3 ones defined in the asm-file.<br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1158229"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Wow, I haven't seen people writing assembly code for ages. It doesn't surprise me too much that writing stuff in assembler is *several* times faster than code converted from a higher level language. If assemble wasn't so.... longwinded, it would be so much more appealing. I can't imagine writing anything of significant size in it unfortunately. <br><br>Brings me back to the Amiga days. Ahhhh 68k. <br><br></td></tr></table><br>
+<a name="1158230"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> It doesn't surprise me too much that writing stuff in assembler is *several* times faster than code converted from a higher level language. <br></div><br><br>Only if a) you're really, <i>really</i> good at writing assembler, and b) your HLL compiler isn't optimising very well.<br><br>You're flat-out never going to write better assembly by hand than the GCC backend will. <br><br></td></tr></table><br>
+<a name="1158240"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Results from Sony Vaio VGN-FW31M.<br>Well done, the speed increase is well worth it.<br><br>MT/MMX<br>1024x1024 - 8.25x<br>2048x2048 - 10.25x<br>4096x4096 - 12.30x<br><br>The larger the image the greater the gains. Have you considered SSE2/3 ? to take advantage of the 128bit instructions.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">CPU Vendor: GenuineIntel
+MMX Supported
+
+Performing 4 iterations on 4000, 4000 pixmaps.
+
+creating custom pixmap..done!
+creating custom pixmap..done!
+
+Reference blend function: 3522 ms. (1.000x) memory: 0.541/0.270 GB/s
+Saving result to blend_reference.png
+Done
+
+Single thread blitzmax blend: 3878 ms. (0.908x) memory: 0.491/0.245 GB/s
+Saving result to blend_stbmx.png
+Done
+
+Multithreaded blitzmax blend: 2021 ms. (1.742x) memory: 0.943/0.471 GB/s
+Saving result to blend_mtbmx.png
+Done
+
+Singlethreaded MMX blend: 346 ms. (10.17x) memory: 5.512/2.756 GB/s
+Saving result to blend_stmmx.png
+Done
+
+Multithreaded MMX blend: 270 ms. (13.04x) memory: 7.064/3.532 GB/s
+Saving result to blend_mtmmx.png
+Done
+</textarea> <br><br></td></tr></table><br>
+<a name="1158308"></a>
+
+<a name="1158309"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >zzz</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> @col<br>I just assumed sse was all about floating point stuff. I'll write a version using sse2 when I have some time left over to see how it performs. The multithreaded mmx part already hits max bandwidth on my system though, so I would'nt expect much of a speed improvement. Might be some headroom left on other systems. :)<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1158313"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh, no way, there is no way an automated optimizer can do a better job than hand-written assembler by a skilled programmer. <br><br></td></tr></table><br>
+<a name="1158320"></a>
+
+<a name="1158321"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yeah, if said "skilled programmer" is a professor at MIT who's spent the last twenty years directing optimisation research and writing LLVM components, they could probably do a better job. Because they know everything that went into the automated system. Thousands upon thousands of rewrite rules, machine-specific tweaks, etc.<br><br>The average engineer programmer? Absolutely, <i>definitely</i> not. They will, however, almost certainly <i>think</i> they can do better (this is very common: the vast majority of people have no idea just how complicated hardcore optimisation is), and then accuse the compiler of cheating somehow when they inevitably fail.<br><br>The main reason why this is true is because optimisation isn't about skipping a few mul instructions here, or tweaking a vtable there, any more. Nowadays optimisation involves heavy rewriting from algorithmic form, and is usually completely unrecognisable at the assembly level. It's too complex to keep in one's head (if it isn't, either the program is trivial or the developer isn't thinking at the algorithmic level, in which case they'll produce very fast minicomponents that don't work well together because it's <i>impossible</i> to design a whole program at that granularity).<br><br><br>...please, don't be insulted (too many people get in a huff). Claiming a human can write better assembly code than a compiler is like saying a human has faster reaction times than an aimbot. It's not only wrong, it's conceptually ludicrous. We just happen to exist at the turning-point of the art where there are still a very small, ever-shrinking number of programmer savants who can work at that level. In five years that breed of coder <i>will</i> be extinct (in twenty years they will start to admit it).<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1158359"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Really? Check out any `demo` from the demo scene where clever use of assembly language has provided massively faster performance, to such a degree that you have to ask yourself how it can be possible. <br><br></td></tr></table><br>
+<a name="1158360"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >zzz</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here's an SSE2 version along with some small issues corrected. It's not the nicest assembly code, but I'm not sure if we can trust pixmap surfaces to be 16byte aligned?<br><br>something.bmx<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+Framework BRL.Pixmap
+Import BRL.StandardIO
+Import BRL.BMPLoader
+Import BRL.JPGLoader
+Import BRL.PNGLoader
+Import BRL.Threads
+Import BRL.Retro
+
+Import "blend.s"
+'Import "threadedworker.bmx"
+'Include "blend/blend.bmx"
+
+Const SAVERESULT:Int=True
+Const SMALL:Int=False'loading only
+Const GENERATE:Int=True
+Const ITER:Int=4
+Const THREADSNUM:Int=12
+
+Const PIXWIDTH:Int=4000
+Const PIXHEIGHT:Int=4000
+
+Extern
+
+	Function CPU_Vendor(str:Byte Ptr)
+	Function MMX_Support:Int()
+	Function MMX_Blend(source1:Byte Ptr, source2:Byte Ptr, target:Byte Ptr, factor:Byte Ptr, width:Int, pitch:Int, start:Int, length:Int)
+
+End Extern
+
+'Graphics(320, 200, 0, 0)
+
+' /////////////////////////////////////////////////////////////////////////////
+
+' load master copy
+
+Local vendor:Byte[12]
+CPU_Vendor(Varptr vendor[0])
+
+WriteStdout "~nCPU Vendor: "
+For Local i:Int=0 To vendor.length-1
+	WriteStdout Chr(vendor[i])
+Next
+WriteStdout "~n"
+
+Local mmx:Int=MMX_Support()
+If mmx Then
+	WriteStdout "MMX/SSE2 Supported~n"
+Else
+	WriteStdout "MMX/SSE2 not supported~n"
+EndIf
+
+WriteStdout "~nPerforming "+ITER+" iterations on "+PIXWIDTH+", "+PIXHEIGHT+" pixmaps.~n"
+
+Local image:TPixmap
+
+If GENERATE Then
+	'create a pixmap with a bunch of horizontal bars, random colors
+	WriteStdout "~ncreating custom pixmap.."
+	image=CreatePixmap(PIXWIDTH, PIXHEIGHT, PF_RGBA8888)
+	If image=Null Then
+		Print "failed to create pixmap"
+		End
+	EndIf
+	
+	For Local y:Int=0 To PixmapWidth(image)-1
+		For Local x:Int=0 To PixmapHeight(image)-1
+			
+			Local r:Int
+			Local g:Int
+			Local b:Int
+			
+			Select True
+				Case x&gt;=0 And x&lt;PIXWIDTH/4
+					r=255
+					g=0
+					b=0
+				Case x&gt;=PIXWIDTH/4 And x&lt;PIXWIDTH/2
+					r=0
+					g=255
+					b=0
+				Case x&gt;=PIXWIDTH/2 And x&lt;PIXWIDTH/2+PIXWIDTH/4
+					r=0
+					g=0
+					b=255
+				Case x&gt;=PIXWIDTH/2+PIXWIDTH/4
+					r=255
+					g=255
+					b=255
+			End Select
+			
+			Local pix:Int=255 Shl 24 + r Shl 16 + g Shl 8 + b
+			WritePixel(image, x, y, pix)
+		
+		Next
+	Next
+	SavePixmapPNG(image, "source.png")
+	WriteStdout "done!~n"
+Else
+	If SMALL Then
+		image = LoadPixmap("data/source-small.png")
+	Else
+		image = LoadPixmap("data/source.png")
+	EndIf
+	If image=Null Then
+		Print "failed to load image.."
+		End
+	EndIf
+	image = ConvertPixmap(image, PF_RGBA8888)
+EndIf
+
+Local temp1:TPixmap
+Local temp2:TPixmap
+Local temp3:TPixmap
+
+Local ms:Long
+Local ms_acc:Long
+Local basetime:Double
+Local memin:Double
+Local memout:Double
+
+'WriteStdout "~nMaster copy of image loaded.~n"
+'WriteStdout "Calculating memory footprint.."
+
+Local mem_footprint:Int = PixmapPitch(image)*PixmapHeight(image)*4
+
+'WriteStdout " "+mem_footprint+" bytes.~n"
+
+' /////////////////////////////////////////////////////////////////////////////
+
+' blend test
+
+'WriteStdout "~nTesting blend routine~n"
+
+If image&lt;&gt;Null Then
+	temp1 = CopyPixmap(image)
+EndIf
+
+If GENERATE Then
+	'create a vertical gradient
+	WriteStdout "creating custom pixmap.."
+	temp2=CreatePixmap(PIXWIDTH, PIXHEIGHT, PF_RGBA8888)
+	If temp2=Null Then
+		Print "failed to create pixmap"
+		End
+	EndIf
+	For Local y:Int=0 To PixmapHeight(temp2)-1
+		Local value:Int=(Float(y)/Float(PixmapHeight(temp2)))*255.0
+		'Print value
+		For Local x:Int=0 To PixmapWidth(temp2)-1
+			Local pix:Int=value Shl 16 + value Shl 8 + value
+			WritePixel(temp2, x, y, pix)
+		Next
+	Next
+	SavePixmapPNG(temp2, "blend.png")
+	WriteStdout "done!~n"
+Else
+	If SMALL Then
+		temp2 = LoadPixmap("data/blendshape-small.png")
+	Else
+		temp2 = LoadPixmap("data/blendshape.png")
+	EndIf
+EndIf
+
+If temp1=Null Or temp2=Null Then
+	Print "failed to set up temp sources.."
+	End
+EndIf
+
+temp2 = ConvertPixmap(temp2, PF_RGBA8888)
+
+' ///////////////////////////////////////////
+
+' test 0, reference, straightforward singlethreaded blitzmax code
+
+ms_acc=0
+For Local i:Int=1 To ITER
+
+	ms=MilliSecs()
+	temp3=StandardBlend(temp1, temp2, 0.5)
+	ms=MilliSecs()-ms
+	
+	ms_acc:+ms
+	
+Next
+
+'ms_acc:/10
+ms=ms_acc
+basetime=ms
+
+memin=mem_footprint*ITER*2
+memin:/1073741824
+memin:*(1000.0/Float(ms))
+memout=mem_footprint*ITER
+memout:/1073741824
+memout:*(1000.0/Float(ms))
+
+WriteStdout "~nReference blend function: "+ms+" ms. ("+Left(String((basetime/basetime)), 5)+"x)"
+WriteStdout " memory: "+Left(String(memin), 5)+"/"+Left(String(memout), 5)+" GB/s~n"
+
+If SAVERESULT Then
+	Print "Saving result to blend_reference.png"
+	If temp3&lt;&gt;Null Then
+		SavePixmapPNG(temp3, "blend_reference.png")
+	EndIf
+	Print "Done"
+EndIf
+
+' test 1, blitzmax code, singlethreaded
+
+ms_acc=0
+For Local i:Int=1 To ITER
+
+	ms=MilliSecs()
+	temp3 = ThreadedBlend(temp1, temp2, 0.5, 1, FUNC_FLOAT)
+	ms=MilliSecs()-ms
+
+	ms_acc:+ms
+
+Next
+
+'ms_acc:/10
+ms=ms_acc
+
+memin=mem_footprint*ITER*2
+memin:/1073741824
+memin:*(1000.0/Float(ms))
+memout=mem_footprint*ITER
+memout:/1073741824
+memout:*(1000.0/Float(ms))
+
+WriteStdout "~nSingle thread blitzmax blend: "+ms+" ms. ("+Left(String((basetime/ms)), 5)+"x)"
+WriteStdout " memory: "+Left(String(memin), 5)+"/"+Left(String(memout), 5)+" GB/s~n"
+
+If SAVERESULT Then
+	Print "Saving result to blend_stbmx.png"
+	If temp3&lt;&gt;Null Then
+		SavePixmapPNG(temp3, "blend_stbmx.png")
+	EndIf
+	Print "Done"
+EndIf
+
+' test 2, blitzmax code, multithreaded
+
+ms_acc=0
+For Local i:Int=1 To ITER
+
+	ms=MilliSecs()
+	temp3 = ThreadedBlend(temp1, temp2, 0.5, THREADSNUM, FUNC_FLOAT)
+	ms=MilliSecs()-ms
+	
+	ms_acc:+ms
+	
+Next
+
+'ms_acc:/10
+ms=ms_acc
+
+memin=mem_footprint*ITER*2
+memin:/1073741824
+memin:*(1000.0/Float(ms))
+memout=mem_footprint*ITER
+memout:/1073741824
+memout:*(1000.0/Float(ms))
+
+WriteStdout "~nMultithreaded blitzmax blend: "+ms+" ms. ("+Left(String((basetime/ms)), 5)+"x)"
+WriteStdout " memory: "+Left(String(memin), 5)+"/"+Left(String(memout), 5)+" GB/s~n"
+
+If SAVERESULT Then
+	Print "Saving result to blend_mtbmx.png"
+	If temp3&lt;&gt;Null Then
+		SavePixmapPNG(temp3, "blend_mtbmx.png")
+	EndIf
+	Print "Done"
+EndIf
+
+If mmx=0 Then
+	WriteStdout "~nMMX/SSE2 is not supported. Stopping here..~n"
+	End
+EndIf
+
+' test 3, mmx code, single threaded
+
+ms_acc=0
+For Local i:Int=1 To ITER
+
+	ms=MilliSecs()
+	temp3 = ThreadedBlend(temp1, temp2, 0.5, 1, FUNC_SSE)
+	ms=MilliSecs()-ms
+	
+	ms_acc:+ms
+	
+Next
+
+'ms_acc:/10
+ms=ms_acc
+
+memin=mem_footprint*ITER*2
+memin:/1073741824
+memin:*(1000.0/Float(ms))
+memout=mem_footprint*ITER
+memout:/1073741824
+memout:*(1000.0/Float(ms))
+
+WriteStdout "~nSinglethreaded MMX/SSE2 blend: "+ms+" ms. ("+Left(String((basetime/ms)), 5)+"x)"
+WriteStdout " memory: "+Left(String(memin), 5)+"/"+Left(String(memout), 5)+" GB/s~n"
+
+If SAVERESULT Then
+	Print "Saving result to blend_stmmx.png"
+	If temp3&lt;&gt;Null Then
+		SavePixmapPNG(temp3, "blend_stmmx.png")
+	EndIf
+	Print "Done"
+EndIf
+
+' test 4, mmx code, multithreaded
+
+
+ms_acc=0
+For Local i:Int=1 To ITER
+
+	ms=MilliSecs()
+	temp3 = ThreadedBlend(temp1, temp2, 0.5, THREADSNUM, FUNC_SSE)
+	ms=MilliSecs()-ms
+
+	ms_acc:+ms
+	
+Next
+
+'ms_acc:/10
+ms=ms_acc
+
+memin=mem_footprint*ITER*2
+memin:/1073741824
+memin:*(1000.0/Float(ms))
+memout=mem_footprint*ITER
+memout:/1073741824
+memout:*(1000.0/Float(ms))
+
+
+WriteStdout "~nMultithreaded MMX/SSE2 blend: "+ms+" ms. ("+Left(String((basetime/ms)), 5)+"x)"
+WriteStdout " memory: "+Left(String(memin), 5)+"/"+Left(String(memout), 5)+" GB/s~n"
+
+If SAVERESULT Then
+	Print "Saving result to blend_mtmmx.png"
+	If temp3&lt;&gt;Null Then
+		SavePixmapPNG(temp3, "blend_mtmmx.png")
+	EndIf
+	Print "Done"
+EndIf
+
+' /////////////////////////////////////////////////////////////////////////////
+
+' done with testing
+
+'EndGraphics()
+End
+
+' #####################################################################################################################
+' blend.bmx
+
+Rem
+
+	pure blitzmax threaded image blending routine.
+
+End Rem
+
+Const FUNC_FLOAT:Int=1
+Const FUNC_SSE:Int=2
+
+Const LINES:Int=64
+
+'straightforward singlethreaded blend for speed comparison
+
+Function StandardBlend:TPixmap(source1:TPixmap, source2:TPixmap, factor:Float)
+
+	' sanity checks
+	
+	If PixmapFormat(source1)&lt;&gt;PF_RGBA8888 Or PixmapFormat(source2)&lt;&gt;PF_RGBA8888 Then
+		Print "invalid pixmap formats"
+		Return Null
+	EndIf
+	
+	If PixmapWidth(source1)&lt;&gt;PixmapWidth(source2) Or PixmapHeight(source1)&lt;&gt;PixmapHeight(source2) Then
+		Print "image size must match"
+		Return Null
+	EndIf
+	
+	If factor&lt;0.0 Then factor=0.0
+	If factor&gt;1.0 Then factor=1.0
+	
+	Local target:TPixmap=CreatePixmap(PixmapWidth(source1), PixmapHeight(source1), PF_RGBA8888)
+	
+	Local invfactor:Float=1.0-factor
+	
+	Local ptr1:Byte Ptr=PixmapPixelPtr(source1)
+	Local ptr2:Byte Ptr=PixmapPixelPtr(source2)
+	Local ptrt:Byte Ptr=PixmapPixelPtr(target)
+	
+	'WriteStdout "aligned?~n"
+	'WriteStdout Int(ptr1)+" ("+(Int(ptr1) Mod 16)+")~n"
+	'WriteStdout PixmapPitch(source1)+" pitch, suspect some kind of alignment..~n"
+	
+	For Local y:Int=0 To PixmapHeight(source1)-1
+	
+		Local totalpitch:Int=PixmapPitch(source1)*y
+		
+		For Local x:Int=0 To PixmapWidth(source1)-1
+		
+			Local offset:Int=totalpitch+x*4
+		
+			ptrt[offset+0] = (factor*ptr1[offset+0]) + (invfactor * ptr2[offset+0])
+			ptrt[offset+1] = (factor*ptr1[offset+1]) + (invfactor * ptr2[offset+1])
+			ptrt[offset+2] = (factor*ptr1[offset+2]) + (invfactor * ptr2[offset+2])
+			ptrt[offset+3] = (factor*ptr1[offset+3]) + (invfactor * ptr2[offset+3])
+		
+		Next
+	Next
+	
+	'done
+
+	Return target
+
+End Function
+
+Function ThreadedBlend:TPixmap(source1:TPixmap, source2:TPixmap, factor:Float, threads:Int, func:Int=FUNC_FLOAT)
+
+	' sanity checks
+	
+	If PixmapFormat(source1)&lt;&gt;PF_RGBA8888 Or PixmapFormat(source2)&lt;&gt;PF_RGBA8888 Then
+		Print "invalid pixmap formats"
+		Return Null
+	EndIf
+	
+	If PixmapWidth(source1)&lt;&gt;PixmapWidth(source2) Or PixmapHeight(source1)&lt;&gt;PixmapHeight(source2) Then
+		Print "image size must match"
+		Return Null
+	EndIf
+	
+	If factor&lt;0.0 Then factor=0.0
+	If factor&gt;1.0 Then factor=1.0
+	
+	If threads&lt;1 Then threads=1
+	If threads&gt;64 Then threads=64 'not useful with more in any way i can think of, enough to max out a 4 cpu box
+	
+	' create target pixmap
+	
+	Local target:TPixmap=CreatePixmap(PixmapWidth(source1), PixmapHeight(source1), PF_RGBA8888)
+	
+	' worker
+	
+	Local worker:TThreadedWorker=New TThreadedWorker
+	
+	worker.Init(threads)
+	'WriteStdout "~nusing "+threads+" thread(s)~n"
+	
+	If func=FUNC_FLOAT Then
+		'WriteStdout "using float~n"
+		worker.SetFunction(BlendFunctionFloat)
+	EndIf
+	If func=FUNC_SSE Then
+		'WriteStdout "using mmx~n"
+		worker.SetFunction(BlendFunctionSSE)
+	EndIf
+	
+	'create data entries
+	
+	'WriteStdout "adding data entries.."
+	Local datacount:Int=0
+	
+	If threads=1 Then
+	
+		Local data:TBlendData=TBlendData.Create(source1, source2, target, factor, 0, PixmapHeight(source1)-1)
+		worker.add(data)
+		datacount:+1
+	
+	Else
+	
+		Local y:Int=0
+		Repeat
+		
+			If y&gt;=PixmapHeight(source1)-1 Then
+				Exit
+			EndIf
+		
+			Local inc:Int=lines
+			If y+lines&gt;=PixmapHeight(source1) Then
+				inc=PixmapHeight(source1)-y-1
+				If func=FUNC_SSE Then
+					inc:+1
+				EndIf
+			EndIf
+		
+			Local data:TBlendData=TBlendData.Create(source1, source2, target, factor, y, inc)
+			worker.Add(data)
+			datacount:+1
+			
+			y:+inc
+		
+		Forever
+		
+	EndIf
+	
+	'WriteStdout "("+datacount+" entries)~n"
+	
+	'blend
+	
+	worker.Start()
+	worker.Finish()
+	
+	' done
+	
+	Return target
+
+End Function
+
+Type TBlendData
+
+	Field factor:Float
+	Field width:Int
+	Field pitch:Int
+	Field start:Int 'starting y line for work
+	Field rows:Int 'number of y lines to blend
+	Field ptr1:Byte Ptr
+	Field ptr2:Byte Ptr
+	Field ptr_target:Byte Ptr
+
+	Function Create:TBlendData(psource1:TPixmap, psource2:TPixmap, ptarget:TPixmap, pfactor:Float, pstart:Int, prows:Int)
+	
+		Local this:TBlendData = New TBlendData
+		
+		this.factor = pfactor
+		this.width = PixmapWidth(psource1)
+		this.pitch = PixmapPitch(psource1)
+		this.start = pstart
+		this.rows = prows
+		this.ptr1 = PixmapPixelPtr(psource1)
+		this.ptr2 = PixmapPixelPtr(psource2)
+		this.ptr_target = PixmapPixelPtr(ptarget)
+		
+		Return this
+	
+	End Function
+
+End Type
+
+Function BlendFunctionFloat:Object(o:Object)
+
+	Local data:TBlendData = TBlendData(o)
+	
+	'WriteStdout data.start+", "+data.rows+"~n" 'debug
+	
+	Local inv_factor:Float = 1.0 - data.factor
+	
+	' integer equivalents
+	Local ifactor:Int=Int(255.0*data.factor)
+	Local iinvfactor:Int=Int(255.0*(1.0-data.factor))
+	
+	For Local y:Int=data.start To data.start+data.rows
+	
+		For Local x:Int=0 To data.width-1
+	
+			Local offset:Int=y*data.pitch+x*4
+			
+			Rem
+			
+			f * a + (1.0 - f) * b
+			
+			do above with bytes, no division?
+			guess shifting is the way to go, normalizing the equation
+			for 255-&gt;256 for lossless quality
+			
+			End Rem
+			
+			data.ptr_target[offset+0] = (data.factor * data.ptr1[offset+0]) + (inv_factor * data.ptr2[offset+0])
+			data.ptr_target[offset+1] = (data.factor * data.ptr1[offset+1]) + (inv_factor * data.ptr2[offset+1])
+			data.ptr_target[offset+2] = (data.factor * data.ptr1[offset+2]) + (inv_factor * data.ptr2[offset+2])
+			data.ptr_target[offset+3] = (data.factor * data.ptr1[offset+3]) + (inv_factor * data.ptr2[offset+3])
+	
+		Next
+	Next
+	
+	Return Null
+
+End Function
+
+Function BlendFunctionSSE:Object(o:Object)
+
+	Local data:TBlendData = TBlendData(o)
+	
+	'transform factor to 4byte integer values
+	Local ifac:Int = Int(data.factor*255.0)
+	Local fac:Int = ifac + (ifac Shl 8) + (ifac Shl 16) + (ifac Shl 24)
+	Local faca:Int[2]
+	faca[0]=fac
+	faca[1]=fac
+	'Print Bin(fac)
+	
+	'Print (Int(data.ptr1) Mod 16)+"; "+(Int(data.ptr2) Mod 16)+"; "+(Int(data.ptr_target) Mod 16)
+	
+	MMX_Blend(data.ptr1, data.ptr2, data.ptr_target, Varptr faca[0], data.width, data.pitch, data.start, data.rows)
+	
+	Return Null
+
+End Function
+
+' ##############################################################################################
+' threadedworker.bmx
+
+Type TThreadedWorkerInterface
+
+	Field instance:TThreadedWorker
+	Field data:Object
+	Field id:Int
+	Field func:Object(po:Object)
+	Field internal:Int=False
+
+End Type
+
+Type TThreadedWorkerData
+
+	Field mutex:TMutex
+	Field processed:Int
+	Field data:Object
+
+	Function Create:TThreadedWorkerData(pdata:Object)
+	
+		Local this:TThreadedWorkerData=New TThreadedWorkerData
+		
+		this.mutex=CreateMutex()
+		this.processed=False
+		this.data=pdata
+		
+		Return this
+	
+	End Function
+
+End Type
+
+Function ThreadedWorkerFunction:Object(po:Object)
+
+	Local interface:TThreadedWorkerInterface=TThreadedWorkerInterface(po)
+	
+	If interface.internal Then
+	
+		Repeat
+		
+			Local no_data:Int=True
+			
+			For Local o:TThreadedWorkerData = EachIn interface.instance.data
+				If TryLockMutex(o.mutex)=True Then
+					If o.processed=False Then
+					
+						interface.instance.func(o.data)
+						
+						o.processed=True
+						no_data=False
+						
+					EndIf
+					UnlockMutex(o.mutex)
+				EndIf
+			Next
+			
+			If no_data Then
+				Exit
+			EndIf
+		
+			Delay 1
+		
+		Forever
+	
+		UnlockMutex(interface.instance.mutex[interface.id])
+		Return Null
+	
+	Else
+	
+		'LockMutex(interface.instance.mutex[interface.id])
+	
+		interface.func(interface.data)
+	
+		UnlockMutex(interface.instance.mutex[interface.id])
+		Return Null
+		
+	EndIf
+
+End Function
+
+Type TThreadedWorker
+
+	Field func:Object(param:Object)
+	Field data:TList
+
+	Field threads:Int
+	Field mutex:TMutex[]
+
+	Method Init:Int(pthreads:Int)
+	
+		?debug
+		WriteStdout "initializing worker ("+pthreads+" threads).."
+		?
+	
+		Self.threads=pthreads
+		Self.mutex = New TMutex[Self.threads]
+		
+		For Local i:Int=0 To Self.mutex.length-1
+			Self.mutex[i]=CreateMutex()
+		Next
+		
+		?debug
+		WriteStdout "done!~n"
+		?
+		
+		Return True
+	
+	End Method
+	
+	Method Wait:Int()
+	
+		?debug
+		WriteStdout "waiting for vacant thread.."
+		?
+	
+		Repeat
+		
+			Local vacant:Int=False
+		
+			For Local i:Int=0 To Self.mutex.length-1
+				If TryLockMutex(Self.mutex[i])=True Then
+					UnlockMutex(Self.mutex[i])
+					vacant=True
+				EndIf
+			Next
+		
+			If vacant Then
+				Exit
+			EndIf
+		
+			Delay 1
+		
+		Forever
+		
+		?debug
+		WriteStdout "found!~n"
+		?
+		
+		Return True
+	
+	End Method
+	
+	Method Dispatch:Int(pfunc:Object(po:Object), po:Object)
+	
+		?debug
+		WriteStdout "attempting to dispatch new thread.."
+		?
+	
+		For Local i:Int=0 To Self.mutex.length-1
+			If TryLockMutex(Self.mutex[i])=True Then
+				
+				Local interface:TThreadedWorkerInterface=New TThreadedWorkerInterface
+				
+				interface.instance=Self
+				interface.data=po
+				interface.id=i
+				interface.func=pfunc
+				interface.internal=False
+				
+				CreateThread(ThreadedWorkerFunction, interface)
+				'UnlockMutex(Self.mutex[i]) 'let thread unlock mutex when done instead
+				
+				?debug
+				WriteStdout "succeeded!~n"
+				?
+				
+				Return True
+			
+			EndIf
+		Next
+		
+		?debug
+		WriteStdout "failed~n"
+		?
+		
+		Return False
+	
+	End Method
+	
+	Method Start:Int()
+	
+		?debug
+		WriteStdout "processing of internal data.."
+		?
+	
+		If Self.func=Null Or Self.data=Null Then
+		
+			?debug
+			WriteStdout "missing function/data..~n"
+			?
+			Return False
+			
+		EndIf
+		
+		For Local i:Int=0 To Self.mutex.length-1
+			If TryLockMutex(Self.mutex[i])=True Then
+			
+				Local interface:TThreadedWorkerInterface=New TThreadedWorkerInterface
+				
+				interface.instance=Self
+				interface.data=Null
+				interface.id=i
+				interface.func=Null
+				interface.internal=True
+				
+				CreateThread(ThreadedWorkerFunction, interface)
+				
+				?debug
+				WriteStdout "~nthread ("+(i+1)+") launched!"
+				?
+			
+			EndIf
+		Next
+		
+		?debug
+		WriteStdout "done!~n"
+		?
+		
+		Return True
+	
+	End Method
+	
+	'wait for threads to finish. if no internal data is used, just
+	'wait for all threads to clear. otherwise also check that all
+	'data has been processed
+	
+	Method Finish:Int()
+	
+		?debug
+		WriteStdout "waiting for worker to finish.."
+		?
+	
+		If Self.func&lt;&gt;Null And Self.data&lt;&gt;Null Then
+			
+			?debug
+			WriteStdout " (internal data) "
+			?
+			
+			'wait for all data to be progressed, and all mutexes
+			'to become unlocked
+			
+			Repeat
+			
+				Local done:Int=True
+				
+				For Local o:TThreadedWorkerData=EachIn Self.data
+					If TryLockMutex(o.mutex)=True Then
+						If o.processed=False Then
+							done=False
+							UnlockMutex(o.mutex)
+							Exit
+						EndIf
+						UnlockMutex(o.mutex)
+					Else
+						done=False
+						Exit
+					EndIf
+				Next
+				
+				If done Then
+					Exit
+				EndIf
+				
+				Delay 1
+				
+			Forever
+			
+			?debug
+			WriteStdout "data has been processed.."
+			?
+			
+			Repeat
+			
+				Local done:Int=True
+			
+				For Local i:Int=0 To Self.mutex.length-1
+					If TryLockMutex(Self.mutex[i])=True Then
+						UnlockMutex(Self.mutex[i])
+					Else
+						done=False
+						Exit
+					EndIf
+				Next
+			
+				If done Then
+					Exit
+				EndIf
+			
+				Delay 1
+			
+			Forever
+			
+			?debug
+			WriteStdout "threads finished! "
+			?
+			
+			?debug
+			WriteStdout "done!~n"
+			?
+			
+			Return True
+			
+		Else
+			
+			?debug
+			WriteStdout " (external data) "
+			?
+			
+			'just wait for all mutexes to become unlocked
+			
+			Repeat
+			
+				Local done:Int=True
+				
+				For Local i:Int=0 To Self.mutex.length-1
+					If TryLockMutex(Self.mutex[i])=True Then
+						UnlockMutex(Self.mutex[i])
+					Else
+						done=False
+						Exit
+					EndIf
+				Next
+			
+				If done Then
+					Exit
+				EndIf
+			
+				Delay 1
+			
+			Forever
+			
+			?debug
+			WriteStdout "done!~n"
+			?
+			
+			Return True
+			
+		EndIf
+	
+	End Method
+
+	'set function to be used to process internal data
+
+	Method SetFunction:Int(pfunction:Object(po:Object))
+	
+		Self.func = pfunction
+		Return True
+		
+	End Method
+
+	'add new internal data entry to worker
+
+	Method Add:Int(po:Object)
+	
+		If Self.data=Null Then
+			Self.data=New TList
+		EndIf
+		
+		Local data:TThreadedWorkerData=TThreadedWorkerData.Create(po)
+		Self.data.AddLast(data)
+		
+		Return True
+	
+	End Method
+
+End Type
+
+
+</textarea><br><br>blend.s<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+	; mmx optimisation attempt for image blend function. mmx should in theory allow me to do 2 whole
+	; pixel blends a time, and it would be quite nice if that really did work.
+	
+	; code assumes pixmap pitch is always a ^2 value.. which accordingly to the module source
+	; is correct.
+	
+	; need to have some way to check for mmx availability (cpuid i guess), even though it can be
+	; assumed to be present on pretty much anything being used on a pc today.
+	
+	; Function SSE_Blend(source1:Byte Ptr, source2:Byte Ptr, target:Byte Ptr, factor:Byte Ptr, width:Int, pitch:Int, start:Int, length:Int, debugstring:byte ptr)
+	
+	; small bug noticed, it will skip the first line of pixels + the first batch of pixels on the
+	; second line for some reason. should be cause of the loop structures... 
+	
+	; 8
+	; 12
+	; 16
+	; 20
+	; 24
+	; 28
+	; 32
+	; 36
+	; 40
+	
+	format MS COFF
+	section '.text' code readable executable
+	
+	public _CPU_Vendor
+	_CPU_Vendor:
+	
+		push ebp
+		mov ebp, esp
+		
+		pusha
+		
+		xor eax, eax
+		cpuid
+		
+		mov dword eax, [ebp+8]
+		mov dword [eax], ebx
+		
+		add eax, 4
+		mov dword [eax], edx
+		
+		add eax, 4
+		mov dword [eax], ecx
+		
+		popa
+		
+		mov esp, ebp
+		pop ebp
+	
+		ret
+	
+	public _MMX_Support
+	_MMX_Support:
+	
+		push ebp
+		mov ebp, esp
+		
+		;pusha
+		
+		push ebx
+		push ecx
+		push edx
+		
+		mov eax, 1
+		cpuid
+		
+		mov ecx, edx
+		
+		and ecx, 8388608
+		shr ecx, 23
+		
+		and edx, 67108864
+		shr edx, 26
+		
+		and ecx, edx
+		mov eax, ecx
+		
+		pop edx
+		pop ecx
+		pop ebx
+		
+		;popa
+		
+		mov esp, ebp
+		pop ebp
+		
+		ret
+	
+	public _MMX_Blend
+	_MMX_Blend:
+	
+		push 		ebp
+		mov 		ebp, esp
+		
+		pusha
+		
+		; set up stuff that can be set up before loop
+		
+		pxor xmm5, xmm5
+		
+		mov dword eax, [ebp+20]
+		
+		movups xmm6, [eax]
+		punpcklbw xmm6, xmm5
+		movups xmm7, [eax]
+		punpcklbw xmm7, xmm5
+		psrlw xmm7, 7
+		paddw xmm6, xmm7
+		
+		pcmpeqw xmm7, xmm7
+		psrlw xmm7, 15
+		psllw xmm7, 8
+		psubw xmm7, xmm6
+	
+		; loop through pixels 
+		
+		mov 		dword eax, [ebp+36]	; load length param to edx
+		mov 		edx, eax
+		
+	y_loop:								; Y LOOP length-&gt;0 + start loop until length-start val goes to zero
+		
+		push 		edx
+		dec 		edx
+		
+		mov 		dword eax, [ebp+32]	; load and add start to edx for current Y value
+		add 		edx, eax	
+			
+		mov 		dword eax, [ebp+28]	; load pitch and multiply with edx for Y*pitch value. move result to edx
+		mul 		dword edx
+		mov 		edx, eax
+		
+		mov 		dword eax, [ebp+24]	; load width into ecx
+		mov 		ecx, eax
+		shr			ecx, 2				; divide with 4 since well be doing 4 pixels a time
+		
+		; now, if ecx is divisible with 16 here, data is aligned, and we can take advantage of
+		; that. (im not sure how to check/make sure that pixmap surfaces are aligned..)
+		
+		mov eax, ecx
+		and eax, 15
+		
+		cmp eax, 0
+		jnz x_loop
+		
+		jmp x_loop_aligned
+		
+		; ////////////////////////////////////////////////////////////////////////////
+		; no alignment
+		
+	x_loop:								; X LOOP width-&gt;0
+			
+		push		ecx
+		dec			ecx
+				
+		shl			ecx, 4				; multiply with 16 (4x4 byte pixels)
+		add 		ecx, edx			; ecx should now be offset for current pixel (y*pitch+x)
+		
+		mov dword eax, [ebp+8]
+		add eax, ecx
+		movups xmm1, [eax]
+		
+		pxor xmm2, xmm2			; clear xmm2 and copy from xmm1
+		por xmm2, xmm1
+	
+		punpckhbw xmm1, xmm5
+		punpcklbw xmm2, xmm5
+			
+		mov dword eax, [ebp+12]
+		add eax, ecx
+		movups xmm3, [eax]
+		
+		pxor xmm4, xmm4
+		por xmm4, xmm3
+		
+		punpckhbw xmm3, xmm5
+		punpcklbw xmm4, xmm5
+	
+		pmullw xmm2, xmm6		; blend low
+		pmullw xmm4, xmm7
+		paddw xmm2, xmm4
+		psrlw xmm2, 8
+		
+		pmullw xmm1, xmm6		; blend high
+		pmullw xmm3, xmm7
+		paddw xmm1, xmm3
+		psrlw xmm1, 8
+
+		packuswb xmm1, xmm1		; repack
+		packuswb xmm2, xmm2
+		
+		mov dword eax, [ebp+16]	; save
+		add eax, ecx
+		movq [eax], xmm2
+		add eax, 8
+		movq [eax], xmm1
+								
+		pop 		ecx					; restore x loop/ecx counter
+			
+		dec 		ecx					; x loop return
+		jnz 		x_loop	
+		
+		jmp x_loop_end
+		
+		; ////////////////////////////////////////////////////////////////////////////
+		; alignment
+	
+	x_loop_aligned:						; X LOOP width-&gt;0
+	
+		push		ecx
+		dec			ecx
+				
+		shl			ecx, 4				; multiply with 16 (4x4 byte pixels)
+		add 		ecx, edx			; ecx should now be offset for current pixel (y*pitch+x)
+		
+		mov dword eax, [ebp+8]
+		add eax, ecx
+		movaps xmm1, [eax]
+		
+		pxor xmm2, xmm2			; clear xmm2 and copy from xmm1
+		por xmm2, xmm1
+	
+		punpckhbw xmm1, xmm5
+		punpcklbw xmm2, xmm5
+			
+		mov dword eax, [ebp+12]
+		add eax, ecx
+		movaps xmm3, [eax]
+		
+		pxor xmm4, xmm4
+		por xmm4, xmm3
+		
+		punpckhbw xmm3, xmm5
+		punpcklbw xmm4, xmm5
+	
+		pmullw xmm2, xmm6		; blend low
+		pmullw xmm4, xmm7
+		paddw xmm2, xmm4
+		psrlw xmm2, 8
+		
+		pmullw xmm1, xmm6		; blend high
+		pmullw xmm3, xmm7
+		paddw xmm1, xmm3
+		psrlw xmm1, 8
+
+		packuswb xmm1, xmm1		; repack
+		packuswb xmm2, xmm2
+		
+		mov dword eax, [ebp+16]	; save
+		add eax, ecx
+		movq [eax], xmm2
+		add eax, 8
+		movq [eax], xmm1
+								
+		pop 		ecx					; restore x loop/ecx counter
+			
+		dec 		ecx					; x loop return
+		jnz 		x_loop_aligned	
+	
+		; ////////////////////////////////////////////////////////////////////////////
+	
+	x_loop_end:
+		
+		pop 		edx					;  restore y loop/edx counter
+		
+		dec 		edx					; y loop return
+		jnz 		y_loop
+		
+		emms							; clear/restore fpu stack
+		
+		popa
+		
+		mov 		esp, ebp
+		pop 		ebp
+	
+		ret
+
+</textarea> <br><br></td></tr></table><br>
+<a name="1158362"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >zzz</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> Bandwidth limited just as I guessed :) I get almost the same result with only three threads.<br><br>phenom 2 x6 @ 2,8Ghz<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+CPU Vendor: AuthenticAMD
+MMX/SSE2 Supported
+
+Performing 4 iterations on 4000, 4000 pixmaps.
+
+creating custom pixmap..done!
+creating custom pixmap..done!
+
+Reference blend function: 5756 ms. (1.000x) memory: 0.331/0.165 GB/s
+Saving result to blend_reference.png
+Done
+
+Single thread blitzmax blend: 5985 ms. (0.961x) memory: 0.318/0.159 GB/s
+Saving result to blend_stbmx.png
+Done
+
+Multithreaded blitzmax blend: 1198 ms. (4.804x) memory: 1.592/0.796 GB/s
+Saving result to blend_mtbmx.png
+Done
+
+Singlethreaded MMX/SSE2 blend: 345 ms. (16.68x) memory: 5.528/2.764 GB/s
+Saving result to blend_stmmx.png
+Done
+
+Multithreaded MMX/SSE2 blend: 144 ms. (39.97x) memory: 13.24/6.622 GB/s
+Saving result to blend_mtmmx.png
+Done
+</textarea> <br><br></td></tr></table><br>
+<a name="1158399"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >BlitzSupport</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> <textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+CPU Vendor: GenuineIntel
+MMX/SSE2 Supported
+
+Performing 4 iterations on 4000, 4000 pixmaps.
+
+creating custom pixmap..done!
+creating custom pixmap..done!
+
+Reference blend function: 4440 ms. (1.000x) memory: 0.429/0.214 GB/s
+Saving result to blend_reference.png
+Done
+
+Single thread blitzmax blend: 4883 ms. (0.909x) memory: 0.390/0.195 GB/s
+Saving result to blend_stbmx.png
+Done
+
+Multithreaded blitzmax blend: 1235 ms. (3.595x) memory: 1.544/0.772 GB/s
+Saving result to blend_mtbmx.png
+Done
+
+Singlethreaded MMX/SSE2 blend: 597 ms. (7.437x) memory: 3.194/1.597 GB/s
+Saving result to blend_stmmx.png
+Done
+
+Multithreaded MMX/SSE2 blend: 361 ms. (12.29x) memory: 5.283/2.641 GB/s
+Saving result to blend_mtmmx.png
+Done
+
+Process complete
+</textarea> <br><br></td></tr></table><br>
+<a name="1158406"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> Marginally faster, and yes, TPixmap memory uses MemAlloc which is aligned on 16 byte boundaries.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+CPU Vendor: GenuineIntel
+MMX/SSE2 Supported
+
+Performing 4 iterations on 4000, 4000 pixmaps.
+
+creating custom pixmap..done!
+creating custom pixmap..done!
+
+Reference blend function: 3486 ms. (1.000x) memory: 0.547/0.273 GB/s
+Saving result to blend_reference.png
+Done
+
+Single thread blitzmax blend: 3861 ms. (0.902x) memory: 0.494/0.247 GB/s
+Saving result to blend_stbmx.png
+Done
+
+Multithreaded blitzmax blend: 2167 ms. (1.608x) memory: 0.880/0.440 GB/s
+Saving result to blend_mtbmx.png
+Done
+
+Singlethreaded MMX/SSE2 blend: 327 ms. (10.66x) memory: 5.832/2.916 GB/s
+Saving result to blend_stmmx.png
+Done
+
+Multithreaded MMX/SSE2 blend: 243 ms. (14.34x) memory: 7.849/3.924 GB/s
+Saving result to blend_mtmmx.png
+Done
+</textarea> <br><br></td></tr></table><br>
+<a name="1158409"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >zzz</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> That is nice to know. Heres some new assembly. Less branching, more parallelization and a fancy new memory write instruction i found in the references. I'm all out of ideas now though, so guess I'll clean up the code. This did give way better performance than I expected from it :) <br><br>blend.s<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+	; mmx optimisation attempt for image blend function. mmx should in theory allow me to do 2 whole
+	; pixel blends a time, and it would be quite nice if that really did work.
+	
+	; code assumes pixmap pitch is always a ^2 value.. which accordingly to the module source
+	; is correct.
+	
+	; need to have some way to check for mmx availability (cpuid i guess), even though it can be
+	; assumed to be present on pretty much anything being used on a pc today.
+	
+	; Function SSE_Blend(source1:Byte Ptr, source2:Byte Ptr, target:Byte Ptr, factor:Byte Ptr, width:Int, pitch:Int, start:Int, length:Int, debugstring:byte ptr)
+	
+	; small bug noticed, it will skip the first line of pixels + the first batch of pixels on the
+	; second line for some reason. should be cause of the loop structures... 
+	
+	; 8
+	; 12
+	; 16
+	; 20
+	; 24
+	; 28
+	; 32
+	; 36
+	; 40
+	
+	; save parameters somewhere else? mmx registers?
+	; mmx regs are free, so do that. actually just work with pixel pointers instead of recalcing
+	; offset all the time?
+		
+	format MS COFF
+	section '.text' code readable executable
+	
+	public _CPU_Vendor
+	_CPU_Vendor:
+	
+		push ebp
+		mov ebp, esp
+		
+		pusha
+		
+		xor eax, eax
+		cpuid
+		
+		mov dword eax, [ebp+8]
+		mov dword [eax], ebx
+		
+		add eax, 4
+		mov dword [eax], edx
+		
+		add eax, 4
+		mov dword [eax], ecx
+		
+		popa
+		
+		mov esp, ebp
+		pop ebp
+	
+		ret
+	
+	public _MMX_Support
+	_MMX_Support:
+	
+		push ebp
+		mov ebp, esp
+		
+		;pusha
+		
+		push ebx
+		push ecx
+		push edx
+		
+		mov eax, 1
+		cpuid
+		
+		mov ecx, edx
+		
+		and ecx, 8388608
+		shr ecx, 23
+		
+		and edx, 67108864
+		shr edx, 26
+		
+		and ecx, edx
+		mov eax, ecx
+		
+		pop edx
+		pop ecx
+		pop ebx
+		
+		;popa
+		
+		mov esp, ebp
+		pop ebp
+		
+		ret
+	
+	public _MMX_Blend
+	_MMX_Blend:
+	
+		push 		ebp
+		mov 		ebp, esp
+		
+		pusha
+		
+		; mm0 low - source 1 pixel pointer
+		; mm1 low - source 2 pixel pointer
+		; mm2 low - target pixel pointer
+		
+		mov dword eax, [ebp+8]
+		movd mm1, eax
+		
+		mov dword eax, [ebp+12]
+		movd mm2, eax
+		
+		mov dword eax, [ebp+16]
+		movd mm3, eax
+		
+		; set up stuff that can be set up before loop (sse)
+		
+		pxor xmm0, xmm0
+		pxor xmm5, xmm5
+		
+		mov dword eax, [ebp+20]
+		
+		movups xmm6, [eax]
+		punpcklbw xmm6, xmm5
+		movups xmm7, [eax]
+		punpcklbw xmm7, xmm5
+		psrlw xmm7, 7
+		paddw xmm6, xmm7
+		
+		pcmpeqw xmm7, xmm7
+		psrlw xmm7, 15
+		psllw xmm7, 8
+		psubw xmm7, xmm6
+	
+		; loop through pixels 
+		
+		mov 		dword eax, [ebp+36]	; load length param to edx
+		mov 		edx, eax
+		
+	y_loop:								; Y LOOP length-&gt;0 + start loop until length-start val goes to zero
+		
+		push 		edx
+		dec 		edx
+		
+		mov 		dword eax, [ebp+32]	; load and add start to edx for current Y value
+		add 		edx, eax	
+			
+		mov 		dword eax, [ebp+28]	; load pitch and multiply with edx for Y*pitch value. move result to edx
+		mul 		dword edx
+		mov 		edx, eax
+		
+		mov 		dword eax, [ebp+24]	; load width into ecx
+		mov 		ecx, eax
+		shr			ecx, 2				; divide with 4 since well be doing 4 pixels a time
+		
+		; now, if ecx is divisible with 16 here, data is aligned, and we can take advantage of
+		; that. (im not sure how to check/make sure that pixmap surfaces are aligned..)
+		; DONT MIND THAT - memalloc is always 16 aligned :D
+		
+	x_loop_aligned:						; X LOOP width-&gt;0
+	
+		push		ecx
+		push 		ebx
+		
+		dec			ecx
+				
+		shl			ecx, 4				; multiply with 16 (4x4 byte pixels)
+		add 		ecx, edx			; ecx should now be offset for current pixel (y*pitch+x)
+		
+		push edx
+		mov edx, ecx
+		
+		; parallell intructions
+		
+		movd eax, mm1
+		movd ebx, mm2
+		
+		add eax, ecx
+		
+		movaps xmm1, [eax]
+
+		; space out memory access as much as possible
+		
+		add ebx, edx
+		pxor xmm2, xmm2
+		pxor xmm4, xmm4
+		
+		movaps xmm3, [ebx]
+				
+		por xmm2, xmm1
+		por xmm4, xmm3
+		
+		punpckhbw xmm1, xmm0
+		punpcklbw xmm2, xmm5
+		
+		punpckhbw xmm3, xmm0
+		punpcklbw xmm4, xmm5
+		
+		pmullw xmm2, xmm6
+		pmullw xmm4, xmm7
+		
+		pmullw xmm1, xmm6
+		pmullw xmm3, xmm7
+	
+		paddw xmm2, xmm4
+		paddw xmm1, xmm3
+		
+		psrlw xmm2, 8
+		psrlw xmm1, 8
+	
+		packuswb xmm1, xmm1
+		packuswb xmm2, xmm2
+	
+		pxor xmm3, xmm3
+		psrldq xmm1, 64
+		por xmm3, xmm1
+		por xmm3, xmm2
+		
+		movd eax, mm3
+		add eax, ecx
+		;movaps [eax], xmm3
+		movntdq [eax], xmm3 ; faster(?) double quadword move? seems to be
+		
+		pop 		edx
+		pop 		ebx
+		pop 		ecx					; restore x loop/ecx counter
+			
+		dec 		ecx					; x loop return
+		jnz 		x_loop_aligned	
+	
+		; ////////////////////////////////////////////////////////////////////////////
+	
+		pop 		edx					;  restore y loop/edx counter
+		
+		dec 		edx					; y loop return
+		jnz 		y_loop
+		
+		emms							; clear/restore fpu stack
+		
+		popa
+		
+		mov 		esp, ebp
+		pop 		ebp
+	
+		ret
+
+
+</textarea><br><br>My results:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+CPU Vendor: AuthenticAMD
+MMX/SSE2 Supported
+
+Performing 4 iterations on 4000, 4000 pixmaps.
+
+creating custom pixmap..done!
+creating custom pixmap..done!
+
+Reference blend function: 5690 ms. (1.000x) memory: 0.335/0.167 GB/s
+Saving result to blend_reference.png
+Done
+
+Single thread blitzmax blend: 6006 ms. (0.947x) memory: 0.317/0.158 GB/s
+Saving result to blend_stbmx.png
+Done
+
+Multithreaded blitzmax blend: 1207 ms. (4.714x) memory: 1.580/0.790 GB/s
+Saving result to blend_mtbmx.png
+Done
+
+Singlethreaded MMX/SSE2 blend: 228 ms. (24.95x) memory: 8.365/4.182 GB/s
+Saving result to blend_stmmx.png
+Done
+
+Multithreaded MMX/SSE2 blend: 138 ms. (41.23x) memory: 13.82/6.910 GB/s
+Saving result to blend_mtmmx.png
+Done
+</textarea> <br><br></td></tr></table><br>
+<a name="1158410"></a>
+
+<a name="1158411"></a>
+
+<a name="1158415"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >col</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yep... Faster still :)<br><br><b>Multithreaded MMX/SSE2 blend: 208 ms. (17.45x) memory: 9.169/4.584 GB/s<br>Saving result to blend_mtmmx.png<br>Done</b><br><br>EDIT:-<br>Although using 2048x2048 I'm getting...<br><br>Singlethreaded MMX/SSE2 blend: 64 ms. (14.28x) memory: 7.812/3.906 GB/s<br>Saving result to blend_stmmx.png<br>Done<br><br>Multithreaded MMX/SSE2 blend: 71 ms. (12.87x) memory: 7.042/3.521 GB/s<br>Saving result to blend_mtmmx.png<br>Done<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1158433"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> Try interleaving two threads running on the same block of memory in parallel... ie each one accesses every other integer. It's good for the cache, or at least that's what I found. <br><br></td></tr></table><br>
+<a name="1158449"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xlsior</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> With the original code in your 1st posting, I'm seeing:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Reference blend function: 1830 ms. (1.000x) memory: 1.042/0.521 GB/s
+Saving result to blend_reference.png
+Done
+
+Single thread blitzmax blend: 1879 ms. (0.973x) memory: 1.015/0.507 GB/s
+Saving result to blend_stbmx.png
+Done
+
+Multithreaded blitzmax blend: 351 ms. (5.213x) memory: 5.434/2.717 GB/s
+Saving result to blend_mtbmx.png
+Done
+
+Singlethreaded MMX blend: 164 ms. (11.15x) memory: 11.63/5.815 GB/s
+Saving result to blend_stmmx.png
+Done
+
+Multithreaded MMX blend: 71 ms. (25.77x) memory: 26.86/13.43 GB/s
+Saving result to blend_mtmmx.png
+Done
+</textarea> <br><br></td></tr></table><br>
+<a name="1158450"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xlsior</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> And the last one:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Reference blend function: 1830 ms. (1.000x) memory: 1.042/0.521 GB/s
+Saving result to blend_reference.png
+Done
+
+Single thread blitzmax blend: 1881 ms. (0.972x) memory: 1.014/0.507 GB/s
+Saving result to blend_stbmx.png
+Done
+
+Multithreaded blitzmax blend: 344 ms. (5.319x) memory: 5.544/2.772 GB/s
+Saving result to blend_mtbmx.png
+Done
+
+Singlethreaded MMX blend: 104 ms. (17.59x) memory: 18.33/9.169 GB/s
+Saving result to blend_stmmx.png
+Done
+
+Multithreaded MMX blend: 65 ms. (28.15x) memory: 29.34/14.67 GB/s
+Saving result to blend_mtmmx.png
+Done
+
+</textarea><br><br>(Using an 6-core Intel i7-3930K Processor, btw) <br><br></td></tr></table><br>
+<a name="1158758"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >zzz</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> @ImaginaryHuman<br>I'd have to do interleavedwrites too then, which would'nt be very good at all. <br><br>Since this seems to be memory bandwidth bound now I'm going to let it be for a while. Think I'll try and make a faster memcopy function and see if that will result in anything that would be useful for this.<br><br>And xlsior, that is one fast cpu :D Clock/active memory channels? <br><br></td></tr></table><br>
+<a name="1158796"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xlsior</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#22">[#22]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cpu: stock speed at  3.2ghz, 3.8ghz burst,  6 cores + hyper threading. <br>Ram: 64gb quad channel 1600mhz ddr3 <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

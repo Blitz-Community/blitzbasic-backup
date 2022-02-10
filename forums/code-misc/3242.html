@@ -1,0 +1,699 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Icon Tabber for Maxgui</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='Nice minimalist looking tabber with icons instead of text, language=bmx, category=Miscellaneous'><meta name='author' content='Bobysait'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=9>Miscellaneous</a>/Icon Tabber for Maxgui</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="3242.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Icon Tabber for Maxgui by Bobysait</td><td align="right">2016 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Creates a stylized tabber with icon buttons (no text and the buttons are not real buttons but panel set with PANEL_ACTIVE and a pixmap extracted from a valid TIconStrip).<br><br>Demo included at the bottom of the source.<br>(There was an issue while posting the source, to you'll have to copy/paste the Method SetIconStrip from the post below the source. Sorry for that)<br><br>The Tabber is customisable, you can make it appear on top or bottom, left or right, vertical or horizontal.<br>you can modify the Cursor size, the buttons size and the colors of foreground/background/cursor<br><br>It works with a fake TGadget items that is not a ProxyGadget but react like one.<br>Every events from the panels are parsed and consumed then new events are generated for the tabber.<br>The events generated can be caught on your main loop with classic pollevent/waitevent.<br><br>EVENT_GADGETACTION when you left-click a button<br>EVENT_GADGETMENU when you right-click<br>EVENT_GADGETACTION and EventMods = 0 if you double-click on a button.<br><br><br>You'll find a demo source on the next post. </td></tr><tr ><td class="cell"><pre class="code">SuperStrict
+
+Import maxgui.drivers
+
+Const TABBER_VERTICAL:Int = 1
+Const TABBER_RIGHT:Int = 2
+Const TABBER_BOTTOM:Int = 4
+
+Const STYLE_FITW:Int = 1
+Const STYLE_FITH:Int = 2
+Const STYLE_FIT:Int	=	STYLE_FITW | STYLE_FITH
+
+Const STYLE_LAYOUTL:Int = 4
+Const STYLE_LAYOUTR:Int = 8
+Const STYLE_LAYOUTT:Int = 16
+Const STYLE_LAYOUTB:Int = 32
+Const STYLE_LAYOUTH:Int	= STYLE_LAYOUTL | STYLE_LAYOUTR
+Const STYLE_LAYOUTV:Int	= STYLE_LAYOUTT | STYLE_LAYOUTB
+Const STYLE_LAYOUT:Int	= STYLE_LAYOUTH | STYLE_LAYOUTV
+
+
+Type TIconTabber Extends TGadget
+	
+	Const DEFAULT_BORDER_SIZE:Int = 2
+	Const DEFAULT_TAB_HEIGHT:Int = 24
+	Const DEFAULT_CURSOR_HEIGHT:Int = 2
+	
+	Global DBCLICK_DELAY:Int = 350
+	' tabber root (panel -&gt; contains buttons bar and body)
+	Field core:TGadget
+	' button bar (panel)
+	Field tool:TGadget
+	' a panel that fit the client area
+	Field body:TGadget
+	' index of the selected tab
+	Field selectedIndex:Int
+	
+	Field pixmaps:TPixmap[]
+	' the buttons to select tab (they are actually simple panels)
+	Field buttons:TGadget[]
+	' panels attached to the body corresponding to the tab "at index"
+	Field panels:TGadget[]
+	' a simple panel that marks the current selected tab.
+	Field cursorgadget:TGadget
+	
+	' some parameters that define the global aspect of the tabber
+	Field border:Int
+	Field buttonsize:Int
+	Field cursorsize:Int
+	' background and foreground colors
+	Field rBG:Int, gBG:Int, bBG:Int
+	Field rFG:Int, gFG:Int, bFG:Int
+	
+	Field _clientX:Int, _clientY:Int
+	
+	' set the click delay between two left-clicks on the tab that will produice an avent_gadgetaction with mods=1
+	Function SetDoubleClickDelay(pDelay:Int)
+		DBCLICK_DELAY = pDelay
+	End Function
+	
+	Function GetDoubleClickDelay:Int()
+		Return DBCLICK_DELAY
+	End Function
+	
+	Function Create:TIconTabber(x:Int, y:Int, w:Int, h:Int, parent:TGadget, Style:Int=0)
+		Local ct:TIconTabber = New TIconTabber
+			ct.selectedIndex=	-1
+			ct.border		=	DEFAULT_BORDER_SIZE
+			ct.cursorsize	=	DEFAULT_CURSOR_HEIGHT
+			ct.buttonsize	=	DEFAULT_TAB_HEIGHT
+			ct.Style		=	Style
+			
+			ct.buttons		=	New TGadget[0]
+			ct.panels		=	New TGadget[0]
+			ct.core			=	CreatePanel			( x,y,w,h, parent )
+			ct.tool			=	CreatePanel			( 0, 0, 1, 1, ct.core )
+			ct.body			=	CreatePanel			( 0, 0, 1, 1, ct.core )
+			ct._updatecore()
+			
+			ct					.SetColor			( 000,175,170 )
+			ct					.SetTextColor		( 001,001,001 )
+			ct.core				.SetText			( "tabber_core" )
+			ct.tool				.SetText			( "tabber_tool" )
+			ct.cursorgadget	=	CreatePanel			( 0,0, ct.buttonsize, ct.cursorsize, ct.tool )
+			ct.cursorgadget		.SetColor			( 255,255,000 )
+								HideGadget			( ct.cursorgadget )
+			AddHook				( EmitEventHook, EventHook, ct )
+		Return ct
+	End Function
+	
+	
+	Method Cleanup()
+		RemoveHook(EmitEventHook, EventHook, Null)
+		Super.CleanUp()
+	End Method
+	
+	Method _updatecore()
+		
+		' height of tool (or width for TABBER_VERTICAL)
+		Local size1:Int	=	Self.cursorsize+Self.buttonsize
+		Local b:Int = Self.border
+		Local w:Int = Self.core.ClientWidth()
+		Local h:Int = Self.core.ClientHeight()
+		Local size2:Int
+		
+		If (Self.Style &amp; TABBER_VERTICAL)
+			size2 = h-b*2
+			If Style &amp; TABBER_RIGHT
+				' Vertical Right
+				Self.tool	.SetShape	( w - b - size1, b, size1, size2 )
+				Self.tool	.SetLayout	( 0, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED)
+				Self.body	.SetShape	( b, b, w-b*2-size1-1, size2 )
+			Else
+				' Vertical Left
+				Self.tool	.SetShape	( b, b, size1, size2 )
+				Self.tool	.SetLayout	( EDGE_ALIGNED, 0, EDGE_ALIGNED, EDGE_ALIGNED)
+				Self.body	.SetShape	( b + 1 + size1, b, w - b*2-size1-1, size2 )
+			EndIf
+		Else
+			size2 = w-b*2
+			If (Self.Style &amp; TABBER_BOTTOM)
+				' Horizontal Bottom
+				Self.body	.SetShape	( b, b, size2, h - b*2 - size1-1 )
+				Self.tool	.SetShape	( b, h-b-size1, size2, size1 )
+				Self.tool	.SetLayout	( EDGE_ALIGNED, EDGE_ALIGNED, 0, EDGE_ALIGNED)
+			Else
+				' default : Horizontal Top
+				Self.tool	.SetShape	( b, b, size2, size1 )
+				Self.tool	.SetLayout	( EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, 0)
+				Self.body	.SetShape	( b, b+size1+1, size2, h - b*2 - size1-1 )
+			EndIf
+		EndIf
+		
+		' always stick the body to the core.client.area
+		Self.body			.SetLayout	( EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED)
+		
+	End Method
+	
+	Method GetPanel:TGadget(index:Int)
+		?Debug
+		If index&lt;0 Or index&gt;=Self.panels.length Throw "Gadget item index out of range."
+		?
+		Return Self.panels[index]
+	End Method
+	
+	'#region aspect
+	Method setCursorColor(r:Int, g:Int, b:Int)
+		Self.cursorgadget.SetColor(r,g,b)
+	End Method
+	
+	Method setButtonSize(Size:Int)
+		Self.buttonsize = Size
+		Self._updatecore()
+		Self._updateitems()
+	End Method
+	
+	Method setCursorSize(Size:Int)
+		Self.cursorsize = Size
+		Self._updatecore()
+		Self._updateitems()
+	End Method
+
+	Method SetIconStrip(pStrip:TIconStrip)
+		?Debug
+		If pStrip=Null Throw "Icon Strip is Null."
+		?
+		' icon strip pixmaps
+		Self.pixmaps = New TPixmap[pStrip.Count]
+		For Local i:Int = 0 Until Self.pixmaps.length
+			Self.pixmaps[i] = pStrip.ExtractIconPixmap(i)
+		Next
+		' update the panels with the new fresh Icons
+		Self._updateitems(True)
+	EndMethod
+	
+	' main color goes to body and tool
+	Method SetColor:Int(r:Int,g:Int,b:Int)
+		Self.rBG=r; Self.gBG=g; Self.bBG=b
+		For Local i:Int = 0 Until Self.buttons.length
+			Self.buttons[i]	.SetColor	( Self.rBG,Self.gBG,Self.bBG)
+			Self.panels[i]	.SetColor	( Self.rBG,Self.gBG,Self.bBG)
+		Next
+		Return Self.tool	.SetColor	( Self.rBG,Self.gBG,Self.bBG)
+	End Method
+	
+	' convert text color to background color
+	Method SetTextColor:Int(r:Int,g:Int,b:Int)
+		Self.rFG=r; Self.gFG=g; Self.bFG=b
+		For Local i:Int = 0 Until Self.buttons.length
+			Self.buttons[i]	.SetTextColor( Self.rFG, Self.gFG, Self.bFG )
+			Self.panels[i]	.SetTextColor( Self.rFG, Self.gFG, Self.bFG )
+		Next
+		Return Self.core	.SetColor	( Self.rFG, Self.gFG, Self.bFG )
+	End Method
+	
+	' gadget layout defines the core layout
+	Method SetLayout( lft:Int,rht:Int,top:Int,bot:Int )
+		Self.core.SetLayout(lft,rht,top,bot)
+	End Method
+	
+	Method ClientWidth:Int()
+		If (Self.Style &amp; TABBER_VERTICAL) Then Return Self.width-Self.border*2-Self.cursorsize-Self.buttonsize-1
+		Return Self.width-Self.border*2
+	EndMethod
+	
+	Method ClientHeight:Int()
+		If (Self.Style &amp; TABBER_VERTICAL) Then Return Self.Height-Self.border*2
+		Return Self.Height-Self.border*2-Self.buttonsize-Self.cursorsize-1
+	EndMethod
+	Method ProcessEvent:Int(event:TEvent, tabGadget:TGadget)
+		
+		Global _lastclick:Int
+		
+		For Local index:Int = 0 Until Self.items.length
+			
+			If Self.buttons[index] = tabGadget
+				
+				Select event.id
+					
+					Case EVENT_MOUSEDOWN
+						
+						' double-click (left mouse button)
+						If self.selectedIndex = index
+							If _lastclick&gt;MilliSecs()
+								EmitEvent(CreateEvent(EVENT_GADGETACTION, Self, index, 1, event.x,event.y, Self.items[index].extra))
+								_lastclick = MilliSecs()+DBCLICK_DELAY
+							EndIf
+						EndIf
+						_lastclick = MilliSecs()+DBCLICK_DELAY
+						
+					Case EVENT_MOUSEUP
+						If event.data = 1 ' left-click
+							If (index&lt;&gt;self.selectedIndex)
+								Self.SelectItem(index, 1)
+								EmitEvent(CreateEvent(EVENT_GADGETACTION, Self, index, 0, event.x,event.y, Self.items[index].extra))
+							EndIf
+						ElseIf event.data = 2 ' right-click
+							EmitEvent(CreateEvent(EVENT_GADGETMENU, Self, index, 0, event.x,event.y, Self.items[index].extra))
+						End If
+						
+				End Select
+				
+				Return 1
+				
+			EndIf
+			
+		Next
+		
+		Return 0
+	End Method
+	
+	Function EventHook:Object(id:Int,data:Object,context:Object)
+		
+		If (TEvent(data)&lt;&gt;Null)
+			If (TGadget(context)&lt;&gt;Null)
+				Local ev:TEvent = TEvent(data)
+				Local src:TGadget = TGadget(ev.source)
+				If (src&lt;&gt;Null)
+					If (TIconTabber(src.extra)&lt;&gt;Null)
+						If (TIconTabber(src.extra).ProcessEvent(ev, src)&gt;0) Then Return Null
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+		
+		Return data
+		
+	EndFunction
+	Method _createitem(i:Int)
+		Self.buttons[i]	=	CreatePanel		( 1+(Self.buttonsize+1)*i, 0, Self.buttonsize,Self.buttonsize, Self.tool, PANEL_ACTIVE )
+		Self.buttons[i]		.SetLayout		( EDGE_ALIGNED, 0, EDGE_ALIGNED, EDGE_ALIGNED )
+		Self.buttons[i]		.extra		=	Self
+		Self.buttons[i]		.SetColor		( Self.rBG, Self.gBG, Self.bBG )
+		Self.buttons[i]		.SetTextColor	( Self.rFG, Self.gFG, Self.bFG )
+		Self.buttons[i]		.SetText		( "item "+i )
+		If Self.pixmaps&lt;&gt;Null
+			Self.buttons[i]	.SetPixmap		( Self.pixmaps[max(Self.items[i].Icon,0)Mod(Self.pixmaps.length)], PANELPIXMAP_STRETCH )
+		EndIf
+		Self.panels[i]=	CreatePanel		( 0,0,Self.body.ClientWidth(),Self.body.ClientHeight(), Self.body )
+		Self.panels[i]	.SetLayout		( EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED )
+		Self.panels[i]	.extra		=	Self
+		Self.panels[i]	.SetColor		( Self.rBG, Self.gBG, Self.bBG )
+		Self.panels[i]	.SetTextColor	( Self.rFG, Self.gFG, Self.bFG )
+		Self.panels[i]	.SetText		( "panel "+i )
+		If (self.selectedIndex = i)
+			ShowGadget(Self.panels[i])
+		Else
+			HideGadget(Self.panels[i])
+		EndIf
+		_updateitemshape(i)
+	End Method
+
+
+	Method _updateitemshape(i:Int)
+		
+		Local sizeA:Int = 1 + i*(Self.buttonsize+1)
+		Local sizeB:Int = 0
+		If Self.Style &amp; TABBER_VERTICAL
+			If Self.Style &amp; TABBER_BOTTOM
+				sizeA = (Self.tool.ClientHeight() - Self.items.length * (Self.buttonsize+1) - 1) + sizeA
+			EndIf
+			If (Self.Style &amp; TABBER_RIGHT)
+				sizeB = Self.cursorsize
+			EndIf
+		Else
+			If Self.Style &amp; TABBER_RIGHT
+				sizeA = (Self.tool.ClientWidth() - Self.items.length * (Self.buttonsize+1) - 1)  + sizeA
+			EndIf
+			If Self.Style &amp; TABBER_BOTTOM
+				sizeB = Self.cursorsize
+			EndIf
+		EndIf
+		
+		Local g:TGadget = Self.buttons[i]
+		If (Self.Style &amp; TABBER_VERTICAL)
+			g.SetShape( sizeB, sizeA, Self.buttonsize,Self.buttonsize )
+			If (Self.Style &amp; TABBER_BOTTOM)
+				g.SetLayout	( EDGE_ALIGNED, EDGE_ALIGNED, 0, EDGE_ALIGNED )
+			Else
+				g.SetLayout	( EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, 0 )
+			EndIf
+		Else
+			g.SetShape( sizeA, sizeB, Self.buttonsize,Self.buttonsize )
+			If (Self.Style &amp; TABBER_RIGHT)
+				g.SetLayout	( 0, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED )
+			Else
+				g.SetLayout	( EDGE_ALIGNED, 0, EDGE_ALIGNED, EDGE_ALIGNED )
+			EndIf
+		EndIf
+		
+	End Method
+
+
+	Method _updateitems(force_reloadIcons:Byte = False, pUpdateCursorOnly:Byte=False, pUpdateIcon:Int=-1)
+		
+		Local sizeA:Int = 1 + Self.selectedIndex*(Self.buttonsize+1)
+		Local sizeB:Int = 0
+		If Self.Style &amp; TABBER_VERTICAL
+			If Self.Style &amp; TABBER_BOTTOM
+				sizeA = (Self.tool.ClientHeight() - Self.items.length * (Self.buttonsize+1) - 1) + sizeA
+			EndIf
+			If Not(Self.Style &amp; TABBER_RIGHT)
+				sizeB = Self.buttonsize
+			EndIf
+		Else
+			If Self.Style &amp; TABBER_RIGHT
+				sizeA = (Self.tool.ClientWidth() - Self.items.length * (Self.buttonsize+1) - 1)  + sizeA
+			EndIf
+			If Not(Self.Style &amp; TABBER_BOTTOM)
+				sizeB = Self.buttonsize
+			EndIf
+		EndIf
+		
+		If Self.items.length&gt;0 And self.selectedIndex&gt;=0
+			ShowGadget				( Self.cursorgadget )
+			If (Self.Style &amp; TABBER_VERTICAL)
+				Self.cursorgadget.SetShape		( sizeB, sizeA, Self.cursorsize, Self.buttonsize )
+				If (Self.Style &amp; TABBER_BOTTOM)
+					Self.cursorgadget.SetLayout	( EDGE_ALIGNED, EDGE_ALIGNED, 0, EDGE_ALIGNED )
+				Else
+					Self.cursorgadget.SetLayout	( EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, 0 )
+				EndIf
+			Else
+				Self.cursorgadget.SetShape		( sizeA, sizeB, Self.buttonsize, Self.cursorsize )
+				If (Self.Style &amp; TABBER_RIGHT)
+					Self.cursorgadget.SetLayout	( 0, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED )
+				Else
+					Self.cursorgadget.SetLayout	( EDGE_ALIGNED, 0, EDGE_ALIGNED, EDGE_ALIGNED )
+				EndIf
+			EndIf
+			For Local i:Int = 0 Until Self.panels.length
+				HideGadget			( Self.panels[i])
+			Next
+			ShowGadget				( Self.panels[self.selectedIndex])
+		Else
+			HideGadget				( Self.cursorgadget )
+			For Local i:Int = 0 Until Self.panels.length
+				HideGadget			( Self.panels[i])
+			Next
+		EndIf
+		
+		If (pUpdateCursorOnly And (Self.pixmaps=Null)) Then Return
+		
+		For Local i:Int = 0 Until Self.items.length
+			If Self.items[i]&lt;&gt;Null
+				Local g:TGadget = Self.buttons[i]
+				
+				' update shapes/colors if required
+				If Not(pUpdateCursorOnly)
+					_updateitemshape(i)
+					ShowGadget (g)
+					g				.SetColor		( Self.rBG, Self.gBG, Self.bBG )
+					g				.SetTextColor	( Self.rFG, Self.gFG, Self.bFG )
+					g				.SetTooltip		( Self.items[i].tip )
+				EndIf
+				
+				' update toggle Icons (if any)
+				If Self.pixmaps&lt;&gt;Null
+					If ((Self.items[i].flags &amp; GADGETITEM_TOGGLE)&gt;0)
+						g	.SetPixmap( Self.pixmaps[ max( Self.items[i].Icon+(Self.selectedIndex=i), 0 ) Mod(Self.pixmaps.length) ], PANELPIXMAP_STRETCH )
+					ElseIf force_reloadIcons Or (i = pUpdateIcon)
+						If ((Self.items[i].flags &amp; GADGETITEM_TOGGLE)&gt;0)
+							g	.SetPixmap( Self.pixmaps[ max( Self.items[i].Icon+(Self.selectedIndex=i), 0 ) Mod( Self.pixmaps.length) ], PANELPIXMAP_STRETCH )
+						Else
+							g	.SetPixmap( Self.pixmaps[ max( Self.items[i].Icon, 0 ) Mod(Self.pixmaps.length) ], PANELPIXMAP_STRETCH )
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+		Next
+		
+	End Method
+
+
+	Method ClearListItems()
+		self.selectedIndex=-1
+		For Local i:Int = 0 Until Self.buttons.length
+			FreeGadget(Self.panels[i])
+			FreeGadget(Self.buttons[i])
+		Next
+		Self.buttons = New TGadget[0]
+		Self.panels = New TGadget[0]
+		_updateitems(False, True) ' hide the cursor
+	EndMethod
+	
+	Method SelectItem(index:Int,op:Int=1)	' op not supported !(it's here just to override the method)
+		?Debug
+			If index&lt;0 Or index&gt;=items.length Throw "Gadget item index out of range."
+		?
+		self.selectedIndex = index
+		Self._updateitems(False, True)	' Update the cursor Position update Icons
+	End Method
+	
+	Method InsertListItem:Int(index:Int,text:String,tip:String,Icon:Int,extra:Object)
+		?Debug
+		If index&lt;0 Or index&gt;=Self.items.length Throw "Gadget item index out of range."
+		?
+		If index=0
+			Self.buttons = [TGadget(Null)]+Self.buttons[..Self.buttons.length]
+			Self.panels = [TGadget(Null)]+Self.panels[..Self.panels.length]
+		ElseIf index=Self.buttons.length
+			Self.buttons = Self.buttons[..index+1]
+			Self.panels = Self.panels[..index+1]
+		Else
+			Self.buttons = Self.buttons[..index]+[TGadget(Null)]+Self.buttons[index..]
+			Self.panels = Self.panels[..index]+[TGadget(Null)]+Self.panels[index..]
+		EndIf
+		_createitem(index)
+		If self.selectedIndex = -1 Then self.selectedIndex = index
+		
+		Print "new item ["+index+"] : "+Self.items[index].text+" flag="+Self.items[index].flags+" Icon="+Self.items[index].Icon
+		
+		_updateitems(False, False) ' update tab positions
+		
+		Return 1
+	End Method
+
+	Method SetItem(index:Int,text:String,tip:String,Icon:Int,extra:Object,flags:Int)
+		?Debug
+			If index&lt;0 Or index&gt;=Self.items.length Throw "Gadget item index out of range."
+		?
+		Local prevIcon:Int = Self.items[index].Icon ' previous Icon
+		Super.SetItem(index, text, tip, Icon, extra, flags)
+		_updateitems(False, True, (prevIcon&lt;&gt;Icon)*index) ' update Icon if modified
+	End Method
+	
+	Method RemoveListItem:Int(index:Int)
+		?Debug
+		If index&lt;0 Or index&gt;=Self.items.length Throw "Gadget item index out of range."
+		?
+		FreeGadget(Self.panels[index])
+		FreeGadget(Self.buttons[index])
+		If index&gt;0
+			If index&lt;Self.buttons.length
+				Self.buttons = Self.buttons[..index]+Self.buttons[index+1..]
+				Self.panels = Self.panels[..index]+Self.panels[index+1..]
+			Else
+				Self.buttons = Self.buttons[..index]
+				Self.panels = Self.panels[..index]
+			EndIf
+		Else
+			Self.buttons = Self.buttons[1..]
+			Self.panels = Self.panels[1..]
+		EndIf
+		If (index &lt;= self.selectedIndex)
+			self.selectedIndex :- 1
+			If ((self.selectedIndex=-1) And (Self.items.length&gt;0))
+				self.selectedIndex = 0
+			EndIf
+		EndIf
+		_updateitems(False, True) ' hide cursor
+		Return 0
+	End Method
+	
+	Method ListItemState:Int(index:Int)
+		?Debug
+		If index&lt;0 Or index&gt;=Self.items.length Throw "Gadget item index out of range."
+		?
+		Return (index=self.selectedIndex) * STATE_SELECTED
+	End Method
+	
+	Method SetItemState(index:Int,State:Int)
+		?Debug
+		If index&lt;0 Or index&gt;=Self.items.length Throw "Gadget item index out of range."
+		?
+		If State Then Self.SelectItem(index)
+		
+	End Method
+
+	Method FitGadget ( gadget:TGadget, index:Int, x:Int, y:Int, Style:Int = 0 )
+		?Debug
+		If index&lt;0 Or index&gt;=Self.items.length Throw "Gadget item index out of range."
+		?
+		Local lParent:TGadget = Self.GetPanel(index)
+		If lParent=Null Then Return
+		
+		Local w:Int = gadget.GetWidth()
+		Local h:Int = gadget.GetHeight()
+		If Style &amp; STYLE_FITW Then w = lParent.ClientWidth() - x
+		If Style &amp; STYLE_FITH Then h = lParent.ClientHeight() - y
+		
+		If ( ((Style &amp; STYLE_FITW)&gt;0) Or ((Style &amp; STYLE_FITH)&gt;0) ) Then gadget.SetShape(x,y,w,h)
+		
+		If (Style &amp; STYLE_FIT)
+			gadget.SetLayout(	( (Style &amp; STYLE_LAYOUTL)&gt;0 ) * EDGE_ALIGNED, ..
+								( (Style &amp; STYLE_LAYOUTR)&gt;0 ) * EDGE_ALIGNED, ..
+								( (Style &amp; STYLE_LAYOUTT)&gt;0 ) * EDGE_ALIGNED, ..
+								( (Style &amp; STYLE_LAYOUTB)&gt;0 ) * EDGE_ALIGNED )
+		EndIf
+	End Method
+	
+	Method getChild:TGadget(index:Int, childIndex:Int=0)
+		?Debug
+		If index&lt;0 Or index&gt;=Self.items.length Throw "Gadget item index out of range."
+		?
+		Local l:TList = Self.panels[index].kids
+		If childIndex=0 Then Return TGadget(l.First())
+		Return TGadget(l.FindLink(l.ValueAtIndex(childIndex)).Value())
+	End Method
+	
+	Method countPanelChildren:Int(index:Int)
+		?Debug
+		If index&lt;0 Or index&gt;=Self.items.length Throw "Gadget item index out of range."
+		?
+		Return Self.GetPanel(index).kids.Count()
+	End Method
+
+End Type
+
+Function GetTabberPanel:TGadget(tabber:TGadget, index:Int)
+	Return TIconTabber(tabber).GetPanel(index)
+End Function
+
+rem
+bbdoc: Create a Colored Tabber
+about: each tab is an Icon without text
+The body and toolbar can be "colored"
+endrem
+Function CreateIconTabber:TIconTabber ( x:Int, y:Int, w:Int, h:Int, group:TGadget, Style:Int=0 )
+	Return TIconTabber.Create(x,y,w,h, group, Style)
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>2016</font></td></tr></table></td></tr><tr ><td class="posttext"> Here is a demo<br>- the demo creates a pixmap to be used as iconstrip, it's only for demonstration purpose, it will works with any valid loadiconstrip("image.png")<br>- you will also find some ascii array showing distribution of the flags TABBER_VERTICAL/TABBER_RIGHT/TABBER_BOTTOM<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Local WIN_FLAG:Int = WINDOW_TITLEBAR|WINDOW_RESIZABLE|WINDOW_CLIENTCOORDS|WINDOW_CENTER
+Local w:TGadget = CreateWindow("name", 50,50,600,430, Null, WIN_FLAG)
+
+Local Icon_pixmap:TPixmap = CreatePixmap(256,32, PF_RGBA8888)
+Icon_pixmap.ClearPixels($FF505050)
+For Local c:Int = 0 To 5
+	If c=3
+		For Local cx:Int = 0 To 31
+			For Local cy:Int = 0 To 31
+				Icon_pixmap.WritePixel(32*c+cx, cy, $FF202020);
+			Next
+		Next
+	EndIf
+	For Local ct:Int = 16-(c+2)*2 To 16+(c+2)*2
+		Icon_pixmap.WritePixel(32*c + 16-(c+2)*2, ct, $FFFFFFFF)
+		Icon_pixmap.WritePixel(32*c + 16+(c+2)*2, ct, $FFFFFFFF)
+		Icon_pixmap.WritePixel(32*c + ct,16-(c+2)*2, $FFFFFFFF)
+		Icon_pixmap.WritePixel(32*c+ ct,16+(c+2)*2, $FFFFFFFF)
+	Next
+	For Local cx:Int = 0 To c
+		Local dx:Int = -c*2 + cx*4
+		For Local cy:Int = 16-(c+2) To 16+(c+2)
+			Icon_pixmap.WritePixel(32*c + 16 + dx ,cy, $FF010101)
+		Next
+	Next
+	For Local ct:Int = 0 Until 32
+		Icon_pixmap.WritePixel(32*c+ct, 0, $FF010101)
+		Icon_pixmap.WritePixel(32*c+ct, 31, $FF010101)
+		Icon_pixmap.WritePixel(32*c, ct, $FF010101)
+		Icon_pixmap.WritePixel(32*c+31, ct, $FF010101)
+	Next
+Next
+
+Local Strip:TIconStrip = LoadIconStrip ( Icon_pixmap )
+'	Local Strip:TIconStrip = LoadIconStrip ( "tool_Icons_32.png" )
+
+' modify the flag to set the look of the tabber
+' -&gt; Vertical makes a tabber on the left or right border
+' -&gt; TABBER_BOTTOM makes it appear at the bottom. If TABBER_VERTICAL -&gt; the tabber will appear on the sides at the bottom
+' -&gt; TABBER_RIGHT align the tabber on the right.
+'
+' This is where the buttons will appear according to each combination
+'
+'         -----------------
+'         | HTL       HTR |
+'   -----------------------------
+'   | VTL |               | VTR |
+'   |     |               |     |
+'   |     |               |     |
+'   | VBL |               | VBR |
+'   -----------------------------
+'         | HBL       HBR |
+'         -----------------
+'
+' H = Horizontal (Default)	, V = TABBER_VERTICAL
+' T = Top (Default)			, B = TABBER_BOTTOM
+' L = Left (Default)		, R = TABBER_RIGHT
+
+Local fg:Int = 0 ' default
+fg :| TABBER_VERTICAL	' add vertical style
+fg :| TABBER_BOTTOM		' align vertical to the bottom
+'	fg :| TABBER_RIGHT		' use the right side
+
+Local It:TIconTabber = CreateIconTabber(0,0, ClientWidth(w),ClientHeight(w)-20, w, fg)
+	
+	' stick the tabber core to the window when resized
+	It.SetLayout		( EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED )
+	' define some colors
+	it.SetColor			( 20,22,25 )
+	it.SetTextColor		( 000,000,000 )
+	It.setCursorColor	( 100,105,110 )
+	' use our previous pixmap as Icon Strip (you can also load a standard IconStrip)
+	it.SetIconStrip		( Strip )
+	' set some parameters to adapt the style.
+	It.setCursorSize	( 3 )
+	It.setButtonSize	( 32 )
+	' not required, but I like to name every objects.
+	It.SetText			( "MyTabber" )
+
+' add some buttons to the tabber
+	AddGadgetItem		( It, "item 1", GADGETITEM_NORMAL , 0, "tab 1 reddish", Null )
+	AddGadgetItem		( It, "Item 2", GADGETITEM_NORMAL , 1, "Tab 2 Yellowish", Null )
+	AddGadgetItem		( It, "Item 3", GADGETITEM_TOGGLE , 2, "Tab 3 Blueish", Null )		' this Icon switches if selected.
+	AddGadgetItem		( It, "item 4", GADGETITEM_DEFAULT, 4, "Tab 4 purpleish", Null )	' this is the selected by default (GADGETITEM_DEFAULT)
+	AddGadgetItem		( It, "item 5", GADGETITEM_NORMAL , 5, "Tab 5 tealish", Null )
+	
+'	AddGadgetItem		( It, "item 1", GADGETITEM_TOGGLE , 0, "tab 1 reddish", Null )
+'	AddGadgetItem		( It, "Item 2", GADGETITEM_TOGGLE , 2, "Tab 2 Yellowish", Null )
+'	AddGadgetItem		( It, "Item 3", GADGETITEM_TOGGLE , 4, "Tab 3 Blueish", Null )		' this Icon switches if selected.
+'	AddGadgetItem		( It, "item 4", GADGETITEM_TOGGLE | GADGETITEM_DEFAULT, 6, "Tab 4 purpleish", Null )	' this is the selected by default (GADGETITEM_DEFAULT)
+'	AddGadgetItem		( It, "item 5", GADGETITEM_TOGGLE , 8, "Tab 5 tealish", Null )
+	
+' add some panels to the internal tabber panels (create them on the fly, no need to keep track on the pointer, we'll get them later with GetChild)
+	It.FitGadget		( CreatePanel(0,0,1,1, It.GetPanel(0)), 0, 0,0, STYLE_FIT|STYLE_LAYOUT ) ' automatic fit to the internal panel area
+	It.FitGadget		( CreatePanel(0,0,1,1, It.GetPanel(1)), 1, 0,0, STYLE_FIT|STYLE_LAYOUT )
+	It.FitGadget		( CreatePanel(0,0,1,1, It.GetPanel(2)), 2, 0,0, STYLE_FIT|STYLE_LAYOUT )
+	It.FitGadget		( CreatePanel(0,0,1,1, It.GetPanel(3)), 3, 0,0, STYLE_FIT|STYLE_LAYOUT )
+	It.FitGadget		( CreatePanel(0,0,1,1, It.GetPanel(4)), 4, 0,0, STYLE_FIT|STYLE_LAYOUT )
+	
+' let's color the created panels
+	It.getChild(0,0)	.SetColor(80,27,30) ' Panel at index 0, first child
+	It.getChild(1,0)	.SetColor(80,70,30) ' Panel at index 1, first child
+	It.getChild(2,0)	.SetColor(25,27,80) ' etc ...
+	It.getChild(3,0)	.SetColor(70,27,80)
+	It.getChild(4,0)	.SetColor(25,70,80)
+	
+Local label:TGadget	=	CreateLabel ( "status :", 0, ClientHeight(w)-20, ClientWidth(w),20, w )
+	label.SetLayout		( EDGE_ALIGNED, EDGE_ALIGNED, 0, EDGE_ALIGNED )
+	
+Repeat
+	
+	While (PollEvent()&lt;&gt;Null)
+		
+		Select EventID()
+			
+			Case EVENT_WINDOWCLOSE
+				End
+				
+			Case EVENT_GADGETACTION
+				If EventMods()
+					label.SetText( "status : double-click on item "+EventData() )
+				Else
+					label.SetText( "status : selected item "+EventData() )
+				EndIf
+				
+			Case EVENT_GADGETMENU
+				label.SetText( "status : Right click on item "+EventData() )
+				
+		End Select
+		
+	Wend
+	
+Forever
+End
+
+</textarea> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>2016</font></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> the forum does not allow some kind of syntax in the code <br></div><br>Possibly your over-zealous use of ";" ?<br><br>Which, by the way, makes BlitzMax code look terrible :-) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>2016</font></td></tr></table></td></tr><tr ><td class="posttext"> Yep, seams it's just that.<br>It's just a convention, I prefer not having to deal with ";" when translating my codes to C++ or java.<br><br>BTW, I tried so many times that the forum kind of Banned me for a small time.<br><br>[edit]<br>The codebox does not want of this line:<br><br>' extracted pixmaps from a TIconStrip<br><br>It's just a comment ... there is something broken in the forum codebox I think ^^ <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>2016</font></td></tr></table></td></tr><tr ><td class="posttext"> - post remove -<br><br>(demo code posted above) <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>2016</font></td></tr></table></td></tr><tr ><td class="posttext"> Do not try to post "borking" code too much, after 3-4 times in a row of posting your form data the server will crash (server not reachable for 15-30 minutes). Some of the "crash codes" I reported were fixed... but some... still crash the server. <br><br><br>PS: could you post the first code in a codebox too (it is scrollable instead of "show everything")<br><br>bye<br>Ron <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Floyd</td><td align="right"><font class=tiny>2016</font></td></tr></table></td></tr><tr ><td class="posttext"> About three years ago there was an attempt ( bbcode ) to add syntax coloring to the forums. This somehow messed up inequality operators such as &gt; by magically adding ; in the middle of code. It was never fixed and bbcode was eventually disabled by making it the same as code. I would guess this is somehow related.<br><br>By the way, when BlitzMax was new I briefly used ;' for comments in Blitz3D and BlitzMax. That works as a comment in both languages. In Blitz3D it is a comment. I suppose in BlitzMax it is really an empty statement followed by a comment since ; is the statement separator. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>2016</font></td></tr></table></td></tr><tr ><td class="posttext"> @Derron : When i post code in archive there is a box made specifically to put the code (without {code} or {codebox} tag) So, I can't put in Codebox. But, trust me, I wish I could !<br><br>@Floyd : <br>Damned, I coded a php script to get syntax highlighting for blitz3d and blitzmax ... it worked perfectly on the old official french forum ... (R.I.P)<br>I might have saved it somewhere on my messy archives <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>2016</font></td></tr></table></td></tr><tr ><td class="posttext"> highlight.js is able to dynamically add syntaxhighlighting ... am using this in my forum for monkey,bmx,shell,c,php and diff.<br><br>Sorry for offtopping :-)<br><br>@boby<br>OK, exculpation successful. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>2016</font></td></tr></table></td></tr><tr ><td class="posttext"> What browser / system are you posting from?<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+' extracted pixmaps from a TIconStrip
+</textarea> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>2016</font></td></tr></table></td></tr><tr ><td class="posttext"> Windows 8.1 (64 bits)<br>Google Chrome last update (Version 47.0.2526.106 m)<br><br>As mentionned, the code does not work in the first post only (the specific codebox from the code archive submission), it works in a standard code or codebox.<br><br>Hope it helps <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>2016</font></td></tr></table></td></tr><tr ><td class="posttext"> It does. I will see what can be done and let you know. <br><br>In the mean time please refrain from posting experimental code to the code archives. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>2016</font></td></tr></table></td></tr><tr ><td class="posttext"> Yep, there is nothing experimental here, but anyway, I promise I won't post any more codes to the archive.<br><br>I managed to post the whole code by removing this single line :<br><br>' pixmaps from the Icon Strip<br><b>and more precisely the word "from" makes the code fail</b><br><br>code updated, it should be working perfectly now. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

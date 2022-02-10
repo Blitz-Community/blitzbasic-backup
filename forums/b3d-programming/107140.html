@@ -1,0 +1,2377 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Stuck in Projection</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Stuck in Projection</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >Stuck in Projection</a><br><br>
+<a name="1325391"></a>
+
+<a name="1325394"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I am currently prototyping a simple softrenderer and I got stuck in a problem, that is when some vertices of a triangle are in front of and some others are behind the camera. As the camera is the focus point, x/y is flipped behind it, well, I don't know how to handle that. Here's the code, quite a piece, the important sections are labeled with "STUCK", just use Search.<br><br>Thanks.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Graphics 320,240,32,2
+SetBuffer BackBuffer()
+
+; simplified 3D engine by Dieter Marfurt, revisited 2016
+; use cursor keys, space, esc
+
+; in short terms, the thing I am having problems to solve is:
+; Triangles with some vertices in front of the camera and some vertices behind the camera
+; do not work with the current 3D to 2D projection formula.
+
+; There are about 3 instances of remarks labeled "STUCK", those sum it up pretty well I think.
+; Thanks everybody.
+
+; Note: this is WIP and far from pretty, lots of todos, eg. Y axis is still reversed etc...
+; however, should run and allow to study the specific issue mentioned.
+
+; some globals used by the texturemapper
+Global dizdx#, duizdx#, dvizdx#, dizdy#, duizdy#, dvizdy#;
+Global xa#, xb#, iza#, uiza#, viza#;
+Global dxdya#, dxdyb#, dizdya#, duizdya#, dvizdya#;
+
+; some other frequently used globals
+Global myGraphicsWidth=GraphicsWidth()
+Global myGraphicsWidthM1=GraphicsWidth()-1
+Global myGraphicsHeight=GraphicsHeight()
+
+; we render to array and also store Z for each rendered pixel
+Dim depthBuffer(myGraphicsWidth,myGraphicsHeight)
+Dim screenBuffer(myGraphicsWidth,myGraphicsHeight)
+For j=0 To myGraphicsHeight-1
+For i=0 To myGraphicsWidth-1
+depthBuffer(i,j)=1000000; magic code for untouched pixel
+Next
+Next
+
+Global cam_x#=-200; initial cam pos + rot
+Global cam_z#=-200
+Global cam_a#=350
+
+
+;counter for drawn pixels, so render can be skipped when screen full (rendering near to far)
+Global n_drawn=0
+Global max_drawn=(320*240)-10
+
+; Note: a word about the used rendering optimations:
+; -clip polygons behind camera, backface, far, and offscreen
+; -render polygons from near to far and count drawn pixels, skip rendering when screen is full
+;  (this is still not a 100% correct, but works kind of, esp. without intersecting triangles)
+
+; -- init texturemapper
+
+texturefile$="testtexture256x256.bmp"
+
+img=LoadImage(texturefile$)
+If img=0 Then 
+ img=CreateImage(256,256)
+ SetBuffer ImageBuffer(img)
+ For j=0 To 255 ; create a simple test texture to make this work out of the box
+  For i=0 To 255
+   c3= (((j Sar 7)+(i Sar 7)) And 1) Shl 7
+   c1= (((j Sar 5)+(i Sar 5)) And 1) Shl 5
+   c2= ((((j) Sar 6)+(i Sar 6)) And 1) Shl 6
+   c=(c1+c2+ c3)
+   Color c,0,c
+   Plot i,j
+  Next
+ Next
+ SetBuffer BackBuffer()
+ blur_img(img); to get some quick fake- mipmapping
+EndIf
+
+; we need the texture in a bank (currently)
+bank=CreateBank(10000+(ImageWidth(img)*ImageHeight(img)*4)); add 10kb for bug tolerance
+zz=0
+Global TextureBank=bank ; using a global handle for now
+
+LockBuffer ImageBuffer(img)
+For j=0 To ImageHeight(img)-1
+ For i=0 To ImageWidth(img)-1
+  PokeInt bank,zz,ReadPixelFast(i,j,ImageBuffer(img))
+  zz=zz+4
+ Next
+Next
+UnlockBuffer ImageBuffer(img)
+FreeImage img
+
+
+Dim Polypoints%(3, 2) ; Array for handing over polygon co-ords, 4 * (x,y,z) to renderer
+
+;A simple polygon z-sorting method, that is using actual projected Z-coords as sorting index (so camerarange must be smaller, btw.)
+Global z10000=10000
+Dim zbuffer(z10000) 
+ 
+
+
+;******** build a main map mesh adhoc, following KISS guidelines
+anz=647 ; don't ask, I counted them.
+Dim xwww(anz),ywww(anz),zwww(anz); vertices of the mesh
+Dim xw(anz),yw(anz),zw(anz),zw2(anz) ; transformed vertices of the mesh
+
+mu#=200.0 ; block size
+sz=9;map size
+Dim cell(sz,sz) ; the level map (see data)
+
+Restore maze
+For j=0 To sz
+For i=0 To sz
+Read cell(i,j)
+Next
+Next
+
+;buid walls, floors and ceils whereever neccessary
+n=0
+For j=0 To sz
+ ;li$=""
+ For i=0 To sz
+  If cell(i,j)=1
+
+   If i&gt;0
+    If cell(i-1,j)=0
+     Restore cube_left
+     For k=0 To 3
+     Read x#
+     Read y#
+     Read z#
+     xwww(n)=x+(i*mu)
+     ywww(n)=y
+     zwww(n)=z+(j*mu)
+     n=n+1
+     Next
+    EndIf
+   EndIf
+   If i&lt;sz
+    If cell(i+1,j)=0
+     Restore cube_right
+     For k=0 To 3
+     Read x#
+     Read y#
+     Read z#
+     xwww(n)=x+(i*mu)
+     ywww(n)=y
+     zwww(n)=z+(j*mu)
+     n=n+1
+     Next
+    EndIf
+   EndIf
+   If j&gt;0
+    If cell(i,j-1)=0
+     Restore cube_back
+     For k=0 To 3
+     Read x#
+     Read y#
+     Read z#
+     xwww(n)=x+(i*mu)
+     ywww(n)=y
+     zwww(n)=z+(j*mu)
+     n=n+1
+     Next
+    EndIf
+   EndIf
+   If j&lt;sz
+    If cell(i,j+1)=0
+     Restore cube_front
+     For k=0 To 3
+     Read x#
+     Read y#
+     Read z#
+     xwww(n)=x+(i*mu)
+     ywww(n)=y
+     zwww(n)=z+(j*mu)
+     n=n+1
+     Next
+    EndIf
+   EndIf
+
+  EndIf 
+
+  If cell(i,j)=0; floor*ceil
+   Restore bottom
+   For k=0 To 7 
+     Read x#
+     Read y#
+     Read z#
+     xwww(n)=x+(i*mu)
+     ywww(n)=y
+     zwww(n)=z+(j*mu)
+    n=n+1
+   Next
+  EndIf
+ Next
+Next
+
+
+
+
+;---------------------------------------
+
+
+
+; init some variables
+a#=0 ; main yaw
+
+alpha#=1 ; these were used for pitch yaw roll transforms, left here for future use
+beta#=1
+gamma#=1
+
+clip0=1.00 ; clipping plane, every projected vertexZ below it is located behind the camera
+clip1=-400 ; 2nd clipping value for exclusion of things WAY behind camera
+clip_far=1700 ; camera range
+camZoom#=0.4; this multiplies all projected screencoords (Note simply increasing this does NOT solve the problem)
+real640#=640; fixed factors in projection formula, kind of debugging-leftovers.
+realb640=640
+
+; MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMmMMMMMMMMMMMMMMMMMMMMMMMMMmmmmmain
+; MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMmMMMMMMMMMMMMMMMMMMMMMMMMMmmmmmain
+; MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMmMMMMMMMMMMMMMMMMMMMMMMMMMmmmmmain
+; MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMmMMMMMMMMMMMMMMMMMMMMMMMMMmmmmmain
+
+While KeyHit(1)=0
+
+ ; calc frames per second
+ tt=MilliSecs()
+ fps#=1000.0/(tt-ttold)
+ fpsadd#=fpsadd#+fps#
+ fpscount=fpscount+1
+ If fpscount&gt;19 Then
+  fpsreal#=fpsadd#/20
+  fpsadd#=0
+  fpscount=0
+ EndIf
+ ttold=tt
+ ; eo calc fps
+
+ ; Cls
+ Color 0,0,0
+ Rect 0,0,320,240,1
+
+ If KeyHit(57)
+  mydebugging=mydebugging Xor 1
+ EndIf
+
+ ; walk
+ If KeyDown(208) ;fwd
+  cam_x#=cam_x#-Sin(cam_a#)*20.0
+  cam_z#=cam_z#+Cos(cam_a#)*20.0
+ EndIf
+
+ If KeyDown(200) ;back
+  cam_x#=cam_x#+Sin(cam_a#)*20.0
+  cam_z#=cam_z#-Cos(cam_a#)*20.0
+ EndIf
+
+ ; turn
+ If KeyDown(203) ;left
+  cam_a#=cam_a#+5
+  If cam_a#&gt;360.0 Then cam_a#=cam_a#-360.0
+ EndIf
+
+
+ If KeyDown(205) ;right
+  cam_a#=cam_a#-5
+  If cam_a#&lt;0.0 Then cam_a#=cam_a#+360.0
+ EndIf
+
+ ; find cams position in map
+ map_y=Floor((100+(-cam_z))/200.0)
+ map_x=Floor((100+(-cam_x))/200.0)
+ If map_x&lt;0 Then map_x=0
+ If map_y&lt;0 Then map_y=0
+ If map_x&gt;sz Then map_x=sz
+ If map_y&gt;sz Then map_y=sz
+
+ where_x=(100-cam_x)-(map_x*200)
+ where_y=(100-cam_z)-(map_y*200)
+
+
+ ; handle slidingcollisions...
+ ; this seems bulky, but it works rather well.
+map_min=60
+map_max=140
+If map_x &gt;0
+ If cell(map_x-1,map_y)=1
+  If where_x&lt;map_min Then
+   cam_x=cam_x-(map_min-where_x)
+  EndIf
+ EndIf
+EndIf
+
+If map_x &lt;sz
+ If cell(map_x+1,map_y)=1
+  If where_x&gt;map_max Then
+   cam_x=cam_x+(where_x-map_max)
+  EndIf
+ EndIf
+EndIf
+
+If map_y &gt;0
+ If cell(map_x,map_y-1)=1
+  If where_y&lt;map_min Then
+   cam_z=cam_z-(map_min-where_y)
+  EndIf
+ EndIf
+EndIf
+
+If map_y &lt;sz
+ If cell(map_x,map_y+1)=1
+  If where_y&gt;map_max Then
+   cam_z=cam_z+(where_y-map_max)
+  EndIf
+ EndIf
+EndIf
+
+map_y=Floor((100+(-cam_z))/200.0)
+map_x=Floor((100+(-cam_x))/200.0)
+If map_x&lt;0 Then map_x=0
+If map_y&lt;0 Then map_y=0
+If map_x&gt;sz Then map_x=sz
+If map_y&gt;sz Then map_y=sz
+
+where_x=(100-cam_x)-(map_x*200)
+where_y=(100-cam_z)-(map_y*200)
+
+If (map_x &gt;0) And (map_y &gt;0)
+ If cell(map_x-1,map_y-1)=1
+  If (where_x&lt;map_min) And (where_y&lt;map_min) Then
+   If (where_x&gt;where_y) Then
+   cam_x=cam_x-(map_min-where_x)
+   Else
+   cam_z=cam_z-(map_min-where_y)
+   EndIf
+  EndIf
+ EndIf
+EndIf
+
+If (map_x &lt;sz) And (map_y &lt;sz)
+ If cell(map_x+1,map_y+1)=1
+  If (where_x&gt;map_max) And (where_y&gt;map_max) Then
+   If (where_x&lt;where_y) Then
+   cam_x=cam_x+(where_x-map_max)
+   Else
+   cam_z=cam_z+(where_y-map_max)
+   EndIf
+  EndIf
+ EndIf
+EndIf
+.aa
+
+If (map_x &gt;0) And (map_y &lt;sz)
+ If cell(map_x-1,map_y+1)=1
+  If (where_x&lt;map_min) And (where_y&gt;map_max) Then
+   If (where_x&gt;(200-where_y)) Then
+   cam_x=cam_x-(map_min-where_x)
+   Else
+   cam_z=cam_z+(where_y-map_max)
+   EndIf
+  EndIf
+ EndIf
+EndIf
+
+If (map_x &lt;sz) And (map_y &gt;0)
+ If cell(map_x+1,map_y-1)=1
+  If (where_x&gt;map_max) And (where_y&lt;map_min) Then
+   If ((200-where_x)&gt;where_y) Then
+   cam_x=cam_x+(where_x-map_max)
+   Else
+   cam_z=cam_z-(map_min-where_y)
+   EndIf
+  EndIf
+ EndIf
+EndIf
+; end of sliding collision
+
+
+ ;****************************************************************************************
+ ; doing 3d transforms, occlusion, z-sorting, perspective-projection and texturemapping...
+ a=cam_a
+
+ alpha=0; these 3 are left here for future use, such as mouselook...
+ beta=a
+ gamma=0;a+a Mod 360
+
+ ; the renderer is working with rotated and translated Copies of the original Points
+
+ For i=0 To anz ; transform all vertices to camera angle and position...
+
+  Goto nada ; just skipping this pitch, roll and yaw rotation
+  ; rotate pitch, roll and yaw
+  xl1#=zwww(i)*Sin(gamma)+xwww(i)*Cos(gamma)
+  yl1#=ywww(i)
+  zl1#=zwww(i)*Cos(gamma)-xwww(i)*Sin(gamma)
+
+  xl2#=xl1
+  yl2#=yl1*Cos(beta)-zl1*Sin(beta)
+  zl2#=yl1*Sin(beta)+zl1*Cos(beta)
+ 
+  xl3#=cam_x+(yl2*Sin(alpha)+xl2*Cos(alpha))
+  yl3#=(yl2*Cos(alpha)-xl2*Sin(alpha))
+  zl3#=cam_z+(zl2)
+  .nada
+
+  cam_xx#=cam_x#+Sin(cam_a#)*575.0; NOTE: for some reason i have to prevent the camera from rotating 
+  cam_zz#=cam_z#-Cos(cam_a#)*575.0; around a point approx. 575 units in front of the camera. it's a hack vs a bug
+
+  ;// rotate yaw only
+  xl3=((zwww(i)+cam_zz)*Sin(a))+((xwww(i)+cam_xx)*Cos(a));
+  yl3=ywww(i);
+  zl3=((zwww(i)+cam_zz)*Cos(a))-((xwww(i)+cam_xx)*Sin(a));
+
+  ; Projecting 3D to 2D (thanks to Toshi Horie)------------------
+ zl3_640#=(zl3+real640)
+ If zl3_640#=0 Then zl3_640#=.000001 ; prevent division by zero
+ If zl3_640#&gt;0
+  yloc# = (yl3*real640  /(zl3_640))
+  xloc# = (xl3*real640  /(zl3_640))
+ Else
+  ; STUCK!!!
+  ; zl3_640# being negative will result in flipping X and Y... not really what we want 
+  ; but inverting their SGN does simply make them "bounce back" after hitting cam_z (=the eye)
+  ; so what are we gonna do?
+  yloc# = -(yl3*real640  /(zl3_640))
+  xloc# = -(xl3*real640  /(zl3_640))
+ EndIf
+
+  xw(i)=((camZoom#)*xloc) +160 ; additional onscreen zoom factor camZoom
+  yw(i)=((camZoom#)*yloc) +120
+  zw(i)=(zl3+realb640) ; remember this for Z-sorting
+  zw2(i)=zl3 ; this unbiased Z may be useful too, while I'm debugging...
+ Next
+
+
+ ; very simple z-sorting of polygons...------------------------
+ For i=0 To z10000
+  zbuffer(i)=-1 ; wipe out old zbuffer info (could be optimized)
+ Next
+ ; check all quads whether they need to be rendered, and if so, when...
+ For i=0 To anz-3 Step 4
+  rend_cond=1 ; first assume we will render this one
+
+ ; check conditions for not rendering...
+ ; pls excuse the Gotos, will sort that out, once it's working
+
+ ; all vertices of this quad too far away?
+ If (zw(i)&gt;clip_far) And (zw(i+1)&gt;clip_far) And (zw(i+2)&gt;clip_far) And (zw(i+3)&gt;clip_far) Then 
+  rend_cond=0
+  Goto got_it
+ EndIf
+
+ ; all offscreen?
+ If ( myTrisOverlap(0,0,myGraphicsWidth,myGraphicsHeight,xw(i),yw(i),xw(i+1),yw(i+1),xw(i+2),yw(i+2) ) Or myTrisOverlap(0,0,myGraphicsWidth,myGraphicsHeight,xw(i),yw(i),xw(i+2),yw(i+2),xw(i+3),yw(i+3) ) )=0 Then 
+  rend_cond=0
+  Goto got_it
+ EndIf
+
+ ; all behind camera?
+ If (zw(i)&lt;clip0) And (zw(i+1)&lt;clip0) And (zw(i+2)&lt;clip0) And (zw(i+3)&lt;clip0) Then
+  rend_cond=0
+  Goto got_it
+ EndIf
+
+ ; any (but not all) behind camera?
+ If (zw(i)&lt;clip0) Or (zw(i+1)&lt;clip0) Or (zw(i+2)&lt;clip0) Or (zw(i+3)&lt;clip0) Then
+  ; STUCK!!!
+  ; this polygon has some vertices in front of the camera and some behind it. The problem is, those behind the camera
+  ; have totally messed up 2D coords, what am I doing wrong?
+
+  ; this is what I tried, without success:
+  xdis#=(xw(i)+xw(i+1)+xw(i+2)+xw(i+3))/4
+  zdis#=(zw(i)+zw(i+1)+zw(i+2)+zw(i+3))/4
+  xydis#=Abs(xdis-160)
+
+  If (xydis&gt;100000) Or (zdis&lt;clip1) Then
+   ; exclude anything that is not within Z &gt; clip1 (currently -400) and a reasonable X-distance.
+   ; note,100000 makes sense here since offscreen behind camera projection quickly reaches huge x/y dimensions.
+   rend_cond=0
+   Goto got_it
+  Else
+   ;STUCK!!!
+   ; ok, what to do with these not-so-far behind camera vertices of polygons that stretch up to in
+   ; front of the camera?
+   rend_cond=0; just REM this to render them "AS IS" and you'll see the mess...
+  EndIf
+ EndIf
+
+.got_it
+
+ If rend_cond=1
+  zwmax=zw(i); currently using the highest VertexZ of each quad for the polygon z-sorting (not a good idea?)
+  If zwmax&lt;0 Then zwmax=0; prevent array index underrun
+  If zwmax&lt;zw(i+1) Then zwmax=zw(i+1)
+  If zwmax&lt;zw(i+2) Then zwmax=zw(i+2)
+  If zwmax&lt;zw(i+3) Then zwmax=zw(i+3)
+  While zbuffer(zwmax)&lt;&gt;-1 And zwmax&lt;z10000 ; find next free slot
+   zwmax=zwmax+1
+  Wend
+  zbuffer(zwmax)=i ; store orig. vertex index, using its Z distance from the camera as new index in zbuffer() (not to be confused with depthBuffer(,) which sorts pixels)
+  EndIf
+ Next
+
+ ; begin rendering...----------------------------
+  n_drawn=0
+
+;  For i2=z10000 To 0 Step -1 ; reading quads in z-order from far to near ; intrestingly both works, near to far and far to near, yet another mystery...
+  For i2=0 To z10000  ; reading quads in z-order from near to far ; i guess however, this one is faster.
+  i=zbuffer(i2); get the index of the to be rendered quad
+
+  If i&gt;-1 And i&lt; anz-2 ; if it isn't -1 then it's a Quad index (otherwise it's just nothing)
+   ; Mapping... (note, UVs expect 0-255, are currently hardcoded to quadmapping)
+   GetPolygonPoints(i) ; this array mediator seems unneccessary, will remove it later.
+
+  ; triangle 1 of quad...
+  x1=Polypoints%(0, 0)
+  y1=Polypoints%(0, 1)
+  z1=Polypoints%(0, 2)
+  u1=0
+  v1=0
+
+  x2=Polypoints%(1, 0)
+  y2=Polypoints%(1, 1)
+  z2=Polypoints%(1, 2)
+  u2=0.999*255 
+  v2=0
+
+  x3=Polypoints%(2, 0)
+  y3=Polypoints%(2, 1)
+  z3=Polypoints%(2, 2)
+  u3=0.999*255
+  v3=0.999*255
+
+  If isClockwise(x1,y1,x2,y2,x3,y3); do not render backfaces...
+   sun=GetSunlight(xwww(i),ywww(i),zwww(i),xwww(i+1),ywww(i+1),zwww(i+1),xwww(i+2),ywww(i+2),zwww(i+2)); simple shading
+   drawtpolyperspsubtri(x1,y1,z1,u1,v1,x2,y2,z2,u2,v2,x3,y3,z3,u3,v3,bank,sun) ; texture-map it
+  EndIf
+
+  ; triangle 2 of quad (note, saves some speed since 2 vertices are shared)
+  x2=x3
+  y2=y3
+  z2=z3
+  u2=u3
+  v2=v3
+
+  x3=Polypoints%(3, 0)
+  y3=Polypoints%(3, 1)
+  z3=Polypoints%(3, 2)
+  u3=0
+  v3=0.999*255
+  If isClockwise(x1,y1,x2,y2,x3,y3) 
+   drawtpolyperspsubtri(x1,y1,z1,u1,v1,x2,y2,z2,u2,v2,x3,y3,z3,u3,v3,bank,sun)
+  EndIf
+
+  ;----------------
+  EndIf
+  If n_drawn&gt;max_drawn Then Exit ; abort rendering when screen is filled.
+
+ Next
+
+ LockBuffer BackBuffer()
+ renderScreen() ; since we have rendered to an array, draw it to the screen
+ UnlockBuffer BackBuffer()
+
+If mydebugging=1
+ Color 0,0,0
+ Rect 0,0,230,60,1
+ Color 255,255,255
+ Text 0,0,"fps "+fpsreal#
+ Text 0,16,"cam "+cam_x+" | "+cam_z
+ Text 0,32,"map "+map_x+" | "+map_y+" | "+cell(map_x,map_y)
+EndIf
+Flip 0
+Wend
+; EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE end
+End
+
+
+
+Function isClockwise(x1,y1,x2,y2,x3,y3)
+ ; thanks to Floyd of blitzbasic com forum
+ a=x2-x1
+ b=y2-y1
+ c=x3-x1
+ d=y3-y1
+ If((a*d)-(b*c)) &gt; 0 Then
+  Return 1
+ EndIf
+ Return 0
+End Function
+
+ 
+; --- texture mapping functions
+
+Function GetPolygonPoints(ilocal%) ; initially read in a rectangle
+ For Count% = 0 To 3
+  Polypoints%(Count%, 0) = xw(ilocal%+Count%)
+  Polypoints%(Count%, 1) = yw(ilocal%+Count%)
+  Polypoints%(Count%, 2) = zw(ilocal%+Count%)
+ Next
+End Function
+
+Function renderScreen()
+ Local x,y,z,rgb
+ For y=0 To 239
+  For x=0 To 319
+   z=depthbuffer(x,y)
+   If z&lt;&gt;1000000 ; write only rendered pixels
+    WritePixelFast x,y,screenBuffer(x,y)
+    depthBuffer(x,y)=1000000; restore to "untouched"
+   EndIf
+  Next
+ Next
+End Function
+
+
+
+;// Texturemapper with full perspective correction, subpixels and subtexels,
+;//	uses floats all the way through
+; credit to Mikael Kalms who did this perspective-corrected texturemapper originally in c++
+Function drawtpolyperspsubtri(x1#,y1#,z1#,u1#,v1#,x2#,y2#,z2#,u2#,v2#,x3#,y3#,z3#,u3#,v3#,bank,sun)
+;{
+;	float x1, y1, x2, y2, x3, y3;
+Goto oki ; no need to declare in blitz, but left here for now
+iz1#=0
+uiz1#=0
+viz1#=0
+iz2#=0
+uiz2#=0
+viz2#=0
+iz3#=0
+uiz3#=0
+viz3#=0
+;	float iz1, uiz1, viz1, iz2, uiz2, viz2, iz3, uiz3, viz3;
+
+dxdy1#=0
+dxdy2#=0
+dxdy3#=0
+temp#=0
+denom#=0
+dy#=0
+
+y1i=0
+y2i=0
+y3i=0
+side=0
+.oki
+
+;	float dxdy1, dxdy2, dxdy3;
+;	float tempf;
+;	float denom;
+;	float dy;
+;	int y1i, y2i, y3i;
+;	int side;
+
+	;// Shift XY coordinate system (+0.5, +0.5) to match the subpixeling
+	;//  technique
+
+	x1 = x1 + 0.5;
+	y1 = y1 + 0.5;
+	x2 = x2 + 0.5;
+	y2 = y2 + 0.5;
+	x3 = x3 + 0.5;
+	y3 = y3 + 0.5;
+
+	;// Calculate alternative 1/Z, U/Z and V/Z values which will be
+	;//  interpolated
+
+	iz1 = 1.0 / z1;
+	iz2 = 1.0 / z2;
+	iz3 = 1.0 / z3;
+	uiz1 = u1 * iz1;
+	viz1 = v1 * iz1;
+	uiz2 = u2 * iz2;
+	viz2 = v2 * iz2;
+	uiz3 = u3 * iz3;
+	viz3 = v3 * iz3;
+
+;	texture = poly-&gt;texture;
+
+	;// Sort the vertices in ascending Y order
+
+	If (y1 &gt; y2)
+	;{
+	temp=x1  :x1=x2    :x2=temp;		swapfloat(x1, x2);
+	temp=y1  :y1=y2    :y2=temp;		swapfloat(y1, y2);
+	temp=iz1 :iz1=iz2  :iz2=temp;		swapfloat(iz1, iz2);
+	temp=uiz1:uiz1=uiz2:uiz2=temp;		swapfloat(uiz1, uiz2);
+	temp=viz1:viz1=viz2:viz2=temp;		swapfloat(viz1, viz2);
+	EndIf;}
+	If (y1 &gt; y3)
+	;{
+	temp=x1  :x1=x3    :x3=temp;		swapfloat(x1, x3);
+	temp=y1  :y1=y3    :y3=temp;		swapfloat(y1, y3);
+	temp=iz1 :iz1=iz3  :iz3=temp;		swapfloat(iz1, iz3);
+	temp=uiz1:uiz1=uiz3:uiz3=temp;		swapfloat(uiz1, uiz3);
+	temp=viz1:viz1=viz3:viz3=temp;		swapfloat(viz1, viz3);
+	EndIf;}
+	If (y2 &gt; y3)
+	;{
+	temp=x2  :x2=x3    :x3=temp;		swapfloat(x2, x3);
+	temp=y2  :y2=y3    :y3=temp;		swapfloat(y2, y3);
+	temp=iz2 :iz2=iz3  :iz3=temp;		swapfloat(iz2, iz3);
+	temp=uiz2:uiz2=uiz3:uiz3=temp;		swapfloat(uiz2, uiz3);
+	temp=viz2:viz2=viz3:viz3=temp;		swapfloat(viz2, viz3);
+	EndIf;}
+
+	y1i = Int(y1-.49999); faster than Floor(), same outcome I guess
+	y2i = Int(y2-.49999);
+	y3i = Int(y3-.49999);
+
+	;// Skip poly if it's too thin to cover any pixels at all
+
+	If (     (  (y1i = y2i) And (y1i = y3i)  )     Or   (  (Int(x1-.49999) = Int(x2-.49999))   And  (Int(x1-.49999) = Int(x3-.49999))  )    )
+		Return;
+	EndIf
+
+	;// Calculate horizontal and vertical increments for UV axes (these
+	;//  calcs are certainly not optimal, although they're stable
+	;//  (handles any dy being 0)
+
+	denom =   ((x3 - x1) * (y2 - y1) - (x2 - x1) * (y3 - y1));
+
+	If denom=0  ;(!denom)		;// Skip poly if it's an infinitely thin line
+		Return;	
+	EndIf
+	denom = 1.0 / denom;	;// Reciprocal for speeding up
+	dizdx = ((iz3 - iz1) * (y2 - y1) - (iz2 - iz1) * (y3 - y1)) * denom;
+	duizdx = ((uiz3 - uiz1) * (y2 - y1) - (uiz2 - uiz1) * (y3 - y1)) * denom;
+	dvizdx = ((viz3 - viz1) * (y2 - y1) - (viz2 - viz1) * (y3 - y1)) * denom;
+	dizdy = ((iz2 - iz1) * (x3 - x1) - (iz3 - iz1) * (x2 - x1)) * denom;
+	duizdy = ((uiz2 - uiz1) * (x3 - x1) - (uiz3 - uiz1) * (x2 - x1)) * denom;
+	dvizdy = ((viz2 - viz1) * (x3 - x1) - (viz3 - viz1) * (x2 - x1)) * denom;
+
+	;// Calculate X-slopes along the edges
+
+	If (y2 &gt; y1) Then dxdy1 = (x2 - x1) / (y2 - y1);
+	If (y3 &gt; y1) Then dxdy2 = (x3 - x1) / (y3 - y1);
+	If (y3 &gt; y2) Then dxdy3 = (x3 - x2) / (y3 - y2);
+
+	;// Determine which side of the poly the longer edge is on
+
+	side = (dxdy2 &gt; dxdy1);
+
+	If (y1 = y2) Then side = (x1 &gt; x2);
+	If (y2 = y3) Then side = (x3 &gt; x2);
+
+	If side=0  ;(!side)	;// Longer edge is on the left side
+	;{
+		;// Calculate slopes along left edge
+
+		dxdya = dxdy2;
+		dizdya = dxdy2 * dizdx + dizdy;
+		duizdya = dxdy2 * duizdx + duizdy;
+		dvizdya = dxdy2 * dvizdx + dvizdy;
+
+		;// Perform subpixel pre-stepping along left edge
+
+		dy = 1.0 - (y1 - y1i);
+		xa = x1 + dy * dxdya;
+		iza = iz1 + dy * dizdya;
+		uiza = uiz1 + dy * duizdya;
+		viza = viz1 + dy * dvizdya;
+
+		If (y1i &lt; y2i)	;// Draw upper segment if possibly visible
+		;{
+			;// Set right edge X-slope and perform subpixel pre-
+			;//  stepping
+
+			xb = x1 + dy * dxdy1;
+			dxdyb = dxdy1;
+
+			drawtpolyperspsubtriseg(y1i, y2i,sun);
+		EndIf;}
+		If (y2i &lt; y3i)	;// Draw lower segment if possibly visible
+		;{
+			;// Set right edge X-slope and perform subpixel pre-
+			;//  stepping
+
+			xb = x2 + (1.0 - (y2 - y2i)) * dxdy3;
+			dxdyb = dxdy3;
+
+			drawtpolyperspsubtriseg(y2i, y3i,sun);
+		EndIf;}
+	;}
+	Else	;// Longer edge is on the right side
+	;{
+		;// Set right edge X-slope and perform subpixel pre-stepping
+		
+		dxdyb = dxdy2;
+		dy = 1.0 - (y1 - y1i);
+		xb = x1 + dy * dxdyb;
+		
+		If (y1i &lt; y2i)	;// Draw upper segment if possibly visible
+		;{
+			;// Set slopes along left edge and perform subpixel
+			;//  pre-stepping
+		
+			dxdya = dxdy1;
+			dizdya = dxdy1 * dizdx + dizdy;
+			duizdya = dxdy1 * duizdx + duizdy;
+			dvizdya = dxdy1 * dvizdx + dvizdy;
+			xa = x1 + dy * dxdya;
+			iza = iz1 + dy * dizdya;
+			uiza = uiz1 + dy * duizdya;
+			viza = viz1 + dy * dvizdya;
+		
+			drawtpolyperspsubtriseg(y1i, y2i,sun);
+		EndIf;}
+		If (y2i &lt; y3i)	;// Draw lower segment if possibly visible
+		;{
+			;// Set slopes along left edge and perform subpixel
+			;//  pre-stepping
+
+			dxdya = dxdy3;
+			dizdya = dxdy3 * dizdx + dizdy;
+			duizdya = dxdy3 * duizdx + duizdy;
+			dvizdya = dxdy3 * dvizdx + dvizdy;
+			dy = 1.0 - (y2 - y2i);
+			xa = x2 + dy * dxdya;
+			iza = iz2 + dy * dizdya;
+			uiza = uiz2 + dy * duizdya;
+			viza = viz2 + dy * dvizdya;
+
+			drawtpolyperspsubtriseg(y2i, y3i,sun);
+		EndIf;}
+	EndIf;}
+End Function
+
+
+
+
+; what really slows things down is texturefill-scanning on offscreen areas, which is even more fatal because
+; very close objects produce huge polygons, most of it offscreen, So we get rid of this, first off all by
+; skipping the scanning, on x when x1 reached right screen end, and on y when y1 reached the 
+; bottom of the screen. Subsequently we check whether x1&lt;0 and do not scan there, but jump right to x=0 by a
+; correctly calculated leap for all scan stepper variables. on y we "phantom-scan" to y1=0, which unfort. seems to 
+; be neccessary, ; but probably there is a better solution, tho, this one is also very fast since it skips 
+; X-scanning when y1&lt;0. These optimations were added by me (Dieter) to this function by Mikael Kalms.
+
+Function drawtpolyperspsubtriseg(y1%,y2%,sun=0)
+
+If y1&gt;myGraphicsHeight Then Return ; all below screen, nothing to render
+;-----------------------------------------------------------------------------------------------------------
+
+	While (y1 &lt; y2)		;// Loop through all lines in the segment
+		If y1&gt;=0
+		x1% = xa;
+		x2% = xb;
+
+		;// Perform subtexel pre-stepping on 1/Z, U/Z and V/Z
+
+;		dx# = 1.0 ;- (xa - x1); originally this was "dx# = 1.0 - (xa - x1)", right after "x1% = xa"... what in the world were you thinking, Mr. Kalms ?? ^^
+		iz# = iza + dizdx;		iz# = iza + dx * dizdx; therefor no need to multiply by 1.0!
+		uiz# = uiza + duizdx;	uiz# = uiza + dx * duizdx;
+		viz# = viza + dvizdx;	viz# = viza + dx * dvizdx;
+
+
+		While (x1 &lt; x2)	;// Draw horizontal line
+			If x1&gt;=0; are we (x-wise) onscreen at all? (if not, jump to x1=0, see Else)
+				;// Calculate U and V from 1/Z, U/Z and V/Z
+				If (x1&gt;=0)And(y1&gt;=0)And(x1&lt;myGraphicsWidth) 
+					z# = 1.0 / iz; compare if there is already a closer pixel drawn, by checking zbuffer
+					z2#=depthBuffer(x1,y1)
+					If z&lt;z2 ; if not, "draw" this one
+						If z=1000000 Then n_drawn=n_drawn+1 ; in case the pixel was untouched (zbuffer entry=1000000), count  it for a later rendering abortion when number of pixels drawn &gt;= (screenwidth*screenheight)
+						depthBuffer(x1,y1)=z ; and store z in the the depthBuffer. btw. use z as color to get a render of the depthbuffer
+						u% = uiz * z;
+						v% = viz * z;
+						; render the pixel to a screenbuffer, think about to directly writepixelfast...
+						If sun&lt;0; simple 2-state shading
+							 screenBuffer(x1,y1)=(PeekInt(TextureBank,((v And $ff) Shl 10)+((u And $ff)Shl 2)) And $fefefe) Sar 1
+						Else
+							 screenBuffer(x1,y1)=PeekInt(TextureBank,((v And $ff) Shl 10)+((u And $ff)Shl 2))
+						EndIf
+					EndIf
+				EndIf
+				iz =iz+ dizdx;
+				uiz=uiz + duizdx;
+				viz=viz + dvizdx;
+				x1=x1+1
+				If x1&gt;=myGraphicsWidthM1 Then Exit
+			Else ; scanning offscreen is a waste, therefor, in case we are x&lt;0, skip it and adjust steppers accordingly
+				xfac=0-x1
+				iz =iz+ dizdx*xfac
+				uiz=uiz + duizdx*xfac
+				viz=viz + dvizdx*xfac
+				x1=x1+xfac
+			EndIf
+		Wend
+
+		xa=xa + dxdya;
+		xb=xb + dxdyb
+		iza=iza + dizdya
+		uiza=uiza + duizdya
+		viza=viza + dvizdya
+		y1=y1+1
+		If y1&gt;=myGraphicsHeight Then Exit
+		If n_drawn&gt;max_drawn Then Exit
+		
+		Else
+;_________________________________________-
+			; whem offscreen y1&lt;0, need to "phantom-scan" only. 
+
+			x1% = xa;
+			x2% = xb;
+
+			iz# = iza + dizdx;
+			uiz# = uiza + duizdx;
+			viz# = viza + dvizdx;
+
+			xfac=x2-x1
+			iz =iz+ dizdx*xfac
+			uiz=uiz + duizdx*xfac
+			viz=viz + dvizdx*xfac
+			x1=x1+xfac
+
+			xa=xa + dxdya;
+			xb=xb + dxdyb
+			iza=iza + dizdya
+			uiza=uiza + duizdya
+			viza=viza + dvizdya
+			y1=y1+1
+;____________________________________________		
+		EndIf
+		
+	Wend
+End Function
+
+
+
+Function myTrisOverlap(x,y,w,h,x1,y1,x2,y2,x3,y3) ;// fast yet mathematicly incorrect Rect overlap triangle check
+Local x_,y_,w_,h_; // rect box of triangle
+
+x_=x1;
+If(x2&lt;x_)x_=x2;
+If(x3&lt;x_)x_=x3;
+
+y_=y1;
+If(y2&lt;y_)y_=y2;
+If(y3&lt;y_)y_=y3;
+
+w_=x1;
+If(x2&gt;w_)w_=x2;
+If(x3&gt;w_)w_=x3;
+
+h_=y1;
+If(y2&gt;h_)h_=y2;
+If(y3&gt;h_)h_=y3;
+
+If((w_&gt;=x)And(x_&lt;w)And(h_&gt;=y)And(y_&lt;h))
+ Return 1
+Else
+ Return 0
+EndIf
+End Function
+
+
+
+Function GetSunlight(ax#,ay#,az#,bx#,by#,bz#,cx#,cy#,cz#)
+ ;partially by sswift, checking the face normals
+ Local px#,py#,pz#,qx#,qy#,qz#,nx#,ny#,nz#,cenx#,ceny#,cenz#
+ cenx=(ax+bx+cx)/3.0; get center coord
+ ceny=(ay+by+cy)/3.0
+ cenz=(az+bz+cz)/3.0
+
+ ax=ax-cenx; localize vertex coords
+ bx=bx-cenx
+ cx=cx-cenx
+
+ ay=ay-ceny
+ by=by-ceny
+ cy=cy-ceny
+
+ az=az-cenz
+ bz=bz-cenz
+ cz=cz-cenz
+ ; Triangle 1
+ ; Get the vectors for two edges of the triangle.
+ Px# = Ax#-Bx#
+ Py# = Ay#-By#
+ Pz# = Az#-Bz#
+
+ Qx# = Bx#-Cx#
+ Qy# = By#-Cy#
+ Qz# = Bz#-Cz#
+ ; Compute their cross product.
+ Nx# = Py#*Qz# - Pz#*Qy#
+ Ny# = Pz#*Qx# - Px#*Qz#
+ Nz# = Px#*Qy# - Py#*Qx#
+ ny=ny+(nx/10.0)+(nz/10.0)
+ If Abs(ny)&lt;200 Then ny=0
+ Return Floor(ny)
+End Function
+
+
+
+
+Function blur_img(img)
+ Local rgb,rgb1,rgb2,rgb3,rgb4,i,j
+ SetBuffer ImageBuffer(img)
+ LockBuffer ImageBuffer(img)
+ For j= 1 To 255
+  For i= 1 To 255
+   rgb1=(ReadPixelFast(i,j) And %111111001111110011111100) Shr 2
+   rgb2=(ReadPixelFast(i-1,j) And %111111001111110011111100) Shr 2
+   rgb3=(ReadPixelFast(i,j-1) And %111111001111110011111100) Shr 2
+   rgb4=(ReadPixelFast(i-1,j-1) And %111111001111110011111100) Shr 2
+   rgb=rgb1+rgb2+rgb3+rgb4
+   WritePixelFast i-1,j-1,rgb
+  Next
+ Next
+ For j= 254 To 0 Step -1
+  For i= 254 To 0 Step -1
+   rgb1=(ReadPixelFast(i,j) And %111111001111110011111100) Shr 2
+   rgb2=(ReadPixelFast(i+1,j) And %111111001111110011111100) Shr 2
+   rgb3=(ReadPixelFast(i,j+1) And %111111001111110011111100) Shr 2
+   rgb4=(ReadPixelFast(i+1,j+1) And %111111001111110011111100) Shr 2
+   rgb=rgb1+rgb2+rgb3+rgb4
+   WritePixelFast i+1,j+1,rgb
+  Next
+ Next
+ UnlockBuffer ImageBuffer(img)
+SetBuffer BackBuffer()
+End Function
+
+
+
+
+.building
+Data 23  ; number of pts -1 ; guess obsolete
+; a simple 4sided column mesh: 24 Points (unshared Vertices) and 4 Quads (must be clockwise):
+.cube_left
+Data -100,-100,100
+Data -100,-100,-100
+Data -100, 100,-100; left ok
+Data -100, 100, 100
+
+.cube_right
+Data 100,-100,-100;right ok
+Data 100,-100,100
+Data 100,100,100
+Data 100,100,-100
+
+.cube_front
+Data 100,-100,100
+Data -100,-100,100;front
+Data -100,100,100
+Data  100,100,100
+
+.cube_back
+Data -100,-100,-100
+Data 100,-100,-100
+Data 100,100,-100;back 
+Data -100,100,-100
+
+; a simple 2-quad floor / ceil for "empty space" (must be clockwise):
+
+.bottom
+Data -100,100,-100;top  
+Data -100,100,100
+Data  100,100,100
+Data  100,100,-100
+
+Data  100,-100,100
+Data -100,-100,100
+Data -100,-100,-100;bottom2
+Data  100,-100,-100
+
+; test map, note size is hardcoded, see above.
+.maze
+Data 1,1,1,1,1,1,1,1,1,1
+Data 1,0,0,0,0,0,0,0,0,1
+Data 1,0,1,0,0,0,1,0,0,1
+Data 1,0,1,1,1,1,1,1,1,1
+Data 1,0,0,0,1,0,0,0,0,1
+Data 1,1,1,0,1,0,1,1,0,1
+Data 1,0,1,0,0,0,1,0,0,1
+Data 1,0,1,0,1,1,1,0,0,1
+Data 1,0,0,0,0,0,0,0,0,1
+Data 1,1,1,1,1,1,1,1,1,1
+; end of program
+
+
+
+
+
+</textarea> <br><br></td></tr></table><br>
+<a name="1325395"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> btw. just fixed 1 bug. <br><br></td></tr></table><br>
+<a name="1325407"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Flanker</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice little engine :)<br><br>Here what I can see is that when you walk in one direction, close to walls, one half of the walls are rendered correctly, and when you inverse your direction the other half is rendered correctly. And it's always every 2 walls. <br><br></td></tr></table><br>
+<a name="1325408"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks, yes, that is when you/the first person rotates, the triangle / quad in front of you at some point is more beside you and one part of the vertices slips behind the camera. Currently these special triangles are not rendered, which is why they pop in and out, depending on camera angle. That is precisely the issue. <br><br></td></tr></table><br>
+<a name="1325409"></a>
+
+<a name="1325410"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Flanker</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> On the screenshot, every white wall is rendered if I go forward next to them. If I turn 180°, it's the other half that will be rendered correctly. So what's the difference beetween one half and the other ?<br><br><img src="https://i.imgbox.com/DdbYrSkE.png"> <br><br></td></tr></table><br>
+<a name="1325445"></a>
+
+<a name="1325505"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Flanker, thanks for "going in there" ^^, I see where your mistake is: such a white wall is only half an actual wall, or quad in this simple wolfenstennoid mesh. So now reading again my prev. explanation makes sense: as you slide along the wall, the closer two corners of one wall-quad will at some point be behind the camera. Then it won't be rendered, because I coded it so, because it would look messed up, wrong. You can try that, somewhere after one of the "STUCK!!!" comments its says "unrem this line to see the mess" or something similar. Have a look at the code, I tried to comment everything. That being said, this source does contain a fully functional perspectivecorrected texturemapper, I'll post that one in the archive I think.<br>Thanks again.<br><br>Edit: arrrgh I am so impatient, just sneaking around, waiting for some help but I may find some examples elsewhere (any links to eg. cpp sources? like fps mouselook all software rendering) <br><br></td></tr></table><br>
+<a name="1325554"></a>
+
+<a name="1325584"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> You've got a mispelled variable on your camera gameplay<br>	;' turn<br>	If KeyDown(203) ;' Left<br>		fam_a#=cam_a#+5<br><br>fam_a against cam_a<br><br>Whatever, It will surely not fix the issue<br>I (maybe) managed to fix the issue by rebuilding the projection according to the z value (just pushing the z to fit the viewport, then remapping the 3 coords and finally recomputing the 2d projections witht the new coordinates)<br><br><pre class=code>
+If (zw[i]&lt;clip0) Or (zw[i+1]&lt;clip0) Or (zw[i+2]&lt;clip0) Or (zw[i+3]&lt;clip0) Then
+			;' STUCK!!!
+			;' this polygon has some vertices in front of the camera And some behind it. The problem is, those behind the camera
+			;' have totally messed up 2D coords, what am I doing wrong?
+			
+			Local Isbehind:Int[] = [zw[i]&lt;clip0, zw[i+1]&lt;clip0, zw[i+2]&lt;clip0, zw[i+3]&lt;clip0]
+			Local SegZ:Float, Zclip0:Float, DVz:Float;
+			' find the point(s) behind the camera
+			Local iX:Int, iY:Int;
+			For iX = 0 To 3
+				' for all points behind the camera, find another one that is front of the camera
+				' then translate the vertex along the segment from the vertex behind to the vertex front
+				If (Isbehind[iX])
+					Local iN0:Int = i+iX;
+					For iY = 0 To 3
+						' find any other that is front (obviously, don't compare to itself)
+						' also, don't project along the diagonal of the polygon or it will make a hole.
+						If (iX&lt;&gt;iY) And (Abs(iX-iY)&lt;2)
+							' don't use another point that was previously behind
+							If (Isbehind[iY] = 0)
+								' found one
+								Local iN1:Int = i+iY;
+								' distance from point behind to point front (on Z axis)
+								SegZ = zw[iN1]-zw[iN0];
+								' distance from point behind to clip0 (and a little bit further)
+								Zclip0 = (clip0+1) - zw[iN0];
+								' ratio of small segment by full segment
+								DVz = Zclip0/SegZ;
+								' new z is the clip0 value (+ a small gap)
+								zw[iN0] = clip0+1;
+								' then rebuild projection
+								Local x__:Float = xwww[iN0] + (xwww[iN1]-xwww[iN0]) * DVz
+								Local y__:Float = ywww[iN0] + (ywww[iN1]-ywww[iN0]) * DVz
+								Local z__:Float = zwww[iN0] + (zwww[iN1]-zwww[iN0]) * DVz
+								ProjectCoords ( res, cam_xx, cam_zz, CamZoom, l_Ca, l_Sa, x__,y__,z__ )
+								xw[iN0] = res[0]
+								yw[iN0] = res[1]
+								zw[iN0] = res[2]
+								' found a good projection point, don't test further.
+								Exit;
+							EndIf;
+						EndIf;
+					Next;
+				EndIf;
+			Next
+</pre><br><br>(i've put the conversion in a function, else it was a bit messy)<br><pre class=code>
+
+Function ProjectCoords(pResult:Float[], pXx:Float, pZz:Float, pZoom:Float, pCa:Float,pSa:Float, pX:Float,pY:Float,pZ:Float)
+	Local xl3:Float = (pX+pXx)*pCa + (pZ+pZz)*pSa;
+	Local yl3:Float = pY;
+	Local zl3:Float = (pZ+pZz)*pCa - (pX+pXx)*pSa;
+	Local zl3_640:Float = zl3+real640
+	If (zl3_640=0) Then zl3_640=.000001 ;' prevent division by zero
+	zl3_640 = 1.0/zl3_640
+	Local xloc:Float, yloc:Float;
+	If (zl3_640&gt;0)
+		yloc = yl3*real640 * zl3_640
+		xloc = xl3*real640 * zl3_640
+	Else
+		yloc = -yl3*real640 * zl3_640
+		xloc = -xl3*real640 * zl3_640
+	EndIf
+	pResult[0] = (pZoom*xloc) +160 ;' additional onscreen zoom factor camZoom
+	pResult[1] = (pZoom*yloc) +120
+	pResult[2] = (zl3+realb640) ;' remember this For Z-sorting
+End Function
+</pre><br><br><br>And here is the full code (it's blitzmax, sorry for that, I'm not on windows so I had to translate it for blitzmax on the mac)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+Graphics 320,240,0,0
+
+;' simplified 3D engine by Dieter Marfurt, revisited 2016
+;' use cursor keys, space, esc
+
+;' in Short terms, the thing I am having problems To solve is:
+;' Triangles with some vertices in front of the camera And some vertices behind the camera
+;' do Not work with the Current 3D To 2D projection formula.
+
+;' There are about 3 instances of remarks labeled "STUCK", those sum it up pretty well I think.
+;' Thanks everybody.
+
+;' Note: this is WIP And far from pretty, lots of todos, eg. Y axis is still reversed etc...
+;' however, should run And allow To study the specific issue mentioned.
+
+;' some globals used by the texturemapper
+	Global dizdx#, duizdx#, dvizdx#, dizdy#, duizdy#, dvizdy#;
+	Global xa#, xb#, iza#, uiza#, viza#;
+	Global dxdya#, dxdyb#, dizdya#, duizdya#, dvizdya#;
+
+;' some other frequently used globals
+	Global myGraphicsWidth:Int	=	GraphicsWidth()
+	Global myGraphicsWidthM1:Int=	GraphicsWidth()-1
+	Global myGraphicsHeight:Int	=	GraphicsHeight()
+	
+	Global Screen:TPixmap		=	CreatePixmap(GraphicsWidth(),GraphicsHeight(),PF_RGB888);
+	Global ScreenPtr:Int Ptr	=	Int Ptr(Screen.PixelPtr(0,0));
+	
+;' we render To array And also store Z For each rendered pixel
+	Global depthBuffer:Int[(myGraphicsWidth+1)*(myGraphicsHeight+1)]
+	Global screenBuffer:Int[(myGraphicsWidth+1)*(myGraphicsHeight+1)]
+	Local j:Int, i:Int;
+									For j=0 Until myGraphicsHeight
+										For i=0 Until myGraphicsWidth
+											depthBuffer[i+j*myGraphicsWidth]=1000000		;' magic code For untouched pixel
+										Next
+									Next
+
+	Global cam_x:Float			=	-200;' initial cam pos + rot
+	Global cam_z:Float			=	-200
+	Global cam_a:Float			=	350
+
+
+;' counter For drawn pixels, so render can be skipped when screen full (rendering near To far)
+	Global n_drawn:Int			=	0
+	Global max_drawn:Int		=	(320*240)-10
+
+;' Note: a word about the used rendering optimations:
+;' -clip polygons behind camera, backface, far, And offscreen
+;' -render polygons from near To far And count drawn pixels, skip rendering when screen is full
+;'  (this is still Not a 100% correct, but works kind of, esp. without intersecting triangles)
+
+;' -- init texturemapper
+	Local texturefile:String	=	"testtexture256x256.bmp"
+	
+	Local img:TPixmap;
+	Local c1:Int;
+	Local c2:Int;
+	Local c3:Int;
+	Local c:Int;
+									If FileType(CurrentDir()+"/"+texturefile)=1
+										img					=	LoadPixmap(texturefile$)
+									Else
+										img					=	CreatePixmap(256,256,PF_RGBA8888)
+										For j=0 To 255 ;' Create a simple test texture To make this work out of the box
+											For i=0 To 255
+											   c3	=	(((j Sar 7)+(i Sar 7)) &amp; 1) Shl 7;
+											   c1	=	(((j Sar 5)+(i Sar 5)) &amp; 1) Shl 5;
+											   c2	=	((((j) Sar 6)+(i Sar 6)) &amp; 1) Shl 6;
+											   c	=	(c1+c2+c3);
+											   img.WritePixel(i,j, $FF000000 | c * $010001);
+											Next
+										Next
+										;' To get some quick fake-mipmapping
+										blur_img(img)
+									EndIf
+
+;' we need the texture in a bank (currently)
+	Local bank:TBank			=	CreateBank	( 10000 + (img.Width*img.Height*4) )	;' add 10kb For bug tolerance
+	Local zz:Int				=	0;
+
+;' using a Global handle For now
+	Global TextureBank:Int[]	=	New Int[img.Height*img.Width + 2500];
+									For j=0 Until img.Height
+										For i=0 Until img.Width
+											TextureBank[zz] = img.ReadPixel(i,j);
+											zz :+ 1
+										Next
+									Next
+									
+;' Array For handing over polygon co-ords, 4 * (x,y,z) To renderer
+	Global Polypoints:Int[4, 3]
+	
+;' A simple polygon z-sorting Method, that is using actual projected Z-coords as sorting index (so camerarange must be smaller, btw.)
+	Global z10000:Int			=	10000;
+	Global zbuffer:Int[z10000+1];
+ 
+
+;' ******** build a Main map mesh adhoc, following KISS guidelines
+	Local anz:Int				=	647 ;' don't ask, I counted them.
+	Global xwww:Int[anz+1]
+	Global ywww:Int[anz+1]
+	Global zwww:Int[anz+1]					;' vertices of the mesh
+	Global xw:Float[anz+1]
+	Global yw:Float[anz+1]
+	Global zw:Float[anz+1]
+	Global zw2:Float[anz+1]					;' transformed vertices of the mesh
+	
+	Local mu:Float				=	200.0	;' block size
+	Local sz:Int				=	9		;' map size
+	Global cell:Int[sz+1,sz+1]				;' the level map (see data)
+	
+	RestoreData maze
+											For j=0 To sz
+												For i=0 To sz
+													ReadData cell[i,j]
+												Next
+											Next
+
+;' buid walls, floors And ceils whereever neccessary
+	Local n:Int	=	0
+	Local x:Float, y:Float, z:Float
+	Local k:Int;
+	
+	For j = 0 To sz
+		;' li$=""
+		For i = 0 To sz
+			If (cell[i,j]=1)
+				If (i&gt;0)
+					If (cell[i-1,j]=0)
+						RestoreData cube_left
+						For k=0 To 3
+							ReadData x
+							ReadData y
+							ReadData z
+							xwww[n]	=	x+(i*mu)
+							ywww[n]	=	y
+							zwww[n]	=	z+(j*mu)
+							n		:+	1
+						Next
+					EndIf
+				EndIf
+				
+				If (i&lt;sz)
+					If (cell[i+1,j]=0)
+						RestoreData cube_right
+						For k=0 To 3
+							ReadData x
+							ReadData y
+							ReadData z
+							xwww[n]	=	x+(i*mu)
+							ywww[n]	=	y
+							zwww[n]	=	z+(j*mu)
+							n		:+	1
+						Next
+					EndIf
+				EndIf
+				
+				If (j&gt;0)
+					If (cell[i,j-1]=0)
+						RestoreData cube_back
+						For k=0 To 3
+							ReadData x
+							ReadData y
+							ReadData z
+							xwww[n]	=	x+(i*mu)
+							ywww[n]	=	y
+							zwww[n]	=	z+(j*mu)
+							n		:+	1
+						Next
+					EndIf
+				EndIf
+				
+				If (j&lt;sz)
+					If (cell[i,j+1]=0)
+						RestoreData cube_front
+						For k=0 To 3
+							ReadData x
+							ReadData y
+							ReadData z
+							xwww[n]	=	x+(i*mu)
+							ywww[n]	=	y
+							zwww[n]	=	z+(j*mu)
+							n		:+	1
+						Next
+					EndIf
+				EndIf
+				
+			EndIf
+				
+			If (cell[i,j]=0)
+			;' Floor*Ceil
+				RestoreData bottom
+				For k=0 To 7 
+					ReadData x
+					ReadData y
+					ReadData z
+					xwww[n]	=	x+(i*mu)
+					ywww[n]	=	y
+					zwww[n]	=	z+(j*mu)
+					n		:+	1
+				Next
+			EndIf
+		Next
+	Next
+
+
+
+Function ProjectCoords(pResult:Float[], pXx:Float, pZz:Float, pZoom:Float, pCa:Float,pSa:Float, pX:Float,pY:Float,pZ:Float)
+	Local xl3:Float = (pX+pXx)*pCa + (pZ+pZz)*pSa;
+	Local yl3:Float = pY;
+	Local zl3:Float = (pZ+pZz)*pCa - (pX+pXx)*pSa;
+	Local zl3_640:Float = zl3+real640
+	If (zl3_640=0) Then zl3_640=.000001 ;' prevent division by zero
+	zl3_640 = 1.0/zl3_640
+	Local xloc:Float, yloc:Float;
+	If (zl3_640&gt;0)
+		yloc = yl3*real640 * zl3_640
+		xloc = xl3*real640 * zl3_640
+	Else
+		yloc = -yl3*real640 * zl3_640
+		xloc = -xl3*real640 * zl3_640
+	EndIf
+	pResult[0] = (pZoom*xloc) +160 ;' additional onscreen zoom factor camZoom
+	pResult[1] = (pZoom*yloc) +120
+	pResult[2] = (zl3+realb640) ;' remember this For Z-sorting
+End Function
+
+;' ---------------------------------------
+;' init some variables
+	Local a:Float			=	0		;' Main yaw
+	
+	Local alpha:Float		=	1		;' these were used For pitch yaw roll transforms, Left here For future use
+	Local beta:Float		=	1
+	Local gamma:Float		=	1
+	
+	Local clip0:Int			=	1.00	;' clipping plane, every projected vertexZ below it is located behind the camera
+	Local clip1:Int			=	-400	;' 2nd clipping value For exclusion of things WAY behind camera
+	Local clip_far:Int		=	1700	;' camera range
+	Local camZoom:Float		=	0.4		;' this multiplies all projected screencoords (Note simply increasing this does Not solve the problem)
+	Global real640:Float	=	640		;' fixed factors in projection formula, kind of debugging-leftovers.
+	Global realb640:Int		=	640
+
+Local res:Float[] = New Float[3];
+Local res1:Float[] = New Float[3];
+Local res2:Float[] = New Float[3];
+
+;' MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMmMMMMMMMMMMMMMMMMMMMMMMMMMmmmmmain
+;' MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMmMMMMMMMMMMMMMMMMMMMMMMMMMmmmmmain
+;' MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMmMMMMMMMMMMMMMMMMMMMMMMMMMmmmmmain
+;' MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMmMMMMMMMMMMMMMMMMMMMMMMMMMmmmmmain
+
+Local tt:Int, ttold:Int = MilliSecs()-16;
+Local fpsreal:Float;
+Local fpsadd:Float;
+Local fpscount:Int;
+Local fps:Float;
+Local myDebugging:Byte = False;
+Local map_x:Int, map_y:Int;
+Local where_x:Int, where_y:Int;
+Local map_min:Int, map_max:Int;
+
+'Local cam_x:Float, cam_z:Float;
+'Local cam_a:Float;
+While KeyHit(KEY_ESCAPE)=0
+	
+	;' calc frames per second
+	tt			=	MilliSecs()
+	fps			=	1000.0/(tt-ttold)
+	fpsadd		=	fpsadd + fps
+	fpscount	:+	1
+	If fpscount&gt;19 Then
+		fpsreal	=	fpsadd/20
+		fpsadd	=	0
+		fpscount=	0
+	EndIf
+	ttold		=	tt
+	;' eo calc fps
+
+	;' Cls
+		SetColor 0,0,0
+		DrawRect 0,0,320,240
+	
+	If KeyHit(KEY_SPACE) Then myDebugging	=	Not(myDebugging)
+	
+	;' walk
+	If KeyDown(KEY_DOWN)
+		;' fwd
+		cam_x	:-	Sin(cam_a)*20.0;
+		cam_z	:+	Cos(cam_a)*20.0;
+	EndIf
+	
+	If KeyDown(KEY_UP)
+		;' back
+		cam_x	:+	Sin(cam_a)*20.0;
+		cam_z	:-	Cos(cam_a)*20.0;
+	EndIf
+	
+	;' turn
+	If KeyDown(KEY_LEFT)
+		;' Left
+		cam_a	:+	5;	If cam_a&gt;360.0 Then cam_a	:-	360.0
+	EndIf
+	
+	If KeyDown(KEY_RIGHT)
+		;' Right
+		cam_a	:-	5;	If cam_a&lt;  0.0 Then cam_a	:+	360.0
+	EndIf
+	
+	;' find cams position in map
+	map_y=Floor((100+(-cam_z))/200.0)
+	map_x=Floor((100+(-cam_x))/200.0)
+	If map_x&lt;0 Then map_x=0
+	If map_y&lt;0 Then map_y=0
+	If map_x&gt;sz Then map_x=sz
+	If map_y&gt;sz Then map_y=sz
+	
+	where_x=(100-cam_x)-(map_x*200)
+	where_y=(100-cam_z)-(map_y*200)
+	
+	;' handle slidingcollisions...
+	;' this seems bulky, but it works rather well.
+	map_min=60
+	map_max=140
+	If map_x &gt;0
+		If cell[map_x-1,map_y]=1
+			If where_x&lt;map_min Then
+				cam_x=cam_x-(map_min-where_x)
+			EndIf
+		EndIf
+	EndIf
+	
+	If map_x &lt;sz
+		If cell[map_x+1,map_y]=1
+			If where_x&gt;map_max Then
+				cam_x=cam_x+(where_x-map_max)
+			EndIf
+		EndIf
+	EndIf
+	
+	If map_y &gt;0
+		If cell[map_x,map_y-1]=1
+			If where_y&lt;map_min Then
+				cam_z=cam_z-(map_min-where_y)
+			EndIf
+		EndIf
+	EndIf
+	
+	If map_y &lt;sz
+		If cell[map_x,map_y+1]=1
+			If where_y&gt;map_max Then
+				cam_z=cam_z+(where_y-map_max)
+			EndIf
+		EndIf
+	EndIf
+	
+	map_y=Floor((100+(-cam_z))/200.0)
+	map_x=Floor((100+(-cam_x))/200.0)
+	If map_x&lt;0 Then map_x=0
+	If map_y&lt;0 Then map_y=0
+	If map_x&gt;sz Then map_x=sz
+	If map_y&gt;sz Then map_y=sz
+	
+	where_x=(100-cam_x)-(map_x*200)
+	where_y=(100-cam_z)-(map_y*200)
+	
+	If (map_x &gt;0) And (map_y &gt;0)
+		If cell[map_x-1,map_y-1]=1
+			If (where_x&lt;map_min) And (where_y&lt;map_min) Then
+				If (where_x&gt;where_y) Then
+					cam_x=cam_x-(map_min-where_x)
+				Else
+					cam_z=cam_z-(map_min-where_y)
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+	
+	If (map_x &lt;sz) And (map_y &lt;sz)
+		If cell[map_x+1,map_y+1]=1
+			If (where_x&gt;map_max) And (where_y&gt;map_max) Then
+				If (where_x&lt;where_y) Then
+					cam_x=cam_x+(where_x-map_max)
+				Else
+					cam_z=cam_z+(where_y-map_max)
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+	
+	If (map_x &gt;0) And (map_y &lt;sz)
+		If cell[map_x-1,map_y+1]=1
+			If (where_x&lt;map_min) And (where_y&gt;map_max) Then
+				If (where_x&gt;(200-where_y)) Then
+					cam_x=cam_x-(map_min-where_x)
+				Else
+					cam_z=cam_z+(where_y-map_max)
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+	
+	If (map_x &lt;sz) And (map_y &gt;0)
+		If cell[map_x+1,map_y-1]=1
+			If (where_x&gt;map_max) And (where_y&lt;map_min) Then
+				If ((200-where_x)&gt;where_y) Then
+					cam_x=cam_x+(where_x-map_max)
+				Else
+					cam_z=cam_z-(map_min-where_y)
+				EndIf
+			EndIf
+		EndIf
+	EndIf
+;' End of sliding collision
+
+
+;' ****************************************************************************************
+;' doing 3d transforms, occlusion, z-sorting, perspective-projection And texturemapping...
+	a		=	cam_a
+	alpha	=	0		;' these 3 are Left here For future use, such as mouselook...
+	beta	=	a
+	gamma	=	0		;' a+a Mod 360
+	
+	;' the renderer is working with rotated And translated Copies of the original Points
+
+	;' transform all vertices To camera angle And position...
+	Local cam_xx:Float, cam_zz:Float;
+	Local xl3:Float, yl3:Float, zl3:Float;
+	Local zl3_640:Float;
+	Local xloc:Float, yloc:Float;
+	
+	Local l_Sa:Float = Sin(a);
+	Local l_Ca:Float = Cos(a);
+	
+	cam_xx = cam_x+l_Sa*575.0;' NOTE: For some reason i have To prevent the camera from rotating 
+	cam_zz = cam_z-l_Ca*575.0;' around a point approx. 575 units in front of the camera. it's a hack vs a bug
+	
+	For i=0 To anz
+		
+		;' just skipping this pitch, roll And yaw rotation
+		Rem
+			;' rotate pitch, roll And yaw
+			xl1=zwww[i]*Sin(gamma)+xwww[i]*Cos(gamma)
+			yl1=ywww[i]
+			zl1=zwww[i]*Cos(gamma)-xwww[i]*Sin(gamma)
+			
+			xl2=xl1
+			yl2=yl1*Cos(beta)-zl1*Sin(beta)
+			zl2=yl1*Sin(beta)+zl1*Cos(beta)
+			
+			xl3=cam_x+(yl2*Sin(alpha)+xl2*Cos(alpha))
+			yl3=(yl2*Cos(alpha)-xl2*Sin(alpha))
+			zl3=cam_z+(zl2)
+		EndRem
+		
+			;' // rotate yaw only
+			ProjectCoords ( res, cam_xx,cam_zz, CamZoom, l_Ca,l_Sa, xwww[i],ywww[i],zwww[i] )
+			xw[i] = res[0]
+			yw[i] = res[1]
+			zw[i] = res[2]
+			zw2[i]= res[2]-realb640
+			Rem
+			xl3 = ((zwww[i]+cam_zz)*l_Sa)+((xwww[i]+cam_xx)*l_Ca);
+			yl3 = ywww[i];
+			zl3 = ((zwww[i]+cam_zz)*l_Ca)-((xwww[i]+cam_xx)*l_Sa);
+			
+			;' Projecting 3D To 2D (thanks To Toshi Horie)------------------
+			zl3_640 = zl3+real640
+			If (zl3_640=0) Then zl3_640=.000001 ;' prevent division by zero
+			If (zl3_640&gt;0)
+				yloc = (yl3*real640  /(zl3_640))
+				xloc = (xl3*real640  /(zl3_640))
+			Else
+				;' STUCK!!!
+				;' zl3_640# being negative will result in flipping X And Y... Not really what we want 
+				;' but inverting their Sgn does simply make them "bounce back" after hitting cam_z (=the eye)
+				;' so what are we gonna do?
+				yloc# = -(yl3*real640  /(zl3_640))
+				xloc# = -(xl3*real640  /(zl3_640))
+			EndIf
+			
+			xw[i]=((camZoom#)*xloc) +160 ;' additional onscreen zoom factor camZoom
+			yw[i]=((camZoom#)*yloc) +120
+			zw[i]=(zl3+realb640) ;' remember this For Z-sorting
+			zw2[i]=zl3 ;' this unbiased Z may be useful too, While I'm debugging...
+			EndRem
+	Next
+
+
+	;' very simple z-sorting of polygons...------------------------
+	For i=0 To z10000
+		zbuffer[i]=-1 ;' wipe out old zbuffer info (could be optimized)
+	Next
+	
+	;' check all quads whether they need To be rendered, And If so, when...
+	Local xdis:Float, zdis:Float, xydis:Float;
+	Local zwmax:Int;
+	For i=0 To anz-3 Step 4
+		
+		;' check conditions For Not rendering...
+		;' pls excuse the Gotos, will sort that out, once it's working
+		
+		;' all vertices of this quad too far away?
+		If (zw[i]&gt;clip_far) And (zw[i+1]&gt;clip_far) And (zw[i+2]&gt;clip_far) And (zw[i+3]&gt;clip_far) Then Continue;
+		
+		;' all offscreen?
+		If ( myTrisOverlap(0,0,myGraphicsWidth,myGraphicsHeight,xw[i],yw[i],xw[i+1],yw[i+1],xw[i+2],yw[i+2] ) Or myTrisOverlap(0,0,myGraphicsWidth,myGraphicsHeight,xw[i],yw[i],xw[i+2],yw[i+2],xw[i+3],yw[i+3] ) )=0 Then Continue;
+		
+		;' all behind camera?
+		If (zw[i]&lt;clip0) And (zw[i+1]&lt;clip0) And (zw[i+2]&lt;clip0) And (zw[i+3]&lt;clip0) Then Continue;
+		
+		;' any (but Not all) behind camera?
+		If (zw[i]&lt;clip0) Or (zw[i+1]&lt;clip0) Or (zw[i+2]&lt;clip0) Or (zw[i+3]&lt;clip0) Then
+			;' STUCK!!!
+			;' this polygon has some vertices in front of the camera And some behind it. The problem is, those behind the camera
+			;' have totally messed up 2D coords, what am I doing wrong?
+			
+			Local Isbehind:Int[] = [zw[i]&lt;clip0, zw[i+1]&lt;clip0, zw[i+2]&lt;clip0, zw[i+3]&lt;clip0]
+			Local SegZ:Float, Zclip0:Float, DVz:Float;
+			' find the point(s) behind the camera
+			Local iX:Int, iY:Int;
+			For iX = 0 To 3
+				' for all points behind the camera, find another one that is front of the camera
+				' then translate the vertex along the segment from the vertex behind to the vertex front
+				If (Isbehind[iX])
+					Local iN0:Int = i+iX;
+					For iY = 0 To 3
+						' find any other that is front (obviously, don't compare to itself)
+						' also, don't project along the diagonal of the polygon or it will make a hole.
+						If (iX&lt;&gt;iY) And (Abs(iX-iY)&lt;2)
+							' don't use another point that was previously behind
+							If (Isbehind[iY] = 0)
+								' found one
+								Local iN1:Int = i+iY;
+								' distance from point behind to point front (on Z axis)
+								SegZ = zw[iN1]-zw[iN0];
+								' distance from point behind to clip0 (and a little bit further)
+								Zclip0 = (clip0+1) - zw[iN0];
+								' ratio of small segment by full segment
+								DVz = Zclip0/SegZ;
+								' new z is the clip0 value (+ a small gap)
+								zw[iN0] = clip0+1;
+								' then rebuild projection
+								Local x__:Float = xwww[iN0] + (xwww[iN1]-xwww[iN0]) * DVz
+								Local y__:Float = ywww[iN0] + (ywww[iN1]-ywww[iN0]) * DVz
+								Local z__:Float = zwww[iN0] + (zwww[iN1]-zwww[iN0]) * DVz
+								ProjectCoords ( res, cam_xx, cam_zz, CamZoom, l_Ca, l_Sa, x__,y__,z__ )
+								xw[iN0] = res[0]
+								yw[iN0] = res[1]
+								zw[iN0] = res[2]
+								Exit;
+							EndIf;
+						EndIf;
+					Next;
+				EndIf;
+			Next
+			
+			Rem
+				;' this is what I tried, without success:
+				xdis=(xw[i]+xw[i+1]+xw[i+2]+xw[i+3])/4
+				zdis=(zw[i]+zw[i+1]+zw[i+2]+zw[i+3])/4
+				xydis=Abs(xdis-160)
+				
+				If (xydis&gt;100000) Or (zdis&lt;clip1) Then
+					;' exclude anything that is Not within Z &gt; clip1 (currently -400) And a reasonable X-distance.
+					;' note,100000 makes sense here since offscreen behind camera projection quickly reaches huge x/y dimensions.
+					Continue;
+				Else
+					;' STUCK!!!
+					;' ok, what To do with these Not-so-far behind camera vertices of polygons that stretch up To in
+					;' front of the camera?
+					Continue' just Rem this To render them "AS IS" And you'll see the mess...
+				EndIf
+			EndRem
+			'Continue;
+		EndIf
+		
+		zwmax=zw[i];' currently using the highest VertexZ of each quad For the polygon z-sorting (Not a good idea?)
+		If zwmax&lt;0 Then zwmax=0;' prevent array index underrun
+		If zwmax&lt;zw[i+1] Then zwmax=zw[i+1]
+		If zwmax&lt;zw[i+2] Then zwmax=zw[i+2]
+		If zwmax&lt;zw[i+3] Then zwmax=zw[i+3]
+		While zbuffer[zwmax]&lt;&gt;-1 And zwmax&lt;z10000 ;' find Next free slot
+			zwmax=zwmax+1
+		Wend
+		zbuffer[zwmax]=i ;' store orig. vertex index, using its Z distance from the camera as New index in zbuffer() (Not To be confused with depthBuffer(,) which sorts pixels)
+	 Next
+	
+	;' begin rendering...----------------------------
+	n_drawn=0
+
+	;'  For i2=z10000 To 0 Step -1 ; reading quads in z-order from far To near ; intrestingly both works, near To far And far To near, yet another mystery...
+	;' reading quads in z-order from near To far ; i guess however, this one is faster.
+	Local i2:Int;
+	Local x1:Int, y1:Int, z1:Int, u1:Int, v1:Int;
+	Local x2:Int, y2:Int, z2:Int, u2:Int, v2:Int;
+	Local x3:Int, y3:Int, z3:Int, u3:Int, v3:Int;
+	Local sun:Int = 0;
+	
+  	For i2=0 To z10000
+  		i=zbuffer[i2]	;' get the index of the To be rendered quad
+		
+		;' If it isn't -1 then it's a Quad index (otherwise it's just nothing)
+		If i&gt;-1 And i&lt; anz-2
+			;' Mapping... (note, UVs expect 0-255, are currently hardcoded To quadmapping)
+			GetPolygonPoints(i) ;' this array mediator seems unneccessary, will remove it later.
+			
+			;' triangle 1 of quad...
+			x1=Polypoints[0, 0]
+			y1=Polypoints[0, 1]
+			z1=Polypoints[0, 2]
+			u1=0
+			v1=0
+			
+			x2=Polypoints[1, 0]
+			y2=Polypoints[1, 1]
+			z2=Polypoints[1, 2]
+			u2=0.999*255 
+			v2=0
+			
+			x3=Polypoints[2, 0]
+			y3=Polypoints[2, 1]
+			z3=Polypoints[2, 2]
+			u3=0.999*255
+			v3=0.999*255
+			
+			;' do Not render backfaces...
+			If isClockwise(x1,y1,x2,y2,x3,y3)
+				sun=GetSunlight(xwww[i],ywww[i],zwww[i],xwww[i+1],ywww[i+1],zwww[i+1],xwww[i+2],ywww[i+2],zwww[i+2]);' simple shading
+				drawtpolyperspsubtri(x1,y1,z1,u1,v1,x2,y2,z2,u2,v2,x3,y3,z3,u3,v3,bank,sun) ;' texture-map it
+			EndIf
+			
+			;' triangle 2 of quad (note, saves some speed since 2 vertices are shared)
+			x2=x3
+			y2=y3
+			z2=z3
+			u2=u3
+			v2=v3
+			
+			x3=Polypoints[3, 0]
+			y3=Polypoints[3, 1]
+			z3=Polypoints[3, 2]
+			u3=0
+			v3=0.999*255
+			If isClockwise(x1,y1,x2,y2,x3,y3) 
+				drawtpolyperspsubtri(x1,y1,z1,u1,v1,x2,y2,z2,u2,v2,x3,y3,z3,u3,v3,bank,sun)
+			EndIf
+			
+			;' ----------------
+		EndIf
+		If n_drawn&gt;max_drawn Then Exit ;' abort rendering when screen is filled.
+		
+	Next
+	
+	Screen.ClearPixels($FF0000)
+	RenderScreen() ;' since we have rendered To an array, draw it To the screen
+	
+	DrawPixmap Screen,0,0
+	
+	If mydebugging=1
+		SetColor 0,0,0
+		DrawRect 0,0,230,60
+		SetColor 255,255,255
+		DrawText "fps "+ fpsreal, 0,0
+		DrawText "cam "+cam_x+" | "+cam_z, 0,16
+		DrawText "map "+map_x+" | "+map_y+" | "+cell[map_x,map_y], 0,32
+	EndIf
+	
+	Flip 0
+
+Wend
+;' EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE End
+End
+
+
+
+Function isClockwise:Byte(x1%,y1%,x2%,y2%,x3%,y3%)
+	;' thanks To Floyd of blitzbasic com forum
+	Return (x2-x1)*(y3-y1)-(y2-y1)*(x3-x1) &gt; 0
+End Function
+
+ 
+;' --- texture mapping functions
+
+Function GetPolygonPoints(ilocal%) ;' initially read in a rectangle
+	Local Count:Int;
+	For Count = 0 To 3
+		Polypoints[Count, 0] = xw[ilocal+Count]
+		Polypoints[Count, 1] = yw[ilocal+Count]
+		Polypoints[Count, 2] = zw[ilocal+Count]
+	Next
+End Function
+
+Function RenderScreen()
+	Local x%,y%,z%,rgb%
+	Local ofs:Int = 0
+	For y=0 To 239
+		For x=0 To 319
+			ofs = x+y*myGraphicsWidth
+			z=depthbuffer[ofs]
+			;' write only rendered pixels
+			If z&lt;&gt;1000000
+				Screen.WritePixel x,y, screenBuffer[ofs]
+				depthBuffer[ofs]=1000000	;' restore To "untouched"
+			EndIf
+		Next
+	Next
+End Function
+
+
+
+;' // Texturemapper with full perspective correction, subpixels And subtexels,
+;' //	uses floats all the way through
+;' credit To Mikael Kalms who did this perspective-corrected texturemapper originally in c++
+Function drawtpolyperspsubtri(x1#,y1#,z1#,u1#,v1#,x2#,y2#,z2#,u2#,v2#,x3#,y3#,z3#,u3#,v3#,bank:TBank,sun%)
+	;' {
+	;' Float x1, y1, x2, y2, x3, y3;
+	Local iz1#=0
+	Local uiz1#=0
+	Local viz1#=0
+	Local iz2#=0
+	Local uiz2#=0
+	Local viz2#=0
+	Local iz3#=0
+	Local uiz3#=0
+	Local viz3#=0
+	;' Float iz1, uiz1, viz1, iz2, uiz2, viz2, iz3, uiz3, viz3;
+	Local dxdy1#=0
+	Local dxdy2#=0
+	Local dxdy3#=0
+	Local temp#=0
+	Local denom#=0
+	Local dy#=0
+		
+	Local y1i:Int=0
+	Local y2i:Int=0
+	Local y3i:Int=0
+	Local side:Int=0
+	
+	;' Float dxdy1, dxdy2, dxdy3;
+	;' Float tempf;
+	;' Float denom;
+	;' Float dy;
+	;' Int y1i, y2i, y3i;
+	;' Int side;
+	
+	;'// Shift XY coordinate system (+0.5, +0.5) To match the subpixeling
+	;'//  technique
+	
+	x1 = x1 + 0.5;
+	y1 = y1 + 0.5;
+	x2 = x2 + 0.5;
+	y2 = y2 + 0.5;
+	x3 = x3 + 0.5;
+	y3 = y3 + 0.5;
+	
+	;' // Calculate alternative 1/Z, U/Z And V/Z values which will be
+	;' //  interpolated
+	
+	iz1 = 1.0 / z1;
+	iz2 = 1.0 / z2;
+	iz3 = 1.0 / z3;
+	uiz1 = u1 * iz1;
+	viz1 = v1 * iz1;
+	uiz2 = u2 * iz2;
+	viz2 = v2 * iz2;
+	uiz3 = u3 * iz3;
+	viz3 = v3 * iz3;
+	
+	;' texture = poly-&gt;texture;
+	
+	;' // Sort the vertices in ascending Y order
+	If (y1 &gt; y2)
+	;' {
+		temp=x1  ;x1=x2    ;x2=temp;'		swapfloat(x1, x2);
+		temp=y1  ;y1=y2    ;y2=temp;'		swapfloat(y1, y2);
+		temp=iz1 ;iz1=iz2  ;iz2=temp;'		swapfloat(iz1, iz2);
+		temp=uiz1;uiz1=uiz2;uiz2=temp;'		swapfloat(uiz1, uiz2);
+		temp=viz1;viz1=viz2;viz2=temp;'		swapfloat(viz1, viz2);
+	EndIf;' }
+	
+	If (y1 &gt; y3)
+		;' {
+		temp=x1  ;x1=x3    ;x3=temp;'		swapfloat(x1, x3);
+		temp=y1  ;y1=y3    ;y3=temp;'		swapfloat(y1, y3);
+		temp=iz1 ;iz1=iz3  ;iz3=temp;'		swapfloat(iz1, iz3);
+		temp=uiz1;uiz1=uiz3;uiz3=temp;'		swapfloat(uiz1, uiz3);
+		temp=viz1;viz1=viz3;viz3=temp;'		swapfloat(viz1, viz3);
+	EndIf;'}
+	
+	If (y2 &gt; y3)
+		;' {
+		temp=x2  ;x2=x3    ;x3=temp;'		swapfloat(x2, x3);
+		temp=y2  ;y2=y3    ;y3=temp;'		swapfloat(y2, y3);
+		temp=iz2 ;iz2=iz3  ;iz3=temp;'		swapfloat(iz2, iz3);
+		temp=uiz2;uiz2=uiz3;uiz3=temp;'		swapfloat(uiz2, uiz3);
+		temp=viz2;viz2=viz3;viz3=temp;'		swapfloat(viz2, viz3);
+	EndIf;' }
+	
+	y1i = Int(y1-.49999);' faster than Floor(), same outcome I guess
+	y2i = Int(y2-.49999);
+	y3i = Int(y3-.49999);
+	
+	;' // Skip poly If it's too thin to cover any pixels at all
+	
+	If ( ( (y1i = y2i) And (y1i = y3i) ) Or ( (Int(x1-.49999) = Int(x2-.49999)) And (Int(x1-.49999) = Int(x3-.49999)) ) )
+		Return;
+	EndIf
+	
+	;' // Calculate horizontal And vertical increments For UV axes (these
+	;' //  calcs are certainly Not optimal, although they're stable
+	;' //  (handles any dy being 0)
+	
+	denom =   ((x3 - x1) * (y2 - y1) - (x2 - x1) * (y3 - y1));
+	
+	;' Skip poly If it's an infinitely thin line
+	If denom=0
+		Return;	
+	EndIf
+	
+	denom	=	1.0 / denom;'	;// Reciprocal For speeding up
+	dizdx	=	((iz3 - iz1) * (y2 - y1) - (iz2 - iz1) * (y3 - y1)) * denom;
+	duizdx	=	((uiz3 - uiz1) * (y2 - y1) - (uiz2 - uiz1) * (y3 - y1)) * denom;
+	dvizdx	=	((viz3 - viz1) * (y2 - y1) - (viz2 - viz1) * (y3 - y1)) * denom;
+	dizdy	=	((iz2 - iz1) * (x3 - x1) - (iz3 - iz1) * (x2 - x1)) * denom;
+	duizdy	=	((uiz2 - uiz1) * (x3 - x1) - (uiz3 - uiz1) * (x2 - x1)) * denom;
+	dvizdy	=	((viz2 - viz1) * (x3 - x1) - (viz3 - viz1) * (x2 - x1)) * denom;
+	
+	;' // Calculate X-slopes along the edges
+	dxdy1 = 0;
+	dxdy2 = 0;
+	dxdy3 = 0;
+	If (y2 &gt; y1) Then dxdy1 = (x2 - x1) / (y2 - y1);
+	If (y3 &gt; y1) Then dxdy2 = (x3 - x1) / (y3 - y1);
+	If (y3 &gt; y2) Then dxdy3 = (x3 - x2) / (y3 - y2);
+	
+	;' // Determine which side of the poly the longer edge is on
+	
+	side = (dxdy2 &gt; dxdy1);
+	
+	If (y1 = y2) Then side = (x1 &gt; x2);
+	If (y2 = y3) Then side = (x3 &gt; x2);
+	
+	;' // Longer edge is on the Left side
+	If side=0
+	;' {
+		;' // Calculate slopes along Left edge
+		
+		dxdya = dxdy2;
+		dizdya = dxdy2 * dizdx + dizdy;
+		duizdya = dxdy2 * duizdx + duizdy;
+		dvizdya = dxdy2 * dvizdx + dvizdy;
+		
+		;' // Perform subpixel pre-stepping along Left edge
+
+		dy = 1.0 - (y1 - y1i);
+		xa = x1 + dy * dxdya;
+		iza = iz1 + dy * dizdya;
+		uiza = uiz1 + dy * duizdya;
+		viza = viz1 + dy * dvizdya;
+		
+		;' // Draw Upper segment If possibly visible
+		If (y1i &lt; y2i)
+		;' {
+			;' // Set Right edge X-slope And perform subpixel pre-
+			;' //  stepping
+			
+			xb = x1 + dy * dxdy1;
+			dxdyb = dxdy1;
+			
+			drawtpolyperspsubtriseg(y1i, y2i,sun);
+		EndIf;' }
+		
+		;' // Draw Lower segment If possibly visible
+		If (y2i &lt; y3i)
+		;' {
+			;' // Set Right edge X-slope And perform subpixel pre-
+			;' //  stepping
+			
+			xb = x2 + (1.0 - (y2 - y2i)) * dxdy3;
+			dxdyb = dxdy3;
+			
+			drawtpolyperspsubtriseg(y2i, y3i,sun);
+		EndIf;' }
+	;' }
+	;' // Longer edge is on the Right side
+	Else
+	;' {
+		;' // Set Right edge X-slope And perform subpixel pre-stepping
+		
+		dxdyb = dxdy2;
+		dy = 1.0 - (y1 - y1i);
+		xb = x1 + dy * dxdyb;
+		
+		;' // Draw Upper segment If possibly visible
+		If (y1i &lt; y2i)
+		;' {
+			;' // Set slopes along Left edge And perform subpixel
+			;' //  pre-stepping
+			
+			dxdya = dxdy1;
+			dizdya = dxdy1 * dizdx + dizdy;
+			duizdya = dxdy1 * duizdx + duizdy;
+			dvizdya = dxdy1 * dvizdx + dvizdy;
+			xa = x1 + dy * dxdya;
+			iza = iz1 + dy * dizdya;
+			uiza = uiz1 + dy * duizdya;
+			viza = viz1 + dy * dvizdya;
+			
+			drawtpolyperspsubtriseg(y1i, y2i,sun);
+		EndIf;' }
+		
+		;' // Draw Lower segment If possibly visible
+		If (y2i &lt; y3i)
+		;' {
+			;' // Set slopes along Left edge And perform subpixel
+			;' //  pre-stepping
+			
+			dxdya = dxdy3;
+			dizdya = dxdy3 * dizdx + dizdy;
+			duizdya = dxdy3 * duizdx + duizdy;
+			dvizdya = dxdy3 * dvizdx + dvizdy;
+			dy = 1.0 - (y2 - y2i);
+			xa = x2 + dy * dxdya;
+			iza = iz2 + dy * dizdya;
+			uiza = uiz2 + dy * duizdya;
+			viza = viz2 + dy * dvizdya;
+
+			drawtpolyperspsubtriseg(y2i, y3i,sun);
+		EndIf;' }
+	EndIf;' }
+End Function
+
+
+;' what really slows things down is texturefill-scanning on offscreen areas, which is even more fatal because
+;' very close objects produce huge polygons, most of it offscreen, So we get rid of this, first off all by
+;' skipping the scanning, on x when x1 reached Right screen End, And on y when y1 reached the 
+;' bottom of the screen. Subsequently we check whether x1&lt;0 And do Not scan there, but jump Right To x=0 by a
+;' correctly calculated leap For all scan stepper variables. on y we "phantom-scan" To y1=0, which unfort. seems To 
+;' be neccessary, ; but probably there is a better solution, tho, this one is also very fast since it skips 
+;' X-scanning when y1&lt;0. These optimations were added by me (Dieter) To this Function by Mikael Kalms.
+
+Function drawtpolyperspsubtriseg(y1%,y2%,sun%=0)
+	
+	If y1&gt;myGraphicsHeight Then Return ;' all below screen, nothing To render
+	;' -----------------------------------------------------------------------------------------------------------
+	
+	;' // Loop through all lines in the segment
+	Local x1:Int, x2:Int;
+	Local iz:Float, uiz:Float, viz:Float;
+	Local z:Float, z2:Float;
+	Local u:Int, v:Int;
+	Local xfac:Int = 0;
+	Local ofs:Int = 0;
+	While (y1 &lt; y2)	
+		If y1&gt;=0
+			x1 = xa;
+			x2 = xb;
+			
+			;' // Perform subtexel pre-stepping on 1/Z, U/Z And V/Z
+			
+			;'dx# = 1.0 ; - (xa - x1); originally this was "dx# = 1.0 - (xa - x1)", Right after "x1% = xa"... what in the world were you thinking, Mr. Kalms ?? ^^
+			iz# = iza + dizdx;'		iz# = iza + dx * dizdx;' therefor no need To multiply by 1.0!
+			uiz# = uiza + duizdx;'	uiz# = uiza + dx * duizdx;
+			viz# = viza + dvizdx;'	viz# = viza + dx * dvizdx;
+			
+			;' // Draw horizontal line
+			While (x1 &lt; x2)
+				ofs = x1+y1*myGraphicsWidth
+				;' are we (x-wise) onscreen at all? (If Not, jump To x1=0, see Else)
+				If x1&gt;=0
+				;' // Calculate U And V from 1/Z, U/Z And V/Z
+					If (x1&gt;=0)And(y1&gt;=0)And(x1&lt;myGraphicsWidth)
+						z# = 1.0 / iz	;' compare If there is already a closer pixel drawn, by checking zbuffer
+						If ofs&gt;=depthBuffer.Length RuntimeError "outside dethbuffer : "+ofs+" limit exclusive is:"+depthBuffer.Length
+						z2#=depthBuffer[ofs]
+						;' If Not, "draw" this one
+						If z&lt;z2
+							If z=1000000 Then n_drawn=n_drawn+1 ;' in Case the pixel was untouched (zbuffer entry=1000000), count  it For a later rendering abortion when number of pixels drawn &gt;= (screenwidth*screenheight)
+							depthBuffer[ofs]=z ;' And store z in the the depthBuffer. btw. use z as color To get a render of the depthbuffer
+							u% = uiz * z;
+							v% = viz * z;
+							;' render the pixel To a screenbuffer, think about To directly writepixelfast...
+							;' simple 2-state shading
+							If sun&lt;0
+								screenBuffer[ofs] = ( TextureBank[ (((v &amp; $ff) Shl 10)+((u &amp; $ff)Shl 2)) / 4 ] &amp; $fefefe ) Sar 1
+							Else
+								screenBuffer[ofs] = TextureBank[ (((v &amp; $ff) Shl 10)+((u &amp; $ff)Shl 2)) / 4]
+							EndIf
+						EndIf
+					EndIf
+					iz =iz+ dizdx;
+					uiz=uiz + duizdx;
+					viz=viz + dvizdx;
+					x1=x1+1
+					If x1&gt;=myGraphicsWidthM1 Then Exit
+				Else ;' scanning offscreen is a waste, therefor, in Case we are x&lt;0, skip it And adjust steppers accordingly
+					xfac=0-x1
+					iz =iz+ dizdx*xfac
+					uiz=uiz + duizdx*xfac
+					viz=viz + dvizdx*xfac
+					x1=x1+xfac
+				EndIf
+			Wend
+			
+			xa=xa + dxdya;
+			xb=xb + dxdyb
+			iza=iza + dizdya
+			uiza=uiza + duizdya
+			viza=viza + dvizdya
+			y1=y1+1
+			If y1&gt;=myGraphicsHeight Then Exit
+			If n_drawn&gt;max_drawn Then Exit
+			
+		Else
+			;'_________________________________________-
+			;' whem offscreen y1&lt;0, need To "phantom-scan" only. 
+			
+			x1% = xa;
+			x2% = xb;
+			
+			iz# = iza + dizdx;
+			uiz# = uiza + duizdx;
+			viz# = viza + dvizdx;
+			
+			xfac=x2-x1
+			iz =iz+ dizdx*xfac
+			uiz=uiz + duizdx*xfac
+			viz=viz + dvizdx*xfac
+			x1=x1+xfac
+			
+			xa=xa + dxdya;
+			xb=xb + dxdyb
+			iza=iza + dizdya
+			uiza=uiza + duizdya
+			viza=viza + dvizdya
+			y1=y1+1
+			;'____________________________________________		
+		EndIf
+		
+	Wend
+End Function
+
+
+;' // fast yet mathematicly incorrect Rect overlap triangle check
+Function myTrisOverlap:Byte(x%,y%,w%,h%,x1%,y1%,x2%,y2%,x3%,y3%)
+	Local x_%,y_%,w_%,h_%;' // rect box of triangle
+	
+	x_=x1;
+	If(x2&lt;x_) Then x_=x2;
+	If(x3&lt;x_) Then x_=x3;
+	y_=y1;
+	If(y2&lt;y_) Then y_=y2;
+	If(y3&lt;y_) Then y_=y3;
+	w_=x1;
+	If(x2&gt;w_) Then w_=x2;
+	If(x3&gt;w_) Then w_=x3;
+	h_=y1;
+	If(y2&gt;h_) Then h_=y2;
+	If(y3&gt;h_) Then h_=y3;
+	If((w_&gt;=x)And(x_&lt;w)And(h_&gt;=y)And(y_&lt;h))
+		Return 1
+	Else
+		Return 0
+	EndIf
+End Function
+
+
+
+Function GetSunlight:Int(ax#,ay#,az#,bx#,by#,bz#,cx#,cy#,cz#)
+	;' partially by sswift, checking the face normals
+	Local px#,py#,pz#,qx#,qy#,qz#,nx#,ny#,nz#,cenx#,ceny#,cenz#
+	cenx=(ax+bx+cx)/3.0;' get center coord
+	ceny=(ay+by+cy)/3.0
+	cenz=(az+bz+cz)/3.0
+	
+	ax=ax-cenx;' localize vertex coords
+	bx=bx-cenx
+	cx=cx-cenx
+	
+	ay=ay-ceny
+	by=by-ceny
+	cy=cy-ceny
+	
+	az=az-cenz
+	bz=bz-cenz
+	cz=cz-cenz
+	;' Triangle 1
+	;' Get the vectors For two edges of the triangle.
+	Px# = Ax#-Bx#
+	Py# = Ay#-By#
+	Pz# = Az#-Bz#
+	
+	Qx# = Bx#-Cx#
+	Qy# = By#-Cy#
+	Qz# = Bz#-Cz#
+	;' Compute their cross product.
+	Nx# = Py#*Qz# - Pz#*Qy#
+	Ny# = Pz#*Qx# - Px#*Qz#
+	Nz# = Px#*Qy# - Py#*Qx#
+	ny=ny+(nx/10.0)+(nz/10.0)
+	If Abs(ny)&lt;200 Then ny=0
+	Return Floor(ny)
+End Function
+
+
+Function blur_img(img:TPixmap)
+	Local rgb%,rgb1%,rgb2%,rgb3%,rgb4%,i%,j%
+	For j= 1 To 255
+		For i= 1 To 255
+			rgb1=(img.ReadPixel(i,j) &amp; %111111001111110011111100) Shr 2
+			rgb2=(img.ReadPixel(i-1,j) &amp; %111111001111110011111100) Shr 2
+			rgb3=(img.ReadPixel(i,j-1) &amp; %111111001111110011111100) Shr 2
+			rgb4=(img.ReadPixel(i-1,j-1) &amp; %111111001111110011111100) Shr 2
+			rgb=rgb1+rgb2+rgb3+rgb4
+			img.WritePixel i-1,j-1,$FF000000 | rgb
+		Next
+	Next
+	
+	For j= 254 To 0 Step -1
+		For i= 254 To 0 Step -1
+			rgb1=(img.ReadPixel(i,j) &amp; %111111001111110011111100) Shr 2
+			rgb2=(img.ReadPixel(i+1,j) &amp; %111111001111110011111100) Shr 2
+			rgb3=(img.ReadPixel(i,j+1) &amp; %111111001111110011111100) Shr 2
+			rgb4=(img.ReadPixel(i+1,j+1) &amp; %111111001111110011111100) Shr 2
+			rgb=rgb1+rgb2+rgb3+rgb4
+			img.WritePixel i+1,j+1,$FF000000 | rgb
+		Next
+	Next
+End Function
+
+
+#building
+DefData 23  ;' number of pts -1 ; guess obsolete
+;' a simple 4sided column mesh: 24 Points (unshared Vertices) And 4 Quads (must be clockwise):
+#cube_left
+DefData -100,-100,100
+DefData -100,-100,-100
+DefData -100, 100,-100;' Left ok
+DefData -100, 100, 100
+
+#cube_right
+DefData 100,-100,-100;' Right ok
+DefData 100,-100,100
+DefData 100,100,100
+DefData 100,100,-100
+
+#cube_front
+DefData 100,-100,100
+DefData -100,-100,100;' front
+DefData -100,100,100
+DefData  100,100,100
+
+#cube_back
+DefData -100,-100,-100
+DefData 100,-100,-100
+DefData 100,100,-100;' back 
+DefData -100,100,-100
+
+;' a simple 2-quad Floor / Ceil For "empty space" (must be clockwise):
+
+#bottom
+DefData -100,100,-100;' top  
+DefData -100,100,100
+DefData  100,100,100
+DefData  100,100,-100
+
+DefData  100,-100,100
+DefData -100,-100,100
+DefData -100,-100,-100;' bottom2
+DefData  100,-100,-100
+
+;' test map, note size is hardcoded, see above.
+#maze
+DefData 1,1,1,1,1,1,1,1,1,1
+DefData 1,0,0,0,0,0,0,0,0,1
+DefData 1,0,1,0,0,0,1,0,0,1
+DefData 1,0,1,1,1,1,1,1,1,1
+DefData 1,0,0,0,1,0,0,0,0,1
+DefData 1,1,1,0,1,0,1,1,0,1
+DefData 1,0,1,0,0,0,1,0,0,1
+DefData 1,0,1,0,1,1,1,0,0,1
+DefData 1,0,0,0,0,0,0,0,0,1
+DefData 1,1,1,1,1,1,1,1,1,1
+;' End of program
+</textarea> <br><br></td></tr></table><br>
+<a name="1325576"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Wow, that must have been quite some work, thanks a lot! As far as i see, you are doing something similar like it dawned to me late yesterday. Basicly just prevent any relevant vertices from landing behind the camera at all, keep them in a positive Zone, in terms of transformed Z...?<br><br>I'll study this closely, thank you very much. <br><br></td></tr></table><br>
+<a name="1325581"></a>
+
+<a name="1325582"></a>
+
+<a name="1325583"></a>
+
+<a name="1325585"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Bobysait</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> <br>that must have been quite some work<br> <br></div><br>not that much actually, I'd say half an hour, the translation in blitzmax is more "Find and replace" so it's pretty fast (then I enabled the superstrict mode so I replaced some variables and used a pixmap for rendering, but it's not really a hard task)<br>In the end, I find this really interesting and entertaining ^_^<br><br><br><div class="quote">  Basicly just prevent any relevant vertices from landing behind the camera at all, keep them in a positive Zone, in terms of transformed Z...?<br> <br></div><br>Yes, it's exactly that<br><br>If it can help hilighting the process, this is what I've done :<br><br><img src="http://mdt.bigbang.free.fr/sources/fix_clipz.png"><br>I projected the z in 2D then used the "Z to Clip / Z Dist" on the 3D coords using a simple linear interpolation (v' = v0 + (v1-v0) * Dz )<br>I finally used the new 3d coords to compute the new 2D coords.<br>There is probably a faster way to do it using the 2D coords, but I didn't really investigate how the engine works, so I've almost no idea where the formulas come from :)<br><br><br><br>ps : Notice that the projection will probably make the texture projection stretch, so it should be usefull to check the edges length to render to recompute the UVs on the rendering of the textures. <br><br></td></tr></table><br>
+<a name="1325588"></a>
+
+<a name="1325589"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2016)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, thanks, yes, that texture distortion thing does pop in occassionally when I mess with the projection values by Toshi. I thought perspective correction would solve it, but it does so only within certain parameters.<br><br>Ok, got some fascinating work in front of me ^^ <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

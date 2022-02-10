@@ -1,0 +1,213 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Simple Ini Reader</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Simple Ini Reader</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=110" >BlitzMax Module Tweaks</a>/<a href="#bottom" >Simple Ini Reader</a><br><br>
+<a name="688556"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Vertex</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here is a simple Ini Reader wich accept only this quasi standard:<br><br><pre class=code>Ini     = {(Section{Key | ({blank} \n)})
+          |({blank} \n)
+          |Comment}.
+Section = "[" Ident "]" [blank {blank} Comment] \n.
+Key     = {blank} Ident {blank} "=" {blank} {character} [blank {blank} Comment] \n.
+Comment = ";" {character} \n.
+Ident   = Letter {Letter | Digit}.
+Letter  = "A" | .. | "Z" | "a" | .. | "z".
+Digit   = "0" | "1" | .. | "9".</pre><br><br>(Ok, ok, identifier are not only constructed with letters and digits)<br><br><pre class=code>SuperStrict
+
+Module PUB.IniReader
+
+ModuleInfo "Version: 1.1"
+ModuleInfo "Author: Oliver Skawronek"
+ModuleInfo "License: Public Domain"
+
+Import BRL.FileSystem
+Import BRL.LinkedList
+
+Type TIniReader
+	Field Sections : TList
+
+	Method New()
+		Self.Sections = New TList
+	End Method
+
+	Method GetValue:String(Section:String, Key:String)
+		Local Found:Int, Section2:TSection, Key2:TKey
+
+		Section = Section.ToLower()
+		Key     = Key.ToLower()
+		For Section2 = EachIn Self.Sections
+			If Section2.Name.ToLower() = Section Then
+				Found = True
+				Exit
+			EndIf
+		Next
+		If Not Found Then Return ""
+
+		For Key2 = EachIn Section2.Keys
+			If Key2.Name.ToLower() = Key Then Return Key2.Value
+		Next
+
+		Return ""
+	End Method
+
+	Function Load:TIniReader(URL:Object)
+		Local Stream:TStream, Reader:TIniReader, Section:TSection
+		Local Key:TKey, Line:String, Position:Int, Found:Int
+
+		Stream = ReadStream(URL)
+		If Not Stream Then Return Null
+
+		Reader = New TIniReader
+
+		While Not Stream.EoF()
+			Line = Stream.ReadLine()
+
+			' Check for white spaces at the beginning
+			If Line[0] = 9 Or Line[0] = 32 Then
+				Found = 0
+				For Position = 1 Until Line.Length
+					If Line[Position] &lt;&gt; 9 And Line[Position] &lt;&gt; 32 Then
+						Found = Position
+						Exit
+					EndIf
+				Next
+
+				' Trim white spaces
+				Line = Line[Found..]
+
+				' Only comments and keys can begin with white spaces
+				If Line[0] = 91 Then
+					Stream.Close()
+					Throw "Sections can't begin with white spaces."
+					Return Null
+				EndIf
+			EndIf
+
+			' Check for a comment
+			Found = Line.Find(";")
+			If Found =&gt; 0 Then
+				If Found &gt; 0 And (Not (Line[Found - 1] = 9 Or ..
+				                       Line[Found - 1] = 32)) Then
+					Stream.Close()
+					Throw "Expected spacing character before ';'."
+					Return Null
+				EndIf
+				
+				Line = Line[..Found]
+			EndIf
+
+			' Check for empty line
+			If Line.Length = 0 Then Continue
+
+			' Check for a section
+			If Line[0] = 91 Then
+				Found = 0
+				For Position = 1 Until Line.Length
+					If Line[Position] = 9 Or Line[Position] = 32 Then
+						Stream.Close()
+						Throw "Sectionnames can't contain white spaces."
+						Return Null
+					EndIf
+
+					If Line[Position] = 93 Then
+						Found = Position
+						Exit
+					EndIf
+				Next
+
+				If Not Found Then
+					Stream.Close()
+					Throw "Expected ']'."
+					Return Null
+				EndIf
+
+				Section = New TSection
+				Section.Name = Line[1..Found]
+
+				Reader.Sections.AddLast(Section)
+				Continue
+			EndIf
+
+			' Check if a section exists
+			If Not Section
+				Stream.Close()
+				Throw "Expected '[Section]' before."
+				Return Null
+			EndIf
+
+			' Check for a key
+			Found = Line.Find("=")
+			If Not Found Then
+				Stream.Close()
+				Throw "Expected '='."
+				Return Null
+			EndIf
+
+			Found = 0
+			For Position = 0 Until Line.Length
+				If Found = 0 And (Line[Position] = 9 Or Line[Position] = 32) Then
+					Found = Position
+				ElseIf Found &gt; 0 And Line[Position] &lt;&gt; 61 Then
+					Stream.Close()
+					Throw "Keynames can't contain white spaces."
+					Return Null
+				ElseIf Line[Position] = 61 Then
+					Found = Position
+					Exit
+				EndIf
+			Next
+
+			Key = New TKey
+			Key.Name  = Line[..Found].Replace(" ", "").Replace("	", "")
+			Key.Value = Line[Found + 1..].Replace(" ", "").Replace("	", "")
+			Section.Keys.AddLast(Key)
+		Wend
+
+		Stream.Close()
+		Return Reader
+	End Function
+End Type
+
+Type TSection
+	Field Name : String
+	Field Keys : TList
+
+	Method New()
+		Self.Keys = New TList
+	End Method
+End Type
+
+Type TKey
+	Field Name  : String
+	Field Value : String
+End Type</pre><br><br>Example:<br><pre class=code>SuperStrict
+
+Framework PUB.IniReader
+Import BRL.StandardIO
+Import BRL.PolledInput
+
+Global Reader:TIniReader
+
+Try
+	Reader = TIniReader.Load("config.ini")
+Catch Error:String
+	Print "Ini Error:"
+	Print Error
+	WaitKey
+	End
+End Try
+
+Print "Screen Height = "+Reader.GetValue("Screen", "Height")
+
+WaitKey
+End</pre><br><br>config.ini<br><pre class=code>[Screen]
+; Only 640*480, 800*600 and 1024*768
+width=800
+height=600
+depth=32
+fullscreen=False
+VSync=False
+
+[Music]
+musicEnabled=False
+musicVolume=100 ; 0 to 100 
+sfxEnabled=True
+sfxVolume=100</pre><br><br>cu olli <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,108 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Optimizing Loops and garbage collection</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Optimizing Loops and garbage collection</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Optimizing Loops and garbage collection</a><br><br>
+<a name="946683"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Long time reader, first time poster.<br><br>Is it helpful or harmful to GCSuspend() and GCResume() when trying to optimize a loop. I am not created or deleting any new variables, and they are placed before/after the loop.<br><br>Does it even effect performance any?<br><br>For example, I was trying to accelerate the PixmapOnPixmap routines to something that could handle many pixmaps very quickly.<br><br>Code example below. So far this code is much much faster, but it may just be the NoDebug tag.<br><br><pre class=code>
+Function DrawPixmapOnPixmap(spix:TPixmap,  pixmap:TPixmap, x:Int, y:Int, opacity:Byte = $ff) NoDebug 
+	Local sourcepixel:Byte Ptr
+	Local destpixel:Byte Ptr
+	Local sAlpha:Byte
+
+	Local i:Int, j:Int
+	
+	If (Not spix Or Not pixmap) Then Return
+	If spix.format&lt;&gt;PF_RGBA8888 ConvertPixmap(spix, PF_RGBA8888 )
+	If pixmap.format&lt;&gt;PF_RGBA8888 ConvertPixmap(pixmap, PF_RGBA8888 )
+
+	GCSuspend()
+	For j = 0 To spix.Height - 1
+		sourcepixel = spix.PixelPtr( 0,j )
+		destpixel = pixmap.PixelPtr( 0,j+y)
+
+		For i= 0 To (spix.Width - 1)*4 Step 4''4=RGBA
+		
+			If (x + i &lt; pixmap.Width &amp; y + j &lt; pixmap.Height) 'And i &gt;= x And j &gt;= y
+			
+				sAlpha = sourcepixel[i+3] &amp; opacity
+				
+				destpixel[x+i] = sAlpha &amp; ((sourcepixel[i] - destpixel[x+i])+destpixel[x+i])
+				
+				destpixel[x+i+1] = sAlpha &amp; ((sourcepixel[i+1] - destpixel[x+i+1])+destpixel[x+i+1])
+				
+				destpixel[x+i+2] = sAlpha &amp; ((sourcepixel[i+2] - destpixel[x+i+2])+destpixel[x+i+2])
+			
+			EndIf
+		Next
+	Next
+	GCResume()
+	
+End Function
+</pre><br><br>Thanks.<br>//Adam <br><br></td></tr></table><br>
+<a name="946692"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well, in terms of keeping things in the cache it perhaps makes sense to stop the garbage collector from interfering in that way, but I don't know how much.<br><br>Actually, bigger influences on your speed right now include:<br><br>a) Using the PixelPtr() method rather than keeping a running pointer of your own is inefficient. You should put PixelPtr() outside the entire nested loop and only call it once, and then add a row pitch (also in a local) at the end of each row loop.<br>b) Reading individual color components as bytes from memory instead of reading and writing whole integers - I know you're using RGB but you can still read a whole integer and use it as a kind of tiny cache of bytes and then use shifts/ands to isolate the components, rather than reading bytes - and then use another integer as a write cache, adding bytes to it and only writing it when it's `full`. That should speed up your memory accesses a lot. Also you converted your pixmaps to RGBA8 so you might as well read an entire integer (4 bytes) at once.<br>c) You do `x+i` 6 times per loop - if you were to just keep a single pointer and add one to it three times that would be less instructions and less math.<br>d) Using *4 when you should be doing Shl 2<br>e) Using FOR loops - you might find that While loops are a bit faster, handling your counters manually.<br>f) Inside your main loop you're reading pixmap.width and pixmap.height for every single pixel. That's way inefficient - you should have widh and height in local variables outside the entire nested loop, read once, otherwise you are having to read the pixmap object, jump to its width or height field, and read those, which will be read from memory (although maybe cached?) But even if they're cached that's not going to be as fast as if they are in locals.<br>g) Instead of only telling your loops to draw the pixels that fit within the destination pixmap, you are doing a test for every single pixel to determine whether it is inside the pixmap and safe to draw. That's a lot of wasted testing. Simply calculate, outside the loops and in locals, exactly from what and to what coordinates you need to run the loops so that the automatically only cover the cropped pixels, and then get rid of the IF tests entirely.<br>h) Also you're using bytes for your operations but really there is no point, integer are as fast or faster, especially if you combine your four byte memory accesses into an integer access.<br>i) If you do all these things I think you'll see much better speedups than you would get from worrying about the garbage collector - although possibly in some situations the GC would have a small influence. <br><br></td></tr></table><br>
+<a name="946702"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Dreamora</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> There is no single object in so the GC will not even trigger.<br><br>Please remember, numerics are NO objects in BM unlike they are in most other managed languages <br><br></td></tr></table><br>
+<a name="946703"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> This is more like how I would code it, I've made several changes along the lines of what I *think* will be faster. I added in a crop which allows you to position the source pixmap inside the destination pixmap even if it would overlap outside the right or bottom edges of the destination pixmap, but I did not account for making x,y negative numbers. If you want to position the source pixmap outside of the left or top edges of the destination then you need to add some extra cropping code and also deal with the possibility that the source pixmap is bigger than the destination, which it currently doesn't do.<br><br>...(untested)...<br><pre class=code>
+Function DrawPixmapOnPixmap(spix:TPixmap,  pixmap:TPixmap, x:Int, y:Int, opacity:Int = $000000ff) NoDebug 
+        Local sourcepixel:Int Ptr
+        Local destpixel:Int Ptr
+        Local sAlpha:Int
+
+        Local i:Int, j:Int
+        
+        If (Not spix Or Not pixmap) Then Return
+        If spix.format&lt;&gt;PF_RGBA8888 ConvertPixmap(spix, PF_RGBA8888 )
+        If pixmap.format&lt;&gt;PF_RGBA8888 ConvertPixmap(pixmap, PF_RGBA8888 )
+
+        GCSuspend()
+
+        Local sWidth:Int=spix.Width()
+        Local sHeight:Int=spix.Height()
+        local dWidth:Int=pixmap.Width()
+        local dHeight:Int=pixmap.Height()
+        sourcepixel=PixmapPixelPtr(spix,0,0)
+        destpixel=PixmapPixelPtr(pixmap,0,0)
+        Local sRowBytes:Int=sWidth Shl 2
+        Local dRowBytes:Int=dWidth Shl 2
+
+        If (x+sWidth)&gt;=dWidth Then sWidth=dWidth-x           'Crop
+        If (y+sHeight)&gt;=dHeight Then sHeight=dHeight-y      'Crop
+
+        j=0
+        sWidth:Shr 2
+        local Mask:Int=$000000FF
+        While j&lt;sHeight
+                i=0
+                While i&lt;sWidth
+                       local sPixel:Int=sourcepixel[i]
+                       sAlpha=(sPixel &amp; Mask) &amp; opacity
+                       local dPixel:Int=destpixel[i]
+                       local sRed:Int=sPixel Shr 24
+                       local dRed:Int=dPixel Shr 24
+                       local sGreen:Int=(sPixel Shr 16) &amp; Mask
+                       local dGreen:Int=(dPixel Shr 16) &amp; Mask
+                       local sBlue:Int=(sPixel Shr 8) &amp; Mask
+                       local dBlue:Int=(dPixel Shr 8) &amp; Mask
+                       dRed=(sAlpha &amp;  ((sRed - dRed) + dRed)) Shl 24
+                       dGreen=(sAlpha &amp; ((sGreen - dGreen) + dGreen)) Shl 16
+                       dBlue=(sAlph &amp; ((sBlue - dBlue) +dBlue)) Shl 8
+                       destpixel[i]=dRed | dGreen | dBlue
+                       i:+1
+                Wend
+                sourcepixel:+sRowBytes
+                destpixel:+dRowBytes
+                j:+1
+        Wend
+        GCResume()
+        
+End Function
+</pre><br>btw, I'm kind of puzzled as to exactly what kind of blending you are trying to achieve with your sAlpha &amp; ((sPixel - dPixel)+dPixel) because surely that's the same thing as sAlpha &amp; sPixel ? You subtract dPixel but then you add it back, what's the point? Also your idea of opacity is a bit weird - if you use &amp; (and) then that means you are doing opacity like it's a bitmask, so say $2 would mean include only the 2nd bit but not the first or any other bits. If you're trying to do like an alpha blend then you need to use multiply * after converting the opacity to a range of 0..1<br><br>Note that I used int pointers instead of byte pointers - when you add 1 to an int pointer you're actually adding 4 bytes because it gets multiplied by 4 internally, which makes the loop a bit easier too cus now you're counting in pixels instead of bytes.<br><br>I also made sure to add in a bit of pipelining by doing a non-memory-based operation after reading the source pixel, before reading the destination pixel, so that there is less time wasted waiting for the bus to be done. Similarly I tried to do part of the operation on each component in turn so that the next instruction is not dependent on the result of the previous one, which helps too.<br><br>Let me know if this is faster for you. <br><br></td></tr></table><br>
+<a name="946705"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DavidDC</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice work Imaginary... I'm interested to see what the speed difference is. <br><br>Is there any way to write to destpixel without using the array index? I'm guessing no, otherwise you'd have done it.<br><br>[edit] Also, do locals get recreated every loop? I have been working under the assumption/delusion that they did. <br><br></td></tr></table><br>
+<a name="946706"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Jesse</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> yes and no, theoritically locals are placed in registers when available. <br><br></td></tr></table><br>
+<a name="946796"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ImaginaryHuman</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> To write something out to memory using a pointer (not quite the same as using an array because arrays have to go get the base pointer of the array memory first), you have to use square brackets. So even if you do destpixel[0] every time that's still required in order to mean `the contents of the memory address` with an offset of 0.<br><br>I wasn't going to use [i] for the offset because possibly an offset of 0 can be optimized in assembly by the compiler to be a more efficient instruction. But I also noticed that if I used [0] every time I would have to keep adding to the sourcepixel and destpixel pointers after every pixel, rather than adding a whole line offset at once. So I figured what the heck, lets just use i.<br><br>As to Locals, they are put into CPU registers if there are registers are thought to be available at that point in the program - which is decided by the compiler. I don't think there is any speed penalty for creating new ones on the fly or inside a loop, it's not like they have to allocate any memory usually. But if you have too many locals needing to be active at once, versus the number of avilable CPU registers, then the compiler has to start shuffling things to and from memory, in which case you might be getting a speed hit. I usually declare locals outside the loop but I don't think it's a problem in this case. <br><br></td></tr></table><br>
+<a name="946894"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi, great feedback! Thanks a lot for looking into this.<br><br>Yes, the PixmapOnPixmap math might have been a little screwy.<br>Let me look into your suggestions and I'll post up a testbed program as well once I get it going.<br><br>//Adam <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,380 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Interfaces</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Interfaces</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Interfaces</a><br><br>
+<a name="1184799"></a>
+
+<a name="1184800"></a>
+
+<a name="1184801"></a>
+
+<a name="1184802"></a>
+
+<a name="1184804"></a>
+
+<a name="1184805"></a>
+
+<a name="1184806"></a>
+
+<a name="1184808"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just for fun... I've seen a few threads talk about this but nobody seems to have actually given it a go, so here is my take:<br><br><br>Interface.bmx:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Import "interface_allocprotect.c"
+
+SuperStrict
+
+
+Type TInterface Abstract
+	Field base:Object
+	
+	Function Interface:TInterface(o:Object, iName:String)
+		Extern
+			Function bbObjectNew:Object(t:Int)
+		End Extern
+		If TInterface(o) Then Throw "TInterface: do not create an interface over" ..
+			+ " another interface - use the .base instead"
+		Local it:TTypeId = TTypeId.ForName(iName), ot:TTypeId = TTypeId.ForObject(o)
+		If it = Null Then Throw "Interface '" + iName + "' does not exist"
+		If Not it.ExtendsType(TTypeId.ForName("TInterface")) Then ..
+			Throw "TInterface: '" + iName + "' does not derive TInterface"
+		
+		Local templ:ITemplate = ITemplate.Get(it, ot)
+		If Not templ Then templ = ITemplate.Build(it, ot, o)
+		
+		Local i:TInterface = TInterface(bbObjectNew(it._class))
+		i.base = o
+		Int Ptr(Byte Ptr(i) - 8)[0] = Int(templ.clas)
+		Return i
+	End Function
+End Type
+
+Private
+Type ITemplate
+	Global map:TMap = CreateMap(), ICounter:Int = 0
+	
+	Field clas:Int Ptr
+	
+	Method Delete()
+		If clas
+			If clas[2] Then MemFree Byte Ptr(clas[2])
+			MemFree clas
+		EndIf
+	End Method
+	
+	Function Get:ITemplate(it:TTypeId, ot:TTypeId)
+		Local m2:TMap = TMap(map.ValueForKey(it))
+		If m2 Then Return ITemplate(m2.ValueForKey(ot)) Else Return Null
+	End Function
+	
+	Function Set(it:TTypeId, ot:TTypeId, v:ITemplate)
+		Local m2:TMap = TMap(map.ValueForKey(it))
+		If Not m2 Then m2 = CreateMap() ; map.Insert it, m2
+		m2.Insert ot, v
+	End Function
+	
+	Function Build:ITemplate(it:TTypeId, ot:TTypeId, base:Object)
+		Local iml:TList = it.EnumMethods(), oml:TList = ot.EnumMethods()
+		iml.Reverse
+		For Local im:TMethod = EachIn iml	'Verify methods are present and correctly typed
+			If BaseMethod(im.Name()) Then Continue	'Ignore Object's methods as they are not vtabled
+			
+			Local om:TMethod = ot.FindMethod(im.Name())
+			If Not om Then Throw "TInterface: type '" + ot.Name() + ..
+				"' does not support method '" + it.Name() + "." + im.Name() + "'"
+			'Due to limitations in BRL.Reflection we can only really check argument number ATM
+			If im.ArgTypes().Length &lt;&gt; om.ArgTypes().Length Then Throw "TInterface: method '" ..
+				+ ot.Name() + "." + om.Name() + "' has wrong number of arguments to match '" ..
+				+ it.Name() + "." + im.Name() + "'"
+		Next
+		
+		'Should correspond to VTable layout
+		Local oms:TList = UniqueMethods(ot), ims:TList = UniqueMethods(it)
+		
+		ICounter :+ 1
+		Local tem:ITemplate = New ITemplate ; Const IFC_SIZE:Int = 13	'12 + constructor
+		tem.clas = Int Ptr(MemAlloc(IFC_SIZE * 4 + ims.Count() * 4))
+		For Local e:Int = 0 Until IFC_SIZE	'Blindly copy the class definition
+			tem.clas[e] = Int Ptr(it._class)[e]
+		Next
+		For Local e:Int = 0 Until ims.Count()	'Replace methods with trampolines
+			tem.clas[e + IFC_SIZE] = Int(GenTrampoline(base, GetMatchingMethod(ims, oms, e)))
+		Next
+		'Replace builtin methods as well (if they exist)
+		If ot.FindMethod("ToString") Then ..
+			tem.clas[6] = Int(GenTrampoline(base, ot.FindMethod("ToString")))
+		If ot.FindMethod("Compare") Then ..
+			tem.clas[7] = Int(GenTrampoline(base, ot.FindMethod("Compare")))
+		If ot.FindMethod("SendMessage") Then ..
+			tem.clas[8] = Int(GenTrampoline(base, ot.FindMethod("SendMessage")))
+		
+		tem.clas[0] = it._class		'Set the new class to be a child of the interface
+		
+		' Need to work out some way to update the debug information so reflection works
+	'	Extern
+	'		Function bbObjectRegisterType(c:Byte Ptr)
+	'	End Extern
+	'	bbObjectRegisterType tem.clas		' This makes reflection work but boots the original class
+		
+		Set it, ot, tem
+		Return tem
+	End Function
+	
+	Function BaseMethod:Int(n:String)	'Check against builtin method names
+		n = n.ToLower()
+		Return n = "new" Or n = "delete" Or n = "tostring" Or n = "compare" Or n = "sendmessage"
+	End Function
+	
+	Function UniqueMethods:TList(t:TTypeId)	'Overrides only; no supers, no ctors or dtors
+		Local ret:TList = CreateList(), ml:TList = t.EnumMethods()
+		ml.Reverse
+		For Local m:TMethod = EachIn ml
+			If BaseMethod(m.Name()) Then Continue
+			Local exists:Int, n:String; exists = 0 ; n = m.Name().ToLower()
+			For Local m2:TMethod = EachIn ret
+				If m2.Name().ToLower() = n Then exists = 1; Exit
+			Next
+			If Not exists Then ret.AddFirst m
+		Next
+		Return ret
+	End Function
+	
+	Function GetMatchingMethod:TMethod(ims:TList, oms:TList, idx:Int)
+		Local n:String = TMethod(ims.ValueAtIndex(idx)).Name().ToLower()
+		For Local om:TMethod = EachIn oms
+			If om.Name().ToLower() = n Then Return om
+		Next
+		Throw "TInterface BUG: something went wrong matching method '" + n + "'"
+	End Function
+End Type
+
+Extern
+	Function IfcAlloc:Byte Ptr(sz:Int) = "tinterface_alloc"
+	Function IfcRePro:Int(p:Byte Ptr, sz:Int) = "tinterface_reprotect"
+End Extern
+
+Function GenTrampoline:Byte Ptr(o:Object, m:TMethod)
+	Extern
+		Function bbRefMethodPtr:Int(o:Object, i:Int)
+	End Extern
+	Const BLOCKSIZE:Int = 4096 * 5
+	Global block:Byte Ptr, bytes:Int = 0
+	
+	?Not X86
+	Throw "TInterface: only x86 targets supported at this time"
+	?
+	
+	Local mp:Int = bbRefMethodPtr(o, m._index), pp:Byte Ptr = Varptr(mp)
+	Local vec:Int[] = [$8B, $44, $24, $04, $8B, $40, $08, $89, $44, $24, $04,..
+					$B8, Int(pp[0]), Int(pp[1]), Int(pp[2]), Int(pp[3]), $FF, $E0]
+	
+	If bytes &lt; vec.Length + 2
+		If block Then IfcRePro(block, 2)	'Remove write capability on old block
+		block = IfcAlloc(BLOCKSIZE)
+		If Not block Then Throw "TInterface: unable to allocate memory for trampoline"
+		bytes = BLOCKSIZE
+	EndIf
+	
+	For Local c:Int = 0 Until vec.Length
+		block[c] = vec[c]
+	Next
+	Local newP:Byte Ptr = block
+	bytes :- vec.Length
+	block :+ vec.Length
+	Return newP
+End Function
+Public
+
+</textarea><br><br>interface_allocprotect.c:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+// Genericised alloc/protect for Windows+UNIX
+// For allocating a code buffer then allowing it to run
+
+#ifdef _WIN32
+#  include &lt;windows.h&gt;
+#else
+#  include &lt;sys/mman.h&gt;
+#endif
+
+#ifdef _WIN32
+
+void * tinterface_alloc(int sz) {
+	return VirtualAlloc(0, sz, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+}
+
+int tinterface_reprotect(void * p, int sz) {
+	DWORD _;
+	return VirtualProtect(p, sz, PAGE_EXECUTE_READ, &amp;_);
+}
+
+#else
+
+void * tinterface_alloc(int sz) {
+	return mmap(0, sz, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANONYMOUS, -1, 0);
+}
+
+int tinterface_reprotect(void * p, int sz) {
+	return mprotect(p, sz, PROT_READ | PROT_EXEC);
+}
+
+#endif
+
+</textarea><br><br><br>And an example:<br><br><pre class=code>
+Import "Interface.bmx"
+SuperStrict
+
+Type Foo
+	Field s:String
+	Method act()
+		Print "This Foo is fooping!"
+	End Method
+	Method show()
+		Print "s is " + s
+	End Method
+	Method ToString:String()
+		Return "Foo!"
+	End Method
+End Type
+
+Type Bar
+	Field x:Int
+	Method show()
+		Print "x is " + x
+	End Method
+	Method act()
+		Print "This Bar is barping with " + x
+	End Method
+End Type
+
+
+Type IFooBar Extends TInterface
+	Method show() Abstract
+	Method act() Abstract
+End Type
+
+
+Local f:Foo = New Foo
+f.s = "FortyTwo"
+Local g:Foo = New Foo
+g.s = "SixtyFour"
+Local b:Bar = New Bar
+b.x = 42
+
+Local i:IFooBar = IFooBar(TInterface.Interface(f, "IFooBar"))
+Local j:IFooBar = IFooBar(TInterface.Interface(b, "IFooBar"))
+Local k:IFooBar = IFooBar(TInterface.Interface(g, "IFooBar"))
+
+'Foo and Bar objects now run together despite *no* inheritance links! Yay!
+i.show
+j.show
+k.show
+i.act
+j.act
+k.act
+</pre><br><br><br>How it works:<br><br>TInterface.Interface abuses reflection to forcibly instantiate the abstract class being used as an interface definition. It then hunts through the implementors searching for matching methods (complaining if it doesn't find them), and replaces the contents of the interface object's vtable with JITted trampolines to forward all method calls through to the host object untouched. New vtables are created as necessary to reflect whatever is in the implementor, so in the above example i and j don't share a vtable despite both having been spawned from IFooBar.<br><br>An interface should consist <b>only</b> of a list of abstract method declarations. Field accesses cannot be forwarded to the base object, so they will get ignored, and any non-abstract method bodies will just get overwritten (all runnable code should go in class types, as normal).<br><br>It is permitted to inherit declarations from another interface, but this will  likely serve very little purpose in practice.<br><br>Seems to work OK. Performance should be good; the trampolines are only 5 machine instructions long. Since it's effectively untested I am presenting it as a "needs work" solution though with the assumption that there are errors left to find.<br><br><br>Limitations:<br><br>-- The interface won't show as identical to the original object when compared with = (although it does forward the Compare method, so sorting containers should hopefully work as though it were the original). This is because it's technically been wrapped rather than cast<br>-- Similarly, "casting" to the interface a second time will yield a new object identity again (but again... same Compare)<br>-- Basically, don't use = with these<br><br>-- x86 only. Updating it for PPC should be easy for anyone who knows PPC assembly (and who thinks OSX 10.5 still matters)<br><br>-- Reflection doesn't work; it should be possible to make it work but would require a lot of runtime-fu. Anyway the original object is exposed as a "base" field so you can just reflect on that, which makes more sense since interfaces aren't supposed to be "things"<br>-- Cannot put a second Interface layer over an existing interface object (this is a. not something that seems sensible, and b. can be solved in the same way as the above)<br><br>-- Not even remotely tested properly. Heck, I can't even be bothered to check that the *nix code in the C file is correct<br>-- Hardcoded pointer offsets mean this is pretty much guaranteed to break if a BlitzMax update changes the object structure<br>-- Limitations of BlitzMax reflection prevent method type signatures from being checked properly, and mean that this won't work with "interesting" signatures (pointers, functions, etc.)<br><br>-- If you don't know what interfaces are... go and use Monkey or Java or something that has them for realsies, <i>please</i> don't try to learn with this<br><br><br>The above files are public domain. I accept no responsibility for any problems caused as a result of actually using this code. <br><br></td></tr></table><br>
+<a name="1184828"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> That's very nice! It would be great to have this on BlitzMax with a nice Interface / End Interface syntax <br><br></td></tr></table><br>
+<a name="1226292"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >degac</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> It seems incredible...but at the end I understood what are Interfaces and in what they are useful (thank to your example :) even if you said dont' try to learn with this!<br><br>(a little bit complex syntax... but I got the idea)<br>Thanks! <br><br></td></tr></table><br>
+<a name="1270759"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> ... it's all a bit scary and hacky, but very clever nonetheless, Yasha!<br><br>Here's my take on interfaces with an example based on example 2 from here : <a href="http://www.wideskills.com/java-tutorial/java-abstract-class-and-interface" target="_blank">http://www.wideskills.com/java-tutorial/java-abstract-class-and-interface</a><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+SuperStrict
+
+Framework brl.standardio
+
+Local interface1:I1 = New B1
+interface1.methodI1() ' OK as methodI1 is present in B1
+' i1.methodI2(); Compilation error as methodI2 not present in I1
+' Casting to convert the type of the reference from type I1 to type I2
+I2(interface1).methodI2()
+Local interface2:I2 = New B1
+interface2.methodI1() ' OK
+interface2.methodI2() ' OK
+' Does not Compile as methodA1() not present in interface reference I1
+' String var = i1.methodA1();
+' Hence I1 requires a cast to invoke methodA1
+Local  var2:String = A1(interface1).methodA1()
+Print "var2 : " + var2
+Local var3:String = B1(interface1).methodA1()
+Print "var3 : " + var3
+Local var4:String = interface1.toString()
+Print "var4 : " + var4
+Local var5:String = interface2.toString()
+Print "var5 : " + var5
+Local interface3:I1 = New C1
+Local var6:String = interface3.toString()
+Print "var6 : " + var6 ' It prints the Object toString() method
+Local o1:Object = New B1
+' o1.methodI1(); does not compile as Object class does not define
+' methodI1()
+' To solve the probelm we need to downcast o1 reference. We can do it
+' in the following 4 ways
+(I1(o1)).methodI1() ' 1
+(I2(o1)).methodI1() ' 2
+(B1(o1)).methodI1() ' 3
+'
+'
+' B1 does Not have any relationship with C1 except they are "siblings".
+'
+' Well, you can't cast siblings into one another.
+'
+'
+' ((C1)o1).methodI1(); Produces a ClassCastException
+
+interface I1
+	Method methodI1()
+End interface
+
+interface I2 Extends I1
+	Method methodI2()
+End interface
+
+Type A1
+
+	Method methodA1:String()
+		Return "I am in methodC1 of class A1"
+	End Method
+	Method toString:String()
+		Return "toString() method of class A1"
+	End Method
+End Type
+
+Type B1 Extends A1 implements I2
+
+	Method methodI1()
+		Print "I am in methodI1 of class B1"
+	End Method
+	Method methodI2()
+		Print "I am in methodI2 of class B1"
+	End Method
+End Type
+
+Type C1 implements I2
+
+	Method methodI1()
+		Print "I am in methodI1 of class C1"
+	End Method
+	Method methodI2()
+		Print "I am in methodI2 of class C1"
+	End Method
+End Type
+
+' Note that the class is declared as abstract as it does not
+' satisfy the interface contract
+Type D1 implements I2 Abstract
+
+	Method methodI1()
+	End Method
+	' This class does not implement methodI2() hence declared abstract.
+End Type
+</textarea><br><br>and the output, which matches nicely against the example output on the other site :<br><pre class=code>
+I am in methodI1 of class B1
+I am in methodI2 of class B1
+I am in methodI1 of class B1
+I am in methodI2 of class B1
+var2 : I am in methodC1 of class A1
+var3 : I am in methodC1 of class A1
+var4 : toString() method of class A1
+var5 : toString() method of class A1
+var6 : 0x9082fe0
+I am in methodI1 of class B1
+I am in methodI1 of class B1
+I am in methodI1 of class B1
+</pre><br><br>Not quite ready for "prime time" yet, but it's ticking a lot of the boxes so far :o) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

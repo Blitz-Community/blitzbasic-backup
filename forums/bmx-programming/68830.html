@@ -1,0 +1,114 @@
+<!DOCTYPE html><html lang="en" ><head ><title >capture standard io strangely ? fmc.PrcoessStream</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >capture standard io strangely ? fmc.PrcoessStream</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >capture standard io strangely ? fmc.PrcoessStream</a><br><br>
+<a name="769282"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok this is a tricky problem but...<br><br>I currently have a seriously annoying problem with a program i am writting.<br><br>Here is how it works.<br><br>Executable called "installservice.exe" runs<br><br>"installservice.exe" calls the NT command prompt "instsrv.exe" to install another nt exe called "srvany.exe".<br><br>It then sets up the registry entries to run srvany.exe with a blitzmax compiled executable called peer.debug.exe.<br><br>Once it is installed and the registry is updated, it calls "net start" to start the service.<br><br>It does this all using FABIAN's CreateProcessStream fmc.PrcoessStream to read the ouput of said executables.<br><br>NOW here is the problem:<br><br>It will execute the programs fine. The first time it runs it will perform all things according to plan. All output gets directed properly and things work. Upon ending the installservice.exe program there will be a newly installed and running service written in blitzmax.<br><br>If i run installservice.exe again the capture in/out from the process seems to randomly not work. IE it will work with some executables but not with others. I tracked it down that if I KILL srvany or peer.debug.exe from the process list, it will work again as planned.<br><br>The idea of installservice.exe is to check to see if the service is installed. If not, install it. Then check to see if it is running. If not, start it.<br><br>This weird behavior has lead me to believe that somewhere blitz is capturing the input / output in an odd manner.<br><br>Anyone got any ideas ?<br><br><br>Unfortunatly I cant post all the code, but this is installservice.exe<br><pre class=code>'this program will install the cap program as a service
+Framework BRL.FileSystem
+Import brl.standardio
+Import fmc.Processstream
+
+Import "../../../global/types/tcommandline.bmx"
+Import "../../../global/libs/registryfunctions.bmx"
+
+Local temp_action:String = GetCommand(0)
+Local temp_name:String = GetCommand(1)
+Local temp_read:String
+Local temp_ok:Int = True
+Local temp_stream:TProcessStream
+
+Select temp_action.tolower()
+	Case "install"
+		Local temp_path:String = RealPath(GetCommand(2))
+
+		If temp_name.length And temp_path.length And FileType(temp_path) = 1
+			temp_ok = False
+			temp_stream = CreateProcessStream("instsrv.exe "+temp_name+" "+CurrentDir()+"/srvany.exe")
+			If temp_stream
+				While temp_stream.eof() = False
+					temp_read = temp_stream.ReadLine()
+					Select temp_read
+						Case "  CreateService SUCCESS at creating:"
+							temp_ok = True
+							Print "service installed"
+					End Select
+				Wend
+				
+				If temp_ok = True
+					'update the registry entries
+					Local temp_reg:tregkey = OpenRegKey("HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\"+temp_name)
+					If temp_reg
+						temp_reg.close()
+						temp_reg = CreateRegKey("HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\"+temp_name+"\Parameters")
+						temp_reg.setstring("Application",temp_path)
+						temp_reg.close()
+						
+						'start the service
+						temp_stream = CreateProcessStream("net start "+temp_name)
+						temp_ok = False
+						While temp_stream.eof() = False
+							temp_read = temp_stream.ReadLine()
+							
+							Select temp_read
+								Case "The "+temp_name+" service was started successfully."
+									temp_ok = True
+									Print "service started"
+								Case "The requested service has already been started."
+									temp_ok = True
+									Print "service started"
+								Case "The service name is invalid."
+									temp_ok = False
+							End Select
+						Wend
+					End If
+				End If
+
+			End If
+		End If
+		
+		
+	Case "remove"
+		If temp_name.length
+			'stop the service
+			temp_ok = False
+			
+			temp_stream = CreateProcessStream("net stop "+temp_name)
+			While temp_stream.eof() = False
+				Delay 1
+				temp_read = temp_stream.ReadLine()
+				
+				Select temp_read
+					Case "The "+temp_name+" service is Not started."
+						temp_ok = True
+						Print "service stopped"
+					Case "The "+temp_name+" service was stopped successfully."
+						temp_ok = True
+						Print "service stopped"
+					Case "The specified service does not exist as an installed service."
+						temp_ok = False
+				End Select
+			Wend
+			
+			'uninstall service
+			If temp_ok
+			
+				temp_ok = False
+				temp_stream = CreateProcessStream("instsrv.exe "+temp_name+" remove")
+				If temp_stream
+					While temp_stream.eof() = False
+						Delay 1
+						temp_read = temp_stream.ReadLine()
+						
+						Select temp_read
+							Case "DeleteService SUCCESS"
+								temp_ok = True
+								Print "service removed"
+						End Select
+					Wend
+				End If
+			End If
+		End If
+End Select</pre> <br><br></td></tr></table><br>
+<a name="769307"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >SebHoll</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Is this fmc.ProcessStream similar to Skid's Pub.FreeProcess (cross-platform and available through syncmods). If it does the same things (starting, terminating and reading output/writing input from/to processes) then I can vouch for its stability - I've been using it for many projects and never had strange results. I believe it is what the BlitzMax IDE uses too for talking to the compiler etc.<br><br>If I've got the right idea, you may want to give that a try instead, unless of course there is a simple solution.<br><br>;-) <br><br></td></tr></table><br>
+<a name="769463"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2007)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Seb you do indeed have the correct idea. I tried pub.freeprocess but had to resort to using fabian's as there were issues with detecting when a process had ended, and capturing output!<br><br>Got any examples you want to share, perhaps I was doing it wrong ? <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,501 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Optimizing MiniB3D's rendering pipeline</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Optimizing MiniB3D's rendering pipeline</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=119" >MiniB3D Module</a>/<a href="#bottom" >Optimizing MiniB3D's rendering pipeline</a><br><br>
+<a name="1108540"></a>
+
+<a name="1108541"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey guys,<br><br>I'm looking for a way to squeeze some extra performance out of MiniB3D. The OpenGL SuperBible talks about how if you use glMultiDrawElements instead of glDrawElements, you can render large amounts of triangles with fewer calls/OpenGL state changes. This sounded like a typical scalar-to-vector code optimization and I was excited to tweak MiniB3D to see if this would help. However, I got stumped when trying to support the case of VBOs being used with glMultiDrawElements.<br><br>The original code reads as follows (in TMesh.bmx):<br><br><pre class=code>
+	
+			' draw tris
+			
+			glMatrixMode(GL_MODELVIEW)
+
+			glPushMatrix()
+	
+			If TSprite(Self)=Null
+				glMultMatrixf(mat.grid)
+			Else
+				glMultMatrixf(mat_sp.grid)
+			EndIf
+					
+			If vbo																																																																																																																																																																																																																																																																																
+				glDrawElements(GL_TRIANGLES,surf.no_tris*3,GL_UNSIGNED_SHORT,Null)
+			Else
+				glDrawElements(GL_TRIANGLES,surf.no_tris*3,GL_UNSIGNED_SHORT,surf.tris)
+			EndIf
+
+			glPopMatrix()
+</pre><br><br>I'm not sure how to make the VBO-equivalent for glMultiDrawElements. I then read this on Apple's site ( <a href="http://lists.apple.com/archives/mac-opengl/2005/Dec/msg00039.html" target="_blank">http://lists.apple.com/archives/mac-opengl/2005/Dec/msg00039.html</a> ) and began wondering if this was even worth it to begin with.<br><br>Does anyone have any experience with this?<br><br>Thanks,<br>Jason<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1108542"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Just to get the juices flowing, here was my idea of how you could handle this:<br><br>1) For all rendering passes that would use VBO, combine the buffer data into a single VBO, and then make several calls to glDrawElements, and instead of just using NULL / 0 for the last parameter, you would increment it for the offsets of each of the sub-buffers.<br><br>2) For all rendering passes that wouldn't use VBO, you simply add each array that would have gone in the last parameter of glDrawElements to a new array, and then pass that to glMultiDrawElements.<br><br>I'm not really sure at all about this though. Any suggestions? <br><br></td></tr></table><br>
+<a name="1108576"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'm not sure if glMultiDrawElements does what you're looking for.<br><br>You see, if you add different meshes into the same VBO (say, several characters), all the polygons in that VBO will use the same texture even if they were originally textured with different ones.<br>Remember GL is a state machine, so you "activate" a texture, render whatever meshes you want to be textured by it (since it will always use the currently active texture), then activate the next texture and render the next meshes etc.<br><br>There is no way to render things with different textures without setting each texture up and rendering each mesh that uses it in separate passes.<br><br>The optimization you are looking for is in texture atlasing and single-surfacing whenever possible; MiniB3D will join everything into a single VBO internally. So a good effort for you would be to develop a robust single-surface system for particles, one for static meshes and one for skeleton-animated characters.<br>This <i>would</i> improve performance, since you'd be rendering what were all those different meshes with a single 'drawcall', something you really have to cut short.<br>If you use atlasing, things can even have "different" textures while on the same VBO. <br><br></td></tr></table><br>
+<a name="1108587"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jkrankie</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> I'd echo Kryzon here. Texture atlasing or batching meshes would give a much more immediate speed boost.<br><br>Cheers<br>Charlie <br><br></td></tr></table><br>
+<a name="1108589"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for the input guys. I'll look into this more. I'm not too familiar with how to pull these off, but maybe Google does. I'll have to read up on texture atlasing and how to enforce a single surface for meshes. <br><br></td></tr></table><br>
+<a name="1108590"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Also, just to clarify ---- are you saying each animated mesh should be a single surface, each static mesh a single surface, etc or should ALL animated meshes be in a single surface, ALL static meshes in a single surface, etc.<br><br>Just want to make sure I'm not interpreting this the wrong way. <br><br></td></tr></table><br>
+<a name="1108592"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Combine by class: the particles' single-surface object, the static meshes single-surface object etc.<br>You should keep as much stuff as you can in a single mesh. Thinking of it again, you shouldn't make animated meshes single-surface - it'll be too difficult.<br>Use it just for static meshes and particles.<br><br>The problem is, what if you try to store your entire game scene in a single mesh? the size of the atlas required for the entire scene would be enormous - no graphic card would be able to load it. So you have to compromise on the size of the collections. Keep atlas sizes down to like 1024².<br><br>Vertex shaders will also help a great deal with single-surfacing, as you can store each object's matrix as vertex attributes that are read in the vertex-shader, and it's there where you compute each vertex's position with that matrix to restore the original object's transformation. <br>This might be of interest: <a href="http://blitzbasic.com/Community/posts.php?topic=95084" target="_blank">http://blitzbasic.com/Community/posts.php?topic=95084</a> <br><br></td></tr></table><br>
+<a name="1108593"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Texture atlasing is sounding really interesting but also introducing some challenges. I'm working on an MMO, so things like items in a scene, characters in a scene ---- we do not always know before hand what will be there. There are definitely assumptions we can make (e.g. the environment/scene architecture doesn't change, just the items and people in it).<br><br>What I'd like to know is:<br><br>• Does it make sense to use *multiple* texture atlases ---&gt; e.g. one for scenery (wall/ground/ceiling textures), one for items, and one for characters<br><br>• Kryzon you suggested 1024 as an atlas limit. I think I remember MiniB3D pooping itself if I tried to load a texture image any bigger than 2048^2. So it sounds like we'd have to keep all atlases period within this range?<br><br>• Does using multiple atlases *hurt* performance? Is it better to either do one single atlas (+ individual textures) or no atlases at all?<br><br><br>Just want to get a better understanding of what the theoretical constraints are here.<br><br>Thanks,<br>jason <br><br></td></tr></table><br>
+<a name="1108617"></a>
+
+<a name="1108622"></a>
+
+<a name="1108624"></a>
+
+<a name="1108625"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> <b>1)</b> It makes sense to use multiple atlases, because if you use a single one it would have to be huge. This also answers <b>2)</b> with the following: the limit on texture size is given by the hardware, not MiniB3D. <br>Different cards support different "maximum texture sizes" (check THardwareInfo.BMX as it queries this constant among others); that's why I suggested a limit of 1024² because you can store a lot of stuff in it, doesn't cost that much memory and it's generally supported by a broad range of hardware (anything that doesn't support that size most likely wouldn't run your game anyway).<br>Take a look <a href="http://i55.tinypic.com/11vijqr.jpg" target="_blank">at this atlas</a> from PSX's Crash Bandicoot 2. Ignore the noise.<br><br><b>3)</b> Using multiple atlases [properly] is better than using individual textures for everything. EDIT: Of course there <i>will</i> be some situations where you need individual textures for an object, but you shouldn't worry about that as you are optimizing what you can.<br><br>A single texture sheet can hold several types of particles.<br>Each environment in your game can also have things clustered into sheets (without breaking the size limit). Some ceilings in a certain sheet, others in a second. The amount of atlases\sheets should be defined by necessity. Know that atlases can't hold tiling textures - there's no way to tile something from an atlas without breaking geometry and duplicating vertices - so ground textures and other tiling textures you should keep individual.<br>Include in your art pipeline some sort of script or plugin that bakes sheets and handles the necessary UV corrections - avoid doing it manually as that's a pain.<br><br>Further reading:<br><a href="http://www.scriptspot.com/3ds-max/scripts/texture-atlas-generator" target="_blank">http://www.scriptspot.com/3ds-max/scripts/texture-atlas-generator</a> (I'm assuming you use 3DS Max)<br><a href="http://blog.wolfire.com/2010/03/Using-texture-atlases" target="_blank">http://blog.wolfire.com/2010/03/Using-texture-atlases</a><br><a href="http://www.texturebaking.com/features-benefits/" target="_blank">http://www.texturebaking.com/features-benefits/</a><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1108652"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for the clarifications, Kryzon. This makes sense (though I couldn't quite make out what was in that atlas you linked). I always forget about THardwareInfo.bmx but that sounds incredibly useful if it can poll the current graphics card and determine its limits.<br><br>It looks like NVidia also offers some Texture Atlasing tools here: <a href="http://developer.nvidia.com/legacy-texture-tools" target="_blank">http://developer.nvidia.com/legacy-texture-tools</a><br><br>As for my art pipeline, I'm currently using Maya + Ultimate Unwrap to get assets into the game.<br><br>Next I need to find out:<br><br>a) Assuming I have an appropriate texture atlas for the n models in my scene, where in the OpenGL rendering pipeline do I specify the sub-region coordinates for each texel<br><br>b) Assuming I've done a) correctly, is there any additional stuff I must do to let OpenGL know that "yes, these n meshes all use the same texture, don't bother issuing a state change for these textures", or is that handled implicitly by the fact that the n meshes will be rendered within a single glMultiDrawElements call?<br><br><br>Getting there, little by little :) <br><br></td></tr></table><br>
+<a name="1108659"></a>
+
+<a name="1108832"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sure, lets keep it going.<br><br>A) These coordinates you can specify with <b>offsets</b> to the mesh's current UV values. Depending on the way your atlas is set up you can handle this like if it were an array.<br><br>In an atlas of particle textures, comprised of 4 x 4 textures, all square and of size 64² pixels, say I want to pick the last texture - that's the bottom right one.<br>Whenever you create a new particle quad, you would add to the UV coordinates of this quad the appropriate offset so it will reference the right texture from the atlas:<br><pre class=code>
+Local U#,V#
+Local Row = 4
+Local Column = 4
+Local numRows = 4
+Local numColumns
+
+For [all vertices in this quad] {
+
+	U = VertexU(surf,index) / numColumns
+	V = VertexV(surf,index) / numRows
+
+	'Add offsets so we go from texture-space to atlas-space:	
+	VertexTexCoords( surf, index, U + (Column/numColumns), V + (Row/numRows) ) 
+}
+</pre><br>B) If all your geometry belongs <i>to the same TMesh</i> and this TMesh only has <i>one surface</i>, you can rest assured it'll be rendered with a single drawcall, without the need to add glMultiDrawElements or modify further code. You can look at the TMesh.Update() method's source: it goes through every surface of the TMesh, rendering it. If you have only 1 surface, that's just one drawcall.<br><br>Another element that can help you a lot is using shader programs. You can calculate a lot of custom stuff in a vertex shader for this and make it really shine.<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1108673"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for the breakdown. A few questions:<br><br>• To pull of what you described in A), does that mean that you'd effectively have to write/change LoadAnimMesh such that the calls it makes to VertexTexCoords acknowledges the atlas coordinates, no?<br><br>• For B) what happens when the geometry is distributed amongst several different meshes, all of which reference the same texture atlas? Do you still get multiple draw calls? Is that when glMultiDraw would come into play?<br><br>Thanks <br><br></td></tr></table><br>
+<a name="1108758"></a>
+
+<a name="1108760"></a>
+
+<a name="1108762"></a>
+
+<a name="1108765"></a>
+
+<a name="1108766"></a>
+
+<a name="1108777"></a>
+
+<a name="1108778"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> 1) You don't need to change code. You can simply add a routine that processes a mesh object you send to it.<br><br>2) In that case you would get several draw calls, since every mesh would need to run their own .Update() method and that costs 1 drawcall or more per method (depending on the number of surfaces).<br>If you do split your geometry along different VBOs then you're in trouble. You can't switch VBO during a drawcall.<br>You'd have to <b>merge</b> all the vertex data into a single VBO and then proceed to render it (therefore you don't need glMultiDraw; it doesn't do what we were thinking it does).<br>Read more here: <a href="http://www.opengl.org/discussion_boards/ubbthreads.php?ubb=showflat&amp;Number=277705" target="_blank">http://www.opengl.org/discussion_boards/ubbthreads.php?ubb=showflat&amp;Number=277705</a><br><br>Since you're aiming for a MMO engine, maybe MiniB3D lacks the optimization you need for something of this scale (portals, Octrees, physics, streaming). <br>You should take a look at a MMO-capable engine such as <a href="http://www.esenthel.com/" target="_blank">Esenthel</a>.<br>Also check GMan's port of <a href="http://www.gprogs.com/viewforum.php?id=1" target="_blank">Irrlicht Engine</a> for BMax. Irrlicht is a tried-and-true engine with an active community.<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1108780"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Since you're aiming for an MMO engine, maybe MiniB3D lacks the optimization you need for something of this scale (portals, Octrees, physics, streaming).  <br></div><br><br>I figured out-of-the-box it may not support everything I need, but that it would be possible (with enough direction) to at least modify it and optimize it to meet my needs, since at the end of the day it's OpenGL, no? (not saying this would be trivial though!)<br><br>Additionally, I've been modifying the design of the game to ease up on the "massive" part of MMORPG, so that we're not literally rendering endless streaming worlds. What we have is more of a 3D MUD --- you walk from map to map (each map triggering its own scene load), and then include the meshes for whatever other players are in that room. By design we try to limit the amount of avatars in a scene significantly (always under 20, usually under 10 ---- however I am considering adding OpenGL instancing calls for select scenarios where I want to show crowds of NPCs.<br><br><br>So just to clarify, in 2) does that mean that there's no point in texture atlasing if your scene geometry is distributed amongst several meshes/surfaces ---- or does this still somehow come out better than individualized texture maps?<br><br><br>Thanks <br><br></td></tr></table><br>
+<a name="1108792"></a>
+
+<a name="1108794"></a>
+
+<a name="1108831"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> 'Using the atlas' is half the requirement. The other half is having only 'a single-surface'. This way everything is really inside the same VBO, and everything will be rendered with a single drawcall.<br>Therefore, before rendering the frame, gather all the geometry data into the same surface or start working with just one surface to begin with.<br>If you're worried about the individual object control this could take away from you, look at single-surface systems in the code-archives because they show you how to handle objects individually even though their geometry is all mashed up into the same polygon-soup VBO. <br>Even though all your particles are in the same surface, you can still color, move and rotate each one separately.<br>For complex thing such as static objects, you need vertex-programs to be able to store not only vertex information but also their entity matrix, so you can apply individual object transformations to collections of polygons of that single-surface. This way you can use the 'Entity' commands with them so they behave like seperate objects - you'd need to modify the source and use shaders for this.<br><br>About the engine. Well, if you have the resources to improve MiniB3D, I'd say go for it. But if you're dealing with a deadlined production, try to have an engine or two under your belt so you can fallback to something in case it doesn't work! you only have to gain if you make your life easier :)<br><br><b>EDIT:</b> Oh, and my pseudo-code on post <a href="/posts.php?topic=95967#1108659" target="_blank">#11</a> was wrong, but I corrected it now.<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1108835"></a>
+
+<a name="1108839"></a>
+
+<a name="1108845"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cool.<br><br>So here are two things from the archives that I'm finding interesting:<br><br>AddMeshToSurface by sswift:<br><a href="http://blitzmax.com/codearcs/codearcs.php?code=575" target="_blank">http://blitzmax.com/codearcs/codearcs.php?code=575</a><br><br>Ultimate Single Surface Collection by Rob:<br><a href="http://blitzmax.com/codearcs/codearcs.php?code=978" target="_blank">http://blitzmax.com/codearcs/codearcs.php?code=978</a><br>---&gt;working link:  <a href="http://www.box.net/shared/xlqiqyu4gg" target="_blank">http://www.box.net/shared/xlqiqyu4gg</a><br>(the code for the single surface entity system looks a lil sketch in some parts....)<br><br><br>I'm going to dig into these and see how I can push everything into a single surface but maintain ability to control, rotate, etc. Do you think I'm going in the right direction?<br><br>One blaring question that comes into mind is ---- what about 2D images (TImages) rendered with Max2D? I remember thinking before that I would have my 2D rendering optimized as long as I used a spritesheet(atlas) for my images, and then used DrawSubImageRect() to render the specific sub-region. However now I'm thinking that even that will still result in a draw call per object (or per DrawSubImageRect), which seems like (as you described above) is only half the battle. Am I correct in thinking this? It seems Rob's library above has a solution for 2D as well (it looks pretty good, a bit more solid than the 3D entity system to be honest). I<br><br><div class="quote"> Also check GMan's port of Irrlicht Engine for BMax. Irrlicht is a tried-and-true engine with an active community. <br></div><br>Would the benefit be that these engines do single-surface rendering for you out of the box? Otherwise, wouldn't I still have to figure this out on that engine as well?<br><br>Lots to think about...<br><br>(and super thanks for continuing to go into the trenches with me :)<br><br><font class="tiny">Last edited 2011</font><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1108851"></a>
+
+<a name="1108852"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> One blaring question that comes into mind is ---- what about 2D images (TImages) rendered with Max2D? <br></div><br>Every call to DrawImage or DrawSubImage in Max2D runs this:<br><pre class=code>
+glBegin()
+[...]
+glEnd()
+</pre>And that's a draw-call. If you want to perform <b>batching</b> (the optimization we've been talking in these posts - and a good keyword you can use to research material), you need to figure a way to draw more than one image's geometry at once. It's actually not that difficult, you just need to invest time designing the system - you'd need to use a vertex array for this.<br><br><div class="quote"> Would the benefit be that these engines do single-surface rendering for you out of the box? Otherwise, wouldn't I still have to figure this out on that engine as well? <br></div><br>They most likely have these optimizations and plenty of others. They've been in development for a long time by people who are focused in improving them, so they have a lot of accumulated value.<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1108855"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> Irrlicht is a great engine that definitely has some hot stuff. Thing is, we already have a working game written completely in MiniB3D --- we're just trying to speed things up. I see that Gman provides a great BlitzMax mod for Irrlicht, and even a supposed B3D API mapping. In practice, do you know how successful this API port is? If it's the kind of thing that has been proven to easily map over and behave in the same way, then that would be pretty awesome. If not, switching engines/APIs at this point would set us back too much. I'll have to dig around to see what kind of success people have had with Irrlicht-B3D. <br><br></td></tr></table><br>
+<a name="1108873"></a>
+
+<a name="1108874"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> There are a few ways I found to optimize miniB3D, been a while, since I've been working with monkey more but:<br><br>- texture atlases! awesome technique, and is a MUST in mobile for all games.<br>Plenty of texture packers to be found, here's a new one that is quite efficient:<br><a href="http://spritesheetpacker.codeplex.com/" target="_blank">http://spritesheetpacker.codeplex.com/</a><br>Popular one:<br><a href="http://www.texturepacker.com/" target="_blank">http://www.texturepacker.com/</a><br><br>- when it comes to creating isometric landscapes, I created one large object from many smaller, repeatable pieces. Make sure the landscape is static, no moving parts. Coding-wise, what I did was to load an individual mesh asset, then CopyMesh() and AddMesh(). AddMesh() combines duplicate surfaces automagically, reducing overhead. Now this single object is not subject to camera culling, but reduces loop overhead and combined with a texture atlas should be pretty swift in the rendering.<br><br><pre class=code>
+levelmap:TMesh = CreateMesh()
+levelmap.positionentity(0,0,0)
+
+''....some level loading stuff here....
+
+If map[x]  = 121 Then meshToAdd=Copymesh(wall_nernie, levelmap)
+PaintSurfaceMesh(meshToAdd, 1, brush )
+meshtoAdd.PositionMesh( (x)*mapsize,0,(-r)*mapsize)
+meshtoAdd.AddMesh(levelmap)
+meshtoAdd.PositionMesh( -(x)*mapsize,0,(r)*mapsize) ''reset the position of the original mesh to be used again
+</pre><br><br>- you speak of being able to move parts (separate entities) from a single mesh, which is what i demonstrate here:<br><a href="http://blitzmax.com/Community/posts.php?topic=94160" target="_blank">http://blitzmax.com/Community/posts.php?topic=94160</a><br><br><br><br>- the other two big improvements for miniB3d would be batching sprites together (providing they're in the same layer or z-depth) and camera culling using octrees. Culling right now in EntityInFrustrum() (TCamera.bmx) does a lot of calculations per frame PER OBJECT. So yeah, some sort of octree would help.<br><br><br>Other optimizations:<br>Light and shade your objects using textures, and use OpenGL flat-lighting.<br><br>Use mipmaps for distant scenery/ objects.<br><br>I made a bunch of optimizations to my version of miniB3d, but mostly I converted FOR-EACHIN-NEXT loops to use arrays instead. I did this in the main TMesh.bmx Update() and Alpha() methods since those were hit every frame.<br><br>Another small optimization I did for the Method EntityInFrustum#(ent:TEntity) is to unroll the for-next loop within it.<br><br>And lastly,under TCamera.bmx, the ExtractFrustrum() method instead of multiplying those two matricies I let opengl do it for me:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Rem
+		' Combine the two matrices (multiply projection by modelview)
+		clip[ 0] = modl[ 0] * proj[ 0] + modl[ 1] * proj[ 4] + modl[ 2] * proj[ 8] + modl[ 3] * proj[12]
+		clip[ 1] = modl[ 0] * proj[ 1] + modl[ 1] * proj[ 5] + modl[ 2] * proj[ 9] + modl[ 3] * proj[13]
+		clip[ 2] = modl[ 0] * proj[ 2] + modl[ 1] * proj[ 6] + modl[ 2] * proj[10] + modl[ 3] * proj[14]
+		clip[ 3] = modl[ 0] * proj[ 3] + modl[ 1] * proj[ 7] + modl[ 2] * proj[11] + modl[ 3] * proj[15]
+		
+		clip[ 4] = modl[ 4] * proj[ 0] + modl[ 5] * proj[ 4] + modl[ 6] * proj[ 8] + modl[ 7] * proj[12]
+		clip[ 5] = modl[ 4] * proj[ 1] + modl[ 5] * proj[ 5] + modl[ 6] * proj[ 9] + modl[ 7] * proj[13]
+		clip[ 6] = modl[ 4] * proj[ 2] + modl[ 5] * proj[ 6] + modl[ 6] * proj[10] + modl[ 7] * proj[14]
+		clip[ 7] = modl[ 4] * proj[ 3] + modl[ 5] * proj[ 7] + modl[ 6] * proj[11] + modl[ 7] * proj[15]
+		
+		clip[ 8] = modl[ 8] * proj[ 0] + modl[ 9] * proj[ 4] + modl[10] * proj[ 8] + modl[11] * proj[12]
+		clip[ 9] = modl[ 8] * proj[ 1] + modl[ 9] * proj[ 5] + modl[10] * proj[ 9] + modl[11] * proj[13]
+		clip[10] = modl[ 8] * proj[ 2] + modl[ 9] * proj[ 6] + modl[10] * proj[10] + modl[11] * proj[14]
+		clip[11] = modl[ 8] * proj[ 3] + modl[ 9] * proj[ 7] + modl[10] * proj[11] + modl[11] * proj[15]
+		
+		clip[12] = modl[12] * proj[ 0] + modl[13] * proj[ 4] + modl[14] * proj[ 8] + modl[15] * proj[12]
+		clip[13] = modl[12] * proj[ 1] + modl[13] * proj[ 5] + modl[14] * proj[ 9] + modl[15] * proj[13]
+		clip[14] = modl[12] * proj[ 2] + modl[13] * proj[ 6] + modl[14] * proj[10] + modl[15] * proj[14]
+		clip[15] = modl[12] * proj[ 3] + modl[13] * proj[ 7] + modl[14] * proj[11] + modl[15] * proj[15]
+		EndRem
+		
+		''have opengl do the math for us
+		glPushMatrix()
+
+		glLoadMatrixf(proj)
+		glMultMatrixf(modl)
+		glGetFloatv(GL_MODELVIEW_MATRIX, clip)
+	
+		glPopMatrix()
+</textarea><br><br><br>I could go on and on, but honestly, miniB3D isn't too bad without mods. The best approach is to always try and "cheat the shot". In other words, how can the effect be accomplished by making it look right but is done using a cheap visual trick.<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1108947"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> Awesome stuff Adam, thanks!<br><br><div class="quote"> [About GMan's Irrlicht B3D framework] In practice, do you know how successful this API port is? <br></div><br>It's not complete and it can't clone B3D up to command-level because both engines work differently; even though they have an "EntityFX" command, both work with different parameters etc. but provide a similar result.<br><br>However, I'm talking about the Blitz3D-like framework. The entire Irrlicht Engine is wrapped and complete, so it works without a problem - you can even continue his work on the framework so you have something that is more familiar to work with, and you also get to know how Irrlicht works by looking at the source. The benefit would be that Irrlicht is very complete, having octrees, optimized code etc. <br><br></td></tr></table><br>
+<a name="1108981"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for the tips, Adam! I'm going to keep on digesting them.<br><br>Question:<br><div class="quote"> AddMesh() combines duplicate surfaces automagically <br></div><br><br>By duplicate surfaces, does this mean anything that uses the same texture (atlas)? Like for example, if I have a static mesh for a couch in a scene, and I also have a static mesh of a chair in the scene, and both of their textures are on the same atlas. My guess is that their surfaces would still be considered distinct, right? Would AddMesh() automagically recognize that these are two peas from the same texture pod and work them into the same surface, or would there be additional work?<br><br>I guess I'm still uncertain about the surface-texture atlass relationship. <br><br></td></tr></table><br>
+<a name="1108994"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#22">[#22]</a></td></tr></table></td></tr><tr ><td class="posttext"> It should be considered the same surface since the UV values are stored in the VBO, so therefore minib3d should see identical surfaces.<br><br>When creating the chair and sofa, say you model and texture them independently using 128x128 textures, you would have to then create a larger image that would combine the two textures into a single 256x128 image (see programs above, but you could also do it by hand).<br><br>Then you would have to re-texture the models using the new 256x128 image and set your UVs in a modeling program before exporting the model for final minib3d importing. <br><br></td></tr></table><br>
+<a name="1109005"></a>
+
+<a name="1109027"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#23">[#23]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Then you would have to re-texture the models using the new 256x128 image and set your UVs in a modeling program before exporting the model for final minib3d importing. <br></div><br><br>Ahh, I think this was the missing link. Up to now, I've been thinking I'll have to write some tricky code to re-map the UVs at runtime. Having this stored at the model level makes a *lot* more sense and sounds a lot easier (at least for the programmer).<br><br>Back to sanity :)<br><br>Regarding <a href="http://blitzmax.com/Community/posts.php?topic=94160" target="_blank">http://blitzmax.com/Community/posts.php?topic=94160</a> (CreateSubMesh() ) isn't this only helpful if you have multiple surfaces within the combined mesh? And aren't we trying to have just one surface? I'm probably missing something there.<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1109007"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#24">[#24]</a></td></tr></table></td></tr><tr ><td class="posttext"> Another thing I'd like to clarify:<br><br><div class="quote"> Then you would have to re-texture the models using the new 256x128 image and set your UVs in a modeling program before exporting the model for final minib3d importing. <br></div><br><br>When I re-do the models such that they are UV'd to the same map, can I still export them as individual meshes, and then combine as described above in your post (#19), or would I also have to export one single joint mesh?<br><br>(I'm assuming its the former, but just to be sure...)<br><br>Thanks <br><br></td></tr></table><br>
+<a name="1109036"></a>
+
+<a name="1109041"></a>
+
+<a name="1109042"></a>
+
+<a name="1109046"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#25">[#25]</a></td></tr></table></td></tr><tr ><td class="posttext"> Re: exporting individual meshes<br><br>Depends. Say you have a chair model and a sofa model that are in the 256x128 texture atlas. You can LoadBrush("texturefile") and use that brush to PaintMesh(chair) and PaintMesh(sofa).<br><br>If you're Loading models into BMax using a third-party loader, I am not sure if they will recognize the same texture, which is why to be safe, create your own brush and paint the meshes accordingly.<br><br><br><br>Re: CreateSubMesh()<br><br>Yes, good point, this only works if you have separate surfaces. It's more of a time saver for creating a whole bunch of assets and placing into a single model file. I used it for debris, which would disappear after a short while so the overhead was not permanent. I also used it to rotate and move various parts of robots, doors, but keep everything in the same OBJ file.<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1109038"></a>
+
+<a name="1109040"></a>
+
+<a name="1109044"></a>
+
+<a name="1109045"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#26">[#26]</a></td></tr></table></td></tr><tr ><td class="posttext"> ---MORE NOTES ON MINIB3D OPTIMIZATION---<br><br>It's tough with miniB3D since it doesn't batch models with same surface textures together automatically. This is where AddMesh() comes into play. You can have one MASSIVE model with various surfaces, and it will do the batching for you. But you lose object culling, so it's sending all these VBO's to your gfx card, which is overhead (10 million triangles = 30 million points * 2 uvs, you get the idea). That's why I say keep it static, because the VBO's should be sent ONCE, then the graphics card will keep that data in its memory and you don't have to worry about it if you're only moving the camera.<br><br>If you're smart with the AddMesh() you can break up massive terrain into chunks, so the frustrum culling takes care of chunks we don't see.<br><br>Now when I say static, that means no animating bones. There is a way (but not currently implemented in miniB3D) to batch moving, scaling, rotating objects together that share the same surface texture but different positions. This is what Charlie (jkrankie) did with miniB3D sprite batching.<br><a href="http://blitzmax.com/Community/posts.php?topic=90420#1028446" target="_blank">http://blitzmax.com/Community/posts.php?topic=90420#1028446</a><br><br>Now to throw a wrench into all this, is semi-transparency. miniB3D organizes the drawing sequence for alpha-ed objects from back to front. So if you start using glass or semi-transparent surfaces or fading of objects, well, now things get complicated since it needs to be ordered.<br>Luckily, most of the ordered situations are taken care of, but once in a while you'll encounter weird problems, so you'd have to force objects to be in the ordering with the alpha-ed objects by setting the EntityFX(32), force alpha-blending flag.<br><br>So therefore, keep semi-transparent objects and textures separate from the massive, static landscape.<br><br><br>Link on OpenGL culling:<br><a href="http://www.sjbaker.org/steve/omniv/frustcull.html" target="_blank">http://www.sjbaker.org/steve/omniv/frustcull.html</a><br><br>Link on texture/object batching in Unity, but good explanation:<br><a href="http://unity3d.com/support/documentation/Manual/iphone-DrawCall-Batching.html" target="_blank">http://unity3d.com/support/documentation/Manual/iphone-DrawCall-Batching.html</a><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1109048"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#27">[#27]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Culling right now in EntityInFrustrum() (TCamera.bmx) does a lot of calculations per frame PER OBJECT. So yeah, some sort of octree would help. <br></div><br><br>Do you think the Octree code from MiniB3D v0.43 could be easily re-purposed for frustum culling (code pasted below), or did you find in practice that starting from scratch specifically for frustum culling was the way to go?<br><br><pre class=code>
+Type TOctree
+
+	Field x#,y#,z# ' mid point of oct cube
+	Field w#,h#,d#
+
+	Field oct_child:TOctree[8]
+	Field oct_polys:TPolygon[]
+	
+	' debug fields
+	Global no_polys_mesh=0 ' no of polys before octree created
+	Global no_polys_octree=0 ' no of polys after octree created
+	Global no_polys_active=0 ' no of active polys
+	Global no_cells=0 ' no of octree cells (leaf cells)
+	Global no_cells_active=0 ' no of active octree cells (leaf cells)
+	
+	' MiniB3D functions
+	
+	' Internal - not recommended for general use
+	
+	' creates a mesh's octree
+	Function CreateOctree(mesh:TMesh,max_polys,max_levels)
+	
+		' no minus figures
+		If max_polys&lt;0 Then max_polys=0
+		If max_levels&lt;0 Then max_levels=0
+	
+		' if max_polys&gt;0 and max_levels&gt;0 then octree is divided until each oct cube contains less than max_polys, or has been divided max_levels times, whatever comes first
+		' if max_polys&gt;0 and max_levels=0 then octree is divided until each oct cube contains less than max_polys
+		' if max_polys=0 and max_levels&gt;0 then octree is divided until each oct cube has been divided max_levels times
+		' if max_polys=0 and max_levels=0 then error
+		If max_polys=0 And max_levels=0 Then RuntimeError "Octree cannot be created - max_polys or max_levels must be greater than 0"
+	
+		Local polys:TPolygon[]=TPolygon.MeshToPolygons(mesh)
+		
+		mesh.octree:TOctree=New TOctree
+		
+		mesh.octree.w=mesh.MeshWidth()
+		mesh.octree.h=mesh.MeshHeight()
+		mesh.octree.d=mesh.MeshDepth()
+		mesh.octree.x=mesh.min_x+mesh.octree.w/2.0
+		mesh.octree.y=mesh.min_y+mesh.octree.h/2.0
+		mesh.octree.z=mesh.min_z+mesh.octree.d/2.0
+
+		mesh.octree.Create(polys,max_polys,max_levels)
+		
+		mesh.octree.no_polys_mesh=polys.length
+	
+	End Function
+	
+	' returns true if, from an array of polys, more than limit triangles are referenced
+	Method TestTris(polys:TPolygon[],limit=50)
+
+		' if limit=0 then return true immediately, we don't want to test tris
+		If limit=0 Then Return True
+
+		Local tris[limit]
+		Local i=0
+		
+		For Local poly:TPolygon=EachIn polys
+		
+			Local tri=poly.tri
+			
+			Local ref_exists=False
+			For Local check_ref=0 To i
+				If tris[check_ref]=tri Then ref_exists=True
+			Next
+			
+			If ref_exists=False
+			
+				tris[i]=tri
+				i=i+1
+				
+			EndIf
+			
+			If i&gt;=limit Then Exit
+			
+		Next
+
+		If i&gt;=limit Return True Else Return False
+
+	End Method
+
+	' returns, from an array of polys, no. of triangles referenced
+	Method CountTris(polys:TPolygon[],limit=500)
+
+		Local tris[limit]
+		Local i=0
+		
+		For Local poly:TPolygon=EachIn polys
+		
+			Local tri=poly.tri
+			
+			Local ref_exists=False
+			For Local check_ref=0 To i
+				If tris[check_ref]=tri Then ref_exists=True
+			Next
+			
+			If ref_exists=False
+			
+				tris[i]=tri
+				i=i+1
+				
+			EndIf
+			
+			If i&gt;=limit Then Exit
+			
+		Next
+
+		Return i
+
+	End Method
+
+	Method Create(polys:TPolygon[],max_polys,max_levels,level=0)
+	
+		' if max_levels=0 then set max_levels to artificially high no. so that level&lt;=max_levels (below) will always equal true
+		If max_levels=0 Then max_levels=100000
+	
+		level=level+1
+
+		If TestTris(polys,max_polys)=True And level&lt;=max_levels
+
+			Local child_polys:TPolygon[][8]
+		
+			Local polys1:TPolygon[]
+			Local polys2:TPolygon[]
+			Local polys11:TPolygon[]
+			Local polys12:TPolygon[]
+			Local polys21:TPolygon[]
+			Local polys22:TPolygon[]
+			Local origin:TVector=TVector.Create(x,y,z)
+			Local normal_x:TVector=TVector.Create(-1,0,0)
+			Local normal_y:TVector=TVector.Create(0,-1,0)
+			Local normal_z:TVector=TVector.Create(0,0,-1)
+			Local plane_x:TPlane=TPlane.CreatePlane(origin,normal_x)
+			Local plane_y:TPlane=TPlane.CreatePlane(origin,normal_y)
+			Local plane_z:TPlane=TPlane.CreatePlane(origin,normal_z)
+			
+			TPolygon.SplitPolygons2(polys,plane_x,polys1,polys2) ' left and right
+			TPolygon.SplitPolygons2(polys1,plane_y,polys11,polys12) ' left bottom, left top
+			TPolygon.SplitPolygons2(polys2,plane_y,polys21,polys22) ' right bottom, right top
+		
+			TPolygon.SplitPolygons2(polys11,plane_z,child_polys[0],child_polys[1]) ' left bottom front, left bottom back
+			TPolygon.SplitPolygons2(polys12,plane_z,child_polys[2],child_polys[3]) ' left top front, left top back
+			TPolygon.SplitPolygons2(polys21,plane_z,child_polys[4],child_polys[5]) ' right bottom front, right botttom back
+			TPolygon.SplitPolygons2(polys22,plane_z,child_polys[6],child_polys[7]) ' right top front, right bottom back
+
+			For Local i=0 To 7
+
+				oct_child[i]=New TOctree
+				
+				oct_child[i].w=w/2.0
+				oct_child[i].h=h/2.0
+				oct_child[i].d=d/2.0
+	
+				Select i
+				
+					Case 0
+					oct_child[i].x=x-(w/4.0)
+					oct_child[i].y=y-(h/4.0)
+					oct_child[i].z=z-(d/4.0)
+					Case 1
+					oct_child[i].x=x-(w/4.0)
+					oct_child[i].y=y-(h/4.0)
+					oct_child[i].z=z+(d/4.0)
+					Case 2
+					oct_child[i].x=x-(w/4.0)
+					oct_child[i].y=y+(h/4.0)
+					oct_child[i].z=z-(d/4.0)
+					Case 3
+					oct_child[i].x=x-(w/4.0)
+					oct_child[i].y=y+(h/4.0)
+					oct_child[i].z=z+(d/4.0)
+					Case 4
+					oct_child[i].x=x+(w/4.0)
+					oct_child[i].y=y-(h/4.0)
+					oct_child[i].z=z-(d/4.0)
+					Case 5
+					oct_child[i].x=x+(w/4.0)
+					oct_child[i].y=y-(h/4.0)
+					oct_child[i].z=z+(d/4.0)
+					Case 6
+					oct_child[i].x=x+(w/4.0)
+					oct_child[i].y=y+(h/4.0)
+					oct_child[i].z=z-(d/4.0)
+					Case 7
+					oct_child[i].x=x+(w/4.0)
+					oct_child[i].y=y+(h/4.0)
+					oct_child[i].z=z+(d/4.0)
+				
+				End Select
+				
+				oct_child[i].Create(child_polys[i],max_polys,max_levels,level)
+					
+			Next
+				
+		Else
+		
+			oct_polys=polys
+			no_cells=no_cells+1
+			no_polys_octree=no_polys_octree+polys.length
+	
+		EndIf
+	
+	End Method
+
+	Method OctPick(a:TVector,b:TVector,mesh:TMesh,t_min# Var,t_min2# Var)
+	
+		Local xx#=x-w/2.0
+		Local yy#=y-h/2.0
+		Local zz#=z-d/2.0
+		Local ww#=w
+		Local hh#=h
+		Local dd#=d
+		
+		Local t#
+		Local p:TVector
+		
+		Local pick=TPick.IntersectSegmentAABB(a,b,xx#,yy#,zz#,ww#,hh#,dd#,t#,p)
+			
+		If pick
+		
+			If t#&lt;t_min2#
+
+				If oct_polys&lt;&gt;Null
+				
+					Local pick=TPick.PickPolys(a,b,oct_polys,mesh,t_min#)
+					
+					If pick=True
+						t_min2#=t#
+					EndIf
+				
+				Else
+	
+					For Local i=0 To 7
+						If oct_child[i]&lt;&gt;Null
+							oct_child[i].OctPick(a,b,mesh,t_min#,t_min2#)
+						EndIf
+					Next
+					
+				EndIf
+
+			EndIf
+			
+		EndIf
+			
+	End Method
+	
+	Method OctCollision(collisionPackage:TCollisionPacket)
+
+		'If no_cells_active&gt;0 Then Return
+
+		Local a:TBox=collisionPackage.bb
+		
+		Local b:TBox=New TBox
+		b.mini[0]=x-w/2.0
+		b.maxi[0]=x+w/2.0
+		b.mini[1]=y-h/2.0
+		b.maxi[1]=y+h/2.0
+		b.mini[2]=z-d/2.0
+		b.maxi[2]=z+d/2.0
+
+		Local test=TBox.TBoxTBoxIntersection(a,b)
+		
+		If test
+
+			If oct_polys&lt;&gt;Null
+			
+				no_polys_active=no_polys_active+oct_polys.length
+				no_cells_active=no_cells_active+1
+				'HighlightTris(oct_polys)
+				TCollision.PolysCheckCollision(collisionPackage:TCollisionPacket,oct_polys)
+				
+			Else
+
+				For Local i=0 To 7
+					If oct_child[i]&lt;&gt;Null
+						oct_child[i].OctCollision(collisionPackage:TCollisionPacket)
+					EndIf
+				Next
+				
+			EndIf
+			
+		EndIf
+			
+	End Method
+	
+	Method HighlightTris(polys:TPolygon[])
+	
+		For Local poly:TPolygon=EachIn oct_polys
+	
+			Local surf:TSurface=poly.surf
+			Local tri=poly.tri
+	
+			Local v0=surf.TriangleVertex(tri,0)
+			Local v1=surf.TriangleVertex(tri,1)
+			Local v2=surf.TriangleVertex(tri,2)
+	
+			surf.VertexColor(v0,255,0,0)
+			surf.VertexColor(v1,255,0,0)
+			surf.VertexColor(v2,255,0,0)
+	
+		Next
+	
+	End Method
+	
+End Type
+</pre> <br><br></td></tr></table><br>
+<a name="1109051"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AdamRedwoods</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#28">[#28]</a></td></tr></table></td></tr><tr ><td class="posttext"> You could use that, but would have to change it to use an object's min/max xyz points instead of dividing up by the mesh's vertices.<br><br><a href="http://stackoverflow.com/questions/431841/mesh-rendering-using-octree-algorithm" target="_blank">http://stackoverflow.com/questions/431841/mesh-rendering-using-octree-algorithm</a><br><a href="http://www.flipcode.com/archives/Octrees_For_Visibility.shtml" target="_blank">http://www.flipcode.com/archives/Octrees_For_Visibility.shtml</a> <br><br></td></tr></table><br>
+<a name="1109057"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jtfrench</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#29">[#29]</a></td></tr></table></td></tr><tr ><td class="posttext"> In looking through options, implementing occlusion culling from scratch doesn't seem like the way to go, but using the OpenGL extension which handles it on the GPU (gl_arb_occlusion_query) seems like the way to go. It allows you to find out how many pixels on the screen would be affected by the rendering of the given primitive. I have yet to find any good tutorials on it, but a GPU solution seems like the way to go. Yes, there will be some concurrency issues in that the GPU and CPU operate asynchronously (e.g. all the occlusion queries will be based upon the previous -- not current -- frame), but as long as framerate stays high enough, these artifacts shouldn't be too big of a deal.<br><br>Has anyone checked this out yet? <br><br></td></tr></table><br>
+<a name="1109206"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Kryzon</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#30">[#30]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> In looking through options, implementing occlusion culling from scratch doesn't seem like the way to go, but using the OpenGL extension which handles it on the GPU (gl_arb_occlusion_query) seems like the way to go. It allows you to find out how many pixels on the screen would be affected by the rendering of the given primitive. <br></div><br>You should worry more about this when you have very expensive shaders - in this case, every pixel counts.<br>This occlusion query shouldn't be implemented "universally" in your engine as something that would run every single frame. <br>You should implement it per specific area. Say, a forest and other areas with lots of occluders that can benefit from these tests. Most open areas don't need this.<br><br>Also know that many graphic cards come with a feature called "Early-Z"; this does an occlusion test and discards fragments that are covered by others. This feature is not something you turn on, it's just 'there'.<br>If you manually output fragment depth in your pixel shader, it will be disabled (since the hardware needs to run the pixel shader to know what the depth will be).<br><br>If you're having doubts on what to implement, there is a better way.<br>Start developing your game concurrently with the game-engine, having 'necessity' dictate what should be implemented. <br>This way you are always on par with existing bottlenecks and whatever implementations are necessary to keep the target framerate, without risking bloating the engine with a list of optimizations you thought of beforehand. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

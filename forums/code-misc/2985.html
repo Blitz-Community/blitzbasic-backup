@@ -1,0 +1,433 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Lexical scanner framework</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='API for creating general-purpose lexical scanners/tokenisers, language=bb, category=Miscellaneous'><meta name='author' content='Yasha'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=9>Miscellaneous</a>/Lexical scanner framework</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2985.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Lexical scanner framework by Yasha</td><td align="right">2012 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> This is a simple library that allows you to describe a lexical scanner, and use it to tokenise an input file or string. It is suitable for use in things like console inputs, expression calculators, data file parsers, or programming/scripting language compilers.<br><br><br>"Lexing" or "tokenising" is the stage of reading some input where the source is broken up into homogenous "tokens", so that you can stop worrying about the input as text (with all of the annoying variations text can have, like the presence of spaces, indents, cases, and whatnot), and instead treat it as a stream of linear "chunks". e.g. a suitable lexer could take the input:<br><br><pre class=code> 1+2  * 4= 0xC</pre><br><br>...which is polluted by annoying spacing problems, formats, and different value lengths, and turn it into a stream of objects representing numbers and operators, so that we can just pull tokens off the top and be given either an operator or a number.<br><br>The output of a lexer is "flat" - turning it into a "tree" (i.e. parenting values to operators, putting operators in relative precedence to one another, etc.) is the job of a "parser". So this isn't enough to evaluate languages on its own, but it's the first step. Lexers and parsers are normally designed to work together, with the parser consuming the token stream produced by the lexer (<a href="http://www.blitzbasic.com/codearcs/codearcs.php?code=2990" target="_blank">a sister parser API to work with this is now also available</a>).<br><br><br>This library lets you create lexer objects and add rules to them in the form of regular-expression patterns for the input to be matched against, combined with actions and extra result information. Output is directed to a list supplied by the user.<br><br>Rules are tested in the order they were added; a longer match overrules a previous match. This may be relevant if you have two potential matches of the same length, so keep it in mind.<br><br>Upon match an "action" is performed. By default the lexer can store the result, switch mode, raise an error, "include" a filename, and discard the match. The built-in action constants are all negative, so use positives for any extra ones you care to define; add any extra action implementations to LEX_HandleAction in Lexer-Interface (that's what it's there for). The Include functionality is fairly simple and will require some use of modes to be useful; it does however try to detect recursive includes, and optionally guards against repeated includes (like Blitz Basic does, no error).<br><br>The file Lexer-Interface.bb is intended to be supplied by the user: in it, define LEX_HandleAction(l.LEX_Lexer, r.LEX_LexRule, tok$) as explained above, to handle any extra "actions" you want to add; and LEX_Error(l.LEX_Lexer, msg$), because you'll want error handling to suit the logging and handling mechanism of your host program. These two functions are all that are required, and the library does not depend upon either of them doing any more than receiving their arguments (so if you don't care about errors you can even leave them empty!).<br><br>Input is read in the form of a LEX_File object, representing a custom pseudo-filestream (basically a bank, but we're calling it a file), which is passed to LEX_ScanFile for scanning; remember to close LEX_File objects with LEX_CloseFile when done (any files opened by Include actions will be closed automatically). LEX_File objects can either be opened from real files (using LEX_ReadFile), or from strings (using LEX_FileFromString); the latter is handy for scanning input from a command prompt or REPL or something, when you don't necessarily actually have a file providing input. You still need to close LEX_Files created from strings, though.<br><br><br>Here's a small example that uses the library to create a lexer for a minimal calculator language with operators, numbers, functions and comments:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+; Generic Lexer: demonstration
+;==============================
+
+Include "Lexer.bb"
+Include "LList.bb"
+
+
+Local l.LEX_Lexer = LEX_CreateLexer()	;Lexer object
+
+Local tokenList.LList = CreateList()	;Output token list (this isn't "owned" by the lexer so we create it externally)
+LEX_SetOutput l, tokenList		;Do this before each scanning job, or they'll get appended!
+
+
+; For the example, we'll scan a simple mathematical expression language with numbers,
+; arithmetic operators, function calls, parentheses and also (for some reason) comments.
+; We won't bother with variables or includes.
+
+; Values: numeric, in decimal or hex format (won't distinguish ints from floats today)
+; Comments: /* */ and //, like in C
+; Operators: + - * / % &lt;&lt; &gt;&gt; ^ = != &lt;= &gt;=
+; Punctuation: ( ) ,
+; Function names: begin with a letter and then have numbers or underscores as well, like Blitz
+; Whitespace: is ignored, but separates tokens or terminates comments where relevant
+; Everything else: is an error
+
+
+;Block comments need a mode; custom modes must not be zero
+Const COMMENT_MODE = 1
+
+
+;Numbers (most complicated patterns)
+LEX_AddLexRule l, "[0-9]*", LEX_ACTION_STORE, "number"	;Simple int
+LEX_AddLexRule l, "0[xX][0-9a-fA-F]+", LEX_ACTION_STORE, "number"	;Hex int (style: 0xABC12)
+LEX_AddLexRule l, "[0-9]*.[0-9]+([eE]-?[0-9][0-9]*)?", LEX_ACTION_STORE, "number"		;Float, simple or scientific
+
+LEX_AddLexRule l, "/*", LEX_ACTION_MODE, COMMENT_MODE, 0	;Note that the star must be escaped
+LEX_AddLexRule l, ".", LEX_ACTION_DISCARD, "", COMMENT_MODE		;Match any charcater, but throw it away in comment mode only
+LEX_AddLexRule l, "*/", LEX_ACTION_MODE, 0, COMMENT_MODE		;Return to mode 0 on hitting */
+LEX_AddLexRule l, "//[^n]*n", LEX_ACTION_DISCARD			;Line comment: match up to end of line
+
+LEX_AddLexRule l, "+", LEX_ACTION_STORE, "add"		;Any Regex operators need to be escaped with 
+LEX_AddLexRule l, "-",  LEX_ACTION_STORE, "sub"
+LEX_AddLexRule l, "*", LEX_ACTION_STORE, "mul"
+LEX_AddLexRule l, "/",  LEX_ACTION_STORE, "div"
+LEX_AddLexRule l, "%",  LEX_ACTION_STORE, "mod"
+LEX_AddLexRule l, "&lt;&lt;", LEX_ACTION_STORE, "shl"
+LEX_AddLexRule l, "&gt;&gt;", LEX_ACTION_STORE, "shr"
+LEX_AddLexRule l, "^", LEX_ACTION_STORE, "pow"
+LEX_AddLexRule l, "=",  LEX_ACTION_STORE, "eql"
+LEX_AddLexRule l, "!=", LEX_ACTION_STORE, "neq"
+LEX_AddLexRule l, "&lt;=", LEX_ACTION_STORE, "leq"
+LEX_AddLexRule l, "&gt;=", LEX_ACTION_STORE, "geq"
+
+LEX_AddLexRule l, "(", LEX_ACTION_STORE, "lparen"
+LEX_AddLexRule l, ")", LEX_ACTION_STORE, "rparen"
+LEX_AddLexRule l, ",",  LEX_ACTION_STORE, "comma"
+
+LEX_SetCaseSensitivity l, False		;Only really useful to simplify the pattern below
+LEX_AddLexRule l, "[a-z][a-z0-9_]*", LEX_ACTION_STORE, "function"
+
+LEX_AddLexRule l, "[^[:space:]]", LEX_ACTION_ERROR		;Raise an error over any other printable character
+
+
+; OK, let's load a "file":
+Local f.LEX_File = LEX_FileFromString("1+2 * atan2(0x43, 1.5e-03)  /* Comment! */ %2")
+
+LEX_ScanFile l, f
+LEX_CloseFile f
+
+; So what did we get?
+Local i.Iterator = GetIterator(tokenList) : While EachIn(i)
+	Local t.LEX_Token = Object.LEX_Token iValue
+	Print tvalue + " : " + ttType
+Wend
+Print "done"
+;... a tasty list of tokens all ready to be turned into something useful by a parser!
+
+
+WaitKey
+End
+</textarea><br><br>This uses the following Lexer-Interface.bb file:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+; Example lexer specialisations
+;===============================
+
+
+Function LEX_Error(l.LEX_Lexer, msg$)
+	If l &lt;&gt; Null
+		Local err$ = "Lexer Error in '" + lcFilename
+		err = err + "' ('" + lcFiledir + lcFilename + "')"
+		err = err + " at line " + lcFilecLine + ", col " + lcFilecCol
+		Print err + ": " + msg
+	Else
+		Print "Lexer Error: " + msg
+	EndIf
+End Function
+
+Function LEX_HandleAction(l.LEX_Lexer, r.LEX_LexRule, tok$)
+	; Example doesn't have any custom actions
+End Function
+</textarea><br><br>That's one way to get nice clean input for an expression evaluator!<br><br><br>This library depends on <a href="http://www.blitzbasic.com/codearcs/codearcs.php?code=2632" target="_blank">regular expressions</a> and <a href="http://www.blitzbasic.com/codearcs/codearcs.php?code=2873" target="_blank">linked list</a> include files, both of which are available from the code archives at the given links.<br><br>This library replaces my older <a href="http://www.blitzbasic.com/codearcs/codearcs.php?code=2636" target="_blank">lexer generator</a>. It's more or less equally powerful (same regex-powered backend), so there's no reason to use the old version, with its inconvenient preprocessing step and custom source format. </td></tr><tr ><td class="cell"><pre class="code">; Generic lexical scanner/tokeniser framework
+;=============================================
+
+
+;Dependencies
+Include "LList.bb"	;Get this file at http://www.blitzbasic.com/codearcs/codearcs.php?code=2873
+Include "Regex.bb"	;Get this file at http://www.blitzbasic.com/codearcs/codearcs.php?code=2632
+
+;User-specialised interface: supplies LEX_Error and LEX_HandleAction
+Include "Lexer-Interface.bb"
+
+
+Type LEX_Token
+	Field value$, tType$
+	Field file$, l, c
+End Type
+
+Type LEX_Lexer
+	Field rules.LList
+	Field cFile.LEX_File
+	Field out.LList		;Output list is not "owned" by the lexer
+	Field csMode, guardMode, errState
+	Field istk.LList, prev.LList
+End Type
+
+Type LEX_LexRule
+	Field rule.RegEx_Node, pattern$
+	Field action, result$, mode
+End Type
+
+Type LEX_File
+	Field dir$, name$
+	Field stream, sLen, cPtr, cLine, cCol
+End Type
+
+Type LEX_Guard
+	Field name$
+End Type
+
+
+Const LEX_ACTION_STORE = -1, LEX_ACTION_MODE = -2, LEX_ACTION_ERROR = -3, LEX_ACTION_DISCARD = -4, LEX_ACTION_INCLUDE = -5
+
+
+;Create a new, empty lexer object
+Function LEX_CreateLexer.LEX_Lexer()
+	Local l.LEX_Lexer = New LEX_Lexer
+	lrules = CreateList()
+	lcsMode = True
+	lguardMode = False
+	Return l
+End Function
+
+;Set the output token list for the lexer
+Function LEX_SetOutput(l.LEX_Lexer, out.LList)
+	lout = out
+End Function
+
+;Set whether rules added to this lexer will be case-sensitive (changing this doesn't affect old rules)
+Function LEX_SetCaseSensitivity(l.LEX_Lexer, csMode)
+	lcsMode = csMode
+End Function
+
+;Set whether included files are auto-guarded or not (i.e. can they be included twice?)
+Function LEX_SetIncludeMode(l.LEX_Lexer, guarded)
+	lguardMode = guarded
+End Function
+
+;(Internal) Try to include a source file, guards and recursion checks permitting (returns boolean indicating success)
+Function LEX_TryIncludeFile(l.LEX_Lexer, file$)
+	Local i.Iterator, fd$[0], fn$[0]
+	LEX_GetPathCmpts file, fd, fn : file = fd[0] + fn[0]	;Force the path to be absolute for easier comparison
+	
+	If lguardMode	;Auto-guarded includes: check if it's been used already, if so ignore it
+		i = GetIterator(lprev) : While EachIn(i)
+			Local g.LEX_Guard = Object.LEX_Guard iValue
+			If gname = file Then Return True	;...return without actually changing it
+		Wend
+	EndIf
+	
+	i = GetIterator(listk) : While EachIn(i)	;Check against the currently-open files
+		Local f.LEX_File = Object.LEX_File iValue
+		If fdir + fname = file
+			LEX_Error l, "Cannot recursively include '" + file + "'"
+			Return False
+		EndIf
+	Wend
+	
+	lcFile = LEX_ReadFile(file)
+	If lcFile &lt;&gt; Null
+		ListAddLast listk, Handle lcFile : LEX_GuardFileName l, lcFile
+		Return True
+	Else
+		Return False	;Error has already been issued by LEX_ReadFile
+	EndIf
+End Function
+
+;(Internal) Clear the include stacks when a scan has stopped, closing any "owned" files
+Function LEX_ClearStacks(l.LEX_Lexer, keep.LEX_File)
+	Local i.Iterator
+	If listk &lt;&gt; Null
+		i = GetIterator(listk) : While EachIn(i)
+			Local f.LEX_File = Object.LEX_File iValue : If f &lt;&gt; keep Then LEX_CloseFile f
+		Wend
+		FreeList listk
+	EndIf
+	If lprev &lt;&gt; Null
+		i = GetIterator(lprev) : While EachIn(i)
+			Delete Object.LEX_Guard iValue
+		Wend
+		FreeList lprev
+	EndIf
+	lcFile = Null
+End Function
+
+;Delete a lexer object and its resources (not output)
+Function LEX_FreeLexer(l.LEX_Lexer)
+	Local i.Iterator = GetIterator(lrules) : While EachIn(i)
+		Local r.LEX_LexRule = Object.LEX_LexRule(iValue)
+		RegEx_Delete rrule
+		Delete r
+	Wend
+	FreeList lrules
+	
+	LEX_ClearStacks l, Null
+	If lcFile &lt;&gt; Null Then LEX_CloseFile lcFile
+	
+	Delete l
+End Function
+
+;Delete an output token stream (convenience function)
+Function LEX_FreeTokenStream(s.LList)
+	Local i.Iterator = GetIterator(s) : While EachIn(i)
+		Delete Object.LEX_Token iValue
+	Wend
+	FreeList s
+End Function
+
+;Add a scan rule, consisting of a match pattern, action, "result" (additional data such as type or error message) and permitted mode
+Function LEX_AddLexRule(l.LEX_Lexer, rule$, action, result$ = "", mode = 0)
+	Local r.LEX_LexRule = New LEX_LexRule
+	rrule = RegEx_Parse(rule, lcsMode)
+	rpattern = rule
+	raction = action
+	rresult = result
+	rmode = mode
+	ListAddLast lrules, Handle r
+End Function
+
+;Scan a file (opened with LEX_ReadFile) using the given lexer
+Function LEX_ScanFile(l.LEX_Lexer, f.LEX_File)
+	LEX_ResetFile f
+	lerrState = False
+	lcFile = f
+	
+	listk = CreateList()
+	lprev = CreateList()
+	ListAddLast listk, Handle f
+	LEX_GuardFileName l, f
+	
+	Repeat
+		Local token$, rule.LEX_LexRule, mode = 0
+		
+		While lcFilecPtr &lt; lcFilesLen
+			token = "" : rule = Null
+			
+			Local i.Iterator = GetIterator(lrules) : While EachIn(i)
+				Local r.LEX_LexRule = Object.LEX_LexRule iValue
+				If mode = rmode
+					Local cMatch$ = RegEx_Match(rrule, lcFilestream, lcFilecPtr)
+					If Len(cMatch) &gt; Len(token) Then token = cMatch : rule = r
+				EndIf
+			Wend
+			
+			If rule &lt;&gt; Null		;Something matched successfully!
+				Select ruleaction
+					Case LEX_ACTION_STORE
+						ListAddLast lout, Handle LEX_NewToken(token, ruleresult, lcFilename, lcFilecLine, lcFilecCol)
+					Case LEX_ACTION_MODE
+						mode = Int ruleresult
+					Case LEX_ACTION_ERROR
+						LEX_Error l, ruleresult
+						LEX_ClearStacks l, f : Return	;Clear the include stacks and stop scanning
+					Case LEX_ACTION_DISCARD
+						;Do nothing
+					Case LEX_ACTION_INCLUDE
+						LEX_IncrementFilePtr lcFile, Len(token)
+						token = LEX_FilterIncludeString(token, ruleresult)	;Shorten the token to just the file path
+						If Not LEX_TryIncludeFile(l, token) Then LEX_ClearStacks l, f : Return
+						
+					Default
+						LEX_HandleAction l, rule, token
+						If lerrState Then LEX_ClearStacks l, f : Return
+				End Select
+				
+				If ruleaction &lt;&gt; LEX_ACTION_INCLUDE Then LEX_IncrementFilePtr lcFile, Len(token)
+			Else
+				LEX_IncrementFilePtr lcFile, 1
+			EndIf
+		Wend
+		
+		If lcFile &lt;&gt; f		;Pop back to the previous file in the include stack
+			LEX_CloseFile lcFile
+			ListRemoveLast listk
+			lcFile = Object.LEX_File ListLast(listk)
+		Else
+			Exit	;If it's f, we're done
+		EndIf
+	Forever
+	
+	LEX_ClearStacks l, f
+End Function
+
+;Load a file into a suitable format for scanning
+Function LEX_ReadFile.LEX_File(path$)
+	path = Replace(path, "", "/")	;Normalise slashes
+	
+	Local dirName$[0], fileName$[0] : LEX_GetPathCmpts path, dirName, fileName
+	
+	Local stream = ReadFile(path) : If Not stream
+		LEX_Error Null, "Unable to open file '" + path + "' ('" + dirName[0] + fileName[0] + "')"
+		Return Null
+	EndIf
+	
+	Local f.LEX_File = New LEX_File
+	fdir = dirName[0] : fname = fileName[0]
+	
+	fstream = CreateBank(FileSize(path))
+	ReadBytes fstream, stream, 0, BankSize(fstream)
+	CloseFile stream
+	fsLen = BankSize(fstream)
+	
+	LEX_ResetFile f
+	Return f
+End Function
+
+;Flag an error, preventing the lexer from continuing and possibly logging it via the interface
+Function LEX_Error(l.LEX_Lexer, msg$)
+	LEX_LogError l, msg
+	lerrState = True
+End Function
+
+;(Internal) Use a simple set of filter chars to chop the path out of an include directive
+Function LEX_FilterIncludeString$(inc$, filter$)
+	Local i, p
+	For i = 1 To Len(filter)
+		p = Instr(inc, Mid(filter, i, 1))
+		If p Then inc = Mid(inc, p + 1) : Exit
+	Next
+	For i = 1 To Len(filter)
+		p = Instr(inc, Mid(filter, i, 1))
+		If p Then inc = Left(inc, p - 1) : Exit
+	Next
+	Return inc
+End Function
+
+;(Internal) Get the absolute directory and stripped filename from a path
+Function LEX_GetPathCmpts(path$, dirOut$[0], fileOut$[0])
+	dirOut[0] = "" : fileOut[0] = path
+	Local tgt$ : If Instr(path, "/") Then tgt = "/" : Else tgt = ":"
+	
+	Local c : For c = Len(path) To 1 Step -1
+		If Mid(path, c, 1) = tgt
+			dirOut[0] = Left(path, c) : If Left(dirOut[0], 1) = "/" Then dirOut[0] = Mid(dirOut[0], 2)
+			fileOut[0] = Mid(path, c + 1)
+			Exit
+		EndIf
+	Next
+	
+	Local isAbsolute = (Left(path, 2) = "//") Or Instr(path, ":")	;UNC/driveletter/URL
+	If Not isAbsolute Then dirOut[0] = dirOut[0] + Replace(CurrentDir(), "", "/")
+End Function
+
+;(Internal) Reset a LEX_File's pointer fields
+Function LEX_ResetFile(f.LEX_File)
+	fcPtr = 0
+	fcLine = 1
+	fcCol = 1
+End Function
+
+;(Internal) Increment a LEX_File's pointer fields
+Function LEX_IncrementFilePtr(f.LEX_File, count)
+	Local c : For c = 1 To count
+		Local char = PeekByte(fstream, fcPtr)
+		If char &lt; 32	;Only count printable characters in the column field
+			If char = 10 Then fcLine = fcLine + 1 : fcCol = 1
+		Else
+			fcCol = fcCol + 1
+		EndIf
+		fcPtr = fcPtr + 1
+	Next
+End Function
+
+;(Internal) "Guard" a file against being included twice
+Function LEX_GuardFileName(l.LEX_Lexer, f.LEX_File)
+	Local g.LEX_Guard = New LEX_Guard
+	gname = fdir + fname
+	ListAddLast lprev, Handle g
+End Function
+
+;"Close" a file opened for scanning
+Function LEX_CloseFile(f.LEX_File)
+	If fstream Then FreeBank fstream
+	Delete f
+End Function
+
+;Treat the contents of a string as a lexer file (useful for short inputs)
+Function LEX_FileFromString.LEX_File(s$)
+	Local f.LEX_File = New LEX_File
+	fdir = "" : fname = "&lt;string&gt;"
+	
+	fstream = CreateBank(Len(s))
+	Local c : For c = 1 To BankSize(fstream)
+		PokeByte fstream, c - 1, Asc(Mid(s, c, 1))
+	Next
+	fsLen = BankSize(fstream)
+	
+	LEX_ResetFile f
+	Return f
+End Function
+
+;Create a new match result (token object)
+Function LEX_NewToken.LEX_Token(val$, tt$, file$, l = 0, c = 0)
+	Local t.LEX_Token = New LEX_Token
+	tvalue = val : ttType = tt
+	tfile = file : tl = l : tc = c
+	Return t
+End Function
+
+
+;~IDEal Editor Parameters:
+;~F#D#12#1A#1F#24#2D#36#3B#40#45#62#74#83#8B#96#D6#ED#F3#101#112
+;~F#119#126#12D#133#142
+;~C#Blitz3D</pre></td></tr></table><br><a name="comments">Comments</a><br><br>None.<br><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

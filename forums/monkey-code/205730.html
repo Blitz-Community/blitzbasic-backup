@@ -1,0 +1,245 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Faster Ray Traced Terrain Shadow Maps</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Faster Ray Traced Terrain Shadow Maps</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >Faster Ray Traced Terrain Shadow Maps</a><br><br>
+<a name="2064882"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I found this fast enough to use in real-time in Monkey in maps up to 256x256. I extracted it from a larger codebase, and I think I removed the stuff specific to my code. If not, it should be easy to spot. :)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+	' Monkey implementation of "Faster Ray Traced Terrain Shadow Maps"
+	' optimized version, minus the threading
+	' from <a href="http://content.gpwiki.org/index.php/Faster_Ray_Traced_Terrain_Shadow_Maps" target="_blank">http://content.gpwiki.org/index.php/Faster_Ray_Traced_Terrain_Shadow_Maps</a>
+	
+	' heightmap is a single array of Floats. Note, shouldn't normalized 0 to 1!
+	
+	' lightmap is a blank array of matching size. It's passed by reference so it's where
+	'   your output will be.
+	
+	' width of the heightmap (e.g. the x)
+	
+	' height of the heightmap (e.g. the y)
+	
+	' light dir is a vec3 for the sun
+
+Function IntersectMap(heightmap:Float[], lightmap:Float[], width:Int, height:Int, lightDir:Float[])
+	
+		Local flagMap:Float[width * height]
+		For Local i:Int = 0 To (width * height) - 1
+			flagMap[i] = 0
+		Next
+		
+		Local lightDirXMagnitude:Float = lightDir[0]
+		Local lightDirZMagnitude:Float = lightDir[2]
+		If (lightDirXMagnitude &lt; 0) Then lightDirXMagnitude *= -1
+		If (lightDirZMagnitude &lt; 0) Then lightDirZMagnitude *= -1
+		
+		Local distanceStep:Float = Sqrt(lightDir[0] * lightDir[0] + lightDir[1] * lightDir[1])
+		
+		Local X:Int, Y:Int
+		Local iX:Int, iY:Int
+		Local dirX:Int, dirY:Int	
+		
+		If (lightDirXMagnitude &gt; lightDirZMagnitude)
+			Y = iX
+			X = iY
+		
+			If lightDir[0] &lt; 0
+				dirY = -1
+			Else
+				dirY = 1
+			EndIf
+			
+			If lightDir[2] &lt; 0
+				dirX = -1
+			Else
+				dirX = 1
+			EndIf
+		Else
+			Y = iY
+			X = iX
+			
+			If lightDir[0] &lt; 0
+				dirX = -1
+			Else
+				dirX = 1
+			EndIf
+			
+			If lightDir[2] &lt; 0
+				dirY = -1
+			Else
+				dirY = 1
+			EndIf
+		EndIf
+		
+		For Local y:Int = 0 To height - 1
+
+			If dirY &lt; 0
+				iY = height - y - 1
+			Else
+				iY = y
+			EndIf
+			
+			For Local x = 0 To width - 1
+
+				If dirX &lt; 0
+					iX = width - x - 1
+				Else
+					iX = x
+				EndIf
+				
+				Local px:Float, py:Float, heightVal:Float, distance:Float, origX:Float, origY:Float
+				Local index:Int
+				
+				px = x
+				py = y
+				origX = px
+				origY = py
+				index = y * width + x
+				distance = 0.0
+				'DebugLog(iX + "," + iY)
+				While 1
+					px -= lightDir[0]
+					py -= lightDir[2]
+					
+					If px &lt; 0 or px &gt;= width or py &lt; 0 or py &gt;= height
+						flagMap[index] = -1
+						Exit
+					EndIf
+					
+					Local x0:Int, x1:Int, y0:Int, y1:Int
+					Local du:Float, dv:Float
+					Local interpolatedHeight:Float, interpolatedFlagMap:Float
+					Local invdu:Float, invdv:Float
+					Local w0:Float, w1:Float, w2:Float, w3:Float
+					
+					x0 = Int(px)
+					y0 = Int(py)
+					
+					'DebugLog("Ray in " + x0 + "," + y0)
+					
+					x1 = x0 + 1
+					y1 = y0 + 1
+					
+					du = px - x0
+					dv = py - y0
+					
+					invdu = 1 - du
+					invdv = 1 - dv
+					
+					w0 = invdu * invdv
+					w1 = invdu * dv
+					w2 = du * invdv
+					w3 = du * dv
+					
+					interpolatedHeight = w0 * heightmap[y0 * width + x0] + w1 * heightmap[y1 * width + x0] + w2 * heightmap[y0 * width + x1] + w3 * heightmap[y1 * width + x1]
+					interpolatedFlagMap = w0 * flagMap[y0 * width + x0] + w1 * flagMap[y1 * width + x0] + w2 * flagMap[y0 * width + x1] + w3 * flagMap[y1 * width + x1];
+					
+					distance += distanceStep
+					
+					heightVal = heightmap[index] + lightDir[1] * distance
+					'If heightmap[index] &lt;&gt; 0 Then DebugLog("Height is " + heightmap[index] + " and heightVal is " + heightVal)
+					Local val:Float
+					If (interpolatedHeight &lt; interpolatedFlagMap) Then val = interpolatedFlagMap Else val = interpolatedHeight
+					'If heightmap[index] &lt;&gt; 0 Then DebugLog("Val is " + val)
+					If (heightVal &lt; val)
+						flagMap[index] = val - heightVal
+						lightmap[index] = 0
+						'DebugLog("Shadow!")
+						Exit
+					EndIf
+					
+					Local epsilon:Float = 0.5
+					If interpolatedFlagMap &lt; - 1.0 + epsilon And interpolatedFlagMap &gt; - 1.0 - epsilon
+						flagMap[index] = -1
+						'DebugLog("Outside epsilon")
+						Exit
+					EndIf
+					
+				Wend
+				
+			Next
+		Next
+		
+	End
+</textarea> <br><br></td></tr></table><br>
+<a name="2065084"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GW_</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Very cool! <br><br></td></tr></table><br>
+<a name="2065101"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sammy</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looks great, any chance of some demo code, to show how to use it? <br><br></td></tr></table><br>
+<a name="2065131"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well, you need a fair amount of code to use it -- some way to render the map, some way to generate the map, etc.<br><br>How I am using it is more or less like this (mostly pseudocode)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+'this is Impixi's heightmap generation stuff from here:
+' <a href="http://www.monkeycoder.co.nz/Community/posts.php?topic=1762" target="_blank">http://www.monkeycoder.co.nz/Community/posts.php?topic=1762</a>
+Import hmap
+
+' Holds a tile type
+Class Tile
+    Field img
+    ' I also have here fields for all the tile blends
+End
+
+Class MapTile
+    Field elev
+    Field Tile
+    Field light  ' this one is the self-shadows
+    Field light2 ' this one is for height-based shadows. It looks better with both inputs.
+
+    ' a whole lot of other fields (blocking, flat, mouseover, etc)
+End
+
+Class Terrain
+    Field map:Tile[][]
+    Field cameraLightX:Float, cameraLightY:Float, cameraLightZ:Float
+    Field width:Int, Height:Int
+    ' a whole lot of other fields :)
+
+    Method Create()
+        Local perlin:HeightMap = New HeightMap(width, height)
+        perlin.GenerateHillMap(1, 100, 25, True)
+
+        ' copy the heights into the map
+        For Local x = 0 to width - 1
+            For Local y = 0 to height - 1
+                map[x][y] = New Tile(x, y, perlin.values[x + y * width])
+            Next
+        Next
+
+        UpdateLights()
+    End
+
+    Method UpdateLights()
+
+        ' obviously, this is incurring a bunch of extra array copies that it shouldn't! Optimize it later...
+
+	Local lightMap:Float[width * height]
+	Local hmap:Float[width * height]
+	For Local x = 0 To width - 1
+	    For Local y = 0 To height - 1
+                ' multiply by 100 bc IntersectMap doesn't expect normalized floats
+	        hmap[x + y * width] = map[x][y].elev * 100
+                ' set as lit by default
+	        lightMap[x + y * width] = 1
+	    Next
+	Next		
+		
+	IntersectMap(hmap, lightMap, width, height,[cameraLightX, cameraLightY, cameraLightZ])
+
+        ' put the light values back into map
+	For Local x = 0 To width - 1
+	    For Local y = 0 To height - 1
+	        map[x][y].light = lightMap[x + y * width]
+	    Next
+	Next
+    End
+   
+End
+</textarea><br><br>When I go to render it, I am actually only letting this shadowmap contribute 10% of the overall light, because it's a binary value -- either it's shadowed or it's not. So I blend in two other light levels. One is purely based on the elevation of the tile. The other is based on the gap between the highest and lowest corners of the tile.<br><br>Here it is with only the gap between highest and lowest -- basically, this is relief lighting. I am just using SetColor here to darken the quad.<br><br><img src="http://www.raphkoster.com/images/Monkeyterrain1.PNG"><br><br>Then if you add in the output of IntersectMap, you can see it does self-shadowing.<br><br><img src="http://www.raphkoster.com/images/Monkeyterrain2.PNG"><br><br>I am doing soft shadowing by overlaying four shadow blends onto each tile, one from each corner of the tile. Same idea as vertex colors, but DrawTextPoly doesn't have those. :) I query the light levels of the neighboring tiles, and pick a light level for that corner. Then I set the alpha for that blend, and repeat for each of the four corners. As you can see, my shadow blend tiles are not perfect. That's actually been the hardest part of this! You can see a sort of "grid effect" on the big shadowed hillside.<br><br><img src="http://www.raphkoster.com/images/Monkeyterrain3.PNG"><br><br>The last touch is a little trick that helps pop hills off of backgrounds with similar light levels -- an up to 10% penalty on light level based on elevation. This way ridges pop off, though the price is a slight darkening of the overall scene.<br><br><img src="http://www.raphkoster.com/images/Monkeyterrain4.PNG"><br><br>I call UpdateLights() whenever the sun moves, which I currently have on some hotkeys...<br><br>I am probably going to rework this so that instead of just drawing a black shadow texture with alpha, I'll draw a white one, and SetColor it to the right light level. Then I can add in a vertex color map into the mix without incurring any additional draw calls. <br><br></td></tr></table><br>
+<a name="2065145"></a>
+
+<a name="2065146"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Pretty nifty. Mojo can be persuaded to take a vertex colour array if you're willing to get your hands dirty by the way. <br><br></td></tr></table><br>
+<a name="2065153"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yeah, I was pretty sure it could be extended for that. Given that Mark was going to do his 'Mojo2din3d' thing, I wasn't sure whether to bother. And really, I am past the overkill point on this, considering it's primarily intended for a background for a bird to fly over. ;)<br><br>Still having issues with alpha in the HTML5 target, btw. Have been trying varied params in TexturePacker and so far have only managed to make it worse. :P <br><br></td></tr></table><br>
+<a name="2065158"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >muddy_shoes</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Extrude with a value of 1 seems to do the trick for me but I can't be sure the few tiled textures would show the same issue you're having. WebGL is just a convenient test platform rather than a serious target for me at the moment so I've also only looked at output on Chrome on my laptop. There could be variation across browsers and drivers, I suppose.<br><br>I also use my own atlas code that could vary in behaviour from what you're using. I should maybe get around to organising that and releasing it as a module sometime. It would give me an excuse to ask the TexturePacker guy for a free license as my upgrades expired a while back. <br><br></td></tr></table><br>
+<a name="2065160"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Raph</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Good point about the different browsers -- haven't thought to try in more than Firefox yet. <br><br></td></tr></table><br>
+<a name="2065167"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Sammy</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Many thanks for the extra information and pics Raph. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

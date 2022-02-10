@@ -1,0 +1,717 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Adjacent Triangles</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Adjacent Triangles</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=5" >Blitz3D Beginners Area</a>/<a href="#bottom" >Adjacent Triangles</a><br><br>
+<a name="603256"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >octothorpe</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> The shape below is single-surface.  It was constructed by addmesh()ing together four meshes.  Note the two black pixels along a junction between two quads.  There are actually a lot of parallel quads which are joined together without artifacts in this mesh, but that junction is the only one that causes any artifacts.  How can I fix this?<br><br><img src="http://www.wzone.com/chris/blitz/tetrad1.png"><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+;---------------------------------------------------------------------------------------------------
+;= TYPES
+;---------------------------------------------------------------------------------------------------
+type point
+	field x#, y#, z#
+end type
+
+type shape
+	field rotation_pivot
+	field origin_pivot
+	field entity
+	field shape_info.shape_info
+end type
+
+type shape_info
+	field r, g, b
+	field block.shape_block_info[4-1]
+	field collision_map[4*4*4-1]
+end type
+
+type shape_block_info
+	field block_id
+	field x, y, ang
+end type
+
+;---------------------------------------------------------------------------------------------------
+;= CONSTANTS
+;---------------------------------------------------------------------------------------------------
+const BLOCK_SIZE#         = 1.0
+const BLOCK_BEVEL_WIDTH#  = 0.2
+; block enum
+const BLOCK_end           = 0
+const BLOCK_corner        = 1
+const BLOCK_straight      = 2
+const BLOCK_three_way     = 3
+const BLOCK_filled_corner = 4
+const BLOCK_TOTAL         = 5
+; shape enum
+const SHAPE_I             = 0
+const SHAPE_T             = 1
+const SHAPE_O             = 2
+const SHAPE_L             = 3
+const SHAPE_J             = 4
+const SHAPE_S             = 5
+const SHAPE_Z             = 6
+const SHAPE_TOTAL         = 7
+
+
+;---------------------------------------------------------------------------------------------------
+;= GLOBALS
+;---------------------------------------------------------------------------------------------------
+dim block_blueprint_outsideonly(BLOCK_TOTAL-1)
+dim block_blueprint_complete(BLOCK_TOTAL-1)
+dim shape_colours(SHAPE_TOTAL-1, 3-1)
+dim shape_info.shape_info(SHAPE_TOTAL-1)
+global block_texture
+
+; used in Calculate_Normals()
+Dim Face_NX#(32768)
+Dim Face_NY#(32768)
+Dim Face_NZ#(32768)
+Dim Vertex_ConnectedTris(32768)
+Dim Vertex_TriList(32768, 32)
+
+;---------------------------------------------------------------------------------------------------
+;= PROGRAM FLOW
+;---------------------------------------------------------------------------------------------------
+game_init()
+game_main()
+
+;---------------------------------------------------------------------------------------------------
+function game_init()
+	graphics3d 800, 600, 32, 0
+	setbuffer backbuffer()
+
+	init_block_blueprint_outsideonly()
+	init_shape_data()
+
+	camera = createcamera()
+	positionentity(camera, 0, 0, -6)
+	light = createlight()
+	rotateentity(light, 45, 45, 0)
+	ambientlight(200, 200, 200)
+
+	block_texture = loadtexture("block_texture.jpg", 1) ; 64=spheremap, but that doesn't work well on tris with "flat" normals. flare them?
+	scaletexture(block_texture, 3, 3)
+end function
+
+;---------------------------------------------------------------------------------------------------
+function game_main()
+	current_shape.shape = create_shape(SHAPE_T)
+	entityalpha(current_shape\entity, .5)
+	;entityblend(current_shape\entity, 3)
+
+	mousexspeed() : mouseyspeed()
+	while not keyhit(1)
+		turnentity(current_shape\rotation_pivot, -mouseyspeed(), mousexspeed(), 0)
+		renderworld
+		flip
+	wend
+	end
+end function
+
+;---------------------------------------------------------------------------------------------------
+;= POINTS
+;---------------------------------------------------------------------------------------------------
+function point_new.point(x#, y#, z#)
+	this.point = new point
+	this\x = x : this\y = y : this\z = z
+	return this
+end function
+
+;---------------------------------------------------------------------------------------------------
+;= SHAPES
+;---------------------------------------------------------------------------------------------------
+function create_shape.shape(id)
+	s.shape = new shape
+	s\shape_info = shape_info(id)
+	s\origin_pivot = createpivot()
+	s\rotation_pivot = createpivot(s\origin_pivot)
+
+	s\entity = createmesh(s\rotation_pivot)
+	entitycolor(s\entity, s\shape_info\r, s\shape_info\g, s\shape_info\b)
+	entityshininess(s\entity, .3)
+	;entitytexture(s\entity, block_texture)
+
+	for b = 0 to 4-1
+		block_info.shape_block_info = s\shape_info\block[b]
+		bp = block_blueprint_outsideonly(block_info\block_id)
+		rotatemesh(bp, 0, 0, -block_info\ang)
+		positionmesh(bp, -block_info\x, -block_info\y, 0)
+		addmesh(bp, s\entity)
+		positionmesh(bp, block_info\x, block_info\y, 0)
+		rotatemesh(bp, 0, 0, block_info\ang)
+	next
+
+	surface_id = getsurface(s\entity, 1)
+	for v = 0 to countvertices(surface_id)-1
+		x# = vertexx(surface_id, v)
+		y# = vertexy(surface_id, v)
+		z# = vertexz(surface_id, v)
+		vertextexcoords(surface_id, v, x+z/2, y+z/2)
+	next
+
+	return s
+end function
+
+;---------------------------------------------------------------------------------------------------
+function init_shape_data()
+	restore shape_data
+	for id = 0 to SHAPE_TOTAL-1
+		shape_info(id) = new shape_info
+		read shape_info(id)\r, shape_info(id)\g, shape_info(id)\b
+		for b = 0 to 4-1
+			shape_info(id)\block[b] = new shape_block_info
+			read shape_info(id)\block[b]\block_id
+			read shape_info(id)\block[b]\x
+			read shape_info(id)\block[b]\y
+			read shape_info(id)\block[b]\ang
+		next
+		for r = 0 to 3
+			for y = 0 to 3
+				for x = 0 to 3
+					read shape_info(id)\collision_map[r*16 + y*4 + x]
+				next
+			next
+		next
+	next
+end function
+
+;---------------------------------------------------------------------------------------------------
+function init_block_blueprint_outsideonly()
+	local xy_lookup#[3]
+	xy_lookup[0] = -BLOCK_SIZE / 2
+	xy_lookup[1] = -BLOCK_SIZE / 2 + BLOCK_BEVEL_WIDTH
+	xy_lookup[2] = BLOCK_SIZE / 2 - BLOCK_BEVEL_WIDTH
+	xy_lookup[3] = BLOCK_SIZE / 2
+
+	local z_lookup#[3]
+	z_lookup[0] = BLOCK_SIZE / 2
+	z_lookup[1] = BLOCK_SIZE / 2 - BLOCK_BEVEL_WIDTH
+	z_lookup[2] = -BLOCK_SIZE / 2 + BLOCK_BEVEL_WIDTH
+	z_lookup[3] = -BLOCK_SIZE / 2
+
+	restore block_blueprints
+	while true
+		read id
+		if id = -1 then exit
+		block_blueprint_outsideonly(id) = createmesh()
+		hideentity(block_blueprint_outsideonly(id))
+		surface_id = createsurface(block_blueprint_outsideonly(id))
+		while true
+			while true
+				read x#
+				if x = -1 then exit
+				read y#, z#
+				x = xy_lookup[x]
+				y = xy_lookup[y]
+				z = z_lookup[z]
+				point_new(x, y, z)
+			wend
+			if first point = null then exit ; if no points were created, then we're done with this block_mesh
+			draw_polygon_with_all_points(surface_id)
+		wend
+		Calculate_Normals(block_blueprint_outsideonly(id))
+
+		block_blueprint_complete(id) = copymesh(block_blueprint_outsideonly(id))
+		hideentity(block_blueprint_complete(id))
+		surface_id = getsurface(block_blueprint_complete(id), 1)
+		while true
+			while true
+				read x#
+				if x = -1 then exit
+				read y#, z#
+				x = xy_lookup[x]
+				y = xy_lookup[y]
+				z = z_lookup[z]
+				point_new(x, y, z)
+			wend
+			if first point = null then exit ; if no points were created, then we're done with this block_mesh
+			draw_polygon_with_all_points(surface_id)
+		wend
+		Calculate_Normals(block_blueprint_complete(id))
+
+	wend
+end function
+
+;---------------------------------------------------------------------------------------------------
+function draw_polygon_with_all_points(surface_id)
+	point.point = first point
+	first_vertex = addvertex(surface_id, point\x, point\y, point\z)
+	delete point
+
+	point.point = first point
+	previous_vertex = addvertex(surface_id, point\x, point\y, point\z)
+	delete point
+
+	while first point &lt;&gt; null
+		point = first point
+		this_vertex = addvertex(surface_id, point\x, point\y, point\z)
+		delete point
+		
+		addtriangle(surface_id, first_vertex, previous_vertex, this_vertex)
+		previous_vertex = this_vertex
+	wend
+end function
+
+;---------------------------------------------------------------------------------------------------
+;= DATA
+;---------------------------------------------------------------------------------------------------
+
+;= block_blueprints
+.block_blueprints
+
+; a list of vertices for drawing polygons.  triangles will be drawn between the first, previous, and current point.
+; the second set of polygons for each block are for "inside" polygons, which will not be visible in unadulterated shapes.
+
+data BLOCK_end
+data 1,1,3, 1,3,3, 2,3,3, 2,1,3, -1               ; surface
+data 1,3,3, 1,1,3, 0,0,2, 0,3,2, -1               ; bevel
+data 1,1,3, 2,1,3, 3,0,2, 0,0,2, -1               ; bevel
+data 2,1,3, 2,3,3, 3,3,2, 3,0,2, -1               ; bevel
+data 0,0,0, 0,0,2, 3,0,2, 3,0,0, -1               ; south edge
+data 3,0,0, 3,0,2, 3,3,2, 3,3,0, -1               ; east edge
+data 0,3,0, 0,3,2, 0,0,2, 0,0,0, -1               ; west edge
+data 0,0,0, 3,0,0, 3,3,0, 0,3,0, -1               ; bottom
+data -1
+data 3,3,0, 3,3,2, 2,3,3, 1,3,3, 0,3,2, 0,3,0, -1 ; north edge
+data -1
+
+data BLOCK_corner
+data 1,1,3, 1,3,3, 2,3,3, 2,2,3, 3,2,3, 3,1,3, -1 ; surface
+data 1,3,3, 1,1,3, 0,0,2, 0,3,2, -1               ; bevel
+data 1,1,3, 3,1,3, 3,0,2, 0,0,2, -1               ; bevel
+data 2,2,3, 2,3,3, 3,3,2, -1                      ; bevel
+data 3,2,3, 2,2,3, 3,3,2, -1                      ; bevel
+data 0,0,0, 0,0,2, 3,0,2, 3,0,0, -1               ; south edge
+data 0,3,0, 0,3,2, 0,0,2, 0,0,0, -1               ; west edge
+data 0,0,0, 3,0,0, 3,3,0, 0,3,0, -1               ; bottom
+data -1
+data 3,0,0, 3,0,2, 3,1,3, 3,2,3, 3,3,2, 3,3,0, -1 ; east edge
+data 3,3,0, 3,3,2, 2,3,3, 1,3,3, 0,3,2, 0,3,0, -1 ; north edge
+data -1
+
+data BLOCK_straight
+data 1,0,3, 1,3,3, 2,3,3, 2,0,3, -1               ; surface
+data 1,3,3, 1,0,3, 0,0,2, 0,3,2, -1               ; bevel
+data 2,0,3, 2,3,3, 3,3,2, 3,0,2, -1               ; bevel
+data 3,0,0, 3,0,2, 3,3,2, 3,3,0, -1               ; east edge
+data 0,3,0, 0,3,2, 0,0,2, 0,0,0, -1               ; west edge
+data 0,0,0, 3,0,0, 3,3,0, 0,3,0, -1               ; bottom
+data -1
+data 0,0,0, 0,0,2, 1,0,3, 2,0,3, 3,0,2, 3,0,0, -1 ; south edge
+data 3,3,0, 3,3,2, 2,3,3, 1,3,3, 0,3,2, 0,3,0, -1 ; north edge
+data -1
+
+data BLOCK_three_way
+data 1,0,3, 1,3,3, 2,3,3, 2,0,3, -1               ; surface
+data 2,2,3, 3,2,3, 3,1,3, 2,1,3, -1               ; surface
+data 1,3,3, 1,0,3, 0,0,2, 0,3,2, -1               ; bevel
+data 2,2,3, 2,3,3, 3,3,2, -1                      ; bevel
+data 3,2,3, 2,2,3, 3,3,2, -1                      ; bevel
+data 2,1,3, 3,1,3, 3,0,2, -1                      ; bevel
+data 2,0,3, 2,1,3, 3,0,2, -1                      ; bevel
+data 0,3,0, 0,3,2, 0,0,2, 0,0,0, -1               ; west edge
+data 0,0,0, 3,0,0, 3,3,0, 0,3,0, -1               ; bottom
+data -1
+data 0,0,0, 0,0,2, 1,0,3, 2,0,3, 3,0,2, 3,0,0, -1 ; south edge
+data 3,0,0, 3,0,2, 3,1,3, 3,2,3, 3,3,2, 3,3,0, -1 ; east edge
+data 3,3,0, 3,3,2, 2,3,3, 1,3,3, 0,3,2, 0,3,0, -1 ; north edge
+data -1
+
+data BLOCK_filled_corner
+data 1,1,3, 1,3,3, 3,3,3, 3,1,3, -1               ; surface
+data 1,3,3, 1,1,3, 0,0,2, 0,3,2, -1               ; bevel
+data 1,1,3, 3,1,3, 3,0,2, 0,0,2, -1               ; bevel
+data 0,0,0, 0,0,2, 3,0,2, 3,0,0, -1               ; south edge
+data 0,3,0, 0,3,2, 0,0,2, 0,0,0, -1               ; west edge
+data 0,0,0, 3,0,0, 3,3,0, 0,3,0, -1               ; bottom
+data -1
+data 3,0,0, 3,0,2, 3,1,3, 3,3,3, 3,3,0, -1        ; east edge
+data 3,3,0, 3,3,3, 1,3,3, 0,3,2, 0,3,0, -1        ; north edge
+data -1
+
+data -1
+
+;---------------------------------------------------------------------------------------------------
+;= shape_data
+.shape_data
+
+; SHAPE_I
+data 0, 0, 127
+data BLOCK_end,        0, -2, 180
+data BLOCK_straight,   0, -1, 0
+data BLOCK_straight,   0,  0, 0
+data BLOCK_end,        0,  1, 0
+
+data 0,0,1,0
+data 0,0,1,0
+data 0,0,1,0
+data 0,0,1,0
+
+data 0,0,0,0
+data 1,1,1,1
+data 0,0,0,0
+data 0,0,0,0
+
+data 0,0,1,0
+data 0,0,1,0
+data 0,0,1,0
+data 0,0,1,0
+
+data 0,0,0,0
+data 1,1,1,1
+data 0,0,0,0
+data 0,0,0,0
+
+; SHAPE_T
+data 127, 127, 0
+data BLOCK_end,        0,  1, 0
+data BLOCK_three_way,  0,  0, 90
+data BLOCK_end,       -1,  0, -90
+data BLOCK_end,        1,  0, 90
+
+data 0,0,1,0
+data 0,1,1,1
+data 0,0,0,0
+data 0,0,0,0
+
+data 0,0,1,0
+data 0,0,1,1
+data 0,0,1,0
+data 0,0,0,0
+
+data 0,0,0,0
+data 0,1,1,1
+data 0,0,1,0
+data 0,0,0,0
+
+data 0,0,1,0
+data 0,1,1,0
+data 0,0,1,0
+data 0,0,0,0
+
+; SHAPE_O
+data 127, 127, 127
+data BLOCK_filled_corner,  0,  0, 0
+data BLOCK_filled_corner, -1,  0, -90
+data BLOCK_filled_corner,  0, -1, 90
+data BLOCK_filled_corner, -1, -1, 180
+
+data 0,0,0,0
+data 0,1,1,0
+data 0,1,1,0
+data 0,0,0,0
+
+data 0,0,0,0
+data 0,1,1,0
+data 0,1,1,0
+data 0,0,0,0
+
+data 0,0,0,0
+data 0,1,1,0
+data 0,1,1,0
+data 0,0,0,0
+
+data 0,0,0,0
+data 0,1,1,0
+data 0,1,1,0
+data 0,0,0,0
+
+; SHAPE_L
+data 127, 0, 127
+data BLOCK_end,        0,  1, 0
+data BLOCK_straight,   0,  0, 0
+data BLOCK_corner,     0, -1, 180
+data BLOCK_end,        1, -1, 90
+
+data 0,0,1,0
+data 0,0,1,0
+data 0,0,1,1
+data 0,0,0,0
+
+data 0,0,0,0
+data 0,1,1,1
+data 0,1,0,0
+data 0,0,0,0
+
+data 0,1,1,0
+data 0,0,1,0
+data 0,0,1,0
+data 0,0,0,0
+
+data 0,0,0,1
+data 0,1,1,1
+data 0,0,0,0
+data 0,0,0,0
+
+; SHAPE_J
+data 0, 127, 127
+data BLOCK_end,        0,  1, 0
+data BLOCK_straight,   0,  0, 0
+data BLOCK_corner,     0, -1, 90
+data BLOCK_end,       -1, -1, -90
+
+data 0,0,1,0
+data 0,0,1,0
+data 0,1,1,0
+data 0,0,0,0
+
+data 0,1,0,0
+data 0,1,1,1
+data 0,0,0,0
+data 0,0,0,0
+
+data 0,0,1,1
+data 0,0,1,0
+data 0,0,1,0
+data 0,0,0,0
+
+data 0,0,0,0
+data 0,1,1,1
+data 0,0,0,1
+data 0,0,0,0
+
+; SHAPE_S
+data 127, 0, 0
+data BLOCK_end,        0,  1, 0
+data BLOCK_corner,     0,  0, 180
+data BLOCK_corner,     1,  0, 0
+data BLOCK_end,        1, -1, 180
+
+data 0,0,1,0
+data 0,0,1,1
+data 0,0,0,1
+data 0,0,0,0
+
+data 0,0,1,1
+data 0,1,1,0
+data 0,0,0,0
+data 0,0,0,0
+
+data 0,0,1,0
+data 0,0,1,1
+data 0,0,0,1
+data 0,0,0,0
+
+data 0,0,1,1
+data 0,1,1,0
+data 0,0,0,0
+data 0,0,0,0
+
+; SHAPE_Z
+data 0, 127, 0
+data BLOCK_end,        1,  1, 0
+data BLOCK_corner,     1,  0, 90
+data BLOCK_corner,     0,  0, -90
+data BLOCK_end,        0, -1, 180
+
+data 0,0,0,1
+data 0,0,1,1
+data 0,0,1,0
+data 0,0,0,0
+
+data 0,1,1,0
+data 0,0,1,1
+data 0,0,0,0
+data 0,0,0,0
+
+data 0,0,0,1
+data 0,0,1,1
+data 0,0,1,0
+data 0,0,0,0
+
+data 0,1,1,0
+data 0,0,1,1
+data 0,0,0,0
+data 0,0,0,0
+
+
+;---------------------------------------------------------------------------------------------------
+;= MISC
+;---------------------------------------------------------------------------------------------------
+Function Calculate_Normals(ThisMesh)
+; Author: sswift
+; Date: 2004-03-25 09:17:35
+	
+	; Loop through all surfaces of the mesh.
+	Surfaces = CountSurfaces(ThisMesh)
+	For LOOP_Surface = 1 To Surfaces
+
+		Surface_Handle = GetSurface(ThisMesh, LOOP_Surface)
+
+		; Reset the number of connected polygons for each vertex.
+		For LoopV = 0 To 32767	
+			Vertex_ConnectedTris(LoopV) = 0
+		Next	
+	
+		; Loop through all triangles in this surface of the mesh.
+		Tris = CountTriangles(Surface_Handle)
+		For LOOP_Tris = 0 To Tris-1
+
+			; Get the vertices that make up this triangle.
+				Vertex_0 = TriangleVertex(Surface_Handle, LOOP_Tris, 0)
+				Vertex_1 = TriangleVertex(Surface_Handle, LOOP_Tris, 1)
+				Vertex_2 = TriangleVertex(Surface_Handle, LOOP_Tris, 2)
+	
+			; Adjust the number of triangles each vertex is connected to and
+			; store this triangle in each vertex's list of triangles it is connected to.
+				ConnectedTris = Vertex_ConnectedTris(Vertex_0)
+				Vertex_TriList(Vertex_0, ConnectedTris) = LOOP_Tris
+				Vertex_ConnectedTris(Vertex_0) = ConnectedTris + 1
+
+				ConnectedTris = Vertex_ConnectedTris(Vertex_1)
+				Vertex_TriList(Vertex_1, ConnectedTris) = LOOP_Tris
+				Vertex_ConnectedTris(Vertex_1) = ConnectedTris + 1
+
+				ConnectedTris = Vertex_ConnectedTris(Vertex_2)
+				Vertex_TriList(Vertex_2, ConnectedTris) = LOOP_Tris
+				Vertex_ConnectedTris(Vertex_2) = ConnectedTris + 1
+
+			; Calculate the normal for this face.
+
+				; Get the corners of this face:
+				Ax# = VertexX#(Surface_Handle, Vertex_0)
+				Ay# = VertexY#(Surface_Handle, Vertex_0)
+				Az# = VertexZ#(Surface_Handle, Vertex_0)
+
+				Bx# = VertexX#(Surface_Handle, Vertex_1)
+				By# = VertexY#(Surface_Handle, Vertex_1)
+				Bz# = VertexZ#(Surface_Handle, Vertex_1)
+
+				Cx# = VertexX#(Surface_Handle, Vertex_2)
+				Cy# = VertexY#(Surface_Handle, Vertex_2)
+				Cz# = VertexZ#(Surface_Handle, Vertex_2)
+
+				; Triangle 1
+				; Get the vectors for two edges of the triangle.
+				Px# = Ax#-Bx#
+				Py# = Ay#-By#
+				Pz# = Az#-Bz#
+
+				Qx# = Bx#-Cx#
+				Qy# = By#-Cy#
+				Qz# = Bz#-Cz#
+
+				; Compute their cross product.
+				Nx# = Py#*Qz# - Pz#*Qy#
+				Ny# = Pz#*Qx# - Px#*Qz#
+				Nz# = Px#*Qy# - Py#*Qx#
+
+				; Store the face normal.
+				Face_NX#(LOOP_Tris) = Nx#
+				Face_NY#(LOOP_Tris) = Ny#
+				Face_NZ#(LOOP_Tris) = Nz#
+
+		Next
+
+		; Now that all the face normals for this surface have been calculated, calculate the vertex normals.
+		Vertices = CountVertices(Surface_Handle)
+		For LOOP_Vertices = 0 To Vertices-1
+
+			; Reset this normal.
+			Nx# = 0
+			Ny# = 0
+			Nz# = 0
+
+			; Add the normals of all polygons which are connected to this vertex.
+			Polys = Vertex_ConnectedTris(LOOP_Vertices)
+				
+			For LOOP_Polys = 0 To Polys-1
+
+				ThisPoly = Vertex_TriList(LOOP_Vertices, LOOP_Polys)
+
+				Nx# = Nx# + Face_NX#(ThisPoly)
+				Ny# = Ny# + Face_NY#(ThisPoly)
+				Nz# = Nz# + Face_NZ#(ThisPoly)			
+				
+			Next	
+				
+			; Normalize the new vertex normal.
+			; (Normalizing is scaling the vertex normal down so that it's length = 1)
+
+				Nl# = Sqr(Nx#^2 + Ny#^2 + Nz#^2)
+
+				; Avoid a divide by zero error if by some freak accident, the vectors add up to 0.
+				; If Nl# = 0 Then Nl# = 0.1
+
+				Nx# = Nx# / Nl#
+				Ny# = Ny# / Nl#
+				Nz# = Nz# / Nl#
+
+			; Set the vertex normal.
+			
+				VertexNormal Surface_Handle, LOOP_Vertices, Nx#, Ny#, Nz#
+				;VertexColor Surface_Handle, LOOP_Vertices, polys*127, polys*127, polys*127
+		
+		Next
+
+	Next
+
+End Function
+</textarea> <br><br></td></tr></table><br>
+<a name="603299"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >octothorpe</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> A (much) simpler program to reproduce the problem:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">graphics3d 800, 600
+camera = createcamera()
+positionentity(camera, 0, 0, -3)
+
+const BLOCK_SIZE#         = 1.0
+const BLOCK_BEVEL_WIDTH#  = 0.2
+
+; lookup coordinates (x and y are identical)
+global x#[3]
+global y#[3]
+global z#[3]
+x[0] = -BLOCK_SIZE / 2
+x[1] = -BLOCK_SIZE / 2 + BLOCK_BEVEL_WIDTH
+x[2] =  BLOCK_SIZE / 2 - BLOCK_BEVEL_WIDTH
+x[3] =  BLOCK_SIZE / 2
+y[0] = -BLOCK_SIZE / 2
+y[1] = -BLOCK_SIZE / 2 + BLOCK_BEVEL_WIDTH
+y[2] =  BLOCK_SIZE / 2 - BLOCK_BEVEL_WIDTH
+y[3] =  BLOCK_SIZE / 2
+z[0] =  BLOCK_SIZE / 2
+z[1] =  BLOCK_SIZE / 2 - BLOCK_BEVEL_WIDTH
+z[2] = -BLOCK_SIZE / 2 + BLOCK_BEVEL_WIDTH
+z[3] = -BLOCK_SIZE / 2
+
+; create block
+block = createmesh()
+surface_id = createsurface(block)
+
+vertex_0 = addvertex(surface_id, x[1], y[0], z[3])
+vertex_1 = addvertex(surface_id, x[1], y[3], z[3])
+vertex_2 = addvertex(surface_id, x[2], y[3], z[3])
+addtriangle(surface_id, vertex_0, vertex_1, vertex_2)
+vertex_3 = addvertex(surface_id, x[2], y[0], z[3])
+addtriangle(surface_id, vertex_0, vertex_2, vertex_3)
+
+vertex_4 = addvertex(surface_id, x[2], y[2], z[3])
+vertex_5 = addvertex(surface_id, x[3], y[2], z[3])
+vertex_6 = addvertex(surface_id, x[3], y[1], z[3])
+addtriangle(surface_id, vertex_4, vertex_5, vertex_6)
+vertex_7 = addvertex(surface_id, x[2], y[1], z[3])
+addtriangle(surface_id, vertex_4, vertex_6, vertex_7)
+
+; translucency better shows the artifacts
+entityalpha(block, .5)
+ambientlight(255, 255, 255)
+
+; move it around with the mouse to see artifacts
+movemouse(400, 300)
+while true
+	if keyhit(1) then end
+	rotateentity(block, -mousey()+300, mousex()-400, 0)
+	renderworld
+	flip
+wend
+</textarea> <br><br></td></tr></table><br>
+<a name="603316"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> I think you will find the only way to fix it is to trianglulate the mesh properly.<br><br>You should tesselate the mesh like so:<br><pre class=code>
+   _
+ _|_|_
+|\|\|\|
+ - - -
+</pre><br><br>With one vertex where each vertical and horizontal line meets.  That top square should have a \ in it too, but I can't draw both a horizontal line across the bottom, and a slash.<br><br>Anyway, that shows that you should have 8 polygons in the T shape, not 4.  The reason you get black dots is simply because of floating point inaccuracies.  Sometimes you can get away with it, sometimes not.  But pretty much all pro game developers set up the meshes like this to avoid those issues.<br><br>Also, the difference between this paralell quad and the others is that the others all share vertices on all edges, whereas these two KIND OF share an edge, but the two edges each use seperate vertices, so they're really not the same edge.  That's the source of the problem.  The two edges don't pass through precisely the same space.  When you have two edged which use the same vertices, they're guaranteed to pass through the same space, but here you aren't sharing vertcies, so floating point inaccuracy causes them to be slightly different. <br><br></td></tr></table><br>
+<a name="603393"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Ice9</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> This may be a quick and dirty method that may produce<br>the results you want. There are UnWeldMesh and WeldMesh<br>functions in the code archive. <br><br></td></tr></table><br>
+<a name="603415"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >sswift</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ice:<br>If those functions do what I think they do, then those won't help.  His problem is not vertices which are placed at the same location in space but not welded, it's edges which are not sharing vertices because the vertices are far away from one another and the edges they form just happen to lie on the same line in space. <br><br></td></tr></table><br>
+<a name="603555"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >octothorpe</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> That solved it, thanks sswift! <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

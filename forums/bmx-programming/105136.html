@@ -1,0 +1,506 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Weird crashes with TMap.Values()</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Weird crashes with TMap.Values()</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Weird crashes with TMap.Values()</a><br><br>
+<a name="1279039"></a>
+
+<a name="1279040"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Im having a bit of trouble with when enumerating over <b>TMap.Values()</b>, for some reason a <b>Null</b> value creeps into the tree and crashes the enumerator on <b>TNode.NextNode()</b> (it gets it when tracing the nodes parents).<br><br>But this only happens in Release mode, in Debug mode everything runs as expected :(<br><br>And the weirder part is that if i enumerate over <b>TNode</b>s instead, it also works as expected, even in Release mode!<br><br>Also this only happens in NON-Threaded mode, so might have something to do with refcounting.<br><br>Im not doing anything special either, just using generated strings as keys...<br><br>Anyway, could someone try this piece of code and see if they get the same problem?  Atleast then id know if its something with my setup or otherwise.<br><br><br>typemap.bmx<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Framework BRL.StandardIO
+
+SuperStrict
+
+Import BRL.Map
+
+Const IR_T_NONE:Int = 0
+Const IR_T_BOOL:Int = 1
+Const IR_T_INT:Int = 2
+Const IR_T_FLOAT:Int = 3
+Const IR_T_STRING:Int = 4
+
+Function IrTypeToString:String( tag:Int)
+	Assert tag &gt;= IR_T_NONE And tag &lt;= IR_T_STRING Else "invalid type tag: " + tag
+	Select tag
+		Case IR_T_NONE		Return ""
+		Case IR_T_BOOL		Return "Bool"
+		Case IR_T_INT		Return "Int"
+		Case IR_T_FLOAT	Return "Float"
+		Case IR_T_STRING	Return "String"
+	EndSelect
+EndFunction
+
+Function IrTypeToString_short:String( tag:Int)
+	Assert tag &gt;= IR_T_NONE And tag &lt;= IR_T_STRING Else "invalid type tag: " + tag
+	Select tag
+		Case IR_T_NONE		Return "?"
+		Case IR_T_BOOL		Return "B"
+		Case IR_T_INT		Return "I"
+		Case IR_T_FLOAT	Return "F"
+		Case IR_T_STRING	Return "S"
+	EndSelect
+EndFunction
+
+Function IrTypeFromString:Int( name:String)
+	If Not name Then Return IR_T_NONE
+	Select name.ToLower()
+		Case "bool"		Return IR_T_BOOL
+		Case "int"		Return IR_T_INT
+		Case "float"	Return IR_T_FLOAT
+		Case "string"	Return IR_T_STRING
+	EndSelect
+	Return IR_T_NONE
+EndFunction
+
+
+Type TIrOpMapping
+	Field Name:String
+	Field Value:String
+	Field IsBinary:Int
+	Field Op:Int
+	
+	Method Compare:Int( other:Object)
+		Local m:TIrOpMapping = TIrOpMapping(other)
+		If Not m Then Return 1
+		Return Name.Compare(m.Name)
+	EndMethod
+	
+	Method ToString:String()
+		Return Name
+	EndMethod
+EndType
+
+Type TIrTypeMapping
+	Field Name:String
+	Field Op:TIrOpMapping
+	Field LType:Int
+	Field RType:Int
+	Field DType:Int
+	Field Code:String
+	
+	Method ToName:String()
+		If Name Then Return Name
+		Name = IrTypeToString_short(DType) + "_" + IrTypeToString_short(LType) + "_" + Op.Name + "_" + IrTypeToString_short(RType)
+		Return Name
+	EndMethod
+	
+	Method ToString:String()
+		Local s:String = IrTypeToString(DType) + " := "
+		If LType &lt;&gt; IR_T_NONE Then s :+ IrTypeToString(LType) + " "
+		If Op Then s :+ Op.Name
+		If RType &lt;&gt; IR_T_NONE Then s :+ " " + IrTypeToString(RType)
+		Return s
+	EndMethod
+EndType
+
+Type TIrTypeMap
+	Field OpMaps:TMap = New TMap
+	Field TypeMaps:TMap = New TMap
+	Field AssignOp:TIrOpMapping
+	
+	Method New()
+		AssignOp = New TIrOpMapping
+		AssignOp.Name = "ASSIGN"
+		AssignOp.Value = "="
+		AssignOp.IsBinary = False
+		AssignOp.Op = 0
+		OpMaps.Insert( AssignOp.Name, AssignOp)
+	EndMethod
+	
+	Method LookupOp:TIrOpMapping( name:String)
+		Assert name Else "attempted to Lookup Null op name"
+		Return TIrOpMapping( OpMaps.ValueForKey(name))
+	EndMethod
+	
+	Method InsertOp:TIrOpMapping( map:TIrOpMapping)
+		Assert map Else "attempted to Insert Null op mapping"
+		Assert Not TIrOpMapping( OpMaps.ValueForKey(map.Name)) Else "op mapping already defined: " + map.ToString()
+		OpMaps.Insert( map.Name, map)
+	EndMethod
+
+	Method LookupMap:TIrTypeMapping( map:TIrTypeMapping)
+		Assert map Else "attempted to Lookup Null type mapping"
+		Return TIrTypeMapping( TypeMaps.ValueForKey(map.ToName()))
+	EndMethod
+	
+	Method InsertMap:TIrTypeMapping( map:TIrTypeMapping)
+		Assert map Else "attempted to Insert Null type mapping"
+		Assert Not TIrTypeMapping( TypeMaps.ValueForKey(map.ToName())) Else "type mapping already defined: " + map.ToString()
+		TypeMaps.Insert( map.ToName(), map)
+	EndMethod
+	
+	Method ReadFromFile:Int( url:Object)
+		Function nextspace:Int( s:String)
+			If Not s Then Return -1
+			For Local i:Int = 0 Until s.Length
+				If s[i] = Asc(" ") Or s[i] = Asc("~t") Then Return i
+			Next
+			Return -1
+		EndFunction
+		
+		Function stripafter:String( s:String, after:String)
+			If Not s Then Return Null
+			Local i:Int = s.Find(after)
+			If i = -1 Then Return s
+			s = s[.. i]
+			If s Then Return s.Trim()
+		EndFunction
+		
+		Function swapends:String( s:String, middle:String)
+			If Not s Then Return Null
+			Local a:String[] = s.Split(middle)
+			If a.Length &lt;&gt; 2 Then Return s
+			Return a[1].Trim() + " " + middle + " " + a[0].Trim()
+		EndFunction
+		
+		
+		Local file:String = String(url)
+		Local stream:TStream = ReadStream(url)
+		If Not stream Then Return 0
+		
+		Local line:Int = 0
+		Local count:Int = 0		
+		Local opmode:Int = 0 ' 0=none 1=unary 2=binary 
+		Local numops:Int = 1 ' +1 for ASSIGN
+		
+		While Not stream.Eof()
+			Local l:String = stream.ReadLine()
+			Local s:String = stripafter( l.Trim(), "//")
+			line :+ 1
+			If Not s Then Continue
+			
+			If s.StartsWith("%") Then
+				If s = "%%" Then
+					opmode = 0
+				ElseIf s = "%unary" Then
+					opmode = 1
+				ElseIf s = "%binary" Then
+					opmode = 2					
+				EndIf
+				Continue
+			EndIf
+			
+			If opmode &gt; 0 Then
+				Local i:Int = nextspace(s)
+				If i = -1 Then
+					DebugLog "TirTypeMap.ReadFromFile(" + file + "): invalid %op syntax at line " + line + ", expected: T T..."
+					Continue
+				EndIf
+				Local opmap:TIrOpMapping = New TIrOpMapping
+				opmap.Name = s[.. i].Trim()
+				opmap.Value = s[i + 1 ..].Trim()
+				opmap.Op = numops
+				opmap.IsBinary = (opmode = 2)
+				InsertOp(opmap)
+				numops :+ 1
+				Continue
+			EndIf			
+
+			Local a:String[] = s.Split(":=")
+			If a.Length &lt;&gt; 2 Then
+				DebugLog "TirTypeMap.ReadFromFile(" + file + "): invalid type syntax at line " + line + ", expected: T := T..."
+				Continue
+			EndIf
+
+			Local dtype:Int = IR_T_NONE
+			Local ltype:Int = IR_T_NONE
+			Local rtype:Int = IR_T_NONE
+			Local ops:String[] = Null
+			Local code:String = Null
+			
+			dtype = IrTypeFromString(a[0].Trim())
+			If dtype = IR_T_NONE Then
+				DebugLog "TirTypeMap.ReadFromFile(" + file + "): invalid type '" + a[0] + "' at line " + line
+				Continue
+			EndIf
+
+			s = a[1].Trim()
+			a = s.Split(Null)
+			If a.Length &lt; 1 Then
+				DebugLog "TIrTypeMap.ReadFromFile(" + file + "): invalid syntax at line " + line + ", expected: T..."
+				Continue			
+			EndIf
+
+			Local mode:Int = 0 ' 0=types 1=ops
+			Local i:Int = 0
+			While i &lt; a.Length
+				s = a[i].Trim()
+				If Not s Then
+					i :+ 1
+					Continue
+				EndIf
+				If s.StartsWith("(") Then ' enter ops mode
+					If s.EndsWith(")") And s.Length &gt; 2 Then
+						ops :+ [ s[1.. s.Length - 1].Trim() ]
+						mode = 0
+						i :+ 1
+						Continue
+					ElseIf s.Length &gt; 1 Then
+						ops :+ [ s[1 ..].Trim() ]
+					EndIf
+					mode = 1
+				ElseIf s.EndsWith(")") Then ' enter type mode
+					If s.Length &gt; 1 Then ops :+ [ s[.. s.Length - 1] ]
+					mode = 0
+				ElseIf s = "-&gt;" Then ' read code and exit
+					code = " ".Join(a[i + 1..])
+					Exit
+				ElseIf mode = 0 Then
+					If ops.Length = 0 Then
+						If ltype = IR_T_NONE Then
+							ltype = IrTypeFromString(s)
+						Else
+							DebugLog "TIrTypeMap.ReadFromFile(" + file + "): left-type already specified " + line
+							Exit
+						EndIf
+					ElseIf ops.Length &gt; 0 Then
+						If ltype = IR_T_NONE And rtype = IR_T_NONE Then
+							rtype = IrTypeFromString(s)
+						ElseIf ltype &lt;&gt; IR_T_NONE And rtype = IR_T_NONE Then
+							rtype = IrTypeFromString(s)
+						Else
+							DebugLog "TIrTypeMap.ReadFromFile(" + file + "): right-type already specified " + line
+							Exit
+						EndIf
+					EndIf
+				ElseIf mode = 1 Then
+					ops :+ [ s ]
+				EndIf
+				i :+ 1
+			Wend
+			
+			If ops.Length = 0 Then
+				If ltype = IR_T_NONE Then
+					DebugLog "TirTypeMap.ReadFromFile(" + file + "): missing left-type at line " + line
+					Continue
+				EndIf
+				Local typemap:TIrTypeMapping = New TIrTypeMapping
+				typemap.Op = AssignOp
+				typemap.RType = ltype
+				typemap.DType = dtype
+				typemap.Code = code
+				InsertMap(typemap)
+				Continue
+			EndIf
+			
+			For Local op:String = EachIn ops
+				Local opmap:TIrOpMapping = LookupOp(op)
+				If Not opmap Then
+					DebugLog "TirTypeMap.ReadFromFile(" + file + "): invalid op '" + op + "' at line " + line
+					Continue
+				EndIf
+				
+				If opmap.IsBinary Then
+					If (ltype = IR_T_NONE Or rtype = IR_T_NONE) Then
+						DebugLog "TirTypeMap.ReadFromFile(" + file + "): binary op '" + opmap.Name + "' missing types at line " + line
+						Continue
+					EndIf
+				Else
+					If (ltype &lt;&gt; IR_T_NONE Or rtype = IR_T_NONE) Then
+						DebugLog "TirTypeMap.ReadFromFile(" + file + "): unary op '" + opmap.Name + "' missing types at line " + line
+						Continue
+					EndIf
+				EndIf
+				
+				Local typemap:TIrTypeMapping = New TIrTypeMapping
+				typemap.Op = opmap
+				typemap.LType = ltype
+				typemap.RType = rtype
+				typemap.DType = dtype
+				typemap.Code = code
+				InsertMap(typemap)
+				count :+ 1
+				
+				' also add with swapped types
+				If opmap.IsBinary And ltype &lt;&gt; IR_T_NONE And rtype &lt;&gt; IR_T_NONE And ltype &lt;&gt; rtype Then
+					typemap = New TIrTypeMapping
+					typemap.Op = opmap
+					typemap.LType = rtype
+					typemap.RType = ltype
+					typemap.DType = dtype
+					typemap.Code = swapends( code, "$O").Replace( "$L", "$_").Replace( "$R", "$L"). Replace( "$_", "$R")
+					InsertMap(typemap)
+					count :+ 1
+				EndIf
+			Next
+		Wend
+		stream.Close()
+		Return count
+	EndMethod
+	
+	Method CanAssign:Int( dst:Int, src:Int)
+		If dst = IR_T_NONE Or src = IR_T_NONE Then Return False
+		If dst = src Then Return True
+		Local typemap:TIrTypeMapping = New TIrTypeMapping
+		typemap.DType = dst
+		typemap.Op = AssignOp
+		typemap.RType = src
+		typemap = TIrTypeMapping( TypeMaps.ValueForKey(typemap.ToName()))
+		If Not typemap Then Return IR_T_NONE
+		Return typemap.DType = dst
+	EndMethod
+	
+	Method GetBinaryResult:Int( ltype:Int, op:String, rtype:Int)
+		Local typemap:TIrTypeMapping = New TIrTypeMapping
+		typemap.LType = ltype
+		typemap.Op = LookupOp(op)
+		typemap.RType = rtype
+		typemap = TIrTypeMapping( TypeMaps.ValueForKey(typemap.ToName()))
+		If Not typemap Then Return IR_T_NONE
+		Return typemap.DType
+	EndMethod
+	
+	Method GetUnaryResult:Int( op:String, rtype:Int)
+		Local typemap:TIrTypeMapping = New TIrTypeMapping
+		typemap.Op = LookupOp(op)
+		typemap.RType = rtype
+		typemap = TIrTypeMapping( TypeMaps.ValueForKey(typemap.ToName()))
+		If Not typemap Then Return IR_T_NONE
+		Return typemap.DType
+	EndMethod
+EndType
+
+'
+' TEST
+'
+Local map:TIrTypeMap = New TIrTypeMap
+map.ReadFromFile("typemap.txt")
+Print "---------------------------------------------------------"
+' swap the next line with the 2 below it for non crash behaviour
+For Local m:TIrTypeMapping = EachIn map.TypeMaps.Values()
+'For Local n:TNode = EachIn map.TypeMaps
+'	Local m:TIrTypeMapping = TIrTypeMapping(n._value)
+	Local s:String = m.ToName()[.. 15] + m.ToString()
+	WriteStdout s[.. 42]
+	If m.Code Then
+		WriteStdout " -&gt; "
+		WriteStdout m.Code
+	EndIf
+	WriteStdout "~n"
+Next
+</textarea><br><br>typemap.txt<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+// operator mappings
+%binary
+	ADD		+
+	SUB		-
+	MUL		*
+	DIV		/
+	MOD		Mod
+	BAND	&amp;
+	BOR		|
+	BXOR	~
+	BSHL	Shl
+	BSHR	Shr
+	LAND	And
+	LOR		Or
+	EQ		=
+	NEQ		&lt;&gt;
+	LE			&lt;
+	LEQ		&lt;=
+	GR		&gt;
+	GRQ		&gt;=
+%unary
+	NEG		-
+	BNOT	~
+	LNOT	Not
+	ISZ		0 =
+	ISNZ		0 &lt;&gt;
+%%
+
+// type assign mappings
+Bool := Int
+Bool := Float
+Bool := String
+Int := Float
+Float := Int
+String := Bool
+String := Int
+String := Float
+
+// matching type mappings
+Bool := Bool (LAND LOR EQ NEQ) Bool
+Bool := (LNOT ISZ ISNZ) Bool
+
+Int := Int (ADD SUB MUL DIV MOD BAND BOR BXOR BSHL BSHR) Int
+Int := (NEG BNOT) Int																		
+Bool := Int (LAND LOR EQ NEQ LE LEQ GR GRQ) Int
+Bool := (LNOT ISZ ISNZ) Int
+
+Float := Float (ADD SUB MUL DIV MOD) Float
+Float := (NEG) Float
+Bool := Float (LAND LOR) Float							-&gt; $L:Bool $O $R:Bool
+Bool := Float (EQ NEQ LE LEQ GR GRQ) Float
+Bool := (LNOT) Float											-&gt; $O $R:Bool
+Bool := (ISZ ISNZ) Float
+
+String := String (ADD) String
+Bool := String (LAND LOR) String						-&gt; $L:Bool $O $R:Bool
+Bool := String (EQ NEQ LE LEQ GR GRQ) String
+Bool := (LNOT ISZ ISNZ) String							-&gt; $O $R:Bool
+
+// mixed type mappings
+Bool := Bool (LAND LOR EQ NEQ LE LEQ GR GRQ) Int		-&gt; $L:Int $O $R
+Bool := Bool (LAND LOR EQ NEQ) String							-&gt; $L $O $R:Bool
+
+Float := Int (ADD SUB MUL DIV MOD) Float						-&gt; $L:Float $O $R
+Bool := Int (LAND LOR EQ NEQ LE LEQ GR GRQ) Float		-&gt; $L:Float $O $R
+
+String := Bool (ADD) String			-&gt; $L:String $O $R
+String := Int (ADD) String				-&gt; $L:String $O $R
+String := Float (ADD) String			-&gt; $L:String $O $R
+Bool := Int (EQ NEQ) String			-&gt; $L:String $O $R
+Bool := Float (EQ NEQ) String		-&gt; $L:String $O $R
+Bool := Int (LAND LOR) String		-&gt; $L:Bool $O $R:Bool
+Bool := Float (LAND LOR) String		-&gt; $L:Bool $O $R:Bool
+</textarea> <br><br></td></tr></table><br>
+<a name="1279051"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I had the "null" problem on a "NextNode()" last friday - when I freshly installed BlitzMax 1.50 on a Linux Mint (15 or 16?) 32Bit. The error did not happen when compiling it on my desktop (1.50, Mint 17,64Bit).<br><br><br>On the desktop I use the "maxmod"-variant of TMap. According to the changes it does not do change things (but it adds "concurrent modification"-checks).<br><br><br>But: I did not have issues on the 32bit-linux-laptop when directly working with "values()". It only segfaulted when using "themap.copy().Values()"<br><br><br><br>So if the reason is the same, some people wont see your problem while others might experience it.<br><br>Your example did not segfault here on 64bit Mint17. Tried release, release+threaded, debug.<br><br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1279058"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hmm so this might be something relating to 32-bit OS then, as im on Windows 7 32-bit right now.<br>Never ran into this before on my main 64-bit rig.<br><br>And i should probably add that a <b>GCCollect</b> anywhere crashes too, <br>so it seems more and more to do with the single threaded GC really. <br><br></td></tr></table><br>
+<a name="1279059"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Assuming nothing has changed with BlitzMax, I wonder why it would suddenly start to behave erratically... <br><br></td></tr></table><br>
+<a name="1279063"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yeah it is kinda weird, and i use TMap all the time so should have noticed something like this sooner.<br><br>I even tried it on the OpenSource version to no avail.<br><br>Only thing ive done is make it run on Mingw 5.1.0..<br>But il try a recompile on this machine, as i just copied the precompiled stuff over. Maybe gcc did something funny, who knows :p <br><br></td></tr></table><br>
+<a name="1279064"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> @grable<br><br>do you use prebuild modules or ones you recompiled? Vanilla "fasm" or an updated one?<br><br><br>@Brucey<br>I think so too ... but if it crashes, it crashes and most of us are left "puzzled" then.<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1279076"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Derron<br><br>I always recompile when i update to a new Mingw, so they should be fine.<br>And the version of fasm i use is 1.71.39. <br><br></td></tr></table><br>
+<a name="1279080"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Well that took its sweet time. 1 hour for a recompile, and that doesnt include thread mode!<br><br>Sadly it did nothing :( <br><br></td></tr></table><br>
+<a name="1279083"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> You should only need to recompile the modules you are using... only wxmax is what takes forever here.<br><br><br>Does your example crash with a "vanilla blitzmax 1.50"-compilation ?<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1279089"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Floyd</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Does your example crash with a "vanilla blitzmax 1.50"-compilation ? <br></div><br>It crashes with my vanilla BlitzMax 1.50, and with 1.48 as well.<br><br>Both use FASM 1.69.14 and I have not changed/rebuilt anything since they were installed. <br><br></td></tr></table><br>
+<a name="1279091"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Crashes on OS X too.<br><br>Runs fine in NG though :-) <br><br></td></tr></table><br>
+<a name="1279092"></a>
+
+<a name="1279093"></a>
+
+<a name="1279094"></a>
+
+<a name="1279095"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >GW</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Not sure if it helps but inserting this <pre class=code>Local _count% = 0
+For Local m:TIrTypeMapping = EachIn map.TypeMaps.Values()
+	_count:+ 1
+Next
+'// continue to the offending loop
+'// unchanged
+For Local m:TIrTypeMapping = EachIn map.TypeMaps.Values()
+'For Local n:TNode = EachIn map.TypeMaps
+'	Local m:TIrTypeMapping = TIrTypeMapping(n._value)
+	Local s:String = m.ToName()[.. 15] + m.ToString()
+	WriteStdout s[.. 42]
+	If m.Code Then
+		WriteStdout " -&gt; "
+		WriteStdout m.Code
+	EndIf
+	WriteStdout "~n"
+Next
+
+
+</pre><br>just above your value iteration (~ln:360) stops the crashing. <br><br>strange, I've never had Map blow up on me before. <br><br></td></tr></table><br>
+<a name="1279102"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> This sounds as if the iterator is creating some trouble.<br><br>NextNode() fails (in my case "_node" was null then in the debug tree) .<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1279641"></a>
+
+<a name="1279642"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ive done some more tests, and have more or less figured out why it happens. Exactly where though i have no idea :/<br><br>Things that does NOT crash:<br><br>1. GCSuspend before the loop, and GCResume/GCCollect afterwards.<br>2. Making the container type Global instead of Local.<br>3. Using container type as an argument to a function.<br>4. Adding a field to TNodeEnumerator that contains the TMap itself.<br><br>This leads me to believe that its a combination of the Single-Threaded GC and For-EachIn enumeration that frees the container type in the middle of the loop.<br><br>The easiest fix without changing the compiler is to just add a field to the enumerator to make sure its map can never go out of scope early.<br><br>But a proper fix would be better... <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

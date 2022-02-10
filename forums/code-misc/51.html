@@ -1,0 +1,260 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Blitz Compiler</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='A simple compiler written in Blitz, language=bb, category=Miscellaneous'><meta name='author' content='marksibly'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=9>Miscellaneous</a>/Blitz Compiler</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="51.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Blitz Compiler by marksibly</td><td align="right">2001 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> I get quite a few emails about just what's involved in writing a compiler, so thought I'd throw this together.<br><br>It takes a 'simple BASIC' source program and converts it into x86 assembler.<br><br>The x86 wont even work 'as-is'. In particular, the condition code stuff in x86 is downright bizarre and I didn't bother implementing it properly, but it shouldn't take too much hacking to get working.<br><br>If someone's really keen, they might want to fix this up, stick the output through 'NASM' (a cool, free assembler) and see what happens! The included print command is implemented as a library call, so it'll have to be linked with something that exports a 'print' function.<br><br>This is designed (hopefully) for simplicity - not efficiency! Blitz code generation does considerably better than this, and will improve further over time.<br><br>Have fun! </td></tr><tr ><td class="cell"><pre class="code">
+;Very simple compiler.
+;
+;Blitz does NOT generate code like this! But the parsing is similar...
+;
+;Statements supported: let, print, end, if, then, else
+;
+;Operators supported: binary +, -, *, /, <, =, >, <=, <>, >= and unary -
+;
+;*, / have precedence over +, -, which have precendence over <,=,>,<=,<>,>=
+;
+;Parenthesis can be used to group subexpressions.
+
+;**** The program *****
+;
+Data "let a=1"
+Data "let b=2"
+Data "let c=a*b+a/b"
+Data "if a<b then print a else print b"
+Data "end"
+
+Graphics 320,700,0,2
+SetFont LoadFont( "blitz" )
+Color 0,255,0
+
+Type Glob
+	Field name$
+End Type
+
+Global toke$,lin$,label
+
+Const TOKE_IDENT=1,TOKE_CONST=2
+Const TOKE_LET=3,TOKE_PRINT=4,TOKE_END=5
+Const TOKE_ADD=6,TOKE_SUB=7,TOKE_MUL=8,TOKE_DIV=9
+Const TOKE_OPENPAR=10,TOKE_CLOSEPAR=11
+Const TOKE_EQ=12,TOKE_LT=13,TOKE_GT=14,TOKE_LE=15,TOKE_GE=16,TOKE_NE=17
+Const TOKE_IF=18,TOKE_THEN=19,TOKE_ELSE=20
+
+Print ";startup..."
+Print "    sub   edx,edx"	;'coz idiv uses edx...
+
+t=GetToke()
+Repeat
+	Print ";"+toke$+lin$
+	t=ParseStmt( t )
+Forever
+
+Function ParseStmt( t )
+	Select t
+	Case TOKE_LET
+		If GetToke()<>TOKE_IDENT SynErr()
+		id$=toke$
+		AddGlob( toke$ )
+		If GetToke()<>TOKE_EQ SynErr()
+		t=ParseExpr()
+		Print "    mov   [_"+id$+"],eax"
+	Case TOKE_IF
+		If ParseExpr()<>TOKE_THEN SynErr()
+		label=label+1:lab=label
+		Print "    and   eax,eax"
+		Print "    jz    __"+lab
+		t=ParseStmt( GetToke() )
+		If t=TOKE_ELSE
+			label=label+1:lab2=label
+			Print "    jmp   __"+lab2
+			Print "__"+lab+":"
+			t=ParseStmt( GetToke() )
+			lab=lab2
+		EndIf
+		Print "__"+lab+":"
+	Case TOKE_PRINT
+		t=ParseExpr()
+		Print "    call  PRINT"
+	Case TOKE_END
+		Print "    ret"
+		Print
+		For gl.Glob=Each Glob
+			Print "_"+gl\name+":"
+			Print "    dd    0"
+		Next
+		Print:Print "Done!":WaitKey
+		End
+	Default
+		SynErr()
+	End Select
+	Return t
+End Function
+
+Function ParseExpr()
+	Return ParseComp()
+End Function
+
+Function ParseComp()
+	t=ParseTerm()
+	Repeat
+		Select t
+		Case TOKE_LT op$="lt"	;these ops are wrong! x86 is weird!
+		Case TOKE_GT op$="gt"
+		Case TOKE_LE op$="le"
+		Case TOKE_GE op$="ge"
+		Case TOKE_EQ op$="eq"
+		Case TOKE_NE op$="ne"
+		Default Return t
+		End Select
+		Print "    push  eax"
+		t=ParseTerm()
+		Print "    pop   ecx"
+		Print "    cmp   ecx,eax"
+		Print "    s"+op$+"   eax"
+		Print "    and   eax,255"
+	Forever
+End Function
+
+Function ParseTerm()
+	t=ParseFact()
+	Repeat
+		Select t
+		Case TOKE_ADD
+			Print "    push  eax"
+			t=ParseFact()
+			Print "    pop   ecx"
+			Print "    add   eax,ecx"
+		Case TOKE_SUB
+			Print "    push  eax"
+			t=ParseFact()
+			Print "    mov   ecx,eax"
+			Print "    pop   eax"
+			Print "    sub   eax,ecx"
+		Default
+			Return t
+		End Select
+	Forever
+End Function
+
+Function ParseFact()
+	t=ParseLeaf()
+	Repeat
+		Select t
+		Case TOKE_MUL
+			Print "    push  eax"
+			t=ParseLeaf()
+			Print "    pop   ecx"
+			Print "    imul  eax,ecx"
+		Case TOKE_DIV
+			Print "    push  eax"
+			t=ParseLeaf()
+			Print "    mov   ecx,eax"
+			Print "    pop   ecx"
+			Print "    idiv  eax,ecx"
+		Default
+			Return t
+		End Select
+	Forever
+End Function
+
+Function ParseLeaf()
+	t=GetToke()
+	Select t
+	Case TOKE_SUB
+		t=ParseLeaf()
+		Print "    neg   eax"
+	Case TOKE_OPENPAR
+		If ParseExpr() <> TOKE_CLOSEPAR SynErr()
+		t=GetToke()
+	Case TOKE_IDENT
+		Print "    mov   eax,[_"+toke$+"]"
+		AddGlob( toke$ )
+		t=GetToke()
+	Case TOKE_CONST
+		Print "    mov   eax,"+toke$
+		t=GetToke()
+	Default
+		SynErr()
+	End Select
+	Return t
+End Function
+
+Function AddGlob( name$ )
+	For gl.Glob=Each Glob
+		If gl\name=name Return
+	Next
+	gl=New Glob
+	gl\name=name
+End Function
+
+Function SynErr()
+	RuntimeError "Syntax Error"
+End Function
+	
+Function CurrCh$()
+	If lin$=""
+		Read lin$
+		lin$=Lower$( lin$ )+" "
+	EndIf
+	Return Left( lin$,1 )
+End Function
+
+Function NextCh()
+	lin$=Mid$( lin$,2 )
+End Function
+
+Function GetToke()
+
+	Repeat
+		toke$=CurrCh$()
+		NextCh()
+	Until toke$<>" "
+	
+	If toke$>="0" And toke$<="9"
+		Repeat
+			t$=CurrCh$()
+			If t$<"0" Or t$>"9" Return TOKE_CONST
+			toke$=toke$+t$
+			nextCh()
+		Forever
+	EndIf
+	
+	If toke$>="a" And toke$<="z"
+		Repeat
+			t$=CurrCh$()
+			If t$<"a" Or t$>="z"
+				Select toke$
+				Case "let" Return TOKE_LET
+				Case "print" Return TOKE_PRINT
+				Case "end" Return TOKE_END
+				Case "if" Return TOKE_IF
+				Case "then" Return TOKE_THEN
+				Case "else" Return TOKE_ELSE
+				End Select
+				Return TOKE_IDENT
+			EndIf
+			toke$=toke$+t$
+			NextCh()
+		Forever
+	EndIf
+	
+	Select toke$
+	Case "+" Return TOKE_ADD
+	Case "-" Return TOKE_SUB
+	Case "*" Return TOKE_MUL
+	Case "/" Return TOKE_DIV
+	Case "(" Return TOKE_OPENPAR
+	Case ")" Return TOKE_CLOSEPAR
+	Case "="
+		If CurrCh$()="<" NextCh():Return TOKE_LE
+		If CurrCh$()=">" NextCh():Return TOKE_GE
+		Return TOKE_EQ
+	Case "<"
+		If CurrCh$()="=" NextCh():Return TOKE_LE
+		If currCh$()=">" NextCh():Return TOKE_NE
+		Return TOKE_LT
+	Case ">"
+		If CurrCh$()="=" NextCh():Return TOKE_GE
+		If CurrCh$()="<" NextCh():Return TOKE_NE
+		Return TOKE_GT
+	End Select
+	
+	SynErr()
+	
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Agamer</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> Thought I better comment on this after coming across it and I must say very interesting! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Techlord</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> This is an excellent start for writing your own scripting language in blitz. Now if I can only figure out how to handle procedures, loops, arrays, and types. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Erroneouss</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> case without select error?<br>anyone else get that? <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Floyd</td><td align="right"><font class=tiny>2004</font></td></tr></table></td></tr><tr ><td class="posttext"> Sometimes the displayed code is corrupted.<br><br>Whenever that happens you should click the download link at the top of the thread. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Boulderdash</td><td align="right"><font class=tiny>2006</font></td></tr></table></td></tr><tr ><td class="posttext"> Cool... I have also made a compiler for 2650,6502,Z80 etc sort of CPU's useful for retro dev's making vintage console games, its intesting if not very useful to most people.<br><br><br>my compiler uses a pre-compiler to reformat if...then constructs and expressiions. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nate the Great</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> I know this is old but its still pretty cool. helpful for a scripting language im messing around with <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

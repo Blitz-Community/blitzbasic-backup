@@ -1,0 +1,255 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Wavelet noise</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Wavelet noise</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=82" >Blitz3D Programming</a>/<a href="#bottom" >Wavelet noise</a><br><br>
+<a name="1039176"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Axel Wheeler</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ok, here's the deal.  I've ported some code from c (or c++?) to B3D from a paper on wavelet noise functions:<br><br>Wavelets are thought to be superior and faster than Perlin noise, my other favorite cloudy noise function.  This type of function is great for generating random clouds, terrain, and other kinds of "intelligent noise" within your programs without having to resort to Photoshop's Clouds filter (which of course is itself using a similar function).<br><br>The original paper is here, and is I believe it is the seminal work on Wavelets:<br><br><a href="http://graphics.pixar.com/library/WaveletNoise/paper.pdf" target="_blank">http://graphics.pixar.com/library/WaveletNoise/paper.pdf</a><br><br>(The code is Appendix A, but is also reproduced below)<br><br>Now, since I don't actually know much of the c/c++ languages I am stunned that it does indeed seem to produce something.  I changed some ways of doing things into Blitz-style ways, but otherwise it's pretty similar, I think.  It is reproduced below, along with a little program to demonstrate a tile. <br><br>It seems not to be concerned about things like frequency scaling (the noise is pretty dense as is and not too useful, I wouldn't think).  Also, it seems to produce a 3D noise range and then show a 2D slice of it, which seems pretty wasteful.  <br><br>Really I'm just looking for thoughts, corrections from any c/c++ weens out there.  Or if there are any other great wavelet noise functions out there I'd love to see them.<br><br>First, my port of the routines:<br><pre class=code>
+;/* Note: this code is designed For brevity, Not efficiency; many operations can be hoisted,
+;	* precomputed, Or vectorized. Some of the straightforward details, such as tile meshing,
+;	* decorrelating bands And fading out the Last band, are omitted in the interest of space.*/
+
+Global noiseTileSize
+
+Const ARAD=16
+Global aCoeffs[2*ARAD]
+Restore datastart
+For i=0 To 2*ARAD-1
+	Read aCoeffs[i]
+Next
+
+Global pCoeffs[4]
+pCoeffs[0]=0.25
+pCoeffs[1]=0.75
+pCoeffs[2]=0.75
+pCoeffs[3]=0.25
+
+Dim noise#(1)
+Dim temp1#(1)
+Dim temp2#(1)
+
+Function OtherMod(x,n)
+	Local m=x Mod n
+	If m&lt;0
+		Return m+n
+	Else
+		Return m
+	EndIf
+End Function
+	
+Function Downsample (from#, dest#, n, stride ) 
+	
+	For i=0 To n/2-1
+		temp1(i*stride)=0
+		For k=2*i-ARAD To 2*i+ARAD
+			temp1(i*stride) = temp1(i*stride) + aCoeffs[k-2*i] * noise(OtherMod(k,n)*stride);
+		Next
+		Next
+			
+End Function
+
+.datastart
+Data 0.000334,-0.001528, 0.000410, 0.003545,-0.000938,-0.008233, 0.002172, 0.019120
+Data -0.005040,-0.044412, 0.011655, 0.103311,-0.025936,-0.243780, 0.033979, 0.655340
+Data 0.655340, 0.033979,-0.243780,-0.025936, 0.103311, 0.011655,-0.044412,-0.005040
+Data 0.019120, 0.002172,-0.008233,-0.000938, 0.003546, 0.000410,-0.001528, 0.000334
+
+			
+Function Upsample( from#, dest#, n, stride) 
+	For i=0 To n-1
+		temp2(i*stride) = 0;
+		For k=i/2 To i/2+1
+			temp2(i*stride) = temp2(i*stride)+pCoeffs[i-2*k] * temp1(OtherMod(k,n/2)*stride)
+		Next
+	Next
+End Function
+					
+Function GenerateNoiseTile( n, olap) 
+	If n Mod 2&lt;&gt;n Then n=n+1; /* tile size must be even */
+	Local ix, iy, iz, i
+	Local sz=n*n*n;*sizeof(Float)
+	
+	Dim temp1#(sz)
+	Dim temp2#(sz)
+	Dim noise#(sz)
+		;/* Step 1. Fill the tile with random numbers in the range -1 To 1. */
+	For i=0 To n*n*n 
+		noise(i) = (Rnd(1)+Rnd(1))/2.0;gaussianNoise()
+	Next
+							;/* Steps 2 And 3. Downsample And upsample the tile */
+	
+	
+	For iy=0 To n
+		For iz=0 To n
+								;{ /* Each x row */
+			i = iy*n + iz*n*n
+			Downsample( noise(i), temp1(i), n, 1 )
+			Upsample( temp1(i), temp2(i), n, 1 )
+		Next
+	Next
+	
+	For ix=0 To n
+		For iz=0 To n 
+										;{ /* Each y row */
+			i = ix + iz*n*n
+			Downsample( temp2(i), temp1(i), n, n )
+			Upsample( temp1(i), temp2(i), n, n )
+		Next
+	Next
+	
+	For ix=0 To n
+		For iy=0 To n 
+										;/* Each z row */
+			i = ix + iy*n
+			Downsample( temp2(i), temp1(i), n, n*n )
+			Upsample( temp1(i), temp2(i), n, n*n )
+		Next
+	Next
+	
+										;/* Step 4. Subtract out the coarse-scale contribution */
+	
+	For i=0 To n*n*n
+		noise(i)=noise(i)-temp2(i)
+	Next
+	
+;			/* Avoid even/odd variance difference by adding odd-offset version of noise To itself.*/
+	Local offset=n/2
+	If offset Mod 2=0 Then offset=offset+1
+	
+	i=0
+	For ix=0 To n 
+		For iy=0 To n 
+			For iz=0 To n
+				temp1(i) = noise( OtherMod(ix+offset,n) + OtherMod(iy+offset,n)*n + OtherMod(iz+offset,n)*n*n )
+				i=i+1
+			Next
+		Next
+	Next
+	
+	For i=0 To n*n*n 
+		noise(i)=noise(i)+temp1(i)
+		noiseTileSize=n
+	Next
+	
+End Function
+</pre><br><br>Next, the original:<br><pre class=code>
+/* Note: this code is designed for brevity, not efficiency; many operations can be hoisted,
+* precomputed, or vectorized. Some of the straightforward details, such as tile meshing,
+* decorrelating bands and fading out the last band, are omitted in the interest of space.*/
+static float *noiseTileData; static int noiseTileSize;
+int Mod(int x, int n) {int m=x%n; return (m&lt;0) ? m+n : m;}
+#define ARAD 16
+void Downsample (float *from, float *to, int n, int stride ) {
+float *a, aCoeffs[2*ARAD] = {
+0.000334,-0.001528, 0.000410, 0.003545,-0.000938,-0.008233, 0.002172, 0.019120,
+-0.005040,-0.044412, 0.011655, 0.103311,-0.025936,-0.243780, 0.033979, 0.655340,
+0.655340, 0.033979,-0.243780,-0.025936, 0.103311, 0.011655,-0.044412,-0.005040,
+0.019120, 0.002172,-0.008233,-0.000938, 0.003546, 0.000410,-0.001528, 0.000334};
+a = &amp;aCoeffs[ARAD];
+for (int i=0; i&lt;n/2; i++) {
+to[i*stride] = 0;
+for (int k=2*i-ARAD; k&lt;=2*i+ARAD; k++)
+to[i*stride] += a[k-2*i] * from[Mod(k,n)*stride];
+}
+}
+void Upsample( float *from, float *to, int n, int stride) {
+float *p, pCoeffs[4] = { 0.25, 0.75, 0.75, 0.25 };
+p = &amp;pCoeffs[2];
+for (int i=0; i&lt;n; i++) {
+to[i*stride] = 0;
+for (int k=i/2; k&lt;=i/2+1; k++)
+to[i*stride] += p[i-2*k] * from[Mod(k,n/2)*stride];
+}
+}
+void GenerateNoiseTile( int n, int olap) {
+if (n%2) n++; /* tile size must be even */
+int ix, iy, iz, i, sz=n*n*n*sizeof(float);
+float *temp1=(float *)malloc(sz),*temp2=(float *)malloc(sz),*noise=(float *)malloc(sz);
+/* Step 1. Fill the tile with random numbers in the range -1 to 1. */
+for (i=0; i&lt;n*n*n; i++) noise[i] = gaussianNoise();
+/* Steps 2 and 3. Downsample and upsample the tile */
+for (iy=0; iy&lt;n; iy++) for (iz=0; iz&lt;n; iz++) { /* each x row */
+i = iy*n + iz*n*n; Downsample( &amp;noise[i], &amp;temp1[i], n, 1 );
+Upsample( &amp;temp1[i], &amp;temp2[i], n, 1 );
+}
+for (ix=0; ix&lt;n; ix++) for (iz=0; iz&lt;n; iz++) { /* each y row */
+i = ix + iz*n*n; Downsample( &amp;temp2[i], &amp;temp1[i], n, n );
+Upsample( &amp;temp1[i], &amp;temp2[i], n, n );
+}
+for (ix=0; ix&lt;n; ix++) for (iy=0; iy&lt;n; iy++) { /* each z row */
+i = ix + iy*n; Downsample( &amp;temp2[i], &amp;temp1[i], n, n*n );
+Upsample( &amp;temp1[i], &amp;temp2[i], n, n*n );
+}
+/* Step 4. Subtract out the coarse-scale contribution */
+for (i=0; i&lt;n*n*n; i++) {noise[i]-=temp2[i];}
+/* Avoid even/odd variance difference by adding odd-offset version of noise to itself.*/
+int offset=n/2; if (offset%2==0) offset++;
+for (i=0,ix=0; ix&lt;n; ix++) for (iy=0; iy&lt;n; iy++) for (iz=0; iz&lt;n; iz++)
+temp1[i++] = noise[ Mod(ix+offset,n) + Mod(iy+offset,n)*n + Mod(iz+offset,n)*n*n ];
+for (i=0; i&lt;n*n*n; i++) {noise[i]+=temp1[i];}
+noiseTileData=noise; noiseTileSize=n; free(temp1); free(temp2);
+}
+</pre><br><br>And finally my little program to display them.  Blitz blurs the image, though, so if you hit Enter it will save to C:\noise.bmp.  You can also zoom in/out with the arrow keys.<br><pre class=code>
+Include ".\wavelets.bb"
+
+Graphics3D(1024,768,32,1)
+SetBuffer(BackBuffer())
+SeedRnd(MilliSecs())
+
+Global cam=CreateCamera()
+MoveEntity(cam,0,0,-2)
+CameraRange(cam,0.001,10)
+Global sun=CreateLight()
+LightColor(sun,255,255,200)
+AmbientLight(200,200,255)
+
+
+Global size=128
+Global sprite
+Global tex
+
+createWavelet(32)
+
+While Not KeyHit(1)
+	If KeyHit(200)
+		PositionEntity(cam,0,0,EntityZ(cam)*.9)
+	EndIf
+	If KeyHit(208)
+		PositionEntity(cam,0,0,EntityZ(cam)*1.111111)
+	EndIf
+	If KeyHit(28)
+		SaveBuffer(TextureBuffer(tex),"c:\noise.bmp")
+	EndIf
+	Delay(10)
+	RenderWorld()
+	
+	Flip()
+Wend
+
+
+Function createWavelet(size)
+	generatenoisetile(32,1)
+	createNoiseTexture()
+	
+End Function
+
+Function createNoiseTexture()
+	tex=CreateTexture(size,size)
+	SetBuffer(TextureBuffer(tex))
+	
+	For y=0 To size-1
+		For x=0 To size-1
+			c#=255*noise(y*size+x)
+			Color(c,c,c)
+			Oval(x,y,1,1)
+		Next
+	Next
+	
+	sprite=CreateSprite()
+	EntityTexture(sprite,tex)
+	
+	SetBuffer(BackBuffer())
+End Function
+</pre> <br><br></td></tr></table><br>
+<a name="1040382"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >puki</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Interesting stuff. <br><br></td></tr></table><br>
+<a name="1040396"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Axel Wheeler</td><td align="right"><font class=tiny>(Posted 2010)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks.  It's not clear how to tweak the noise to produce less cluttered patterns to make it really useful.  <br><br>Considering how revolutionary wavelet noise is supposed to be (compared to Perlin noise, for example) it's odd that there are so few examples in pseodocode (or any actual code) out there, at least that I could find.  All the articles appear to be aimed at methematicians and cover the theory rather than the practice.  Oh, well.<br><br>-Pete <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,494 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Array Tlist and leaks</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Array Tlist and leaks</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=101" >BlitzMax Beginners Area</a>/<a href="#bottom" >Array Tlist and leaks</a><br><br>
+<a name="603400"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Arne</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> <b>Hello!</b><br>I got BMX a few days ago and I'm really enjoying it. I've realized the usefulness of Types and Methods, so I'm trying to learn those a little better.<br><br>Many of my ideas incorporate large play areas and lots of enemies, so I need something like a QuadTree for collision detection. I figured I'd start with something else though, an array containing linked lists of objects inside each grid 'cell'.  Objects may change grid cells as they move, removing themself from the old one and adding themself to the new. <br><br>To check for collisions I only look at the nearby cells. I would have to check 3*3 cells normally, but I check if the object is close to any of the edges, and that way I only have to check 1, 2 or 4 cells.<br><br>Well, it's almost working! However, the program mysteriously slows down gradually. I think it manages to kill some of my tray icons too, so I'm not sure how safe it is to run! I don't get any nasty errors though.<br><br>I've narrowed down the problem to line 140. It's the part where I know which grid cell is nearby, and I begin checking what objects are in its linked list. I do this with a regular For EachIn loop. If I comment it away I don't get any problems. <br><br>I've tried making it a Type Function and just a normal Program Function, but I still get the slowdown. I'm pretty clueless to what the problem is. I'm thinking that maybe some objects are kept in memory somehow. Maybe the lists get corrupted as objects flicker between the grid cells. Maybe I need to run some GarbageCollector? I'm using BlitzMax 1.09.<br>--<br><i><br><b>Edit:</b> Intalled 1.14 and the Garbage Collector made the problem go away. I'll be reading this WikiPedia link in a minute:<br><a href="http://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" target="_blank">http://en.wikipedia.org/wiki/Garbage_collection_(computer_science)</a><br><br>Scroll down for screens (An array out of bound problem still remains if the grid size/num constants are changed.)</i><br><br><i><b>Edit:</b> Actually, scroll down a bit for a better version of this program, without the array bounds error. Faster too.</i><br><br><i><b>Last Edit?</b> Actually, by now I got a much better version. Open dir:<br><a href="http://web.telia.com/~u48508900/spacegame/" target="_blank">http://web.telia.com/~u48508900/spacegame/</a><br></i><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Graphics 640,480,0
+
+SeedRnd(MilliSecs())
+
+Const XGRIDSIZE=64, YGRIDSIZE=48 'Size of grid cells
+Const XGRIDPLAYAREA=8, YGRIDPLAYAREA=8 'Size of grid array/map
+
+Const XPLAYAREA=XGRIDSIZE*XGRIDPLAYAREA, YPLAYAREA=YGRIDSIZE*YGRIDPLAYAREA 'PlayArea size in pix is calculated
+
+Global Pyths:Int ' For Dbug / benchmarking.
+
+Global GridList:TList[XGRIDPLAYAREA,YGRIDPLAYAREA] 'Set us up the grid, each grid position has a pointer list
+For y=0 To XGRIDPLAYAREA-1
+For x=0 To YGRIDPLAYAREA-1
+GridList[x,y] = New TList
+Next
+Next
+
+Global AllList:TList = New TList ' This is a linked list containing all the objects, used for updating all.
+
+Type Zig
+
+	Global IDCount:Int ' Just for fun, first time I use type globals!
+
+	Field XPos:Float
+	Field YPos:Float
+	Field Value:Int
+	
+	Field XGridCurr:Byte ' Current grid cell it's in
+	Field YGridCurr:Byte
+	
+	Field XGridOld:Byte ' Old grid cell it was in, so we can check if it has moved
+	Field YGridOld:Byte
+	
+	Field XEdge:Byte ' How close to edges 0-2 (-1 to +1 in a way)
+	Field YEdge:Byte ' Dun wanna check 3*3 grids so it's useful to know edge proximity.
+	
+	
+	Method New() 'Constructor
+		XPos=Rnd(XPLAYAREA) ' Place in playarea
+		YPos=Rnd(YPLAYAREA)
+		IDCount=IDCount+1
+		Value=IDCount
+		AllList.AddLast Self ' Add to AllList
+		
+		XGridCurr=XPos / XGRIDSIZE 'What grid cell coord?
+		YGridCurr=YPos / YGRIDSIZE
+		
+		If XGridCurr&lt;0 XGridCurr=0 ' Bounds for grid array. Just wanna make sure cuz array errors are nasty.
+		If YGridCurr&lt;0 YGridCurr=0
+		If XGridCurr&gt;XGRIDPLAYAREA-1 XGridCurr=XGRIDPLAYAREA-1
+		If YGridCurr&gt;YGRIDPLAYAREA-1 YGridCurr=YGRIDPLAYAREA-1
+		
+		XGridOld=XGridCurr 'It's new so there's no old coords
+		YGridOld=YGridCurr 
+		GridList(XGridCurr,YGridCurr).AddLast Self ' Add to GridList
+	End Method
+	
+	
+	Method Report() ' Draw
+		SetColor 255,191,63
+
+		DrawRect XPos-1,YPos-1,3,3
+	End Method
+	
+	
+	Method Move()
+		XPos=XPos+Rnd(1)-0.5
+		YPos=YPos+Rnd(1)-0.5
+		If XPos&lt;0 XPos=0 ' Bounds for pixel play area 
+		If YPos&lt;0 YPos=0
+		If XPos=&gt;XPLAYAREA-1 XPos=XPLAYAREA-1
+		If YPos=&gt;YPLAYAREA-1 YPos=YPLAYAREA-1
+	
+		XGridOld=XGridCurr ' Store old grid coordinates so we can check for movement with them later
+		YGridOld=YGridCurr 
+	
+		XGridCurr=XPos / XGRIDSIZE ' Find out what grid cell it's in.
+		YGridCurr=YPos / YGRIDSIZE
+		
+		If XGridCurr&lt;0 XGridCurr=0 ' Bounds for grid array. Just wanna make sure cuz array errors are nasty.
+		If YGridCurr&lt;0 YGridCurr=0
+		If XGridCurr&gt;XGRIDPLAYAREA-1 XGridCurr=XGRIDPLAYAREA-1
+		If YGridCurr&gt;YGRIDPLAYAREA-1 YGridCurr=YGRIDPLAYAREA-1
+		
+		If XGridOld&lt;&gt;XGridCurr Or YGridOld&lt;&gt;YGridCurr ' Has it grid-moved?
+			GridList(XGridCurr,YGridCurr).AddLast Self ' Add to new GridList
+			GridList(XGridOld,YGridOld).Remove Self ' Remove from old GridList 
+		EndIf
+		
+		Local XRel:Int=XPos-(XGRIDSIZE*XGridCurr) ' Here we need to figure out what edge it's close to.
+		Local YRel:Int=YPos-(YGRIDSIZE*YGridCurr)
+		XRel=XRel/(XGRIDSIZE/3.0)
+		YRel=YRel/(YGRIDSIZE/3.0) ' Better use 3.0 here, otherwise it might yeild a 3?
+		XEdge=Xrel ' Can't store signed (-1) so we store 0-2
+		YEdge=Yrel
+	End Method
+	
+	
+	Method ProximityCheck()
+		' We only wanna check the grid cells it's close to, and its own grid cell of course.
+		' Since no sentinels are used, we must also do a boundry check.
+		' I have a feeling this 'If' construction could be simplified, couldn't make a 'For' loop work tho.
+	
+		Local Xok=False, Yok=False ' First check bounds
+		If XGridCurr+(XEdge-1)=&gt;0 And XGridCurr+(XEdge-1)&lt;XGRIDPLAYAREA Xok=True
+		If YGridCurr+(YEdge-1)=&gt;0 And YGridCurr+(YEdge-1)&lt;YGRIDPLAYAREA Yok=True
+		
+		CollisionCheck(0,0,True) ' no need to test Edge polarity in the same grid
+		
+		If XEdge&lt;&gt;1
+			If Xok=True ' Bounds
+				CollisionCheck((XEdge-1),0,False)
+			EndIf
+		EndIf
+		
+		If YEdge&lt;&gt;1
+			If Yok=True ' Bounds
+				CollisionCheck(0,(YEdge-1),False)
+			EndIf
+			
+			If XEdge&lt;&gt;1 
+				If Xok=True And Yok=True
+					CollisionCheck((XEdge-1),(YEdge-1),False)
+				EndIf
+			EndIf
+		EndIf
+
+	End Method
+	
+	
+	' !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	' !PROBLEM IN THIS METHOD CAUSES GRADUAL SLOWDOWN!
+	' !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	' This method checks the distance to all objects in a selected grid cell
+	Method CollisionCheck(x:Int,y:Int,PolarityCheck)
+		Local Dist:Float, XDiff:Float, YDiff:Float, PolDiff:Byte
+
+		'If x&lt;0 x=0 ' Bounds check in here instead? 
+		'If y&lt;0 y=0 
+		'If x=&gt;XGRIDPLAYAREA x=XGRIDPLAYAREA-1
+		'If y=&gt;YGRIDPLAYAREA y=YGRIDPLAYAREA-1
+		
+		For BugTemp:Zig = EachIn GridList(x+XGridCurr,y+YGridCurr) ' &lt;&lt;&lt; It is this line causing problems! Isn't deleted after use?
+			If BugTemp&lt;&gt;Self 'Just Temp&lt;Self to save 'handshake' time? Might work.
+			
+				' Test Edge 'polarities', must be opposite, unless in the same grid.
+				If PolarityCheck=False 'We're not in the same grid, I hope! Never know with the bounds checks resetting stuff.
+					' not sure if I shouldn't just make the grid cells smaller.
+ 					'PolDiff = Abs((XEdge-1)-(x+BugTemp.XEdge-1)) + Abs((YEdge-1)-(y+BugTemp.YEdge-1))
+					'If PolDiff =&lt; 1 PolarityCheck=True
+					PolarityCheck=True
+				EndIf
+			
+				If PolarityCheck=True
+
+					Pyths=Pyths+1 ' Count pythagoras just for benchmarking purposes.
+					XDiff=Abs(XPos - BugTemp.XPos)
+					YDiff=Abs(YPos - BugTemp.YPos)
+					Dist=Sqr(XDiff^2 + YDiff^2)
+					SetColor 60,95,110 ' Potential
+					DrawLine XPos,YPos,BugTemp.XPos,BugTemp.YPos
+					If Dist&lt;16
+						SetColor 70,170,255
+						DrawLine XPos,YPos,BugTemp.XPos,BugTemp.YPos
+					EndIf
+					
+				Else	
+					SetColor 50,55,65 ' Wrong Edge polarity!
+					DrawLine XPos,YPos,BugTemp.XPos,BugTemp.YPos
+				EndIf
+				
+			EndIf
+		Next
+
+	End Method
+	
+End Type
+
+
+For i=1 To 100
+Temp:Zig = New Zig
+Next
+
+SetClsColor 0,0,0
+TimerStart = MilliSecs()
+TimerDiff = MilliSecs()
+
+While Not KeyHit(KEY_ESCAPE)
+
+	Cls
+
+
+	For y=0 To YGRIDPLAYAREA-1 ' Draw the grid
+	For x=0 To XGRIDPLAYAREA-1
+		SetColor 50,50,50
+		DrawRect x*XGRIDSIZE, y*YGRIDSIZE,XGRIDSIZE,YGRIDSIZE
+		SetColor 0,0,0
+		DrawRect x*XGRIDSIZE+1, y*YGRIDSIZE+1,XGRIDSIZE-2,YGRIDSIZE-2
+		' Draw center for edge polarity clarity.
+		SetColor 50,50,50
+		DrawRect x*XGRIDSIZE+(XGRIDSIZE/3.0), y*YGRIDSIZE+(YGRIDSIZE/3.0),XGRIDSIZE/3.0,YGRIDSIZE/3.0
+
+	Next
+	Next
+	
+	TimerStart=MilliSecs()
+	
+	For Temp:Zig = EachIn AllList
+		Temp.Move() ' Move Zig, ha ha.
+	Next
+	
+	Pyths=0
+	For Temp:Zig = EachIn AllList
+		Temp.ProximityCheck() ' Do the proximity test.
+		Temp.Report()
+	Next
+	
+	SetColor 70,120,220
+	DrawText "Pyths:" + Pyths,8,32
+	
+	TimerDiff = MilliSecs()-TimerStart
+	DrawText "ms:" + TimerDiff, 8,16 ' This timer slows down as a result of... ???
+	
+	
+	If KeyDown(KEY_SPACE) ' Debug! Hold down SpaceBar to count all objects. Count Matches atm.
+		a=0
+		For Temp:Zig = EachIn AllList ' Count entire list
+			a=a+1
+		Next
+		DrawText "AllList Count:" + a,10,20
+		
+		a=0
+		For y=0 To YGRIDPLAYAREA-1 ' Count grid cell by grid cell
+			For x=0 To XGRIDPLAYAREA-1
+				For Temp:Zig = EachIn GridList(x,y)
+					a=a+1
+				Next
+			Next
+		Next
+		DrawText "GridList Count:" + a,10,30
+	EndIf
+
+	Flip
+
+Wend
+</textarea> <br><br></td></tr></table><br>
+<a name="603405"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Mark Tiffany</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Before version 1.12, you had to include FlushMem in your main loop somewhere to free up discarded memory.  I can't spy a FlushMem above, and would give the symptoms you describe.<br><br>But if you upgrade to the latest version (now 1.14), you no longer need to worry about FlushMem, it's all automated for you, and it should reolve your problem!  The code above certainly seems to run fine for me. <br><br></td></tr></table><br>
+<a name="603660"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Arne</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thnks for the help! It works now! Mister 'Garbage Collector', whatever he does, did the trick. I hope he does his job well though, the objects are all over the place doing stuff.<br><br><br><i>(Image removed, serverspace troubles)</i><br><br>Still get some array out of bound errors crashing the program when I toy around with the grid resolution and object amount. Need to look into that. Comments on the code greatly appreciated! I bet a lot of people have done similar things for collision detection. <br><br></td></tr></table><br>
+<a name="603672"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >FlameDuck</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Mister 'Garbage Collector', whatever he does <br></div>He collects garbage. Obviously. :o&gt; <br><br></td></tr></table><br>
+<a name="603709"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Arne</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Haha, well let's hope he's more professional than me!<br><br><b>Edit:</b> this problem was solved and I went for another solution.<br><br>I got a minor question. I'm using rather large grid cells now, think the size of a Zelda screen. So I figured that I'd give each object in a cell an X,Y polarity that indicates how close it is to an edge (-1,0,+1 for X and Y). This way I won't have to check the 8 surrounding screens (cells), but only the one the object is on, and possibly one above or to the sides, or if the polarity is in a corner, I check 4 screens in total. You can see the center 0,0 polarity of each screen here, drawn as a grey solid square.<br><br><i>(Image removed, serverspace troubles)</i><br><br>Now I got greedy, and thought why not use the polarity of the object I'm checking against aswell? If the 'Hero' has a top edge polarity, I only need to check 'Pythagoras' against objects in the screen above with a bottom edge polarity. <br><br>I basically have 3 sets of X,Y variables that I can use to produce a True or False to check for Pythagoras. Looks like this. Green is the allowed 'enemy' polarities (either 1 or 2 steps away), Blue is the relative screen coordinate (cell), and black would be the player standing in a corner.<br><br><i>(Image removed, serverspace troubles)</i><br><br>I have failed to produce a good formula for this, and the problem should be simple.<br><br><br>Now here's the question: Is the polarity thing completely retarded? Should I just grab the bull by its horns and skip polarity, and just check all 8 surrounding cells instead, but make them smaller to limit the amount of objects likely to be inside? This will consume more memory of course, and objects will change cells more often. How much does a TList cost in terms of memory?<br><br>I want to make something like 1000 objects and maybe have a playfield the size of 20*20 screens, or larger. Enemy population will be along the lines of Zelda. <br><br></td></tr></table><br>
+<a name="603724"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Arne</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Never mind, it was much more efficient to waste memory on the TList array. It made the code much cleaner too! <br><br>Right now I'm doing 1000 objects, 2000 proximity checks are done in maybe 11ms, and the movement (changing grids and so) is 3ms maybe. Not sure how good that performance is.<br>I'm using a 2.5ghz P4.<br><br><i>(Image removed, serverspace troubles)</i><br><br><i>Without lines this time. Each object checks maybe around 0-5 others, and unfortunately the objects check each other twice (A to B and B to A). The play area is actually 8k something pixels high and wide, so I scaled it down for plotting. Each GridCell is 128px. The TList array is 64*64 PLUS Sentinels, so it's 66*66. I was scared It'd hog a ton of mem but It's just using 270kb it seems.</i><br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Graphics 640,480,0
+
+SeedRnd(MilliSecs())
+
+Const GRIDSIZE=128 'Size of grid cells
+Const GRID_PLAYAREA=64+2 'Size of grid array/map +SENTINELS!!!
+
+Const PIX_PLAYAREA=GRIDSIZE*GRID_PLAYAREA 'PIX_PLAYAREA size in pix is calculated
+
+Const MINBOUND=GRIDSIZE+16 ' Needed for bounds, important. In pixels, not grid cells.
+Const MAXBOUND=PIX_PLAYAREA-MINBOUND
+
+Global Pyths:Int ' For Dbug / benchmarking.
+
+Global GridList:TList[GRID_PLAYAREA,GRID_PLAYAREA] 'Set us up the grid, each grid position has a pointer list
+For y=0 To GRID_PLAYAREA-1
+For x=0 To GRID_PLAYAREA-1
+GridList[x,y] = New TList
+Next
+Next
+
+Global AllList:TList = New TList ' This is a linked list containing all the objects, used for updating all.
+
+Type Zig
+
+	Global IDCount:Int ' Just for fun, first time I use type globals!
+
+	Field XPos:Float
+	Field YPos:Float
+	Field Value:Int
+	Field Color:Int
+	
+	Field XGridCurr:Byte ' Current grid cell it's in
+	Field YGridCurr:Byte
+	
+	Field XGridOld:Byte ' Old grid cell it was in, so we can check if it has moved
+	Field YGridOld:Byte
+
+	Method New() 'Constructor
+		XPos=Rnd(PIX_PLAYAREA) ' Place in PIX_PLAYAREA, rnd is exclusive now so no -1
+		YPos=Rnd(PIX_PLAYAREA)
+		IDCount=IDCount+1 ' Increase Type-global ID Count, not using it for much tho
+		Value=IDCount
+		Color=0
+		
+		AllList.AddLast Self ' Add to AllList
+		
+		BoundsCheck()
+		
+		XGridCurr=XPos / GRIDSIZE 'What grid cell coord?
+		YGridCurr=YPos / GRIDSIZE
+		
+		XGridOld=XGridCurr 'It's new so there's no old coords
+		YGridOld=YGridCurr 
+		
+		GridList(XGridCurr,YGridCurr).AddLast Self ' Add to GridList
+	End Method
+	
+	
+	Method Draw() ' Draw
+		Select Color
+		Case 0
+		SetColor 127,127,127
+		Case 1
+		SetColor 255,191,63
+		Default
+		SetColor 255,63,15
+		EndSelect
+		DrawRect XPos*(480.0/PIX_PLAYAREA)-1, YPos*(480.0/PIX_PLAYAREA)-1,3,3
+	End Method
+	
+	
+	Method BoundsCheck()
+		If XPos&lt;MINBOUND XPos=MINBOUND ' Bounds for pixel play area 
+		If YPos&lt;MINBOUND YPos=MINBOUND
+		If XPos&gt;MAXBOUND XPos=MAXBOUND
+		If YPos&gt;MAXBOUND YPos=MAXBOUND
+	End Method
+	
+	
+	Method Move()
+		XPos=XPos+Rnd(10)-5.0
+		YPos=YPos+Rnd(10)-5.0
+
+		BoundsCheck()
+	
+		XGridOld=XGridCurr ' Store old grid coordinates so we can check for movement with them later
+		YGridOld=YGridCurr 
+	
+		XGridCurr=XPos / GRIDSIZE ' Find out what grid cell it's in.
+		YGridCurr=YPos / GRIDSIZE
+		
+		If XGridOld&lt;&gt;XGridCurr Or YGridOld&lt;&gt;YGridCurr ' Has it grid-moved?
+			GridList(XGridCurr,YGridCurr).AddLast Self ' Add to new GridList
+			GridList(XGridOld,YGridOld).Remove Self ' Remove from old GridList 
+		EndIf
+
+	End Method
+	
+	
+	Method ProximityCheck()
+
+		Local x:Int,y:Int
+		
+		Color=0 ' not near anything by default
+		
+		For y=-1 To 1 ' Wohoo, we're using Sentinels so let's not give a damn where we're looking.
+		For x=-1 To 1 ' Take THAT 'out of bounds', Hah, memory is cheap! Hentai Rocks!
+		CollisionCheck(x,y) 
+		Next
+		Next
+
+	End Method
+	
+	
+	' !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	' !PROBLEM IN THIS METHOD CAUSES GRADUAL SLOWDOWN! But Not with The Garbage Collector in 1.14!
+	' !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	' This method checks the distance to all objects in a selected grid cell
+	Method CollisionCheck(x:Int,y:Int) ' x,y are in the range 1- 0 +1
+		Local Dist:Float, XDiff:Float, YDiff:Float
+		
+		For BugTemp:Zig = EachIn GridList(x+XGridCurr,y+YGridCurr) ' &lt;&lt;&lt; It is this line causing problems! Isn't deleted after use?
+			If BugTemp&lt;&gt;Self 'Just Temp&lt;Self to save 'handshake' time? Might work.
+			
+				Pyths=Pyths+1 ' Count pythagoras just for benchmarking purposes.
+				XDiff=Abs(XPos - BugTemp.XPos)
+				YDiff=Abs(YPos - BugTemp.YPos)
+				'Dist=YDiff+XDiff
+				Dist=Sqr(XDiff^2 + YDiff^2)					
+				Color=1
+				If Dist&lt;50
+					Color=2
+				EndIf
+				
+			EndIf
+		Next
+		
+		'Delete BugTemp '? This is the garbage leak?
+
+	End Method
+	
+End Type
+
+
+For i=1 To 1000
+Temp:Zig = New Zig
+Next
+
+SetClsColor 0,0,0
+
+TimerStart = MilliSecs()
+TimerDiff = MilliSecs()
+
+While Not KeyHit(KEY_ESCAPE) ' This is the main loop...
+
+	Cls
+
+	For y=0 To GRID_PLAYAREA-1 ' Draw the grid
+	For x=0 To GRID_PLAYAREA-1
+		xx:Float=7.27'(GRIDSIZE)*(480.0/PIX_PLAYAREA)
+		yy:Float=7.27'(GRIDSIZE)*(480.0/PIX_PLAYAREA)
+		SetColor 50,50,50
+		DrawRect x*xx,y*yy,xx,yy
+		SetColor 0,0,0
+		DrawRect x*xx+1,y*yy+1,xx-2,yy-2
+	Next
+	Next
+	
+	TimerStart=MilliSecs()
+	
+	For Temp:Zig = EachIn AllList
+		Temp.Move() ' Move Zig, ha ha.
+	Next
+	
+	Pyths=0
+	For Temp:Zig = EachIn AllList
+		Temp.ProximityCheck() ' Do the proximity test.
+		Temp.Draw()
+	Next
+	
+	TimerDiff = MilliSecs()-TimerStart
+	
+	SetColor 70,120,220
+	DrawText "msecs:" + TimerDiff, 8,16 ' This timer slows down as a result of... ???
+	DrawText "Pyths:" + Pyths,8,32 ' Num of distance checks run
+	DrawText "GC Mem:" + GCMemAlloced(),8,48
+
+	Flip
+
+Wend
+</textarea><br><br><br>Edit: Pic with lines just for clarity, seems they grab a few ms.<br><i>(Image removed, serverspace troubles)</i> <br><br></td></tr></table><br>
+<a name="603728"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >LarsG</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> I have no clue what you're doing, Arne.. but it looks kinda cool though.. :) <br><br></td></tr></table><br>
+<a name="603738"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Mark Tiffany</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> You might want to use the codebox tag, rather than the code tag.  It does look cool though, whatever it is! <br><br></td></tr></table><br>
+<a name="603768"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Tom</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi,<br><br>Thoughts for optimising:<br><br>Try a fast square root calculation:<br><a href="http://supp.iar.com/FilesPublic/SUPPORT/000419/AN-G-002.pdf" target="_blank">http://supp.iar.com/FilesPublic/SUPPORT/000419/AN-G-002.pdf</a><br><br>How about a square root lookup table? (memory hog!)<br><br>In your move loop try to use multiplication rather than division. Have a Const in your type:<br><br>Const sz:Float = 1.0 / GRIDSIZE<br><br>And replace:<br><br>XGridCurr=XPos / GRIDSIZE<br>YGridCurr=YPos / GRIDSIZE<br><br>With..<br><br>XGridCurr=XPos * sz<br>YGridCurr=YPos * sz<br><br>Same thing for the division in your draw loop:<br>this could be pre-calculated &gt; (480.0/PIX_PLAYAREA)<br><br>Your demo averages 5ms, with some of the things I said there I got it down to a 'flickery 4!' :P <br><br></td></tr></table><br>
+<a name="603789"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Arne</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> Wow, thanks! <br><br>SQRT table would be a hog indeed! I'll take a look at that pdf soon, gotta run an errand first. I suppose it covers using a dist^2 = (x^2+y^2) solution. <br><br>So multiplication is faster? XGridCurr is kinda sensitive, because it's used in the array, but I have a little padding (16px) added before the sentinels so I should be safe from strange float rounding errors I guess.<br><br>The draw stuff is all temporary, I just wanted to see what was going on.<br><br>Thanks a lot for taking time to comment!<br><br>For those who wonder what this is, I'm going to use it for stuff where I have a large persistant and active world. An example could be Asteroids, but with a much larger play area and asteroids that can all collide with each other. <br>I Made some quick GFX. No explosions or ufo yet. I figure I can just use rotate on the stuff, and use SetColor and LIGHTBLEND for the 2 shield layers (rotating cw and ccw to look varied and cool).<br><br><i>(Image removed, serverspace troubles)</i> <br><br></td></tr></table><br>
+<a name="603794"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >fredborg</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> You don't need square root or power at all, both are really heavy calculations for the cpu. Do it like this instead:<br><br><pre class=code>' Place at top of code
+Const DISTCOL# = 50*50
+
+' The collision check method
+	Method CollisionCheck(x:Int,y:Int) ' x,y are in the range 1- 0 +1
+		Local Dist:Float, Diff:Float
+		
+		For Local BugTemp:Zig = EachIn GridList[x+XGridCurr,y+YGridCurr] 
+			If BugTemp&lt;&gt;Self 'Just Temp&lt;Self to save 'handshake' time? Might work.
+			
+				Pyths=Pyths+1 ' Count pythagoras just for benchmarking purposes.
+				Diff = (XPos - BugTemp.XPos)
+				Dist = Diff*Diff 	
+
+				Color=1
+				If Dist&lt;DISTCOL
+					Diff = (YPos - BugTemp.YPos)					
+					Dist :+ Diff*Diff
+					If Dist&lt;DISTCOL
+						Color=2
+					EndIf
+				EndIf
+				
+			EndIf
+		Next
+		
+		'Delete BugTemp '? This is the garbage leak?
+
+	End Method</pre>There is actually a point in splitting up the distance calculation in several sub pieces, as in larger data sets it allows you to quickly filter out irrelevant entries, without wasting a lot of calculations on them. But it might not make any difference in your code... <br><br></td></tr></table><br>
+<a name="603855"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Arne</td><td align="right"><font class=tiny>(Posted 2005)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Aah, yes, I was vaguely aware of using the ^2 solution, but didn't really know how to implement it. I'll definately use that bit of code! Thanks!<br><br>I threw in a Pythagoras because it's the first thing I could think of. I actually don't know what type of distance check to use yet. For an asteroids game, definately some Pythagoras cuz stuff is round.<br><br>Otherwise cubes could be useful in some games. I think dist= abs(x1-x2) + abs(y1-y2) is rhombic.<br><br>Maybe it would it be possible to do a distance lookup table that has lower resolution (greater distance) further away/up in the array? <br><br>I'm really tired now, been up all night and now it's getting dark again. I'll see tomorrow if I can work some on making a simple Asteroids game to demonstrate the idea with the program. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,154 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Object Pooling</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Object Pooling</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Object Pooling</a><br><br>
+<a name="695307"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DStastny</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> There has been alot of questions about Garbage Collection, in BMAX and people looking for or worrying about leaks.<br><br>One thing not discussed is performance.  This is not necessarily issue with Garbage Collection but more of Blitz Max being object based language.  i.e. Everything being object.  As such it becomes quite easy to start new'ing objects all over your code and quickly peformance will start to drag.<br><br>I thought I would share a common technique that can be useful in mitgating performance issues caused by allocations.  If you learn one thing from this tutorial learn this Memory Allocations are evil!<br><br>The technique I am going to demonstrate is known as object pooling and the performance increase can be dramatic, as it ensures that the Garbage collector is never invoked, and more specifically no-allocations have to happen.<br><br>The following example code demonstrates the mechanism and pretty much any object can be extended to use it.  It does however require that you manage the life-time of your objects ala C/C++ or other structured languages however the benfit is well worth it.<br><br>To see it work best compile and run in non-debug mode.<br><pre class=code>
+SuperStrict
+' This is simple program to demostrate concept of Object Pooling.  
+' This is common technique used in Object and Garbage collected Languages
+' to maximize performance and to minimize possiblitiy of Garbage Collector
+' from being invoked in real time processes.  This is technique commonly used
+' in Java,.NET Languages and even C/C++ with Garbage Collectors
+'
+' Number of loops for our test cases
+Const MAXITS:Int=2000000
+
+' these are used to ensure the BMax Compiler does not optimize our loops
+' The Blitz Max Compiler is pretty smart and will optimize out code and variables
+' If it detects its not begin used so this helps trick it :)
+
+Global TotalX:Float
+Global TotalY:Float
+
+' Important to Note: That during our tests we dont use any Strings
+' Strings are GC'd by nature so simple string manipulations can and will invoke GC
+' If you need strings just be sure you allocate them up front and you will be ok
+' Just dont do things like this:  
+' FPS$= "FPS="+framespersec 
+' DrawText 0,0,FPS$
+
+' Now on to test object
+' simple 2d Vector type
+Type TVector2d
+	Field x : Float
+	Field y : Float
+	
+	Function Create:TVector2d(x:Float=0.0,y:Float=0.0)
+		Local v:TVector2d = New TVector2d
+		v.x=x
+		v.y=y
+		Return v
+	End Function	
+End Type	
+
+' Test loop can just adds up some simple vectors to simulate work
+Function TestNonPooled:Int()
+	Local time:Int=MilliSecs()
+	For Local i:Int = 0 To MAXITS
+    	Local v1:TVector2d = TVector2d.Create(0.0,0.0)
+		Local v2:TVector2d = TVector2d.Create(1.0,1.0)		
+		Local v3:TVector2d = TVector2d.Create(v1.x+v2.x,v1.y+v2.y)
+		TotalX=TotalX+v3.x
+		TotalY=TotalY+v3.y		
+	Next	
+	Return MilliSecs()-time
+End Function
+
+' Now we will create a Pool of Vectors to minimize impact caused by garbage collection and 
+' overhead of allocations.  This is accomplished by making simple linked list
+' to keep track of available vectors if none are available we will allocate one
+' if we forget to call Free thats ok it will then be garbage collected.
+
+Type TVector2dPool Extends TVector2d
+    Global _Freelist : TVector2dPool 
+    Field _Next : TVector2dPool
+
+    ' The create function looks to see if object is available in
+    ' the pool
+    Function Create:TVector2dPool(x:Float=0.0,y:Float=0.0)
+      	Local v : TVector2dPool
+
+	  	If (_Freelist)
+	  	    ' Have a free object in pool
+	    	v = _Freelist;
+	    	_Freelist = v._Next;	  	
+		Else
+		    ' Make a new one, this might invoke GC
+	 		v = New TVector2dPool
+		End If			
+		v.x=x
+		v.y=y
+		Return v;
+    End Function
+
+    Method Free()
+       ' Adds the object back to freelist
+    	Self._Next = _Freelist;
+	    _Freelist = Self;
+    End Method  
+    
+    Function InitializePool(Size:Int)
+        ' Free the current pool if one exists
+    	TVector2dPool._Freelist=Null    	
+    	' all we do is create and free to grow the pool
+		For Local i:Int=0 Until Size 
+			TVector2dPool.Create().Free()
+		Next    	
+    End Function
+End Type
+
+' Initialize Pool
+' For our test we will just put in 100 objects we only need 3.
+' This is good idea to do before hand. If we are wrong with 100 thats ok it will grow
+' if more are needed however we face the rath of allocation and GC so good idea to plan
+' ahead for amount you need
+
+TVector2dPool.InitializePool(100)
+
+' Same Test now using pooled objects that we Free when finished
+	
+Function TestPooled:Int()
+	Local time:Int=MilliSecs()
+	For Local i:Int = 0 To MAXITS
+		Local v1:TVector2dPool = TVector2dPool.Create(0.0,0.0)
+		Local v2:TVector2dPool = TVector2dPool.Create(1.0,1.0)		
+		Local v3:TVector2dPool = TVector2dPool.Create(v1.x+v2.x,v1.y+v2.y)
+		TotalX=TotalX+v3.x
+		TotalY=TotalY+v3.y							
+	    v1.Free()
+	    v2.Free()
+	    v3.Free()	
+	Next	
+	Return MilliSecs()-time
+End Function
+
+' now we run our tests
+' we will GCCollect to ensure the GC is in cleared state before our tests
+GCCollect()
+Local timeNonPooled:Float=TestNonPooled()
+Print "Test 1(NonPooled) complete X="+TotalX+", Y="+TotalY
+' we will GCCollect to ensure the GC is in cleared state before our tests
+TotalX=0.0
+TotalY=0.0
+GCCollect()
+' Lets see the results
+Local timePooled:Float=TestPooled()
+Print "Test 1(Pooled) complete X="+TotalX+", Y="+TotalY
+Print "--------------"
+Print "Results"
+Print "Time for Tests"
+Print "Test 1(No Pool)="+timeNonPooled
+Print "Test 2(Pooled)="+timePooled
+Print "--------------"
+Print "Test 2(Pooled) is "+timeNonPooled/timePooled*100+ "% faster"
+Input "Enter for Exit"
+End
+</pre><br><br>Hopefully some of you will find this useful, this technique is common and has been used by developers for decades.  Old days pre-OOP we would create seperate heaps for various structures.  So network packets dont get mixed with graphics data, etc.<br><br>Have fun<br>Doug Stastny <br><br></td></tr></table><br>
+<a name="695376"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dan_upright</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> this has been a big help for me - i knew i had to watch my string use but i'd never considered that i should be watching my object use too<br><br>thanks a lot =] <br><br></td></tr></table><br>
+<a name="695385"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >impixi</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes indeed. Thanks Budman. <br><br></td></tr></table><br>
+<a name="695427"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Defoc8</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> jst one thing - wont "Test 1(Pooled) complete X="+TotalX+", Y="+TotalY<br>actually cause string objects to be created on the fly? - i know that the string literals in this expression will most<br>probably be allocated on startup..but the addition operator,<br>will most probably cause dynamic mem alloc's.<br>Then again i dont know enough about how bmax works <br>under the hood..so im probably mistaken ;)<br><br>heh..anyway, it doesnt make your point any less valid. <br><br></td></tr></table><br>
+<a name="695524"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >DStastny</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> In the case of the Print Statements it would, but for the test which is timed around the function I needed someway to show the feedback from the tests :).  <br><br>Doug Stastny <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

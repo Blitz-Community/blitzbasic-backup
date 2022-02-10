@@ -1,0 +1,238 @@
+<!DOCTYPE html><html lang="en" ><head ><title >new ALSA audio driver</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >new ALSA audio driver</h1><a href="forums.php" >Archives Forums</a>/<a href="topics.php?forum=109" >Linux Discussion</a>/<a href="#bottom" >new ALSA audio driver</a><br><br>
+<a name="1142882"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> After failing to get the OSS driver working on latest Ubuntu, have fixed the ALSA driver which seems to work now without problem.<br><br>To switch from OSS to ALSA edit freeaudio.mod/freeaudio.bmx in two places:<br><br><pre class=code>
+?Linux
+Import "-lasound"
+Import "alsadevice.cpp"
+'Import "ossdevice.cpp"
+</pre><br><br>and here in the fa_Init method<br><br><pre class=code>
+?Linux
+	Select deviceid
+		Case 0
+			device=OpenALSADevice()
+	EndSelect
+</pre><br><br>then replace alsadevice.cpp with following:<br><br><pre class=code>
+
+// alsadevice.cpp
+
+#ifdef __linux
+
+#include "freeaudio.h"
+
+#include &lt;sys/ioctl.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;fcntl.h&gt;
+#include &lt;sys/soundcard.h&gt;
+#include &lt;pthread.h&gt;
+
+#include &lt;alsa/asoundlib.h&gt;
+
+extern "C" audiodevice *OpenALSADevice();
+
+void *audiothread(void *dev);
+
+#define LINUXFRAG 2048
+
+struct alsaaudio:audiodevice{
+	pthread_t	audiopthread;
+	int			threadid;
+	int			running,playing;
+	short		*buffer;
+	int			buffersize;	//in bytes
+	
+	int reset(){
+		running=1;
+		playing=0;
+		mix=new mixer(LINUXFRAG);
+		mix-&gt;freq=44100;
+		mix-&gt;channels=2;
+		buffer=new short[LINUXFRAG];
+		buffersize=LINUXFRAG*2;
+		pthread_attr_t	attr;
+		pthread_attr_init(&amp;attr);
+		threadid=pthread_create(&amp;audiopthread,&amp;attr,audiothread,(void*)this);	
+		return 0;
+	}
+	
+	int close(){	
+		int		timeout;
+		running=0;
+		timeout=5;
+		while (timeout-- &amp;&amp; playing) sleep(1);
+		return 0;
+	}
+};
+
+
+void *audiothread(void *v){
+	int						policy;
+	sched_param		sched;	
+	int						err;
+	alsaaudio 		*dev;
+	
+	pthread_getschedparam(pthread_self(),&amp;policy,&amp;sched);
+	sched.sched_priority++;//policy=SCHED_RR;
+	pthread_setschedparam(pthread_self(),policy,&amp;sched);	
+	dev=(alsaaudio*)v;
+
+	unsigned int val;
+	
+	snd_pcm_t *fd;
+	snd_pcm_uframes_t periodsize;
+	snd_pcm_hw_params_t *hwparams;
+	snd_pcm_hw_params_alloca(&amp;hwparams);
+	int output_rate;
+	int channels;
+	int fragment_size;
+	int fragment_count;
+
+	err=snd_pcm_open(&amp;fd, strdup("default"), SND_PCM_STREAM_PLAYBACK, 0);
+	if (err&lt;0) return v;
+
+	fragment_size=LINUXFRAG;  //overall buffer size
+	fragment_count=2; //2 - 16 fragment count - 2 minimum, the lower it is potentially the lower the latency
+
+//configure device
+	if (snd_pcm_hw_params_any(fd, hwparams) &lt; 0) {
+		//printf("linuxaudio failed at params any\n");
+		return v;
+	}	
+	if (snd_pcm_hw_params_set_access(fd, hwparams,SND_PCM_ACCESS_RW_INTERLEAVED) &lt; 0) {
+		//printf("linuxaudio failed at set access\n");
+		return v;
+	}	
+	
+	if (snd_pcm_hw_params_set_format(fd, hwparams,SND_PCM_FORMAT_S16_LE) &lt; 0) {
+		//printf("linuxaudio failed at set format\n");
+		return v;
+	}
+	val = 44100;
+	if (snd_pcm_hw_params_set_rate_near(fd, hwparams,&amp;val, 0) &lt; 0) {
+		// Try 48KHZ too 
+		//printf("linuxaudio - %d HZ not available, trying 48000HZ\n", output_rate);
+		val = 48000;
+		if (snd_pcm_hw_params_set_rate_near(fd, hwparams,&amp;val, 0) &lt; 0) {
+			//printf("linuxaudio failed at setting output rate (%d)\n", output_rate);
+			return v;
+		}
+		dev-&gt;mix-&gt;freq=val;		
+	}
+	channels=2;
+	if (snd_pcm_hw_params_set_channels(fd, hwparams, channels) &lt; 0) {
+		//printf("linuxaudio failed at set channels (%d)\n", channels);
+		return v;
+	}
+	periodsize = (fragment_size) / 4; // bytes -&gt; frames for 16-bit,stereo - should be a minimum of 512
+	if (snd_pcm_hw_params_set_period_size_near(fd, hwparams,&amp;periodsize, 0) &lt; 0) {
+		//printf("linuxaudio failed at set period size (%d)\n", (int)periodsize);			
+		return v;
+	}
+	val = fragment_count;
+	if (snd_pcm_hw_params_set_periods_near(fd, hwparams,&amp;val, 0) &lt; 0) {
+		//printf("linuxaudio failed at set periods (%d)\n", val);			
+		//should attempt a one by one period increase up to 16?
+		return v;
+	}
+	if (snd_pcm_hw_params(fd, hwparams) &lt; 0) {
+		//printf("linuxaudio failed at installing hw params\n");
+		return v;
+	}
+	//loop while playing sound
+	dev-&gt;playing=1;
+	while (dev-&gt;playing)
+	{
+		dev-&gt;mix-&gt;mix16(dev-&gt;buffer);
+		if ((snd_pcm_writei (fd, dev-&gt;buffer,LINUXFRAG/2)) &lt; 0) {	//Half buffer for two channels?
+			//printf ("linuxaudio warning: buffer underrun occurred\n");
+			if (snd_pcm_prepare(fd) &lt; 0) {
+				//printf ("linuxaudio failed at preparing pcm\n");
+				dev-&gt;playing=0; //die gracefully
+			}
+		}	
+	}
+	snd_pcm_drop(fd);
+	snd_pcm_close (fd);
+	return 0;
+}
+
+audiodevice *OpenALSADevice(){
+	return new alsaaudio();
+}
+
+#endif
+</pre> <br><br></td></tr></table><br>
+<a name="1142952"></a>
+
+<a name="1142971"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Captain Wicker (crazy hillbilly)</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thank You! Thank You! Thank You skidracer!!!!!! I hope this works! Testing now!!!! :) :) :) :) :) :)<br><br>EDIT: No Luck! :(<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1143064"></a>
+
+<a name="1143071"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dawlane</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Nice one skid works well so far with Ubuntu 12.04(64bit) so should work with 32bit as well.<br><br>@Captain Wicker:Was the Ubuntu install a clean or was it an upgrade?<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1143155"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Captain Wicker (crazy hillbilly)</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Was the Ubuntu install a clean  <br></div><br>Yep! :D <br><br></td></tr></table><br>
+<a name="1143208"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dawlane</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> @Captain Wicker: Which method did you use to set up the build environment for BMax and what architecture is the installation as some of the old tutorials will not work correctly for 12.04 (I've done an updated version with a little explanation of whats the difference is between the last 64bit version and the new one). I don't even know if a chroot environment will work correctly as that tutorial was created when 32bit support on a 64bit install was sketchy. <br><br></td></tr></table><br>
+<a name="1143236"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Captain Wicker (crazy hillbilly)</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Which method did you use to set up the build environment for BMax <br></div><br>I extracted the BlitzMax folder to my desktop. Is this not right? Does BlitzMax work 'out-of-the-box' in Linux Mint? What is the difference? <br><br></td></tr></table><br>
+<a name="1143310"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dawlane</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> I extracted the BlitzMax folder to my desktop. Is this not right? <br></div>BMax can be extracted to any location. If you extracted it to any other place than your home folder or it's sub folders then you would have to set the file permissions. By build environment I mean all the dependencies; as I've noticed in a few other posts that you have links to some of the old tutorials for previous version of Ubuntu and by rights are out of date.<br><div class="quote"> Does BlitzMax work 'out-of-the-box' in Linux Mint? <br></div>I'm not familiar with Linux Mint but as it's based on Debian and appears to use the repositories of Ubuntu so it should work out of the box (unless your using the 64bit version then more work is required look for the post BlitzMax on Ubuntu 12.04) and I have tested Linux Mint-MATE-64bit(13) in Virtual box. The only exception so far was getting sound working. As skid says getting it to work with the OSS driver is a lost cause so the ALSA driver should now be used as the default.<br>I got sound working by editing the freeaudio.bmx file in pub.mod/freeaudio.mod to read<pre class=code>?Linux
+Import "-lasound"
+Import "alsadevice.cpp"
+'Import "ossdevice.cpp"
+Extern "C"
+'Function OpenOSSDevice()
+Function OpenALSADevice()
+End Extern</pre><br>and modified the Select deviceid in the Linux section in the Function fa_Init( deviceid ) of the same file with the alteration above.<br>Then I renamed the file alsadevice.cpp by adding _bak to the end. I then used maxide to create a new empty file saving it as alsadevice.cpp in pub.mod/freeaudio.mod and then copying the cpp code above and pasting it to the empty file before saving it again. It was just a case of rebuilding all the modules and testing the sample. <br><br></td></tr></table><br>
+<a name="1144138"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Captain Wicker (crazy hillbilly)</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> On Ubuntu, is it supposed to freeze after rebuilding modules when compiling alsadevice.cpp? <br><br></td></tr></table><br>
+<a name="1144208"></a>
+
+<a name="1144209"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dawlane</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> On Ubuntu, is it supposed to freeze after rebuilding modules when compiling alsadevice.cpp? <br></div>No. If I remember some else posted about this problem in skid's other topic on the pulse audio driver. Turns out they copied and pasted to the MaxIDE first and then saved it when they should have created an empty file then saved it as alsadevice.cpp and then reopening the file to do the copy and past before re-saving it.<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1144458"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Captain Wicker (crazy hillbilly)</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> It works now all of the sudden!!!! :)<br>I started all over with your instructions and works great! thank you so much!!!! :D <br><br></td></tr></table><br>
+<a name="1148457"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Captain Wicker (crazy hillbilly)</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> wanted to confirm that it is working now on Ubuntu 12.04 LTS <br><br></td></tr></table><br>
+<a name="1162550"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Richard Betson</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> Awesome. :)<br><br>Works on debian 6.0 squeeze i386. <br><br>Thanks, <br><br></td></tr></table><br>
+<a name="1166699"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Captain Wicker (crazy hillbilly)</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> Shouldn't somebody sticky this thread? <br><br></td></tr></table><br>
+<a name="1166748"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dawlane</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> It shouldn't need to be a sticky. It should have been added as an update. <br><br></td></tr></table><br>
+<a name="1166852"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Captain Wicker (crazy hillbilly)</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> It should have been added as an update.  <br></div><br>agreed <br><br></td></tr></table><br>
+<a name="1188571"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Tachyon</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> When I try to rebuild the modules, I get:<br><br>Compile Error 23: fatal error: freeaudio.h: No such file or directory<br><br>It's stopping on the line:<br><br><pre class=code>#include "freeaudio.h"</pre><br>in alsadevice.cpp <br><br></td></tr></table><br>
+<a name="1188577"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> what says "locate freeaudio.h" ? do you have it somewhere in a reachable path?<br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1188578"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> freeaudio is in Pub, as far as I remember. <br><br></td></tr></table><br>
+<a name="1188581"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Tachyon</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#19">[#19]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looks like in my frustration to get sound working, I was looking in the wrong folders and altered something I shouldn't have.<br><br>Fresh BlitzMax install, followed instructions closely, sound now works fine.<br><br>Thank you, guys! <br><br></td></tr></table><br>
+<a name="1188582"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Tachyon</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#20">[#20]</a></td></tr></table></td></tr><tr ><td class="posttext"> Oh, and what is the most favoured sound driver on Linux: ALSA, Pulse, or OpenAL? <br><br></td></tr></table><br>
+<a name="1188590"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#21">[#21]</a></td></tr></table></td></tr><tr ><td class="posttext"> Ubuntubased installations will use "PulseAudio".<br><br>OpenAL has to get installed first to work.<br><br>ALSA is used by older DE or ones that dislike PA.<br>Also you have good chances to get problems with multiple apps trying to output sound with ALSA.<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1200247"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >pmc</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#22">[#22]</a></td></tr></table></td></tr><tr ><td class="posttext"> The module builds for me (Mint 11, 64-bit), but linking doesn't seem to work.<br><br><pre class=code>/usr/bin/ld: skipping incompatible /usr/lib/libasound.so when searching for -lasound
+/usr/bin/ld: skipping incompatible /usr/lib/libasound.a when searching for -lasound
+/usr/bin/ld: skipping incompatible /usr/lib/libasound.so when searching for -lasound
+/usr/bin/ld: skipping incompatible /usr/lib/libasound.a when searching for -lasound
+/usr/bin/ld: cannot find -lasound</pre><br>Is this a 32-bit/64-bit problem? I have all the ALSA libraries installed including libasound2 and libasound2-dev. <br><br></td></tr></table><br>
+<a name="1200290"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dawlane</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#23">[#23]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> Is this a 32-bit/64-bit problem? I have all the ALSA libraries installed including libasound2 and libasound2-dev. <br></div>It always has been a problem. Even now it's still an issue for some distributions.<br><br>There are two version of any development package. One 32bit and one 64bit.<br>Which of these gets installed depends on which architecture you Linux OS is built for.<br><br>So on a 64bit OS, the default will be to install the 64bit version. If you need to install the 32bit version you had to add :i386 on the end (and sometime the 32bit repositories) or down load the 32bit standard library separately (libasound2:i386) or as part of the ia32-multilib package and make a link to it.<br><br>The problem is as the the repositories for Mint 11 have closed you will have to go looking for the 32bit version of libasound2. You don't need the 32bit development version as the 64bit header file should be the same in both the 32bit and 64bit.<br><br>Once you have the 32bit libasound package then you can try and force an install or extract any file with libasound.so in their name to /usr/lib32.<br>And if need be create a link to libasound.so.2 somewhere in your system search path to those files that were extracted. <br><br></td></tr></table><br>
+<a name="1200348"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >pmc</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#24">[#24]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey... thanks man. This taught me alot.<br><br>I went and got a copy of libasound2_1.0.24.1-0ubuntu5_i386.deb to get the lib from, but then when I checked /usr/lib32 it was already there! No need to install it. I just need to get MaxIDE to use it.<br><br>How do I update my search path so that it'll be found? LD_LIBRARY_PATH was empty so I set it to /usr/lib32 but it didn't work. If I can simply tell MaxIDE to use the the 32-bit libs and not mess with the rest of my config, that would be ideal (i.e., I don't want no trouble with the rest of my apps).<br><br>I think when I go the newest Mint -- which is very soon now that I'm starting to have package trouble -- I'm going 32-bit altogether. This isn't my first go-round with forcing architectures and disassembling packages to get the PC work. <br><br></td></tr></table><br>
+<a name="1200380"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dawlane</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#25">[#25]</a></td></tr></table></td></tr><tr ><td class="posttext"> If the ia-32libs package is installed and the MaxIDE works then then the path is already set up. <br><br>The system search path is set to look in a number of places. Some common locations are.<br>/usr/bin<br>/usr/lib<br>/usr/lib32 &lt;----- Only found on 64bit systems when any 32bit library package is installed and defined in /etc/ld.so.conf<br>/usr/local/bin<br>/usr/local/share<br><br>To add a path there are a number of ways to do it but the recommended way is to add as a variable in the hidden file .profile in the user's home directory.<br>e.g <br>PATH="$HOME/BlitzMax:$HOME/BlitzMax/bin:$PATH"<br>LD_LIBRARY_PATH="/usr/lib32/:$LD_LIBRARY_PATH"<br><br>The other is directly editing the PATH found in /etc/environment or one of the files in /etc/ld.so.conf.<br><br>In /usr/lib32 there should be....<br>libasound.a          &lt;---- This is the old static link version of the library<br>libasound.so         &lt;---- This is a link to libasound.so.2 (and the one that the BlitzMax compiiler is looking for). <br>libasound.so.2       &lt;---- This is a link to libasound.so.2.0.0<br>libasound.so.2.0.0   &lt;---- This is the shared library<br><br>libasound.la         &lt;---- This is a script used by libtool and is found in the development package. You could try and copy it over to /usr/lib32 and do a bit of editing.<br><br>My advice is...<br>In stead of trying to get software to work on a operating system that is no longer being supported. It would have been better spending the time and effort in just backing up all the important data to an external storage device or another partition/hard drive and doing a clean install with a later version. You could have been up and running again within a few hours.<br><br>You should only install a 64bit OS if you have more than 4GB of memory installed and would like to use it or you intend to target both 32bit and 64bit systems as it's easier to set up and test on a 64bit build environment with support of 32bit binaries than trying to build and test 64bit binaries on a 32bit system. You can build the binaries of a 32bit system but you wouldn't be able to test them.<br><br>I made it easy to set up BlitzMax on many versions of Linux (32bit and 64bit) by writing a script to handle much of the dependencies and set up installation as I got tired of doing it by hand. <br><br></td></tr></table><br>
+<a name="1201835"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >pmc</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#26">[#26]</a></td></tr></table></td></tr><tr ><td class="posttext"> Sorry for the late response dawlane.<br><br>I tried setting paths in both .profile and via a shell (and then launching MaxIDE from the command line in that shell). No go. Same error. I'll keep dorking with it when I get more time.<br><br>I will accelerate my "OS upgrade" project as you suggest, but it isn't really 3-hours. I have alot of reconfiguration work to do to restore my environment.<br><br>My PC is 8-gigs RAM. I have no need to build 64-bit binaries. Actually, my final executables are intended for Windows so my final builds will always be in Windows. I just work in Linux on a day-to-day basis and would prefer that everything work normally. I only went Linux-64bit because I figured it'd handle things better. I think I'll be better off with a 32-bit OS next time...<br><br>I appreciate your assistance. This is what I get for insisting on running as much open source software as possible. I always learn alot, but it always takes some work too... <br><br></td></tr></table><br>
+<a name="1228515"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Armitage 1982</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#27">[#27]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for this patch Simon.<br>Some users reported weird music pitch while good SFX output but at least no more crash on this version.<br>Anyway the PulseAudio hack and this ALSA fix works great on my Mint 12.<br><br>I went niggling Monkeycoders to see if we could not officialize this patch (which is always better than the default one). I'm gonna get my *ss beaten, but I do not care :D<br>Hope it will be fixed for the next BlitzMax users at the very least.<br><br><img src="http://i3.kym-cdn.com/entries/icons/original/000/004/006/y-u-no-guy.jpg"><br>So much troubles for just sounds... <br><br></td></tr></table><br>
+<a name="1228519"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#28">[#28]</a></td></tr></table></td></tr><tr ><td class="posttext"> To get that fixed you will have to directly write to Mark S. so he gets his hands on this ... else it will be hidden under dust within the next months. I had to be obstinate too to get that comments-bug fixed which lead to the latest release.<br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1228839"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skidracer</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#29">[#29]</a></td></tr></table></td></tr><tr ><td class="posttext"> That post on monkeycoder will not make any sense to mark, you don't even link to the relevant threads. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

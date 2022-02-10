@@ -1,0 +1,126 @@
+<!DOCTYPE html><html lang="en" ><head ><title >GNet some messages are not received</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >GNet some messages are not received</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=101" >BlitzMax Beginners Area</a>/<a href="#bottom" >GNet some messages are not received</a><br><br>
+<a name="1158414"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Arska</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> I encountered some problems with GNet again. I am sending "damage" message when player is hit, but randomly it's not received. It occurs more often when more than 2 players are connected to same server.<br><br>Any ideas to fix this issue? <br><br></td></tr></table><br>
+<a name="1158462"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Such things happened to me too.<br><br>In my case the packets were not splitted correctly. So I received multiple data in one package - if you then just "read" one packageset, the rest will get deleted unread.<br><br>I modified my code to use magic key data which I use to identify "merged" packages. Most time it is also used as a kind of controlling hash as it sends:<br>- "my identifier data header"<br>- dataLength (as controller)<br>- data<br><br>So my code just recognizes appended code (which also could be garbage) but if the code is my identifier, and the datalength afterwards corresponds to the rest of the data (datalength &lt; length of the rest).<br><br><br><br>What the problem seems to be directly: the loop gnet uses. I observed the data send and received with Wireshark and I implemented my own "data structure"-setup for Wireshark. Each packet monitored was correctly split and Wireshark was able to dissamble my data ("SetName - fields: name with Value, slot id,  ... | SetGameData ... ).<br>What this means: the implementation of gnet and the underlying lib is doing something wrong - or the loop is not doing everything correctly.<br><br>The problem did not occour using 2 linux machines - but as soon as I connected virtual Windows machines and together (or mixing it with linux) the windows machines had problems using the normal gnet loop.<br>That is why I used the base idea of gnet (objects with "automagic" data fields detection) and build an own network class using the "identifier data" on top of the packets send (and to add broadcast ability for LAN gamelobby possibility, chat messages, packet relayability ...).<br><br><br><br>What really differs from gnet:<br><br><pre class=code>
+	Method ToPacket:TNetworkPacket()
+		local packet:TNetworkPacket = New TNetworkPacket
+		packet.writeInt(NET_PACKET_HEADER)
+		packet.writeInt(state)
+		packet.writeInt(evType)
+		packet.writeInt(self.senderIP)
+		packet.writeInt(self.senderPort)
+		local packedData:byte[] = PackSlots( modified )
+		packet.writeBytes( packedData, len(packedData) )
+		return packet
+	End Method
+
+	Function FromPacket:TNetworkObject( packet:TNetworkPacket )
+		if not packet then return TNetworkObject.Create(0)
+
+		packet.seek(0)
+		local obj:TNetworkObject = new TNetworkObject
+		if packet.size() &gt;= 20 '5 ints
+			local header:int = packet.readInt()
+			if header &lt;&gt; NET_PACKET_HEADER then return null
+			obj.state	= packet.readInt()
+			obj.evType	= packet.readInt()
+			obj.senderIP= packet.readInt()
+			obj.senderPort= packet.readInt()
+
+			if obj.senderIP = 0 then obj.senderIP = packet.ip
+			if obj.senderPort = 0 then obj.senderPort = packet.port
+
+			if packet.Size() &gt; 20
+				local rawdata:byte ptr = MemAlloc( packet.Size()-20 )
+				local packdata:byte[] = New Byte[ packet.Size()-20 ]
+				packet.readbytes(rawdata, packet.Size()-20 )
+				MemCopy packdata,rawdata, packet.Size()-20
+				MemFree rawdata
+				obj.UnpackSlots(packdata)
+				packdata = null
+			else
+				For Local i:int = 0 Until 32
+					obj.slots[i] = New TNetworkObjectSlot
+				Next
+			endif
+		endif
+		return obj
+	End Function
+
+</pre><br><br>So most "work" is to check wether the packet has the minimum size (data header and so on) and if the header is correct.<br><br>Maybe you can fiddle in something similar.<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1158470"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Arska</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks Derron. Good to see someone with knowledge in GNet. :)<br><br>Before i start doing any changes to my code, i need to know am i even right way with my current code.<br><br>When player is hit. Send damage message:<br><pre class=code>
+' IF PLAYER HIT
+If GetEntityKey(mpick.entity, "player") Then
+	enemyHit = True
+	Print "Hit! "+GetEntityKey(mpick.entity, "player")
+	Local localDmg:TGNetObject = CreateGNetMessage:TGNetObject( host )
+	SetGNetString localDmg, SLOT_TYPE, "damage"
+	SetGNetString localDmg, SLOT_NICKNAME, GetEntityKey(mpick.entity, "player")
+	SetGNetString localDmg, SLOT_NICKNAME2, nickname
+	SetGNetFloat localDmg, SLOT_DMG, weapDamage
+	SendGNetMessage(localDmg, remoteObj)
+EndIf
+</pre><br><br><br>Receive damage message:<br><pre class=code>
+Case "damage"
+	If nickName = GetGNetString(msgs, SLOT_NICKNAME) And health&gt;0 Then
+	health=health - GetGNetFloat(msgs, SLOT_DMG)
+						
+	If health &lt;= 0 And deathMessageSent = False Then
+		deathMessageSent = True
+		Local localKill:TGNetObject = CreateGNetMessage:TGNetObject( host )
+		SetGNetString localKill, SLOT_TYPE, "kill"
+		SetGNetString localKill, SLOT_NICKNAME, GetGNetString(msgs, SLOT_NICKNAME)
+		SetGNetString localKill, SLOT_NICKNAME2, GetGNetString(msgs, SLOT_NICKNAME2)
+		SetGNetString localKill, SLOT_TEAM, team$
+		SendGNetMessage (localKill, remoteObj)
+	EndIf
+						
+	Print "HEALTH: "+health+" (dmg: "+GetGNetFloat(msgs, SLOT_DMG)+")"
+	hurt=True
+EndIf
+</pre><br><br>And what is best way to fix this in this case. My game has lots of code and i am searching easy way to fix this issue. <br><br></td></tr></table><br>
+<a name="1158477"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Like said...<br>just BEFORE "select ... case EVENTTYPE/damage/..." you have to decide wether it is a valid data packet - and you have to repeat that whole thing until no more data is present (if data somehow from two packages somehow got merged).<br><br><br><br>Suggestion/Hint: <br><pre class=code>
+Case "damage"
+	If nickName = GetGNetString(msgs, SLOT_NICKNAME) And health&gt;0 Then
+	health=health - GetGNetFloat(msgs, SLOT_DMG)
+</pre><br>using IF ... in multiline code is "if [newline] ... [newline] endif", singleline "if ... then ..."<br><br>so:<br><pre class=code>
+Case "damage"
+	If nickName = GetGNetString(msgs, SLOT_NICKNAME) And health&gt;0 Then health=health - GetGNetFloat(msgs, SLOT_DMG)
+</pre><br><br><br>hint2:<br><pre class=code>
+health=health - GetGNetFloat(msgs, SLOT_DMG)
+'is the same as
+health:- GetGNetFloat(msgs, SLOT_DMG)
+
+SetGNetString localKill, SLOT_TYPE, "kill"
+'is the same as - but brackets are more error prune concerning "reading"
+SetGNetString( localKill, SLOT_TYPE, "kill" )
+</pre><br><br><br><br>As I don't use gnet but my own wrapper I cannot say if the way you use it is correct (but it seems valid). Instead of the procedural style "GetGNetXXX(obj, KEY)" I have a networkobject which can be read with obj.GetInt(numberORkey). That is nearly the same - but my objects have helperfunctions too - and thingies like "defaultValue" (obj.GetInt(playerID,-1) which helps writing less and more readable code.<br>Using "events" also adds the possiblity to produce an base networking class which can be used by specific game code.<br><br><br>ps: game logic:<br>even if there is a package coming with "damage" it is not given that one was really hurt...<br>So check for dmgValue (and clamp them to possible values - so no -15677575675 values of wrong read data are possible).<br>In short: validate your data (does that player/team exist? -&gt; return/break if not...), don't set indicator flags if data is corrupt or in other ways not correct (if dmgOk then hurt = true).<br>Same is valid for processing data (if dmgOK and health &lt;= 0... killMsg).<br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1158479"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Arska</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes... it definetly looks like there is some packets missing. It registers hit to target player, but damage is missing so no damage is dealed. Thanks. I'll try to fix this. <br><br></td></tr></table><br>
+<a name="1158490"></a>
+
+<a name="1158491"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Arska</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Woah.. this is weird. Target nickname packet goes for different player and damage to another. :o<br><br>Edit:<br>Nevermind i found problem.<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1158494"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Arska</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Another question. What happens to GNetObject when client reads it? Does it disappear or what? <br><br>And as i said earlier that only damage variable is missing. I was wrong. Client never gets "damage" message. <br><br></td></tr></table><br>
+<a name="1158497"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> basic tutorial for gnet: <a href="http://www.blitzbasic.com/Community/posts.php?topic=51171" target="_blank">http://www.blitzbasic.com/Community/posts.php?topic=51171</a><br><br><br><div class="quote"> Another question. What happens to GNetObject when client reads it? Does it disappear or what? <br></div><br><br>GNetSync seems to build up a "modified since last check"-list<br>GnetObjects (host:TGnetHost) then returns a list containing modified objects for the given host<br><br>So if you do not "sync" for a long time, the list will get longer, if you sync twice, the GnetObjects will be empty (thats why you do a "foreach" with the objects - to process all of the "new ones").<br><br><br><br>Please take care of only trying to modify "local" objects.<br>Gnet uses a methodology which is kind of:<br>Each player stores its local object (each ".exe" has an own "global player:TPlayer" and "remotePlayers:TList 'list with players").<br>Each client can only modify "player", modifications at "remotePlayers" are not possible. Modifications at them are done automatically during GnetSync.<br>What can be done? You receive the modified objects - you can switch the eventTypes and print debug messages, do other things... but you cannot (as not needed) adjust data of the remote objects.<br><br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1158498"></a>
+
+<a name="1158501"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Arska</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looks like that GNet tutorial page isn't loading correctly. I loads the page forever. Tried to navigate to that tutorial by myself, but not working.<br><br>Edit:<br>Only some lag. Now i can read it.<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="1158502"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> The forum is under stress at the moment (all pages have hickups) ... it happens so since weeks.<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1158503"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Arska</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yeah... this is very confusing. You said i need to repeat receive of data until i have everything, how can i even know if client has got that packet? <br><br></td></tr></table><br>
+<a name="1158507"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> In your case you won't be able to "repeat receive" as it is done using<br>GnetSync<br><br>So it may not be needed or has to get circumvented in a way not known to me.<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1158508"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Arska</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> I solved this, but i don't know if this is good way to do it...<br><br>My solution is that if damage package is not meant to receiver, i send it forward. Seems like it makes little bit lag, but not very much. I don't know what happens if there is like 10 players in same server.<br><br>I still wait for better solution, but i keep it this way for now. <br><br></td></tr></table><br>
+<a name="1158512"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> the normal way should be:<br><br>- store local player object<br>- store list of remote player objects<br><br>on damage done to you: modify your local player object (SetGNetInt( localPlayerNetObj,  DMG_RECEIVED_AKA_OBJ_SLOT, dmgValue) )<br><br>during gnetSync: your modifications are send to others<br><br>receiving modified object data: if event is "damage" - handle it (eg. draw "remote player got hit")<br><br>To check for cheaters you could store the damage locally (but do not modify the remote player object by yourself)<br><br><br>Hmpf... I just wrote an example and recognized: it is similar to<br>BlitzMax/samples/mak/gnetdemo.bmx<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

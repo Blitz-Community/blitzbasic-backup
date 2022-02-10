@@ -1,0 +1,304 @@
+<!DOCTYPE html><html lang="en" ><head ><title >RSA encrypted network</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >RSA encrypted network</h1><a href="forums.php" >BlitzPlus Forums</a>/<a href="topics.php?forum=81" >BlitzPlus Programming</a>/<a href="#bottom" >RSA encrypted network</a><br><br>
+<a name="1219977"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Heliotrope</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi guys,<br>I have being trying to implement RSA in a network. the encryption is fine except for the decryption (I will fix that soon as I want to see what the encrypted message looks like unencrypted). The problem is that the Public key exchange returns a 0 and the encryption has a 'integer divide by 0' error when dubuged by visual studio. Can someone suggest an improvement on the key exchange at lines 123 and 235 or notify me if you see any flaws in the algorithm itself. <br><br><pre class=code>
+;create a type to save message data
+Type message 
+Field cont$
+Field from
+Field Too
+Field tpe
+End Type 
+msg$ = ""
+host = False 
+
+;infomation about players 
+Type players
+Field name$
+Field id
+Field keyn
+Field keyk
+Field r
+Field g
+Field b
+End Type 
+
+;make the main window
+window = CreateWindow ("IM Program",250,100,800,600,0,15)
+SetMinWindowSize window,800,600
+timer = CreateTimer (60)
+Gosub createname 
+;error checking for creating the net game and player
+.creategame
+gamemain = StartNetGame ()
+playerid = CreateNetPlayer (plname$)
+If gamemain &lt; 1 Then Goto creategame  
+If gamemain = 1 Then
+	Gosub joinencrypt
+	te.message = New message
+		te\cont = "Succesfully joined session"
+EndIf 
+If gamemain = 2 
+	te.message = New message
+		te\cont = "Succesfully hosted session on " + DottedIP (HostIP (CountHostIPs ("")))
+	Gosub hostencrypt 
+EndIf 
+
+If playerid = 0
+	Gosub createname  
+Else 
+te.message = New message
+	te\cont = "User '" + plname$ + "' was created" 
+End If 
+
+;main chat interface 
+canvas = CreateCanvas (20,20,560,440,window)
+panel = CreatePanel (600,20,180,490,window,1)
+sendbt = CreateButton ("Send",480,480,50,30,window)
+imput = CreateTextArea (160,470,300,50,window) 
+SetBuffer CanvasBuffer (canvas)
+SetPanelColor panel,255,255,255
+SetGadgetLayout canvas,1,2,1,2
+SetGadgetLayout panel,2,1,1,2
+;main loop 
+Repeat 
+	
+	WaitEvent (1) 
+	If EventID () = $803 Then Gosub leave 
+	;send messages if send button is pressed 
+	If EventSource () = sendbt Then Gosub sendfunc
+	
+	;check for messages 
+	If RecvNetMsg() = True Gosub checkboard
+	
+	;Print the messages on the screen 
+	r = 1
+	For te.message = Each message
+		Text 10,10 * r,te\cont
+		r = r + 1
+	Next 
+	;draw everything and wait 40 millisecs
+	FlipCanvas canvas
+	Delay 40
+	
+Forever 
+
+;set player name 
+Goto skipcreatename
+.createname 
+	;gui elements 
+	lab1 = CreateLabel ("Enter Name",170,200,70,20,window)
+	pname = CreateTextField (250,200,150,20,window)
+	but1 = CreateButton ("Go",410,200,40,20,window,4)
+	;wait for a button press
+	Repeat
+	
+		WaitEvent (1)
+		If EventID () = $803 Then End 
+		If EventSource () = but1 And TextFieldText (pname) &lt;&gt; "" Then Exit
+		Delay 40
+		 
+	Forever
+	;get the name 
+	plname$ = TextFieldText$ (pname)
+	;clear the screen 
+	FreeGadget lab1
+	FreeGadget pname
+	FreeGadget but1
+	.skipcreatename
+Return 
+
+;recive message functions 
+Goto skiprec
+.checkboard 
+	;capture the message as it could change 
+	msg$ =  NetMsgData$ ()
+	from = NetMsgFrom ()
+	too = NetMsgTo ()
+	tpe = NetMsgType ()
+	;type 1 = unencrypted 
+	If tpe = 1
+		te.message = New message
+			te\cont$ = msg$
+			te\from = from 
+			te\too = too
+			te\tpe = tpe
+	EndIf
+	;type 2 = key exchange  
+	If tpe = 2 And Left$ (msg$,10) = "CRYPTOKEY "
+		For counter = 1 To (10 - Len (msg$))
+			If Mid (msg$,counter + 10,1) = " " Then space = counter + 10
+		Next 
+		qt.players = New players
+			qt\id = from
+			qt\keyn = Mid (msg$,10,space)
+			qt\keyk = Mid (msg$,space,space - Len (msg$))
+			qt\name$ = NetPlayerName$ (from)
+			If qt\keyk &lt;&gt; 0 And qt\keyn &lt;&gt; 0
+				te.message = New message 
+					te\cont = "Key acquired from " + NetPlayerName$ (from)
+			EndIf 
+		SeedRnd MilliSecs ()
+		Delay Rnd (600)
+		SendNetMsg (3,"CRYPTOKEY " + n + " " + k,playerid,from)
+		te.message = New message 
+			te\cont = "Key acquired from " + NetPlayerName$ (from)
+
+	EndIf
+	;type 4 = encrypted message 
+	;If tpe = 4 And Left (msg$,6) = "stream"
+	;	counter = Right (msg$,1)
+	;	Dim incoming (counter,1)
+	;	c = 0
+	;	loex = 0
+	;	Repeat 
+	;		
+	;		If RecvNetMsg () = True
+	;			incoming (c,0) = NetMsgData$ ()
+	;			c = c + 1
+	;		EndIf 
+	;		If c =&gt; counter Then loex = 1
+	;		
+	;	Until loex &lt;&gt; 0
+	;	For c = 0 To counter 
+	;		pl = incoming(c,0) ^ j
+	;		incoming (c,1) = pl Mod n
+	;	Next 
+	;	For c = 0 To counter
+	;		msg$ = msg$ + Chr (incoming(c,1))
+	;	Next
+	;	te.message = New message
+	;		te\cont = msg$
+	;EndIf 
+	;type 102 = change of host
+	If tpe = 102 
+		te.message = New message
+			te\cont = "You are now the host of this session"
+	EndIf 
+	;type 200 = something bad happened 
+	If tpe = 200 Then Gosub quit  
+	.skiprec
+Return 
+
+;send message functions 
+Goto skipsend 
+.sendfunc
+	
+	msg$ = TextAreaText$ (imput)
+	leg = Len (msg$)
+	If msg$ = "" Then Goto skipsend 
+	;display the message
+	te.message = New message
+		te\cont$ = plname$ + ": " + msg$
+	;break the message up 
+	Dim msgarr (leg,1)
+	For counter = 1 To leg
+		msgarr (counter,0) = Mid (msg$,counter,1)
+	Next 
+	;send the message to each user encrypted with their keys
+	For qt.players = Each players
+		For counter = 1 To leg
+			emsg = msgarr (counter,0) ^ qt\keyk
+			msgarr (counter,1) = emsg Mod qt\keyn
+		Next 
+		For counter = 1 To leg
+			msg$ = msg$ + msgarr (counter,1)
+		Next 
+		SendNetMsg (1,msg$,playerid,qt\id)
+	Next 
+	SetTextAreaText imput,""
+	.skipsend
+	
+Return 
+
+Goto skiphostenc
+.hostencrypt
+	SeedRnd MilliSecs ()
+	checktime = 50
+	;key generation 
+	p = Rnd (10,20)
+	q = Rnd (10,20)
+	n = p * q ;public key
+	z = (p - 1) * (q - 1)
+	.createkh
+	k = Rnd (1,10);public key
+	;If test &lt;&gt; Floor (test) Then Goto createkh
+	j = (z + 1) / k;private key 
+	
+	te.message = New message 
+		te\cont = "Generated public keys n:" + n + " and k:" + k
+	te.message = New message 
+		te\cont = "And private key j:" + j
+	hostcont = True
+	.skiphostenc
+Return 
+
+Goto skipjoinencrypt
+.joinencrypt
+	 
+	SeedRnd MilliSecs ()
+	checktime = 50
+	;key generation 
+	p = Rnd (10,20)
+	q = Rnd (10,20)
+	n = p * q ;public key
+	z = (p - 1) * (q - 1)
+	.createkj
+	k = Rnd (1,10);public key
+	;If test &lt;&gt; Floor (test) Then Goto createkj
+	j = (z + 1) / k;private key 
+	SendNetMsg (1,plname$ + " has joined",playerid,0)
+	Delay 40 
+	;send the public keys away
+	SendNetMsg (2,"CRYPTOKEY " + n + " " + k,playerid,0)
+	te.message = New message 
+		te\cont = "Generated public keys n:" + n + " and k:" + k
+	te.message = New message 
+		te\cont = "And private key j:" + j
+	timer = 1000
+	tim = 0
+	;public key capture 
+	Repeat 
+		
+		If RecvNetMsg () = True And NetMsgType () = 3
+			For counter = 1 To (10 - Len (msg$))
+				If Mid (msg$,counter + 10,1) = " " Then space = counter + 10
+			Next 
+				qt.players = New players
+					qt\id = NetMsgFrom ()
+					qt\keyn = Mid (msg$,10,space)
+					qt\keyk = Mid (msg$,space,space - Len (msg$))
+					qt\name$ = NetPlayerName$ (NetMsgFrom ()) 
+		EndIf 
+		If timer &lt; 0 Then tim = 1 
+		timer = timer - 1
+		Delay 1
+		
+	Until tim &lt;&gt; 0
+	hostcont = False 
+	.skipjoinencrypt
+Return 
+
+;leave the session 
+Goto skipleave 
+.leave
+	
+	SendNetMsg (1,plname$ + " has left",playerid,0)
+	DeleteNetPlayer playerid
+	End 
+	.skipleave
+	
+Return 
+
+;force quit
+Goto skipquit 
+.quit
+	
+	Notify "Unknown Network Error",1
+	End 
+	.skipquit
+	
+Return  
+End 
+</pre> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

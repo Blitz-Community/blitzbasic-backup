@@ -1,0 +1,180 @@
+<!DOCTYPE html><html lang="en" ><head ><title >win/mac custom cursor/pointer module</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >win/mac custom cursor/pointer module</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=117" >MaxGUI Module</a>/<a href="#bottom" >win/mac custom cursor/pointer module</a><br><br>
+<a name="1117323"></a>
+
+<a name="1117325"></a>
+
+<a name="1117329"></a>
+
+<a name="1117438"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hey,<br><br>I just finished another maxgui extension module today for setting custom cursors cross platform (well mac and windows ... sorry linux).<br><br>The module lets you import a windows.cur file and set it.<br><br>Some things to remember<br>- Store cursor in windows .cur file format<br>- Store only 1 cursor per .cur file<br>- In mac mode don't set the cursor right at the start of the program as it wont work (this is a general osx behaviour)<br>- make sure to manually free the cursor when you are done with it.<br><br>Osx supports loading a .cur file into an NSImage object but as far as I could tell has no knowledge of the hotspot a cursor has. I made a simple .cur file parser which will read out the hotspot data and set it for you automatically.<br><br>I have tested the code on windows 7 and osx lion.<br><br>example<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">Local pointer:Skn3CustomPointer = LoadCustomPointer("blah.cur")
+SetCustomPointer(pointer)
+FreeCustomPointer(pointer)</textarea><br><br>custumcursor.bmx<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Import maxgui.drivers
+Import brl.filesystem
+Import brl.map
+
+?Win32
+Extern "Win32"
+	Function Skn3LoadCursorFromFile:Int(path$w) = "LoadCursorFromFileW@4"
+	Function Skn3DestroyCursor:Int(hcursor:Int) = "DestroyCursor@4"
+EndExtern
+
+?MacOs
+Import "customcursor.m"
+Extern "macos"
+	Function skn3_loadCustomPointer:Int(path:String,cursorX:Int,cursorY:Int)
+	Function skn3_setCustomPointer:Int(cursor:Int)
+	Function skn3_freeCustomPointer:Int(cursor:Int)
+	Function skn3_currentCursor:Int()
+EndExtern
+?
+
+Function LoadCustomPointer:Skn3CustomPointer(path:String)
+	' --- this will load a cursor ---
+	Local pointer:Skn3CustomPointer
+	
+	'check for cache
+	If Skn3CustomPointer.all = Null
+		' make sure teh cursor store is created
+		Skn3CustomPointer.all = CreateMap()
+	Else
+		'check existance
+		pointer = Skn3CustomPointer(Skn3CustomPointer.all.ValueForKey(path))
+	EndIf
+	
+	'create new pointer
+	If pointer = Null
+		'create custom pointer
+		pointer = New Skn3CustomPointer
+		pointer.path = path
+		Skn3CustomPointer.all.Insert(path,pointer)
+
+		'load in os (using path)
+		?Win32
+		pointer.pointer = Skn3LoadCursorFromFile(path)
+		?MacOs
+		'first get the offset
+		Local offset:Int[] = ExtractCursorHotspot(path)
+		'now load the pointer
+		pointer.pointer = skn3_loadCustomPointer(path,offset[0],offset[1])
+		?
+	End If
+		
+	'return pointer
+	If pointer.pointer &lt;&gt; 0
+		'increase reference count
+		pointer.refCount :+ 1
+		Return pointer
+	EndIf
+End Function
+
+Function SetCustomPointer(pointer:Skn3CustomPointer)
+	' --- set the pointer up in os ---
+	If pointer
+		lastPointer = -1
+		?Win32
+		SetCursor(pointer.pointer)
+		TWindowsGUIDriver._cursor = pointer.pointer
+		If TWindowsTextArea._oldCursor Then TWindowsTextArea._oldCursor = pointer.pointer
+		?MacOs
+		skn3_setCustomPointer(pointer.pointer)
+		?
+	EndIf
+End Function
+
+Function FreeCustomPointer(pointer:Skn3CustomPointer)
+	' --- free the pointer ---
+	If pointer
+		'decrease ref coutn then check
+		pointer.refCount :- 1
+		If pointer.refCount = 0
+			'free in maxguiex
+			Skn3CustomPointer.all.remove(pointer.path)
+			
+			'free in os
+			?Win32
+			'check if we need to reset in maxgui
+			If TWindowsGUIDriver._cursor = pointer.pointer SetPointer(POINTER_DEFAULT)
+			
+			Skn3DestroyCursor(pointer.pointer)
+			pointer.pointer = 0
+			?MacOs
+			If skn3_currentCursor() = pointer.pointer SetPointer(POINTER_DEFAULT)
+			skn3_freeCustomPointer(pointer.pointer)
+			?
+		EndIf
+	EndIf
+End Function
+
+Function ExtractCursorHotspot:Int[](path:String,index:Int=0)
+	' --- function to extract the hotspot x,y from a cursor ---
+	Local result:Int[2]
+	
+	Local file:TStream = ReadFile("littleendian::"+path)
+	If file
+		'reserved
+		file.seek(2)
+		
+		'only process cursor types
+		Local temp:Int = file.ReadShort()
+		If temp = 2
+			'only process if valid index
+			temp = file.ReadShort()
+			If index &lt; temp
+				'only process if offset isnt beyond file length
+				temp = 6+(12*index)+4
+				If temp &lt; file.size()
+					file.seek(temp)
+					result[0] = file.ReadShort()
+					result[1] = file.ReadShort()
+				EndIf
+			EndIf
+		EndIf
+		
+		'close the stream
+		file.close()
+	EndIf
+	
+	'return the result
+	Return result
+End Function
+
+Type Skn3CustomPointer
+	Global all:TMap
+	Field path:String
+	Field pointer:Int
+	Field refCount:Int
+End Type</textarea><br><br>customcursor.h<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">NSCursor * skn3_loadCustomPointer(BBString *path,int hotspotX,int hotspotY);
+void skn3_setCustomPointer(NSCursor *cursor);
+void skn3_freeCustomPointer(NSCursor *cursor);
+NSCursor * skn3_currentCursor();</textarea><br><br>customcursor.m<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">NSCursor * skn3_loadCustomPointer(BBString *path,int hotspotX,int hotspotY) {
+	//load image
+	NSImage * image = [[NSImage alloc] initWithContentsOfFile:[NSString stringWithCString:bbStringToCString(path)]];
+	
+	//create cursor
+	NSCursor * cursor = [[NSCursor alloc] initWithImage: image hotSpot:NSMakePoint(hotspotX,hotspotY)];
+	
+	[image release];
+	
+	//return as int handle
+	return cursor;
+}
+
+void skn3_setCustomPointer(NSCursor *cursor) {
+	[cursor set];
+}
+
+void skn3_freeCustomPointer(NSCursor *cursor) {
+	[cursor release];
+}
+
+NSCursor * skn3_currentCursor() {
+	return [NSCursor currentCursor];
+}</textarea><br><br><font class="tiny">Last edited 2011</font><br><br><font class="tiny">Last edited 2011</font><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1117439"></a>
+
+<a name="1122093"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >skn3</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> .<br><br><font class="tiny">Last edited 2012</font> <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

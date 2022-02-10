@@ -1,0 +1,760 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Creating realistic gravity</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Creating realistic gravity</h1><a href="forums.php" >Blitz3D Forums</a>/<a href="topics.php?forum=5" >Blitz3D Beginners Area</a>/<a href="#bottom" >Creating realistic gravity</a><br><br>
+<a name="983503"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >A51M15X</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Does any one know a way to create gravity that gradually increases in speed when you fall? I'm not very good with c++ so could you kind of explain it in detail? I asked this once before but i went to the blitzmax forums by accident. <br><br></td></tr></table><br>
+<a name="983507"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> 1) (Recommended solution) Use a third-party physics engine. ODE is OK, and both free and commercial (but stabler and supported) versions exist.<br><br>2) Use something extremely loosely based on verlet integration:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+;ARROW KEYS AND SPACE TO MOVE
+
+Type verlet		;Verlet points
+	Field cx#,cy#,cz#	;Current position
+	Field ox#,oy#,oz#	;Previous position
+	Field radius#		;Collision radius
+	Field pivot			;3D entity (necessary for collisions with non-VPhysics entities)
+	Field collided		;True if verlet is in contact with another verlet or B3D entity
+End Type
+
+Type vlink		;VLinks
+	Field p1.verlet
+	Field p2.verlet
+	Field minlength#
+	Field maxlength#
+	Field offset#		;The actual distance between p1 and p2, to pass on to child link
+	Field parent.vlink	;Copy the length of another link (prevents rotation of hinges)
+End Type
+
+Type vpe		;Physics entities
+	Field state			;0=Inactive, no collisions; 1=Active, VPhysics interactions
+	Field ptype			;Type of primitive. 1=single point, 2=cube, 3=ragdoll, 4=fabric
+	Field points		;Number of VPoints
+	Field p.verlet[19]	;List of VPoints
+	Field links			;Numver of VLinks
+	Field l.vlink[52]	;List of VLinks
+	Field radius#
+	Field mesh			;The mesh itself
+End Type
+
+
+Global gwidth=1024,gheight=768
+Global VP_FPS#=50		;Fixed timestep for physics
+
+Global airres#=0.985	;Air resistance (ie. slowdown when ver\collided=False)
+Global colres#=0.88		;Ground resistance (ie. slowdown when ver\collided=True)
+Global gravity#=0.15
+Global physicstype=1	;B3D Collsion Type of physics objects
+
+
+Graphics3D gwidth,gheight,32,2
+SetBuffer BackBuffer()
+;Include "Includes\Draw3Dz.bb"
+
+
+;Scene
+camera=CreateCamera();:PositionEntity camera,0,30,-100
+PositionEntity camera,0,30,-60
+light = CreateLight()
+;PositionEntity light,0,100,-50
+RotateEntity light,90,0,0
+ground=CreateMesh():PointEntity camera, ground
+parquet=CreateSurface(ground)
+v1=AddVertex(parquet,-125,0,150):v2=AddVertex(parquet,125,0,150):v3=AddVertex(parquet,125,0,-100)
+AddTriangle(parquet,v1,v2,v3):v2=AddVertex(parquet,-125,0,-100):AddTriangle(parquet,v1,v3,v2)
+EntityColor ground,0,0,255:EntityType ground,2
+block=CreateCube():ScaleEntity block,20,5,20
+EntityType block,2
+
+;DrawInit3D(camera)
+;Origin3D(gwidth,gheight)
+;font=LoadFont3D("Fonts\Phyton1.png")
+
+
+dmesh=CreateCube()
+PositionEntity dmesh,0,15,0
+ScaleEntity dmesh,7,7,7
+EntityColor dmesh,0,255,0
+;EntityAlpha dmesh,0.5
+
+cmesh=CreateCube()
+PositionEntity cmesh,20,30,0
+ScaleEntity cmesh,7,7,7
+EntityColor cmesh,0,255,0
+;EntityAlpha cmesh,0.5
+
+t1.vpe=CreateVCube(dmesh,4,4,4,3.25)
+t2.vpe=CreateVCube(cmesh,5,5,5,2.25)
+
+;ragdoll=CreatePivot()
+;ragtest.vpe=CreateRagdoll(ragdoll)
+
+
+phystime#=1000.0/VP_FPS
+ctime=MilliSecs()
+accum#=0
+
+
+SC_FPS=60	;Desired framerate
+rtime=Floor(1000.0/SC_FPS)
+limited=True
+
+Collisions physicstype,2,2,2
+
+While Not KeyDown(1)
+	dtime=(MilliSecs()-ctime)
+	accum=accum+(MilliSecs()-ctime)
+	ctime=MilliSecs()
+	
+	While accum&gt;=phystime	;This is the update loop for ALL time-dependent functions, not just physics
+		CaptureWorld	;The most important thing! Instant-movement should happen before this
+		
+		UpdateVP
+	
+		;Forces need to stay within this loop
+		ApplyForce(t2,(KeyDown(205)-KeyDown(203))/8.0,4*KeyHit(57),(KeyDown(200)-KeyDown(208))/8.0)
+		
+	;	ragtest\p[1]\cx=0:ragtest\p[1]\cy=35:ragtest\p[1]\cz=0
+	;	ragtest\p[1]\cx=0:ragtest\p[1]\oy=35:ragtest\p[1]\cz=0
+	
+		IntegrateVP 5
+		UpdateWorld
+		
+		accum=accum-phystime
+	Wend
+
+	If KeyHit(38) Then limited=Not limited
+
+	If MilliSecs()-render_time=&gt;1000 Then fps=frames:frames=0:render_time=MilliSecs():Else frames=frames+1
+	
+	RenderWorld accum/phystime
+	Text 0,30,"FPS: "+fps
+
+	Delay (rtime-(MilliSecs()-ctime))-(limited+1)
+	;Insert VWait Parameter Here
+	Flip limited
+Wend
+
+;DrawFree3D
+End
+
+
+
+Function AddVerlet.verlet(ent%,x#,y#,z#,r#)		;Places the VPoint at x,y,z relative to entity
+	ver.verlet=New verlet
+;	ver\vbody=ent
+	
+	ver\cx#=EntityX(ent,1)+x:ver\ox#=ver\cx#
+	ver\cy#=EntityY(ent,1)+y:ver\oy#=ver\cy#
+	ver\cz#=EntityZ(ent,1)+z:ver\oz#=ver\cz#
+	ver\radius#=r
+	
+;	ver\pivot=CreateSphere(8)
+;	ScaleEntity ver\pivot,r,r,r		;Remove this later
+	ver\pivot=CreatePivot()
+	PositionEntity ver\pivot,ver\cx,ver\cy,ver\cz,1
+	ResetEntity ver\pivot	;Make sure it doesn't collide with anything before things begin
+	EntityRadius ver\pivot,r
+	EntityType ver\pivot,physicstype
+	
+	Return ver
+End Function
+
+Function FreeVerlet(ver.verlet)
+	For link.vlink=Each vlink
+		If link\p1=ver Or link\p2=ver Then Delete link
+	Next
+	Delete ver
+End Function
+
+Function LinkVerlets.vlink(v1.verlet,v2.verlet,forced#=0,maxlen#=0,p=0)	;p=Handle(parent.vlink), because Null isn't a constant
+	Local link.vlink=New vlink
+	link\p1=v1
+	link\p2=v2
+	
+	Local dx#=v1\cx-v2\cx
+	Local dy#=v1\cy-v2\cy
+	Local dz#=v1\cz-v2\cz
+	Local length#=Sqr(dx*dx+dy*dy+dz*dz)
+	
+	If forced=0
+		link\minlength=length
+	Else
+		link\minlength=forced
+	EndIf
+	
+	link\maxlength=link\minlength
+	If maxlen&gt;0 Then link\maxlength=maxlen
+	If maxlen&lt;0 Then link\maxlength=length	;In case the starting positions are the max length
+	
+	If p=0
+		link\parent=Null
+	Else
+		link\parent=Object.vlink(p)
+	EndIf
+	Return link
+End Function
+
+Function UnlinkVerlets(v1.verlet,v2.verlet)
+	For link.vlink=Each vlink
+		If (link\p1=v1 And link\p2=v2) Or (link\p1=v2 And link\p2=v1)
+			Delete link
+		EndIf
+	Next
+End Function
+
+Function CreateVPoint.vpe(mesh,x#=0,y#=0,z#=0,radius#=1,yradius#=0)
+	point.vpe=New vpe
+	point\state=1
+	point\mesh=mesh
+	point\ptype=1
+	point\points=1
+	point\links=0
+	
+	point\p[1]=AddVerlet(mesh,x,y,z,radius)
+	
+	;Adjust the Y radius here if desired - for characters
+	
+	Return point
+End Function
+
+Function CreateVCube.vpe(mesh,xs#=1,ys#=1,zs#=1,rs#=1)
+	cube.vpe=New vpe
+	cube\state=1
+	cube\mesh=mesh
+	cube\ptype=2
+	cube\points=9
+	cube\links=30
+	
+	cube\p[1]=AddVerlet(mesh, xs, ys, zs,rs)
+	cube\p[2]=AddVerlet(mesh,-xs, ys, zs,rs)
+	cube\p[3]=AddVerlet(mesh,-xs, ys,-zs,rs)
+	cube\p[4]=AddVerlet(mesh, xs, ys,-zs,rs)
+	cube\p[5]=AddVerlet(mesh, xs,-ys, zs,rs)
+	cube\p[6]=AddVerlet(mesh,-xs,-ys, zs,rs)
+	cube\p[7]=AddVerlet(mesh,-xs,-ys,-zs,rs)
+	cube\p[8]=AddVerlet(mesh, xs,-ys,-zs,rs)
+
+	cube\l[1]=LinkVerlets(cube\p[1],cube\p[2]):cube\l[2]=LinkVerlets(cube\p[2],cube\p[3])
+	cube\l[3]=LinkVerlets(cube\p[3],cube\p[4]):cube\l[4]=LinkVerlets(cube\p[4],cube\p[1])
+	cube\l[5]=LinkVerlets(cube\p[5],cube\p[6]):cube\l[6]=LinkVerlets(cube\p[6],cube\p[7])
+	cube\l[7]=LinkVerlets(cube\p[7],cube\p[8]):cube\l[8]=LinkVerlets(cube\p[8],cube\p[5])
+	cube\l[9]=LinkVerlets(cube\p[1],cube\p[5]):cube\l[10]=LinkVerlets(cube\p[2],cube\p[6])
+	cube\l[11]=LinkVerlets(cube\p[3],cube\p[7]):cube\l[12]=LinkVerlets(cube\p[4],cube\p[8])
+
+	cube\l[13]=LinkVerlets(cube\p[2],cube\p[4]):cube\l[14]=LinkVerlets(cube\p[2],cube\p[5])
+	cube\l[15]=LinkVerlets(cube\p[3],cube\p[6]):cube\l[16]=LinkVerlets(cube\p[3],cube\p[8])
+	cube\l[17]=LinkVerlets(cube\p[4],cube\p[5]):cube\l[18]=LinkVerlets(cube\p[6],cube\p[8])
+	cube\l[19]=LinkVerlets(cube\p[2],cube\p[8]):cube\l[20]=LinkVerlets(cube\p[4],cube\p[6])
+	cube\l[21]=LinkVerlets(cube\p[1],cube\p[7]):cube\l[22]=LinkVerlets(cube\p[3],cube\p[5])
+	
+	cs#=xs
+	If cs&lt;ys Then cs=ys		;Fit the centre point to the smallest dimension
+	If cs&lt;zs Then cs=zs
+	cs=cs+rs				;Then add corner radius to fill out the sides
+	cube\p[9]=AddVerlet(mesh,0,0,0,cs)
+	
+	cube\l[23]=LinkVerlets(cube\p[1],cube\p[9]):cube\l[24]=LinkVerlets(cube\p[7],cube\p[9])
+	cube\l[25]=LinkVerlets(cube\p[3],cube\p[9]):cube\l[26]=LinkVerlets(cube\p[5],cube\p[9])
+	cube\l[27]=LinkVerlets(cube\p[2],cube\p[9]):cube\l[28]=LinkVerlets(cube\p[8],cube\p[9])
+	cube\l[29]=LinkVerlets(cube\p[4],cube\p[9]):cube\l[30]=LinkVerlets(cube\p[6],cube\p[9])
+	
+	Return cube
+End Function
+
+;Function CreateVCloth.vpe()
+;End Function
+
+Function CreateRagdoll.vpe(body)
+	rd.vpe=New vpe
+	rd\state=1
+	rd\mesh=body
+	rd\ptype=3
+	rd\points=19
+	rd\links=52
+
+	rd\p[1]=AddVerlet(body,0,27,0,1.5)		;Head
+	rd\p[2]=AddVerlet(body,-3.32,23.5,0,1.1)	;Shoulders
+	rd\p[3]=AddVerlet(body,3.32,23.5,0,1)
+	rd\p[4]=AddVerlet(body,-1.64,15.8,1,1.2)	;Hips
+	rd\p[5]=AddVerlet(body,1.64,15.8,1,1.2)
+	rd\p[6]=AddVerlet(body,-1.64,15.8,-1,1.2)
+	rd\p[7]=AddVerlet(body,1.64,15.8,-1,1.2)
+
+	rd\p[8]=AddVerlet(body,-8.6,23,0,0.8)	;Arms
+	rd\p[9]=AddVerlet(body,-8.6,24,0,0.8)
+	rd\p[10]=AddVerlet(body,-13.6,23.5,0,0.6)
+	rd\p[11]=AddVerlet(body,8.6,23,0,0.8)
+	rd\p[12]=AddVerlet(body,8.6,24,0,0.8)
+	rd\p[13]=AddVerlet(body,13.6,23.5,0,0.6)
+
+	rd\p[14]=AddVerlet(body,-2,7.8,0,1.1)	;Legs
+	rd\p[15]=AddVerlet(body,-1.2,7.8,0,1.1)
+	rd\p[16]=AddVerlet(body,-1.6,0,0,1)
+	rd\p[17]=AddVerlet(body,2,7.8,0,1.1)
+	rd\p[18]=AddVerlet(body,1.2,7.8,0,1.1)
+	rd\p[19]=AddVerlet(body,1.6,0,0,1)
+
+	rd\l[1]=LinkVerlets(rd\p[1],rd\p[2],3,-1):rd\l[2]=LinkVerlets(rd\p[1],rd\p[3],3,-1)
+	rd\l[3]=LinkVerlets(rd\p[2],rd\p[3])
+	rd\l[4]=LinkVerlets(rd\p[2],rd\p[4]):rd\l[5]=LinkVerlets(rd\p[3],rd\p[5])
+	rd\l[6]=LinkVerlets(rd\p[2],rd\p[6]):rd\l[7]=LinkVerlets(rd\p[3],rd\p[7])
+	rd\l[8]=LinkVerlets(rd\p[4],rd\p[6]):rd\l[9]=LinkVerlets(rd\p[5],rd\p[7])
+	rd\l[10]=LinkVerlets(rd\p[4],rd\p[5]):rd\l[11]=LinkVerlets(rd\p[6],rd\p[7])
+	rd\l[12]=LinkVerlets(rd\p[4],rd\p[7]):rd\l[13]=LinkVerlets(rd\p[5],rd\p[6])
+	rd\l[14]=LinkVerlets(rd\p[2],rd\p[5]):rd\l[15]=LinkVerlets(rd\p[2],rd\p[7])
+	rd\l[16]=LinkVerlets(rd\p[3],rd\p[4]):rd\l[17]=LinkVerlets(rd\p[3],rd\p[6])
+	rd\l[18]=LinkVerlets(rd\p[1],rd\p[6],11.5,-1):rd\l[19]=LinkVerlets(rd\p[1],rd\p[7],11.5,-1)
+
+	rd\l[20]=LinkVerlets(rd\p[2],rd\p[8]):rd\l[21]=LinkVerlets(rd\p[2],rd\p[9])
+	rd\l[22]=LinkVerlets(rd\p[8],rd\p[10]):rd\l[23]=LinkVerlets(rd\p[9],rd\p[10])
+	rd\l[24]=LinkVerlets(rd\p[3],rd\p[9],6,-1):rd\l[25]=LinkVerlets(rd\p[2],rd\p[10],5,-1)
+	rd\l[26]=LinkVerlets(rd\p[8],rd\p[9]):rd\l[27]=LinkVerlets(rd\p[11],rd\p[12])
+	rd\l[28]=LinkVerlets(rd\p[3],rd\p[11]):rd\l[29]=LinkVerlets(rd\p[3],rd\p[12])
+	rd\l[30]=LinkVerlets(rd\p[11],rd\p[13]):rd\l[31]=LinkVerlets(rd\p[12],rd\p[13])
+	rd\l[32]=LinkVerlets(rd\p[2],rd\p[12],6,-1):rd\l[33]=LinkVerlets(rd\p[3],rd\p[13],5,-1)
+
+	rd\l[34]=LinkVerlets(rd\p[4],rd\p[14]):rd\l[35]=LinkVerlets(rd\p[4],rd\p[15])
+	rd\l[36]=LinkVerlets(rd\p[14],rd\p[16]):rd\l[37]=LinkVerlets(rd\p[15],rd\p[16])
+	rd\l[38]=LinkVerlets(rd\p[14],rd\p[15]):rd\l[39]=LinkVerlets(rd\p[6],rd\p[16],7,15.6)
+	rd\l[40]=LinkVerlets(rd\p[6],rd\p[14],8,10):rd\l[41]=LinkVerlets(rd\p[6],rd\p[15],8,10,Handle(rd\l[40]))
+	rd\l[42]=LinkVerlets(rd\p[5],rd\p[17]):rd\l[43]=LinkVerlets(rd\p[5],rd\p[18])
+	rd\l[44]=LinkVerlets(rd\p[17],rd\p[19]):rd\l[45]=LinkVerlets(rd\p[18],rd\p[19])
+	rd\l[46]=LinkVerlets(rd\p[17],rd\p[18]):rd\l[47]=LinkVerlets(rd\p[7],rd\p[19],7,15.6)
+	rd\l[48]=LinkVerlets(rd\p[7],rd\p[17],8,10):rd\l[49]=LinkVerlets(rd\p[7],rd\p[18],8,10,Handle(rd\l[48]))
+	rd\l[50]=LinkVerlets(rd\p[15],rd\p[18],2,12)
+	rd\l[51]=LinkVerlets(rd\p[5],rd\p[15],7,14):rd\l[52]=LinkVerlets(rd\p[4],rd\p[18],8,14)
+	
+	Return rd
+End Function
+
+Function FreeVEntity(ent.vpe)
+	For v=1 To ent\points
+		FreeVerlet(ent\p[v])
+	Next
+	Delete ent
+End Function
+
+Function HideVEntity(ent.vpe,hidemesh=False)
+	For v=1 To ent\points
+		HideEntity ent\p[v]\pivot
+	Next
+	ent\state=False
+	If hidemesh Then HideEntity ent\mesh
+End Function
+
+Function ShowVEntity(ent.vpe)
+	For v=1 To ent\points
+		ShowEntity ent\p[v]\pivot
+	Next
+	ent\state=True
+	ShowEntity ent\mesh
+End Function
+
+Function SetColType(ent.vpe,ctype)
+	For v=1 To ent\points
+		EntityType ent\p[v]\pivot,ctype
+	Next
+End Function
+
+Function ApplyForce(ent.vpe,x#,y#,z#)
+	If ent\state
+		For v=1 To ent\points
+			ver.verlet=ent\p[v]
+			ver\cx=ver\cx+x
+			ver\cy=ver\cy+y
+			ver\cz=ver\cz+z
+		Next
+	EndIf
+End Function
+
+Function SetForce(ent.vpe,x#,y#,z#)
+	If ent\state
+		For v=1 To ent\points
+			ver.verlet=ent\p[v]
+			ver\ox=ver\cx
+			ver\oy=ver\cy
+			ver\oz=ver\cz
+			ver\cx=ver\cx+x
+			ver\cy=ver\cy+y
+			ver\cz=ver\cz+z
+		Next
+	EndIf
+End Function
+
+Function ApplyPointForce(ver.verlet,x#,y#,z#)
+	ver\cx=ver\cx+x
+	ver\cy=ver\cy+y
+	ver\cz=ver\cz+z
+End Function
+
+Function SetPointForce(ver.verlet,x#,y#,z#)
+	ver\ox=ver\cx
+	ver\oy=ver\cy
+	ver\oz=ver\cz
+	ver\cx=ver\cx+x
+	ver\cy=ver\cy+y
+	ver\cz=ver\cz+z
+End Function
+
+Function MoveVerlet(ver.verlet,x#,y#,z#,n=1,r=1)
+	ver\cx=ver\cx+x
+	ver\cy=ver\cy+y
+	ver\cz=ver\cz+z
+	If n
+		ver\ox=ver\cx
+		ver\oy=ver\cy
+		ver\oz=ver\cz
+	Else
+		ver\ox=ver\cx+x
+		ver\oy=ver\cy+y
+		ver\oz=ver\cz+z
+	EndIf
+	PositionEntity ver\pivot,ver\cx,ver\cy,ver\cz
+	If r Then ResetEntity ver\pivot
+End Function
+
+Function MoveVEntity(ent.vpe,x#,y#,z#,n=1,r=1)
+	For v=1 To ent\points
+		ver.verlet=ent\p[v]
+		ver\cx=ver\cx+x
+		ver\cy=ver\cy+y
+		ver\cz=ver\cz+z
+		If n
+			ver\ox=ver\cx
+			ver\oy=ver\cy
+			ver\oz=ver\cz
+		Else
+			ver\ox=ver\cx+x
+			ver\oy=ver\cy+y
+			ver\oz=ver\cz+z
+		EndIf
+		PositionEntity ver\pivot,ver\cx,ver\cy,ver\cz
+		If r Then ResetEntity ver\pivot
+	Next
+	TranslateEntity ent\mesh,x,y,z,1
+End Function
+
+Function PositionVerlet(ver.verlet,x#,y#,z#,n=1)
+	If n
+		ver\ox=x
+		ver\oy=y
+		ver\oz=z
+	Else
+		ver\ox=x-(ver\cx-ver\ox)
+		ver\oy=y-(ver\cy-ver\oy)
+		ver\oz=z-(ver\cz-ver\oz)
+	EndIf
+	ver\cx=x
+	ver\cy=y
+	ver\cz=z
+	PositionEntity ver\pivot,ver\cx,ver\cy,ver\cz
+	ResetEntity ver\pivot
+End Function
+
+Function PositionVEntity(ent.vpe,x#,y#,z#,n=1)
+	For v=1 To ent\points
+		ver.verlet=ent\p[v]
+		If n
+			ver\ox=x
+			ver\oy=y
+			ver\oz=z
+		Else
+			ver\ox=x-(ver\cx-ver\ox)
+			ver\oy=y-(ver\cy-ver\oy)
+			ver\oz=z-(ver\cz-ver\oz)
+		EndIf
+		ver\cx=x+(ver\cx-EntityX(ent\mesh,1))
+		ver\cy=y+(ver\cy-EntityY(ent\mesh,1))
+		ver\cz=z+(ver\cz-EntityZ(ent\mesh,1))
+		PositionEntity ver\pivot,ver\cx,ver\cy,ver\cz
+		ResetEntity ver\pivot
+	Next
+	PositionEntity ent\mesh,x,y,z,1
+End Function
+
+Function IntegrateVP(itns%)
+	Local dx#,dy#,dz#,length#,diff#
+
+	For vb.vpe=Each vpe
+	If vb\state		;Proceed if vb is activated
+	For v=1 To vb\points
+		ver.verlet=vb\p[v]
+		drag#=airres
+		If ver\collided Then drag=colres
+		
+		xvel#=(ver\cx-ver\ox)*drag
+		If Abs(xvel)&lt;0.002 Then xvel=0	;Remove tiny errors that cause things to spin without forces...
+		ver\ox=ver\cx
+		ver\cx=ver\cx+xvel
+
+		yvel#=(ver\cy-ver\oy)*drag
+		If Abs(yvel)&lt;0.002 Then yvel=0
+		ver\oy=ver\cy
+		ver\cy=ver\cy+yvel-gravity
+		
+		zvel#=(ver\cz-ver\oz)*drag
+		If Abs(zvel)&lt;0.002 Then zvel=0	;...which actually speeds up simulation
+		ver\oz=ver\cz
+		ver\cz=ver\cz+zvel
+		
+		;Collisions
+		ver\collided=False
+		For vt.vpe=Each vpe
+			If vt&lt;&gt;vb And vt\state		;Check that vt is also activated
+				For v2=1 To vt\points
+					vet.verlet=vt\p[v2]
+					dx#=ver\cx-vet\cx
+					dy#=ver\cy-vet\cy
+					dz#=ver\cz-vet\cz
+					dd#=Sqr(dx*dx+dy*dy+dz*dz)
+					tr#=ver\radius+vet\radius
+					If dd&lt;tr	;If the verlets are nearer together than their combined radii
+						ddt#=dd-tr
+						ddx#=ddt*(dx/dd)
+						ddy#=ddt*(dy/dd)
+						ddz#=ddt*(dz/dd)
+						
+						ver\cx=ver\cx-ddx
+						ver\cy=ver\cy-ddy
+						ver\cz=ver\cz-ddz
+						
+						vet\cx=vet\cx+ddx
+						vet\cy=vet\cy+ddy
+						vet\cz=vet\cz+ddz
+						
+						ver\collided=True
+					EndIf
+				Next
+			EndIf
+		Next
+		
+		;Screen boundaries
+		If ver\cx&lt;-100 Then ver\cx=-100
+	;	If ver\cy&lt;ver\radius Then ver\cy=ver\radius
+		If ver\cz&lt;-75 Then ver\cz=-75
+		If ver\cx&gt;100 Then ver\cx=100
+		If ver\cy&gt;100 Then ver\cy=100
+		If ver\cz&gt;125 Then ver\cz=125
+	Next
+	EndIf	;State
+	Next	;vpe
+
+	For vb.vpe=Each vpe
+	If vb\state		;Proceed if vb is activated
+	For loop = 1 To itns	;iterations
+	For link=1 To vb\links
+		c.vlink=vb\l[link]
+		dx=c\p2\cx-c\p1\cx
+		dy=c\p2\cy-c\p1\cy
+		dz=c\p2\cz-c\p1\cz
+		
+		length=Sqr(dx*dx+dy*dy+dz*dz)	;distance between p1 and p2
+
+		If length&gt;0
+			If c\parent=Null
+				diff=0
+				c\offset=length
+				If length&lt;c\minlength Then diff=(length-c\minlength)/length:c\offset=c\minlength	;vector length minus vlink length
+				If length&gt;c\maxlength Then diff=(length-c\maxlength)/length:c\offset=c\maxlength
+			Else
+				diff=(length-c\parent\offset)/length	;Snap to length of parent
+			EndIf
+		EndIf
+
+		dx=dx/2:dy=dy/2:dz=dz/2	;find the midpoint
+
+		c\p1\cx=c\p1\cx+diff*dx
+		c\p1\cy=c\p1\cy+diff*dy
+		c\p1\cz=c\p1\cz+diff*dz
+
+		c\p2\cx=c\p2\cx-diff*dx
+		c\p2\cy=c\p2\cy-diff*dy
+		c\p2\cz=c\p2\cz-diff*dz
+	Next	;VLinks
+	Next	;Iterations
+	EndIf	;State
+	Next	;vpe
+	
+	For ver.verlet=Each verlet
+		PositionEntity ver\pivot,ver\cx,ver\cy,ver\cz
+	Next
+End Function
+
+Function UpdateVP()
+	For ver.verlet=Each verlet
+		If CountCollisions(ver\pivot)
+			ver\cx=EntityX(ver\pivot)
+			ver\cy=EntityY(ver\pivot)
+			ver\cz=EntityZ(ver\pivot)
+			ver\collided=True
+		EndIf
+	Next
+;	For c.vlink = Each vlink
+;		PositionEntity c\mesh,c\p1\cx,c\p1\cy,c\p1\cz,1
+;		PointEntity c\mesh,c\p2\pivot
+;	Next
+	For body.vpe=Each vpe
+		If body\state
+			If body\ptype=1
+				If body\mesh&lt;&gt;0 Then PositionEntity body\mesh,body\p[1]\cx,body\p[1]\cy,body\p[1]\cz
+			EndIf
+			If body\ptype=2
+				mx#=(body\p[3]\cx+body\p[5]\cx)/2
+				my#=(body\p[3]\cy+body\p[5]\cy)/2
+				mz#=(body\p[3]\cz+body\p[5]\cz)/2
+				PositionEntity body\mesh,mx,my,mz	
+				AlignToVector body\mesh,(body\p[1]\cx+body\p[3]\cx)/2-mx,(body\p[1]\cy+body\p[3]\cy)/2-my,(body\p[1]\cz+body\p[3]\cz)/2-mz,2,1
+				AlignToVector body\mesh,(body\p[4]\cx+body\p[5]\cx)/2-mx,(body\p[4]\cy+body\p[5]\cy)/2-my,(body\p[4]\cz+body\p[5]\cz)/2-mz,3,1
+			EndIf
+		EndIf
+	Next
+End Function
+</textarea><br><br>(Better examples by Stevie and Nate exist, check the code archives)<br><br>"Verlet integration" for the purposes of this just means store the object's old position, get the difference between that and it's current position, and move it further by that amount, less friction and plus gravity. The resulting movement looks relatively natural although it's not really possible to simulate collisions accurately if you keep it all within Blitz3D. <br><br></td></tr></table><br>
+<a name="983529"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_Skully</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> The basics of gravity are simple...<br><br>you have an x and y position (2d example)<br><br>you also have velocity which is added to the values each iteration of the game...<br><br>Gravity is just an amount added to the y velocity each iteration <br><br></td></tr></table><br>
+<a name="983537"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >A51M15X</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> It needs to be 3D so does that mean i need an X, Y, and Z position? <br><br></td></tr></table><br>
+<a name="983542"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_Skully</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Yes...  If memory serves (provided you haven't rotated everything) Y is still your vertical... so gravity would still be added to that velocity <br><br></td></tr></table><br>
+<a name="983546"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AJ00200</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Objects accelerate downwards at 32 feet per second on earth.<br>So it depends on the scale of the world, and what gravity power you want. <br><br></td></tr></table><br>
+<a name="983548"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_Skully</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> So it depends on the scale of the world, and what gravity power you want. <br> <br></div><br><br>Thats the most relevant.  True gravity never fits in a game world <br><br></td></tr></table><br>
+<a name="983550"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >A51M15X</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Can someone give me some pointers as to how im supposed to create an X Y and Z position and add velocity to the Y position? <br><br></td></tr></table><br>
+<a name="983551"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Matty</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>
+acceleration#=-0.5 ;put any number here that you want...
+
+repeat
+
+;each frame
+x#=x#+vx#	;update velocity in x/y/z direction of your object
+y#=y#+vy#
+z#=z#+vz#
+
+vy#=vy# + acceleration#
+
+
+until keydown(1)
+
+
+
+</pre> <br><br></td></tr></table><br>
+<a name="983568"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >A51M15X</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> i tried putting your example in Matty, but it wont do anything. I'm probably doing something wrong though. <br><br></td></tr></table><br>
+<a name="983572"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Matty</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> It's not going to do anything by itself, it just shows how to calculate the new x/y/z based on the velocity of the object and the acceleration due to gravity. <br><br></td></tr></table><br>
+<a name="983652"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >A51M15X</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> ok thx <br><br></td></tr></table><br>
+<a name="983791"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Nate the Great</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> ok here is a little example.  Not exactly verlet based but this is as simple as it gets other than that.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">;gravity example By: Nate the Great
+Graphics3D 800,600,0,2
+
+;lets set up a scene...
+lit = CreateLight()
+TurnEntity lit,45,90,0	;turns the light to face where we want it to
+
+cam = CreateCamera()
+MoveEntity cam,0,0,-10
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Global gravity# = -.01
+
+;Lets create a cube that will jump "realisticly"
+player = CreateCube()
+TurnEntity player,0,45,0
+;make an x y and z for the player
+plx# = 0
+ply# = 0
+plz# = 0
+;make a dx,dy, and dz as the distance x,y,z the object travels in a frame
+pldx# = 0
+pldy# = 0
+pldz# = 0
+;ok now lets do some physics!!!
+
+While Not KeyDown(1)
+	Cls
+	
+	;do some arrow key input stuff
+	If KeyDown(203) Then pldx = -.1
+	If KeyDown(205) Then pldx = .1
+	
+	If KeyDown(200) Then pldz = .1
+	If KeyDown(208) Then pldz = -.1
+	
+	;check for basic ground collision
+	If ply &lt; -2 Then
+		ply = -2	;set the position back to -2
+		pldy = -pldy*.6	;reverse pl velocity y so it bounces up
+	EndIf
+	
+	;add some friction
+	If ply &lt; -1.8 Then
+		pldx = .6*pldx
+		pldz = .6*pldz
+		If KeyDown(57) Then pldy = .3	;see if jump was pressed (space bar)
+	EndIf
+	
+	;lets update gravity
+	pldy = pldy + gravity
+	
+	;ok lets update the x, y, and z positions of the cube
+	plx = plx + pldx
+	ply = ply + pldy
+	plz = plz + pldz
+	;now apply that to the cube...
+	PositionEntity player,plx,ply,plz
+	
+	
+	UpdateWorld()
+	RenderWorld()
+	
+	Flip
+Wend
+
+End</textarea> <br><br></td></tr></table><br>
+<a name="985648"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> People usually need gravity for the player, be it a fps camera or a tps Character. Even if you could have ultrasimple Gravity by Traqnslateentity it a little down on the Y axis, in a real game there is much more stuff involved.<br><br>What you can do is: test if the players feet touched the ground and then increase the falling speed if they didn't. But this leads to  flipflop condition, where collision is applied every second render, resulting it jittering motion.<br><br>Furthermore: Sliding collision. If you use Blitzs internal Collision, your character will slide down even the slightest slope - very unnatural, unless the game plays on ice. Doing one Linepick vs the ground and calculate the ground angle using PickedNx etc. may be an option. For myself I had to do 4 picks and calcualte the angle myself to obtain stabile functionality, however.<br><br>It is really rather tricky to get good gravity and collision with Blitz3Ds internal commands. It may be a good idea to use a 3rd party physics library in the first place, but make sure it's stabile and fast (unfort. that's something rather rare in phys libs IMHO). <br><br></td></tr></table><br>
+<a name="985659"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >A51M15X</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> I tried doing something super simple (since whenever i add any other gravity code in it screws with my whole game.)<br><br><br><pre class=code>
+entityY#(player) = v
+
+repeat 
+
+v = v + .5
+
+TranslateEntity player,0,-v,0
+
+if entitycollided(player,ground) then v = v
+
+until keydown(1)
+</pre><br><br>i tried this, but it still won't work.<br><br>is there a way to make this work? <br><br></td></tr></table><br>
+<a name="985677"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_Skully</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> If you don't use some kind of delta timing then your game speed and response is going to change depending on the machine you are running it on...<br><br>What I use is millisecs()... use the delta since the last update as a multiplier and you can check to see if a ms has passed before processing (and if it hasn't don't run the game logic).<br><br>Otherwise, I'm not sure of the nature of how your game gets "screwed" <br><br></td></tr></table><br>
+<a name="985733"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >_PJ_</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#17">[#17]</a></td></tr></table></td></tr><tr ><td class="posttext"> <pre class=code>
+if entitycollided(player,ground) then v = v
+</pre><br>This line is useless, 'v' will always equal itself anyway, Not that there's any way to see what's happening as there's no rendering in that loop.<br><br>Posting your actual code would really help.<br><br>Anyway, try this:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+n=EntityY#(player)
+v=0.5
+
+Repeat 
+	
+	n=EntityY#(player)	
+	v = v + .5
+	
+	TranslateEntity player,0,-v,0
+	
+	If EntityCollided(player,ground) Then v = 0
+	
+	UpdateWorld
+	RenderWorld
+	Flip
+	
+Until (KeyDown(1) Or v=0)
+</textarea> <br><br></td></tr></table><br>
+<a name="985797"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >jfk EO-11110</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#18">[#18]</a></td></tr></table></td></tr><tr ><td class="posttext"> also:<br>entitycollided(player,ground)<br>This command checks if an entity collided with a certain entity TYPE, not with a cerain entity. As the return value it will then give you the other entity:<br><br>Const TYPE_WORLD=3<br>Const TYPE_PLAYER=1<br>EntityType ground, TYPE_WORLD<br>EntityType player, TYPE_PLAYER<br>Collisions 1,3,2,2<br>...<br>while keyhit(1)=0 ; mainloop begin<br>...<br>if entitycollided(player, TYPE_WORLD)=ground then v=0<br>...<br><br>Actually, in a game you would use a feet pivot for that check, to prevent the player from climbing up walls, because v would become 0 when he touches the wall. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

@@ -1,0 +1,407 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Linux Graphics Window - setting the title</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Linux Graphics Window - setting the title</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=110" >BlitzMax Module Tweaks</a>/<a href="#bottom" >Linux Graphics Window - setting the title</a><br><br>
+<a name="722369"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2006)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> In linux, a Graphics window doesn't set the window title text like it does on the other two platforms.<br>This change to <b>glgraphics.linux.c</b> fixes it so that both the default "BlitzMax Application" shows and AppTitle sets the title properly (when set before running the Graphics command, as per the other platforms)<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+#include &lt;stdio.h&gt;
+#include &lt;GL/gl.h&gt;
+#include &lt;GL/glx.h&gt;
+#include &lt;X11/extensions/xf86vmode.h&gt;
+#include &lt;assert.h&gt;
+
+/* Added by BaH */
+#include &lt;brl.mod/blitz.mod/blitz.h&gt;
+#include &lt;X11/Xutil.h&gt;
+
+extern void bbSystemPoll();
+extern Display *bbSystemDisplay();
+extern void bbSetSystemWindow(int window);
+
+static XF86VidModeModeInfo **modes,*mode;
+static Display *xdisplay;
+
+static int xscreen,xwindow,xfullscreen;
+
+typedef int (* GLXSWAPINTERVALEXT) (int);
+
+GLXSWAPINTERVALEXT glXSwapIntervalEXT;
+
+void *glXExtension(Display *dpy,int screen,const char *catagory,const char *name){
+	const char *extensions;
+	extensions=glXQueryExtensionsString(dpy,screen);
+	if (strstr(extensions,catagory)) {
+		return (void*)glXGetProcAddressARB(name);
+	}
+	return (void*)0;
+}
+
+enum{
+	MODE_SHARED=0,
+	MODE_WIDGET=1,
+	MODE_WINDOW=2,
+	MODE_DISPLAY=3
+};
+
+enum{
+	FLAGS_BACKBUFFER=	0x2,
+	FLAGS_ALPHABUFFER=	0x4,
+	FLAGS_DEPTHBUFFER=	0x8,
+	FLAGS_STENCILBUFFER=0x10,
+	FLAGS_ACCUMBUFFER=	0x20,
+	FLAGS_FULLSCREEN=0x80000000
+};
+
+typedef struct BBGLContext BBGLContext;
+
+struct BBGLContext{
+	int mode,width,height,depth,hertz,flags,sync;
+	int window;
+	GLXContext glContext;
+};
+
+// glgraphics.bmx interface
+
+int bbGLGraphicsGraphicsModes( int *imodes,int maxcount );
+BBGLContext *bbGLGraphicsAttachGraphics( int window,int flags );
+BBGLContext *bbGLGraphicsCreateGraphics( int width,int height,int depth,int hz,int flags );
+void bbGLGraphicsGetSettings( BBGLContext *context,int *width,int *height,int *depth,int *hz,int *flags );
+void bbGLGraphicsClose( BBGLContext *context );
+void bbGLGraphicsSetGraphics( BBGLContext *context );
+void bbGLGraphicsFlip( int sync );
+void bbGLGraphicsSwapSharedContext();
+void bbGLExit();
+
+static BBGLContext *_currentContext;
+static BBGLContext *_activeContext;
+static BBGLContext *_sharedContext;
+
+#define INTERLACE      0x010
+#define DBLSCAN        0x020
+
+static XF86VidModeModeInfo _oldMode;
+
+/* Added by BaH */
+static const char *_appTitle(){
+	return bbStringToCString( bbAppTitle );
+}
+
+int _calchertz(XF86VidModeModeInfo *m){
+	int	freq;
+	freq=(m-&gt;dotclock*1000.0)/(m-&gt;htotal*m-&gt;vtotal)+.5;
+	if (m-&gt;flags&amp;INTERLACE) freq&lt;&lt;=1;
+	if (m-&gt;flags&amp;DBLSCAN) freq&gt;&gt;=1;
+	return freq;
+}
+
+int _initDisplay(){
+	int		major,minor;
+	if (xdisplay) return 0;
+	xdisplay=bbSystemDisplay();
+	if (!xdisplay) return -1;
+	if (glXQueryVersion(xdisplay,&amp;major,&amp;minor)==0) return -1;
+//	printf("glXVersion=%d.%d\n",major,minor);fflush(stdout);
+	XF86VidModeQueryVersion(xdisplay,&amp;major,&amp;minor);
+//	printf("XF86VidModeExtension-Version %d.%d\n", major,minor);
+	xscreen=DefaultScreen(xdisplay);
+//	glXSwapIntervalEXT=(GLXSWAPINTERVALEXT)glXGetProcAddressARB("glXSwapIntervalSGI");
+	glXSwapIntervalEXT=(GLXSWAPINTERVALEXT)glXExtension(xdisplay,xscreen,"GLX_SGI_swap_control","glXSwapIntervalSGI");
+	atexit( bbGLExit );
+	return 0;
+}
+
+int bbGLGraphicsGraphicsModes( int *imodes,int maxcount ){
+	XF86VidModeModeInfo		**xmodes,*m;
+	int						count,i;
+
+	if (_initDisplay()) return 0;
+	XF86VidModeGetAllModeLines(xdisplay,xscreen,&amp;count,&amp;xmodes);
+	if (count&gt;maxcount) count=maxcount;
+	for (i=0;i&lt;count;i++)
+	{
+		m=xmodes[i];
+		*imodes++=m-&gt;hdisplay;	//width
+		*imodes++=m-&gt;vdisplay;	//height;
+		*imodes++=24;
+		*imodes++=_calchertz(m);
+	}
+	XFree(xmodes);
+	return count;
+}
+
+static void _swapBuffers( BBGLContext *context ){
+	if( !context ) return;
+	glXSwapBuffers(xdisplay,context-&gt;window);
+	bbSystemPoll();
+}
+
+BBGLContext *bbGLGraphicsAttachGraphics( int window,int flags ){
+	BBGLContext *context=(BBGLContext*)malloc( sizeof(BBGLContext) );
+	memset( context,0,sizeof(BBGLContext) );
+	context-&gt;mode=MODE_WIDGET;	
+	context-&gt;flags=flags;
+	context-&gt;sync=-1;	
+	context-&gt;window=window;
+	return context;
+}
+
+XVisualInfo *_chooseVisual(flags){
+	int glspec[32],*s;
+	s=glspec;
+	*s++=GLX_RGBA;
+	if (flags&amp;FLAGS_BACKBUFFER) *s++=GLX_DOUBLEBUFFER;
+	if (flags&amp;FLAGS_ALPHABUFFER) {*s++=GLX_ALPHA_SIZE;*s++=1;}
+	if (flags&amp;FLAGS_DEPTHBUFFER) {*s++=GLX_DEPTH_SIZE;*s++=1;}
+	if (flags&amp;FLAGS_STENCILBUFFER) {*s++=GLX_STENCIL_SIZE;*s++=1;}
+	if (flags&amp;FLAGS_ACCUMBUFFER)
+	{
+		*s++=GLX_ACCUM_RED_SIZE;*s++=1;
+		*s++=GLX_ACCUM_GREEN_SIZE;*s++=1;
+		*s++=GLX_ACCUM_BLUE_SIZE;*s++=1;
+		*s++=GLX_ACCUM_ALPHA_SIZE;*s++=1;
+	}
+ 	*s++=None;
+	return glXChooseVisual(xdisplay,xscreen,glspec);	
+}
+
+static void _initSharedContext(){
+	if( _sharedContext ) return;
+	_sharedContext=bbGLGraphicsCreateGraphics(0,0,0,0,0);
+}
+
+void _makeCurrent(	BBGLContext *context ){
+	glXMakeCurrent(xdisplay,context-&gt;window,context-&gt;glContext);	
+	_currentContext=context;
+}
+
+void bbGLGraphicsSwapSharedContext(){
+	if( xfullscreen ) return;
+	if( _currentContext!=_sharedContext ){
+		_makeCurrent( _sharedContext );
+	}else{
+		_makeCurrent( _activeContext );
+	}
+}
+
+static void _validateSize( BBGLContext *context ){
+	Window			root_return;
+	int				x,y;
+	unsigned int	w,h,border,d;
+	if( !context || context-&gt;mode!=MODE_WIDGET ) return;
+	if (_initDisplay()) return;
+	XGetGeometry(xdisplay,context-&gt;window,&amp;root_return,&amp;x,&amp;y,&amp;w,&amp;h,&amp;border,&amp;d);
+	context-&gt;width=w;
+	context-&gt;height=h;
+}
+
+static void _validateContext( BBGLContext *context ){
+	GLXContext		sharedcontext;
+	XVisualInfo 	*vizinfo;
+
+	if( !context || context-&gt;glContext ) return;
+	if (_initDisplay()) return;
+
+	_initSharedContext();
+	sharedcontext=_sharedContext-&gt;glContext;
+	vizinfo=_chooseVisual(context-&gt;flags);
+	context-&gt;glContext=glXCreateContext(xdisplay,vizinfo,sharedcontext,True);	
+	glXMakeCurrent(xdisplay,context-&gt;window,context-&gt;glContext);	
+	bbSetSystemWindow(context-&gt;window);
+}
+
+void bbGLGraphicsGetSettings( BBGLContext *context,int *width,int *height,int *depth,int *hertz,int *flags ){
+	_validateSize( context );
+	*width=context-&gt;width;
+	*height=context-&gt;height;
+	*depth=context-&gt;depth;
+	*hertz=context-&gt;hertz;
+	*flags=context-&gt;flags;
+}
+
+static Bool WaitForNotify(Display *display,XEvent *event,XPointer arg){
+	return (event-&gt;type==MapNotify) &amp;&amp; (event-&gt;xmap.window==(Window)arg);
+}
+
+BBGLContext *bbGLGraphicsCreateGraphics( int width,int height,int depth,int hz,int flags ){
+	XSetWindowAttributes	swa;
+	XVisualInfo 	*vizinfo;
+	XEvent					event;
+	GLXContext				sharedcontext;
+	GLXContext				context;
+	int						window;
+	int						count,i;
+	int						displaymode;
+
+	if (_initDisplay()) return 0;
+	if (width==0 &amp;&amp; height==0)
+	{
+		sharedcontext=0;width=100;height=100;
+	}
+	else
+	{
+		_initSharedContext();
+		sharedcontext=_sharedContext-&gt;glContext;
+	}
+	vizinfo=_chooseVisual(flags);
+	if (depth)
+	{
+		XF86VidModeGetModeLine(xdisplay,xscreen,&amp;_oldMode.dotclock,(XF86VidModeModeLine*)&amp;_oldMode.hdisplay );
+
+		XF86VidModeGetAllModeLines(xdisplay,xscreen,&amp;count,&amp;modes);
+		mode=0;
+		for (i=0;i&lt;count;i++)
+		{
+			if (width==modes[i]-&gt;hdisplay &amp;&amp; height==modes[i]-&gt;vdisplay &amp;&amp; hz==_calchertz(modes[i]))
+			{
+				mode=modes[i];
+				break;
+			}
+		}	
+		if (mode==0)
+		{
+			for (i=0;i&lt;count;i++)
+			{
+				if (width==modes[i]-&gt;hdisplay &amp;&amp; height==modes[i]-&gt;vdisplay)
+				{
+					mode=modes[i];
+					break;
+				}
+			}	
+		}
+		if (mode==0) return;
+		width=mode-&gt;hdisplay;
+		height=mode-&gt;vdisplay;
+		vizinfo=_chooseVisual(flags);
+		context=glXCreateContext(xdisplay,vizinfo,sharedcontext,True);
+		swa.border_pixel=0;
+		swa.event_mask=StructureNotifyMask|ResizeRedirectMask|FocusChangeMask;
+		swa.colormap=XCreateColormap(xdisplay,RootWindow(xdisplay,0),vizinfo-&gt;visual,AllocNone);
+		swa.override_redirect=True;	
+		XF86VidModeSwitchToMode(xdisplay,xscreen,mode);
+		XF86VidModeSetViewPort(xdisplay,xscreen,0,0);
+		window=XCreateWindow(
+			xdisplay,
+			RootWindow(xdisplay,xscreen),
+			0,
+			0,
+			width,height,
+			0,
+			vizinfo-&gt;depth,
+			InputOutput,
+			vizinfo-&gt;visual,
+			CWBorderPixel|CWColormap|CWEventMask|CWOverrideRedirect,
+			&amp;swa
+		);
+		xfullscreen=1;
+		displaymode=MODE_DISPLAY;
+	}
+	else
+	{		
+		swa.border_pixel=0;
+		swa.event_mask=StructureNotifyMask|ResizeRedirectMask;
+		swa.colormap=XCreateColormap(xdisplay,RootWindow(xdisplay,0),vizinfo-&gt;visual,AllocNone);
+		window=XCreateWindow(
+			xdisplay,
+			RootWindow(xdisplay,xscreen),
+			0,
+			0,  
+			width,height,
+			0,
+			vizinfo-&gt;depth,
+			InputOutput,
+			vizinfo-&gt;visual,
+			CWBorderPixel|CWColormap|CWEventMask,
+			&amp;swa
+		);
+		displaymode=MODE_WINDOW;
+	}
+	context=glXCreateContext(xdisplay,vizinfo,sharedcontext,True);	
+	if (sharedcontext) 
+	{	
+		XMapRaised(xdisplay,window);	
+		if (xfullscreen)
+		{
+			XWarpPointer(xdisplay,None,window,0,0,0,0,0,0);
+			XGrabKeyboard(xdisplay,window,True,GrabModeAsync,GrabModeAsync,CurrentTime);
+			XGrabPointer(xdisplay,window,True,ButtonPressMask,GrabModeAsync,GrabModeAsync,window,None,CurrentTime);
+		}
+		glXMakeCurrent(xdisplay,window,context);	
+		XIfEvent(xdisplay,&amp;event,WaitForNotify,(XPointer)window);	     
+		XSelectInput(xdisplay,window,ResizeRedirectMask|PointerMotionMask|ButtonPressMask|ButtonReleaseMask|KeyPressMask|KeyReleaseMask);	
+		xwindow=window;
+		bbSetSystemWindow(xwindow);
+	}
+
+	/* Added by BaH */
+	/* set the window title */
+	XStoreName(xdisplay, window, _appTitle());
+	
+	bbSystemPoll();
+
+	BBGLContext *bbcontext=(BBGLContext*)malloc( sizeof(BBGLContext) );
+	memset( bbcontext,0,sizeof(BBGLContext) );
+	bbcontext-&gt;mode=displaymode;	
+	bbcontext-&gt;width=width;	
+	bbcontext-&gt;height=height;	
+	bbcontext-&gt;depth=24;	
+	bbcontext-&gt;hertz=hz;
+	bbcontext-&gt;flags=flags;
+	bbcontext-&gt;sync=-1;	
+	bbcontext-&gt;window=window;
+	bbcontext-&gt;glContext=context;
+	return bbcontext;
+}
+
+void bbGLGraphicsSetGraphics( BBGLContext *context ){
+	if( context ){
+		_validateSize( context );
+		_validateContext( context );
+	}
+	if( !context || context==_currentContext ) return;
+	_makeCurrent(context);
+	_activeContext=context;
+}
+
+void bbGLGraphicsFlip( int sync ){
+	if( !_currentContext ) return;
+	sync=sync ? 1 : 0;
+	if( sync!=_currentContext-&gt;sync ){
+		_currentContext-&gt;sync=sync;
+		if ( glXSwapIntervalEXT ) {
+			 glXSwapIntervalEXT( sync );
+		}
+	}
+	_swapBuffers( _currentContext );
+}
+
+void bbGLGraphicsClose( BBGLContext *context ){
+	if (context){
+		if (_currentContext==context) _currentContext=0;
+		if (context-&gt;glContext) 
+		{
+			glXMakeCurrent(xdisplay,None,NULL);
+			glXDestroyContext(xdisplay,context-&gt;glContext);	
+		}
+		if (context-&gt;window &amp;&amp; context-&gt;mode!=MODE_WIDGET){
+			XDestroyWindow(xdisplay,context-&gt;window);
+		}
+		if (context-&gt;mode==MODE_DISPLAY){
+			XF86VidModeSwitchToMode(xdisplay,xscreen,&amp;_oldMode);
+			XF86VidModeSetViewPort(xdisplay,xscreen,0,0);
+			XFlush(xdisplay);
+			XFree(modes);
+			modes=0;
+			mode=0;
+			xfullscreen=0;
+		}
+		free( context );
+	}
+}
+
+void bbGLExit(){
+	bbGLGraphicsClose( _currentContext );
+	bbGLGraphicsClose( _sharedContext );
+	_currentContext=0;
+	_sharedContext=0;
+}
+</textarea><br>...see "<b>/* Added by BaH */</b>" for places where code was changed.<br><br>:o) <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

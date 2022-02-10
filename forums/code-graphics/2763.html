@@ -1,0 +1,286 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Pixmap edges and normals</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='calcs smoothed normals of black and white pixmap, language=bmx, category=Graphics'><meta name='author' content='TWH'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=1>Graphics</a>/Pixmap edges and normals</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2763.bmx">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pixmap edges and normals by TWH</td><td align="right">2010 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Quite fast. A 200x200 bitmap took 4ms on my PC in release, 50ms in debug.<br><br>This is somewhat similar to the heighmap contour finder by Malice, available here:<br><a href="http://www.blitzbasic.com/codearcs/codearcs.php?code=2762" target="_blank">http://www.blitzbasic.com/codearcs/codearcs.php?code=2762</a><br><br>except, this is for 2D games and finds normals. Useful for resolving collisions.<br><br>You could use it in a worms- or Liero-like game, updating edges and normals each time the terrain is modified.<br><br>Or you could use it to calc the collision map and normals of a bitmap game object once and store it.<br><br>Edit: found a bug. normals for single pixels and 1-pixel thick lines are not found. Will fix in the morning. </td></tr><tr ><td class="cell"><pre class="code">'written by torbjoern haugen 7.september 2010
+'based on pseudo-code from "Mathematics and Physics for Programmmers by Danny Kodicek"
+'expects the bitmap to be black and white
+type TimageNormals
+	field originalImage:TPixmap
+	field edgemap:int[] 'is pixel a edge? true/false
+	field normals:vec2[]
+	field smoothedNormals:vec2[]
+	field width:int, height:int
+	field grayLimit:int = $ff010101''$fffffffa
+	
+	field vecZero:vec2 = vec2.create( 0,0 )
+	field vecU:vec2 = vec2.create( 0,-1)
+	field vecD:vec2 = vec2.create( 0, 1)
+	field vecL:vec2 = vec2.create(-1, 0)
+	field vecR:vec2 = vec2.create( 1, 0)
+	field vecUL:vec2 = vec2.create(-1,-1)
+	field vecUR:vec2 = vec2.create( 1,-1)
+	field vecDL:vec2 = vec2.create(-1, 1)
+	field vecDR:vec2 = vec2.create( 1, 1)
+
+	method findEdges(pixmap:TPixmap)
+		originalImage = pixmap
+		width = pixmap.width
+		height = pixmap.height
+		edgemap = new int[width*height]
+		normals = new vec2[width*height]
+		smoothedNormals = new vec2[width*height]
+
+		_findEdges()
+		_calcNormals()
+		_smoothNormals()
+	end method
+
+	'save edge pixels in edgemap
+	method _findEdges()
+		local i:int
+		local j:int
+		for i=1 until originalImage.width-1
+		for j=1 until originalImage.height-1
+			local u_pixel:int = originalImage.readpixel(i,j-1)
+			local d_pixel:int = originalImage.readpixel(i,j+1)
+			local l_pixel:int = originalImage.readpixel(i-1,j)
+			local r_pixel:int = originalImage.readpixel(i+1,j)
+			local current_pixel:int = originalImage.readpixel(i,j)
+			
+			if current_pixel&lt; grayLimit and (u_pixel&gt;grayLimit or d_pixel&gt;grayLimit or l_pixel&gt;grayLimit or r_pixel&gt;grayLimit)
+				edgemap[i*height+j] = 1
+			else
+				edgemap[i*height+j] = 0
+			endif
+		next
+		next
+	end method
+	
+	'for each edge, look at its neighbours and decide normal
+	method _calcNormals()
+		local i:int
+		local j:int
+		
+		for i=1 until originalImage.width-1
+		for j=1 until originalImage.height-1		
+			if edgemap[i*height+j] 
+				local v:vec2 = new vec2
+				v.x = 0; v.y = 0;
+				local neigh:int = 0 'holds count of which edge neighbours this pixel has
+				
+				local hasU:int = false
+				local hasD:int = false
+				local hasL:int = false
+				local hasR:int = false
+				
+				if originalImage.readpixel(i,j-1) &gt; grayLimit
+					hasU = true
+					neigh:+1
+				endif
+				
+				if originalImage.readpixel(i,j+1) &gt; grayLimit
+					hasD = true
+					neigh:+1
+				endif
+				
+				if originalImage.readpixel(i-1,j) &gt; grayLimit
+					hasL = true
+					neigh:+1
+				endif
+				
+				if originalImage.readpixel(i+1,j) &gt; grayLimit
+					hasR = true
+					neigh:+1
+				endif
+
+				'We want the normal to point away from neighbour pixels
+				if(neigh=0)
+					v.x=0; v.y=0; 'no normal
+				else if neigh=1 'has 1 neighbour, normal is minus vec to neighbour
+					if(hasL) v = vecR
+					if(hasR) v = vecL
+					if(hasU) v = vecD
+					if(hasD) v = vecU
+				else if neigh=2
+					if     (hasD and hasU) 
+						v = vecZero
+					else if(hasL and hasR)
+						v = vecZero
+					else if(hasD and hasR) 
+						v = vecUL
+					else if(hasD and hasL)
+						v = vecUR
+					else if(hasU and hasR)
+						v = vecDL
+					else if(hasU and hasL)
+						v = vecDR
+					else 'has U and D or L and R
+						local avgx# = hasL + -hasR
+						local avgy# = hasD + -hasU
+						v.x = -avgx; v.y = -avgy;
+					endif
+				else if neigh=3 'left||right and up||down
+					' v = the non-heighbour vector
+					v.x = 0; v.y = 0;
+					if(hasL) v.x :+ 1
+					if(hasR) v.x :- 1
+					if(hasU) v.y :+ 1
+					if(hasD) v.y :- 1
+				endif
+				
+				if neigh &gt; 0
+					local length:int = sqr(v.x*v.x+v.y*v.y)
+					v.x :/ length
+					v.y :/ length
+				endif
+				
+				normals[i*height+j] = v	
+			endif
+		next		
+		next
+	end method
+	
+	method _smoothNormals()
+		local i:int
+		local j:int
+		for i=1 until originalImage.width-1
+		for j=1 until originalImage.height-1	
+			if edgemap[i*height+j]
+				local current_norm:vec2 = normals[i*height+j]
+				local u_norm:vec2 = normals[i*height+(j-1)]
+				local d_norm:vec2 = normals[i*height+(j+1)]
+				local l_norm:vec2 = normals[(i-1)*height+j]
+				local r_norm:vec2 = normals[(i+1)*height+j]
+				
+				local ul_norm:vec2 = normals[(i-1)*height+(j-1)]
+				local ur_norm:vec2 = normals[(i+1)*height+(j-1)]
+				local dl_norm:vec2 = normals[(i-1)*height+(j+1)]
+				local dr_norm:vec2 = normals[(i+1)*height+(j+1)]
+				
+				local count:int = 1
+				local avgx#=0
+				local avgy#=0
+				avgx :+ current_norm.x; avgy :+ current_norm.y
+				if(edgemap[i*height+(j-1)])
+					avgx :+ u_norm.x; avgy :+ u_norm.y
+					count :+1
+				endif
+				
+				if(edgemap[i*height+(j+1)])
+					avgx :+ d_norm.x; avgy :+ d_norm.y
+					count :+1
+				endif
+				
+				if(edgemap[(i-1)*height+j])
+					avgx :+ l_norm.x; avgy :+ l_norm.y
+					count :+1
+				endif
+				
+				if(edgemap[(i+1)*height+j])
+					avgx :+ r_norm.x; avgy :+ r_norm.y
+					count :+1
+				endif
+				
+				'Up+Left or right
+				if(edgemap[(i-1)*height+(j-1)])
+					avgx :+ ul_norm.x; avgy :+ ul_norm.y
+					count :+1
+				endif
+				
+				if(edgemap[(i+1)*height+(j-1)])
+					avgx :+ ur_norm.x; avgy :+ ur_norm.y
+					count :+1
+				endif
+				'Down+left or right
+				if(edgemap[(i-1)*height+(j+1)])
+					avgx :+ dl_norm.x; avgy :+ dl_norm.y
+					count :+1
+				endif
+				
+				if(edgemap[(i+1)*height+(j+1)])
+					avgx :+ dr_norm.x; avgy :+ dr_norm.y
+					count :+1
+				endif
+				
+				avgx :/ count
+				avgy :/ count
+				
+				
+				smoothedNormals[i*height+j] = vec2.create(avgx,avgy)
+			
+			endif
+		next
+		next	
+	end method
+end type
+
+
+type vec2
+	field x#,y#
+	
+	function create:vec2(x#,y#)
+		local tmp:vec2 = new vec2
+		tmp.x = x; tmp.y = y
+		return tmp
+	end function 
+	
+end type
+
+function unpackARGB(argb:int, a% var, r% var, g% var, b% var)
+	a = argb shr 24 &amp; $ff
+	r = (argb shr 16) &amp; $ff
+	g = (argb shr 8) &amp; $ff
+	b = argb &amp; $ff
+end function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >TWH</td><td align="right"><font class=tiny>2010</font></td></tr></table></td></tr><tr ><td class="posttext"> An example of how to use it:<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+superstrict
+
+include "tpixmapnormals.bmx"
+
+graphics 800,600,0,0,2
+
+local pixmap:TPixmap = loadpixmap("bitmap.bmp")
+
+
+
+local imgNorm:TimageNormals= new TimageNormals
+
+local perfTim1:int = millisecs()
+local iters:int = 5
+local i:int 
+for i=0 until iters
+imgNorm.findEdges(pixmap)
+next
+local perfTim2:int = millisecs()
+print "millisecs used finding normals:"+(perfTim2-perfTim1)/iters
+
+while not keyhit(KEY_ESCAPE)
+	cls
+	
+	drawpixmap(pixmap,0,0)
+	
+	'Draw edges and normals
+	local i:int
+	local j:int
+	local scale# = 2;
+	for i=1 until pixmap.width
+	for j=1 until pixmap.height
+		
+		'draw edge pixels. warning: normals are null at non-edge pixels. So, check if pixel
+		'exists in edgemap before reading smoothedNormals[]
+		if imgNorm.edgemap[i*pixmap.height+j]
+			local scx# = i*scale + pixmap.width 
+			local scy# = j*scale
+			setcolor 255,255,255
+			drawrect scx,scy,scale,scale
+			local vx# = imgNorm.smoothedNormals[i*pixmap.height+j].x*(scale*2)
+			local vy# = imgNorm.smoothedNormals[i*pixmap.height+j].y*(scale*2)
+
+			local pixcenterx# = scx+scale*.5
+			local pixcentery# = scy+scale*.5
+			setcolor 0,255,0
+			drawline pixcenterx,pixcentery, pixcenterx-vx,pixcentery-vy
+		endif
+	next
+	next
+	
+	flip
+wend
+
+</textarea> <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

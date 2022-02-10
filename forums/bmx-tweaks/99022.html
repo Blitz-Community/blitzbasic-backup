@@ -1,0 +1,400 @@
+<!DOCTYPE html><html lang="en" ><head ><title >FreeProcess: process window can be foreground</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >FreeProcess: process window can be foreground</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=110" >BlitzMax Module Tweaks</a>/<a href="#bottom" >FreeProcess: process window can be foreground</a><br><br>
+<a name="1160573"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> You may have experienced problems with a launch process not being able to grab the window focus.  This fix will fix it so all processes your application launches can self-activate their main window.<br><br>You only need to edit the freeprocess.c file.<br><br>1.  Add this code somewhere near the top of the file:<br><pre class=code>#ifdef _WIN32
+extern BOOL WINAPI AllowSetForegroundWindow(DWORD dwProcessId);
+#endif</pre><br><br>2.  Find this line of code:<br><pre class=code>	int pflags=CREATE_NEW_PROCESS_GROUP;</pre><br>And change it to this:<br><pre class=code>	int pflags=CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED;</pre><br><br>3.  Find this line of code:<br><pre class=code>CloseHandle( pi-&gt;hThread );</pre><br>And replace it with this:<br><pre class=code>//------------------------------------------
+	AllowSetForegroundWindow(-1);
+	ResumeThread(pi-&gt;hThread);	
+//------------------------------------------
+	
+	CloseHandle( pi-&gt;hThread );</pre><br><br>That's it!  Here's the whole code:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">// freeprocess.c
+
+#include &lt;brl.mod/blitz.mod/blitz.h&gt;
+#include &lt;stdio.h&gt;
+
+//------------------------------------------
+#ifdef _WIN32
+extern BOOL WINAPI AllowSetForegroundWindow(DWORD dwProcessId);
+#endif
+//------------------------------------------
+
+#define HIDECONSOLE 1
+
+#if __APPLE__ || __linux
+
+#include &lt;sys/ioctl.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;sys/wait.h&gt;
+
+int fdClose(int fd) {return close(fd);}
+int fdRead(int fd,char *buffer,int count) {return read(fd,buffer,count);}
+int fdWrite(int fd,char *buffer,int count) {return write(fd,buffer,count);}
+int fdAvail(int fd) {int avail;if (ioctl(fd,FIONREAD,&amp;avail)) avail=avail;return avail;}
+int fdFlush(int fd) {}//flush(fd);}
+
+///return 1 for running, 0 for finished
+//
+int fdProcessStatus( int pid ){
+
+	int status=0;
+	return !waitpid( pid,&amp;status,WNOHANG );
+}
+
+//returns 0 for success, -1 for error
+//
+int fdTerminateProcess(int pid){
+
+	if( !killpg( pid,SIGTERM ) ){
+		int status=0;
+		waitpid( pid,&amp;status,0 );
+		return 0;
+	}
+	return -1;
+}
+
+static char **makeargv( const char *cmd ){
+	int n,c;
+	char *p;
+	static char *args,**argv;
+	
+	if( args ) free( args );
+	if( argv ) free( argv );
+	args=(char*)malloc( strlen(cmd)+1 );
+	strcpy( args,cmd );
+	
+	n=0;
+	p=args;
+	while( c=*p++ ){
+		if( c==' ' ){
+			continue;
+		}else if( c=='\"' ){
+			while( *p &amp;&amp; *p!='\"' ) ++p;
+		}else{
+			while( *p &amp;&amp; *p!=' ' ) ++p;
+		}
+		if( *p ) ++p;
+		++n;
+	}
+	argv=(char**)malloc( (n+1)*sizeof(char*) );
+	n=0;
+	p=args;
+	while( c=*p++ ){
+		if( c==' ' ){
+			continue;
+		}else if( c=='\"' ){
+			argv[n]=p;
+			while( *p &amp;&amp; *p!='\"' ) ++p;
+		}else{
+			argv[n]=p-1;
+			while( *p &amp;&amp; *p!=' ' ) ++p;
+		}
+		if( *p ) *p++=0;
+		++n;
+	}
+	argv[n]=0;
+	return argv;
+}
+
+#define PIPEREAD 0
+#define PIPEWRITE 1
+
+static int in[2],out[2],errfd[2];
+
+int fdProcess( BBString *bbcmd,int *procin,int *procout,int *procerr,int flags)
+{
+	char 	*const*argv;
+	int   	procid;
+	
+	const char *cmd=bbTmpUTF8String(bbcmd);
+	
+	//Set-up interprocess communication
+	if (pipe(in)) return 0;
+  	if (pipe(out)) return 0;
+  	if (pipe(errfd)) return 0;
+	
+	//Fork process (returned value used to distinguish between child and parent process)
+	procid=vfork();	//vfork() avoids memory overhead of fork()
+	
+	//Child process
+	if (procid==0)
+	{
+		#if __linux
+			setsid(); //Linux doesn't mind setsid()
+		#else
+			setpgid(0,0);	//but OS X doesn't like it, therefore resort to using setpgid().
+		#endif
+		
+		dup2(out[PIPEREAD],STDIN_FILENO);
+		close(out[PIPEWRITE]);
+		
+		dup2(in[PIPEWRITE],STDOUT_FILENO);
+		close(in[PIPEREAD]);
+		
+		dup2(errfd[PIPEWRITE],STDERR_FILENO);		
+		close(errfd[PIPEREAD]);
+		
+		argv=makeargv(cmd);
+		execvp(argv[0],argv);
+		
+		_exit( -1 );
+		
+		return 0;	//Supposedly, we need this for some compilers.
+		
+	}
+	
+	//Parent process
+	
+	if(procid==-1) return 0;	//Return if child process couldn't be started.
+	
+	close(out[PIPEREAD]);		//Close the end of the pipes in that the child
+	close(in[PIPEWRITE]);		//process is using.
+	close(errfd[PIPEWRITE]);
+	
+	*procin=in[PIPEREAD];		//And return the end of the pipes that we should
+	*procout=out[PIPEWRITE];	//be using.
+	*procerr=errfd[PIPEREAD];
+	
+	return procid;
+}
+
+#endif
+
+#ifdef _WIN32
+
+extern int _bbusew;
+
+#define WIN32_LEAN_AND_MEAN
+#include &lt;windows.h&gt;
+#include &lt;tlhelp32.h&gt;
+
+int TerminateProcessGroup(HANDLE prochandle,int procid)
+{
+	HANDLE snapshot,child;
+	PROCESSENTRY32 procinfo;
+	int gotinfo,res;
+
+	snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
+	if (snapshot!=INVALID_HANDLE_VALUE)
+	{
+		procinfo.dwSize=sizeof(procinfo);
+		gotinfo=Process32First(snapshot,&amp;procinfo);
+		while (gotinfo)
+		{
+			if (procinfo.th32ParentProcessID==procid)
+			{
+//				printf("process=%x parent=%x module=%x path=%s\n",procinfo.th32ProcessID,procinfo.th32ParentProcessID,procinfo.th32ModuleID,procinfo.szExeFile);
+				child=OpenProcess(PROCESS_ALL_ACCESS,0,procinfo.th32ProcessID);
+				if (child)
+				{
+					res=TerminateProcess(child,-1);
+					CloseHandle(child);
+				}
+			}
+			gotinfo=Process32Next(snapshot,&amp;procinfo);
+		}
+		CloseHandle(snapshot);
+	}
+	res=TerminateProcess(prochandle,-1);
+	return res;
+}
+
+int fdClose(int fd)
+{
+	return CloseHandle((HANDLE)fd);
+}
+
+int fdRead(int fd,char *buffer,int bytes)
+{
+	int		res; 
+	long	count;
+	res=ReadFile((HANDLE)fd,buffer,bytes,&amp;count,0);
+	if (res) return count;
+	return 0;
+}
+
+int fdWrite(int fd,char *buffer,int bytes)
+{
+	int		res;
+	long	count;
+	res=WriteFile((HANDLE)fd,buffer,bytes,&amp;count,0);
+	if (res) return count;
+	return 0;
+}
+
+int fdFlush(int fd)
+{
+	int		res;
+	res=FlushFileBuffers((HANDLE)fd);
+	return res;
+}
+
+int fdAvail(int fd) 
+{
+	int		res;
+	long	avail;
+	res=PeekNamedPipe((HANDLE)fd,0,0,0,&amp;avail,0);
+	if (res) return avail;
+	return 0;
+}
+
+//Returns Win32 process handle
+int fdProcessGetHandle(int pid)
+{
+	PROCESS_INFORMATION *pi=(PROCESS_INFORMATION *)pid;
+	return (int)pi-&gt;hProcess;
+}
+
+//returns 1 for running, 0 for finished
+int fdProcessStatus( int pid ){
+
+	PROCESS_INFORMATION *pi=(PROCESS_INFORMATION *)pid;
+	
+	long exitcode;
+	
+	if( GetExitCodeProcess( pi-&gt;hProcess,&amp;exitcode ) ){
+
+		if( exitcode==STILL_ACTIVE ) return 1;
+		
+		CloseHandle( pi-&gt;hProcess );
+		free( pi );
+	}
+	return 0;
+}
+
+//returns 0 for success
+int fdTerminateProcess( int pid ){
+
+	PROCESS_INFORMATION *pi=(PROCESS_INFORMATION *)pid;
+	
+	int res=TerminateProcessGroup( pi-&gt;hProcess,pi-&gt;dwProcessId );
+	
+	CloseHandle( pi-&gt;hProcess );
+	free( pi );
+
+	return res;
+}
+
+DWORD GetMainThreadId(DWORD pId)
+{
+    LPVOID lpThId;
+ 	
+    HANDLE hProcess = OpenProcess(PROCESS_VM_READ, FALSE, pId);
+    if(hProcess == NULL)
+        return NULL;
+ 
+    DWORD tId;
+    if(ReadProcessMemory(hProcess, lpThId, &amp;tId, sizeof(tId), NULL) == FALSE)
+    {
+        CloseHandle(hProcess);
+        return NULL;
+    }
+ 
+    CloseHandle(hProcess);
+ 
+    return tId;
+}
+
+int fdProcess( BBString *cmd,int *procin,int *procout,int *procerr,int flags)
+{
+	int res;
+//------------------------------------------
+	//int pflags=CREATE_NEW_PROCESS_GROUP;
+	int pflags=CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED;
+//------------------------------------------
+	PROCESS_INFORMATION *pi;
+	SECURITY_ATTRIBUTES sa={sizeof(sa),0,1};
+	HANDLE istr,p_ostr;	//our in-stream, process out-stream
+	HANDLE ostr,p_istr;	//our out-stream, process in-stream
+	HANDLE estr,p_estr;			//our errin-stream, process errout-stream
+
+	if( !CreatePipe( &amp;istr,&amp;p_ostr,&amp;sa,0 ) ){
+		//unable to create pipe
+		return 0;
+	}
+
+	if( !CreatePipe( &amp;p_istr,&amp;ostr,&amp;sa,0 ) ){
+		CloseHandle( istr );
+		CloseHandle( p_ostr );
+		//ditto
+		return 0;
+	}
+
+	if (!CreatePipe(&amp;estr,&amp;p_estr,&amp;sa,0)) {
+		CloseHandle( istr );
+		CloseHandle( p_ostr );
+		CloseHandle( ostr );
+		CloseHandle( p_istr );
+		//unable to create pipe
+		return 0;
+	}
+
+	pi=(PROCESS_INFORMATION*)calloc(1,sizeof(PROCESS_INFORMATION));
+	
+	if( _bbusew ){
+		STARTUPINFOW si={sizeof(si)};
+
+		si.dwFlags=STARTF_USESTDHANDLES;
+		si.wShowWindow=SW_HIDE;
+		si.hStdInput=p_istr;
+		si.hStdOutput=p_ostr;
+		si.hStdError=p_estr;
+		if (flags&amp;HIDECONSOLE) {
+			si.dwFlags|=STARTF_USESHOWWINDOW;
+			si.wShowWindow=SW_HIDE;
+		}
+		else {
+			pflags|=DETACHED_PROCESS;
+		}
+		res=CreateProcessW( 0,bbTmpWString(cmd),0,0,-1,pflags,0,0,&amp;si,pi );
+		
+	}else{
+		STARTUPINFO si={sizeof(si)};
+
+		si.dwFlags=STARTF_USESTDHANDLES;
+		si.wShowWindow=SW_HIDE;
+		si.hStdInput=p_istr;
+		si.hStdOutput=p_ostr;
+		si.hStdError=p_estr;
+		if (flags&amp;HIDECONSOLE) {
+			si.dwFlags|=STARTF_USESHOWWINDOW;
+			si.wShowWindow=SW_HIDE;
+		}
+		else {
+			pflags|=DETACHED_PROCESS;
+		}
+		res=CreateProcess( 0,bbTmpCString(cmd),0,0,-1,pflags,0,0,&amp;si,pi );
+	}
+	
+	if( !res ){
+		CloseHandle( istr );
+		CloseHandle( ostr );
+		CloseHandle( estr );
+		CloseHandle( p_istr );
+		CloseHandle( p_ostr );
+		CloseHandle( p_estr );
+		return 0;
+	}
+	
+//------------------------------------------
+	AllowSetForegroundWindow(-1);
+	ResumeThread(pi-&gt;hThread);	
+//------------------------------------------
+	
+	CloseHandle( pi-&gt;hThread );
+	
+	*procin=(int)istr;
+	*procout=(int)ostr;
+	*procerr=(int)estr;
+
+	CloseHandle( p_istr );
+	CloseHandle( p_ostr );
+	CloseHandle( p_estr );
+	
+	return (int)pi;
+}
+
+#endif</textarea> <br><br></td></tr></table><br>
+<a name="1160629"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >xlsior</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Should probably be submitted to a change to the official build? <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

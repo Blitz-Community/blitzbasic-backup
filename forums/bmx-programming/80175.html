@@ -1,0 +1,47 @@
+<!DOCTYPE html><html lang="en" ><head ><title >GC trick</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >GC trick</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >GC trick</a><br><br>
+<a name="901027"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here is the solution to a problem that has plagued me for a long time.  Sometimes you need objects stored in some kind of global list or map because if the user loads the same path twice, you want to return the original object, or a copy of the object.  But if you store it in a global list, the reference count will never reach zero and the object will never be freed without a manual free function.  This allows you to use a global list with automatic deletion.<br><br>With this, GC went from being practically useless to the coolest thing ever.  I eliminated the manual Free() method for almost all my classes.<br><br>It would be better if there was a ChangeRefCount() method in the base object class.  Then you could make adjustments when the object changes, instead of iterating through an enumerator.<br><br><pre class=code>Function RefCount:Int(o:Object)
+	Return Byte Ptr(o)[-4]
+EndFunction
+
+Type Texture
+
+	Global map:TMap=New TMap
+	
+	Field index
+	Field path$
+	
+	Method New()
+		For Local texture:TTExture=EachIn map.values()
+			If RefCount(texture)=1 map.remove(texture.name)
+		Next
+		glgentextures 1,Varptr index
+	EndMethod
+	
+	Method Delete()
+		gldeletetextures 1,Varptr index
+	EndMethod
+	
+	Function Load:TTexture(path$)
+		Local texture:TTexture
+		path=RealPath(path).tolower()
+		texture=TTexture(map.valueforkey(path))
+		If texture Return texture
+		texture=MyLoadTextureRoutine(path)'really load the texture here
+		If Not texture Return Null
+		texture.path=path
+		map.insert texture.path,texture
+		Return texture
+	EndFunction
+
+EndType</pre> <br><br></td></tr></table><br>
+<a name="901081"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >AlexO</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> interesting, so the casting to a byte pointer and subtracting 4 you can gain access to the reference count of that particular object?<br><br>Also, any reason why you 'clean up' in the new() method instead of the delete() method? <br><br></td></tr></table><br>
+<a name="901083"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Brucey</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> I eliminated the manual Free() method <br></div><br>I've never understood why you would ever need one. <br><br></td></tr></table><br>
+<a name="901096"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Look at the above example.  Without the refcount trick, those textures would never get freed.  I have to store textures in a map by path, because otherwise each time a texture is loaded a unique texture would be created that was identical to a lot of others.  You might say the user should only call LoadTexture once, and not store it in a TMap.  Fine.  What about a mesh loading routine that automatically loads textures for a mesh?  Oh wait, now conventional BMX GC completely breaks down.<br><br>You might say that textures should only be loaded once by the mesh loader, and then when a copy of the mesh is made, it just references the original texture.  What about a scene where you load a bunch of entities, say particle emitters, and they each have a user-defined value for the material?  Then you would have ten unique textures that each use the same exact pixel data.  Ten times the memory consumption, and ten times the number of texture switches.<br><br>If I tried cleaning up in the Delete() method, it would never be called, because the cleanup is the only way the Delete method can be called in the first place.  It also makes sense if you think about GPU memory consumption.  What are you worried about?  Too much texture data in VRAM.  When do you need to clear up VRAM?  When a new texture is being created.  Until a new texture is created, no new texture memory will be uploaded, so if some VRAM sits around for a while without getting freed, it's not a big deal.<br><br>Let's say you load a scene.  The scene contains ten meshes that each use the texture "brick.jpg".  The above code will only load the texture the first time.  After that, it will just return the previously loaded texture.  Now you happen to free every one of the meshes that reference the brick texture.  You don't want to clear the whole world, you just free some of the entities.  Next time another texture is created, the brick texture will get freed from memory because it only has one reference, in the texture TMap.<br><br>This kind of management allows you to load and free lots of assets in an environment where memory consumption (on the GPU) is critical, and it is easy to exceed VRAM.  I love it because it is completely automated.<br><br>Again, if a ChangeRefCount() method was available, I could check the textures directly instead of iterating through the whole TMap. <br><br></td></tr></table><br>
+<a name="901115"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >MGE</td><td align="right"><font class=tiny>(Posted 2008)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> When I created my own basic texture handler I found out you need to call GC after setting the resource to null to actually move it out of vram immediately. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

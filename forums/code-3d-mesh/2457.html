@@ -1,0 +1,1028 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Vertex animation</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='MD2-like animation using VertexCoords, language=bb, category=3D Graphics - Mesh'><meta name='author' content='Yasha'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=12>3D Graphics - Mesh</a>/Vertex animation</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2457.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >Vertex animation by Yasha</td><td align="right">2009 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> EDIT 2: If anyone's still watching this - DLL version is available upon request that is (at least on my system) as fast as B3D animation (but not faster).<br><br>Not sure how useful this actually is...<br><br>This basically uses native Blitz commands to play MD2-style vertex morph animations (loaded from custom "MDX" files, but with a little imagination you could easily make it read real MD2s). I had hoped it would provide all the advantages of Blitz3D meshes while retaining the speed of MD2 animation. Sadly that doesn't seem to be the case - since each mesh needs to be a separate surface, most of the same speed hit from using B3Ds is still there. Even so it is usable for smaller numbers of characters. Apart from the speed, it is worth pointing out that since this moves the vertices every frame with VertexCoords, it is possible to cast shadows onto meshes animated in this way. Animations also don't suffer from the limitations of MD2, although if you've converted them from an MD2 file this is obviously irrelevant.<br><br>EDIT: If ported to miniB3D this system is in fact significantly faster than B3D animation.<br><br>See the comments for a couple of short programs to convert MD2 and B3D files to MDX format.<br><br>This demo was designed with the dragon.md2 mesh from the dragon demo in Samples\mak. You can convert it with the MD2 to MDX converter. </td></tr><tr ><td class="cell"><pre class="code">Const MAXFRAMES=100
+Const MAXVERTS=1000
+Const MAXSEQS=10
+
+Global appheight=768
+Global appwidth=1024
+Global appdepth=32
+
+AppTitle "Vertex morph animation";,"Are you sure you want to quit?"
+
+Type MDX
+	Field mesh,surf,verts			;Mesh, surface and texture handles; Total no. vertices
+	Field tex,texname$				;Texture handle, and filename. Add more slots if using more than one texture
+	Field cframe#,frames			;Current frame, total no. frames
+	Field fr.TFrame[MAXFRAMES]		;All frames
+	Field cseq,seqs					;Current anim sequence, total no. sequences
+	Field seq.sequence[MAXSEQS]		;Animation sequences
+	Field speed#,mode,dir			;Animation speed, mode (0=stop,1=loop,2=ping-pong,3=one-shot), direction (mode 2)
+	Field tlen,tt					;Transition length and time (for tweening between sequences)
+End Type
+
+Type TFrame
+	Field vx#[MAXVERTS],vy#[MAXVERTS],vz#[MAXVERTS]		;Position
+	Field nx#[MAXVERTS],ny#[MAXVERTS],nz#[MAXVERTS]		;Normal
+End Type
+
+Type sequence
+	Field start		;First frame
+	Field finish	;Last frame
+	Field speed#	;Default play speed
+End Type
+
+
+SC_FPS=60	;Desired framerate
+rtime=Floor(1000.0/SC_FPS)
+limited=True
+
+Graphics3D appwidth,appheight,appdepth,6
+SetBuffer BackBuffer()
+
+centrecam=CreatePivot()
+PositionEntity centrecam,0,15,0
+camera=CreateCamera(centrecam)
+PositionEntity camera,0,20,-50,1
+
+sun=CreateLight()
+PositionEntity sun,-100,400,0
+PointEntity sun,centrecam
+
+ground=CreateMesh()
+parquet=CreateSurface(ground)
+v1=AddVertex(parquet,-125,0,150):v2=AddVertex(parquet,125,0,150):v3=AddVertex(parquet,125,0,-100)
+AddTriangle(parquet,v1,v2,v3):v2=AddVertex(parquet,-125,0,-100):AddTriangle(parquet,v1,v3,v2)
+EntityColor ground,0,0,255
+block=CreateCube():ScaleMesh block,20,5,20
+
+
+dragon.MDX=LoadMDX("dragon.mdx"):d=dragon\mesh:PositionEntity d,0,17,0:ScaleMDXMesh(dragon,0.5,0.5,0.5)
+dragon\texname="dragon.bmp":dragon\tex=LoadTexture(dragon\texname):EntityTexture d,dragon\tex
+
+
+While Not KeyDown(1)
+	ctime=MilliSecs()
+
+	MoveEntity camera,0,KeyDown(200)-KeyDown(208),KeyDown(30)-KeyDown(44)
+	TurnEntity centrecam,0,KeyDown(203)-KeyDown(205),0
+	MoveEntity centrecam,0,(KeyDown(31)-KeyDown(45))*0.2,0
+	PointEntity camera,centrecam
+	
+	If KeyHit(57) Then AnimateMDX(dragon.MDX,1,0.1,0,0)
+	If KeyHit(28) Then AnimateMDX(dragon.MDX,1,0.1,0,20)	;Tween!
+	If KeyHit(38) Then limited=Not limited					;Turn off frame limit
+	
+	If MilliSecs()-render_time=&gt;1000 Then fps=frames:frames=0:render_time=MilliSecs():Else frames=frames+1
+	
+	UpdateMDX
+	UpdateWorld
+	RenderWorld
+	
+	Text 0,30,"FPS: "+fps
+	Text 0,60,"Current frame: "+dragon\cframe
+	
+	n=rtime-(MilliSecs()-ctime)		;Free spare CPU time
+	Delay n-(limited+1)
+	
+	Flip limited
+Wend
+
+End
+
+
+Function LoadMDX.MDX(fname$)	;Load an MDX file
+	meshbank=CreateBank(FileSize(fname))
+	filein=ReadFile(fname)
+	ReadBytes(meshbank,filein,0,BankSize(meshbank))
+	CloseFile filein
+	
+	scale#=PeekFloat(meshbank,0)
+	sfac#=PeekFloat(meshbank,4)
+	
+	ent.MDX=New MDX
+	ent\mesh=CreateMesh():s=CreateSurface(ent\mesh):ent\surf=s
+	
+	ent\frames=PeekShort(meshbank,8)	;Number of frames
+	fsize=PeekInt(meshbank,10)			;Size of a frame in bytes
+	ent\verts=PeekShort(meshbank,14)	;No. verts
+	ent\seqs=PeekShort(meshbank,28)		;No. anim sequences
+	
+	For v=0 To ent\verts-1		;Store the UVs, don't bother with other data yet
+		vu#=PeekShort(meshbank,34+v*4)/65535.0
+		vv#=PeekShort(meshbank,36+v*4)/65535.0
+		AddVertex(s,0,0,0,vu,vv)
+	Next
+	
+	np=PeekInt(meshbank,16)
+	ts=PeekShort(meshbank,np)		;No. tris
+	For t=0 To ts-1		;Triangle info
+		v0=PeekShort(meshbank,np+2+t*6)
+		v1=PeekShort(meshbank,np+4+t*6)
+		v2=PeekShort(meshbank,np+6+t*6)
+		AddTriangle(s,v0,v1,v2)
+	Next
+	
+	np=PeekInt(meshbank,20):nlen=0		;Texture data offset
+	texnum=PeekByte(meshbank,np)		;Number of textures
+	For t=0 To texnum-1
+		pos=PeekInt(meshbank,np+1+t*4)
+		namelen=PeekShort(meshbank,pos)
+		ent\texname=""					;Add more texture slots if intending to use more than one texture
+		For v=0 To namelen-1
+			ent\texname=ent\texname+Chr(PeekByte(meshbank,pos+2+v))
+		Next
+		If FileType(ent\texname)=1 Then ent\tex=LoadTexture(ent\texname):EntityTexture ent\mesh,ent\tex
+	Next
+	
+	np=PeekInt(meshbank,24)
+	For f=0 To ent\frames-1		;Frame data
+		ent\fr[f]=New TFrame
+		For v=0 To ent\verts-1
+			pos=np+(f*ent\verts+v)*9
+			ent\fr[f]\vx[v]=PeekSShort(meshbank,pos)/sfac
+			ent\fr[f]\vy[v]=PeekSShort(meshbank,pos+2)/sfac
+			ent\fr[f]\vz[v]=PeekSShort(meshbank,pos+4)/sfac
+			ent\fr[f]\nx[v]=PeekSByte(meshbank,pos+6)/127.0
+			ent\fr[f]\ny[v]=PeekSByte(meshbank,pos+7)/127.0
+			ent\fr[f]\nz[v]=PeekSByte(meshbank,pos+8)/127.0
+		Next
+	Next
+	ent\fr[MAXFRAMES]=New TFrame		;Temporary frame (for transition tweening)
+	
+	np=PeekInt(meshbank,30)
+	For sq=0 To ent\seqs-1
+		ent\seq[sq]=New sequence
+		ent\seq[sq]\start=PeekShort(meshbank,np+sq*8)
+		ent\seq[sq]\finish=PeekShort(meshbank,np+sq*8+2)
+		ent\seq[sq]\speed=PeekFloat(meshbank,np+sq*8+4)
+	Next
+	
+	For v=0 To ent\verts-1		;Set up the mesh at frame 0 (entirely optional)
+		VertexCoords s,v,ent\fr[0]\vx[v],ent\fr[0]\vy[v],ent\fr[0]\vz[v]
+		VertexNormal s,v,ent\fr[0]\nx[v],ent\fr[0]\ny[v],ent\fr[0]\nz[v]
+	Next
+	
+	FreeBank meshbank
+	Return ent
+End Function
+
+Function SaveMDX(ent.MDX,fname$)	;Save an MDX to file after changing it
+	meshbank=CreateBank(34)
+	numframes=ent\frames
+	
+	SetMDXFrame(ent,0)
+	scale#=MaxRadius(ent\mesh):sfac#=32765.0/scale	;Prevent rounding errors that might result in changing sign
+	PokeFloat meshbank,0,scale:PokeFloat meshbank,4,sfac
+	
+	s=ent\surf							;Only one surface for now
+	vs=ent\verts
+	PokeShort meshbank,8,numframes		;Number of frames
+	PokeInt meshbank,10,vs*9			;Size of a frame in bytes
+	PokeShort meshbank,28,ent\seqs		;Number of anim sequences (only one, no way to get sequence data from an b3d. Change it later if necessary)
+	
+	PokeShort meshbank,14,vs:ResizeBank meshbank,34+(vs*4)+2
+	
+	For v=0 To vs-1		;Store the UVs, don't bother with other data yet
+		PokeShort meshbank,34+v*4,VertexU(s,v)*65535
+		PokeShort meshbank,36+v*4,VertexV(s,v)*65535
+	Next
+	
+	ts=CountTriangles(s):np=BankSize(meshbank)
+	PokeShort meshbank,np-2,ts:ResizeBank meshbank,np+ts*6
+	PokeInt meshbank,16,np-2	;Offset for triangle data
+	For t=0 To ts-1		;Triangle data
+		PokeShort meshbank,np+t*6,TriangleVertex(s,t,0)
+		PokeShort meshbank,np+2+t*6,TriangleVertex(s,t,1)
+		PokeShort meshbank,np+4+t*6,TriangleVertex(s,t,2)
+	Next
+	FreeEntity mesh
+	
+	pos=BankSize(meshbank):PokeInt meshbank,20,pos	;Offset for texture name
+	texnum=1	;Need to make a couple of changes to the system to manage more textures
+	ResizeBank meshbank,pos+1+texnum*4
+	PokeByte(meshbank,pos,texnum)
+	For t=0 To texnum-1
+		np=BankSize(meshbank):PokeInt meshbank,pos+1+t*4,np
+		ResizeBank meshbank,np+2+Len(ent\texname):PokeShort(meshbank,np,Len(ent\texname))
+		For v=1 To Len(ent\texname)
+			PokeByte(meshbank,np+1+v,Asc(Mid(ent\texname,v,1)))
+		Next
+	Next
+	
+	np=BankSize(meshbank):PokeInt meshbank,24,np	;Offset for frame data
+	ResizeBank meshbank,np+ent\frames*vs*9
+	
+	For f=0 To numframes-1		;Frame data
+		For v=0 To vs-1
+			pos=np+(f*vs+v)*9
+			PokeSShort meshbank,pos,ent\fr[f]\vx[v]*sfac
+			PokeSShort meshbank,pos+2,ent\fr[f]\vy[v]*sfac
+			PokeSShort meshbank,pos+4,ent\fr[f]\vz[v]*sfac
+			PokeSByte meshbank,pos+6,ent\fr[f]\nx[v]*127
+			PokeSByte meshbank,pos+7,ent\fr[f]\ny[v]*127
+			PokeSByte meshbank,pos+8,ent\fr[f]\nz[v]*127
+		Next
+	Next
+	
+	np=BankSize(meshbank):PokeInt meshbank,30,np	;Offset for sequence data
+	ResizeBank meshbank,np+8*ent\seqs
+	For s=0 To ent\seqs
+		PokeShort meshbank,np+8*ent\seqs,ent\seq[s]\start:PokeShort meshbank,np+2+8*ent\seqs,ent\seq[s]\finish
+		PokeFloat meshbank,np+4+8*ent\seqs,ent\seq[s]\speed		;Call it one long animseq because I don't know if/how B3D stores those
+	Next
+	
+	fileout=WriteFile(mdxfile)
+	WriteBytes(meshbank,fileout,0,BankSize(meshbank))
+	CloseFile fileout
+	FreeBank meshbank
+End Function
+
+Function AnimateMDX(ent.MDX,mode=1,speed#=1,seq=0,tlen=0)	;Animate an MDX
+	ent\mode=mode
+	ent\speed=speed
+	ent\cseq=seq
+	ent\dir=Sgn(ent\speed)
+	If ent\dir=1
+		ent\cframe=ent\seq[seq]\start
+	Else
+		ent\cframe=ent\seq[seq]\finish
+	EndIf
+	ent\tlen=tlen
+	If tlen
+		For v=0 To ent\verts-1
+			ent\fr[MAXFRAMES]\vx[v]=VertexX(ent\surf,v):ent\fr[MAXFRAMES]\vy[v]=VertexY(ent\surf,v):ent\fr[MAXFRAMES]\vz[v]=VertexZ(ent\surf,v)
+			ent\fr[MAXFRAMES]\nx[v]=VertexNX(ent\surf,v):ent\fr[MAXFRAMES]\ny[v]=VertexNY(ent\surf,v):ent\fr[MAXFRAMES]\nz[v]=VertexNZ(ent\surf,v)
+		Next
+		ent\tt=0
+	EndIf
+End Function
+
+Function MDXAnimTime#(ent.MDX)		;Return the current point of the animation as a float, like MD2AnimTime
+	If ent\tlen Then Return -1
+	Return ent\cframe
+End Function
+
+Function MDXAnimLength(ent.MDX,seq=-1)		;Total number of frames held in the MDX, or in the specified sequence
+	If seq&lt;0 Or seq&gt;ent\seqs-1
+		Return ent\frames
+	Else
+		Return ent\seq[seq]\finish-ent\seq[seq]\start
+	EndIf
+End Function
+
+Function MDXAnimating(ent.MDX)		;Return true if MDX is currently animating
+	If ent\mode&gt;0 Then Return True:Else Return False
+End Function
+
+Function SetMDXFrame(ent.MDX,frame#)	;Manually set animation to a specific point (stops animation)
+	ent\mode=0
+	ent\cframe=frame
+	For v=0 To ent\verts
+		VertexCoords ent\surf,v,ent\fr[frame]\vx[v],ent\fr[frame]\vy[v],ent\fr[frame]\vz[v]
+		VertexNormal ent\surf,v,ent\fr[frame]\nx[v],ent\fr[frame]\ny[v],ent\fr[frame]\nz[v]
+	Next
+End Function
+
+Function AddMDXSeq(ent.MDX,fframe,lframe,speed#=1)	;Define an MDX sequence by first and last frames
+	ent\seq[ent\seqs]\start=fframe
+	ent\seq[ent\seqs]\finish=lframe
+	ent\seq[ent\seqs]\speed=speed
+	ent\seqs=ent\seqs+1
+End Function
+
+Function GetMDXSeq(ent.MDX)		;Return which sequence the MDX is currently playing
+	Return ent\cseq
+End Function
+
+Function UpdateMDX(updatespeed#=1.0)	;Use this instead of/in addition to UpdateWorld, as that obviously doesn't control MDX animation
+	For ent.MDX=Each MDX
+		animspeed#=ent\seq[ent\cseq]\speed*ent\speed*updatespeed
+		If ent\mode
+			If Not ent\tlen
+				If ent\mode=2	;Ping-pong
+					If animspeed&lt;0 Then animspeed=-animspeed:ent\dir=-ent\dir	;Just reverse the direction, simpler
+					ent\cframe=ent\cframe+animspeed*ent\dir
+					If ent\cframe&gt;=ent\seq[ent\cseq]\finish-1 Then ent\dir=-1:ent\cframe=ent\seq[ent\cseq]\finish-1
+					If ent\cframe&lt;=ent\seq[ent\cseq]\start Then ent\dir=1:ent\cframe=ent\seq[ent\cseq]\start
+					
+					If ent\dir=1
+						frame1=Floor(ent\cframe):frame2=frame1+1:frametween#=ent\cframe-frame1
+					Else
+						frame1=Ceil(ent\cframe):frame2=frame1-1:frametween#=frame1-ent\cframe
+					EndIf
+				Else	;Linear
+					ent\cframe=ent\cframe+animspeed
+					If ent\dir=1	;Going forwards
+						If ent\cframe&gt;=ent\seq[ent\cseq]\finish Then ent\cframe=ent\seq[ent\cseq]\start:If ent\mode=3 Then ent\mode=0
+						frame1=Floor(ent\cframe)
+						If frame1&lt;ent\seq[ent\cseq]\finish-1 Then frame2=frame1+1:Else frame2=ent\seq[ent\cseq]\start
+						frametween#=ent\cframe-frame1
+					Else	;Going backwards
+						If ent\cframe&lt;ent\seq[ent\cseq]\start
+							ent\cframe=ent\seq[ent\cseq]\finish-(ent\seq[ent\cseq]\start-ent\cframe)
+							If ent\mode=3 Then ent\mode=0
+						EndIf
+						frame2=Floor(ent\cframe)
+						If frame2&lt;ent\seq[ent\cseq]\finish-1 Then frame1=frame2+1:Else frame1=ent\seq[ent\cseq]\start
+						frametween#=1-(ent\cframe-frame2)
+					EndIf
+				EndIf
+			Else	;Tween to next sequence
+				frame1=MAXFRAMES
+				frame2=ent\seq[ent\cseq]\start
+				ent\tt=ent\tt+1
+				frametween#=Float(ent\tt)/ent\tlen
+				If ent\tt&gt;=ent\tlen Then ent\tlen=0:ent\tt=0
+			EndIf
+			
+			f1.TFrame=ent\fr[frame1]:f2.TFrame=ent\fr[frame2]	;When repeatedly accessing type fields, keep the path simple - faster
+			For v=0 To ent\verts-1
+				vx#=(f1\vx[v]*(1-frametween))+(f2\vx[v]*frametween)
+				vy#=(f1\vy[v]*(1-frametween))+(f2\vy[v]*frametween)
+				vz#=(f1\vz[v]*(1-frametween))+(f2\vz[v]*frametween)
+				nx#=(f1\nx[v]*(1-frametween))+(f2\nx[v]*frametween)
+				ny#=(f1\ny[v]*(1-frametween))+(f2\ny[v]*frametween)
+				nz#=(f1\nz[v]*(1-frametween))+(f2\nz[v]*frametween)
+				VertexCoords ent\surf,v,vx,vy,vz
+				VertexNormal ent\surf,v,nx,ny,nz
+			Next
+		EndIf
+	Next
+End Function
+
+Function ScaleMDXMesh(ent.MDX,xs#,ys#,zs#)	;ScaleMesh won't work, because the VertexCoords change every frame. Slow!
+	For f=0 To ent\frames-1
+		For v=0 To ent\verts-1
+			ent\fr[f]\vx[v]=ent\fr[f]\vx[v]*xs
+			ent\fr[f]\vy[v]=ent\fr[f]\vy[v]*ys
+			ent\fr[f]\vz[v]=ent\fr[f]\vz[v]*zs
+		Next
+	Next
+	frame=Floor(ent\cframe)
+	For v=0 To ent\verts
+		VertexCoords ent\surf,v,ent\fr[frame]\vx[v],ent\fr[frame]\vy[v],ent\fr[frame]\vz[v]
+		VertexNormal ent\surf,v,ent\fr[frame]\nx[v],ent\fr[frame]\ny[v],ent\fr[frame]\nz[v]
+	Next
+End Function
+
+Function CopyMDX.MDX(ent.MDX,newtex=False)
+	ent2.MDX=New MDX
+	ent2\mesh=CopyMesh(ent\mesh)	;Have to use CopyMesh as CopyEntity would use old mesh data
+	ent2\surf=GetSurface(ent2\mesh,1):ent2\verts=CountVertices(ent2\surf)	;Change this if multisurface or multimesh MDX desired
+	ent2\texname=ent\texname
+	If newtex=True Then ent2\tex=LoadTexture(ent2\texname):Else ent2\tex=ent\tex	;Can share the texture. Remember not to free it in that case!
+	EntityTexture ent2\mesh,ent2\tex
+	ent2\frames=ent\frames
+	For f=0 To ent2\frames-1
+		ent2\fr[f]=New TFrame
+		For v=0 To ent2\verts-1
+			ent2\fr[f]\vx[v]=ent\fr[f]\vx[v]
+			ent2\fr[f]\vy[v]=ent\fr[f]\vy[v]
+			ent2\fr[f]\vz[v]=ent\fr[f]\vz[v]
+		Next
+	Next
+	ent2\cseq=ent\cseq:ent2\seqs=ent\seqs
+	For s=0 To ent2\seqs-1
+		ent2\seq[s]=New sequence
+		ent2\seq[s]\start=ent\seq[s]\start
+		ent2\seq[s]\finish=ent\seq[s]\finish
+		ent2\seq[s]\speed=ent\seq[s]\speed
+	Next
+	ent2\cframe=ent2\seq[ent2\cseq]\start
+	Return ent2.MDX
+End Function
+
+Function FreeMDX(ent.MDX,freetex=True)
+	If freetex And ent\tex&lt;&gt;0 Then FreeTexture ent\tex
+	For s=0 To ent\seqs-1
+		Delete ent\seq[s]
+	Next
+	For f=0 To ent\frames-1
+		Delete ent\fr[f]
+	Next
+	FreeEntity ent\mesh
+	Delete ent
+End Function
+
+Function PeekSShort(bank,offset)	;Return a signed short, range -32767,32767
+	s=PeekShort(bank,offset)
+	If s&gt;32767 Then Return s-65535:Else Return s
+End Function
+
+Function PeekSByte(bank,offset)		;Return a signed byte, range -127,127
+	b=PeekByte(bank,offset)
+	If b&gt;127 Then Return b-255:Else Return b
+End Function
+
+Function PokeSShort(bank,offset,value)	;Store a signed Short
+	If value&lt;0 Then value=value+65535
+	PokeShort bank,offset,value
+End Function
+
+Function PokeSByte(bank,offset,value)	;Store a signed Byte
+	If value&lt;0 Then value=value+255
+	PokeByte bank,offset,value
+End Function
+
+Function MaxRadius#(body)		;Get the largest radius of a mesh (ie. distance of furthest vertex)
+	Local r#,cs%,s%,ver%		;Obviously only works on single meshes
+	
+	For cs=1 To CountSurfaces(body)
+		s=GetSurface(body,cs)
+		For ver=0 To CountVertices(s)-1
+			dx#=VertexX(s,ver)
+			dy#=VertexY(s,ver)
+			dz#=VertexZ(s,ver)
+			dd#=Sqr(dx*dx+dy*dy+dz*dz)
+			If r&lt;dd Then r=dd
+		Next
+	Next
+	
+	Return r#
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Yasha</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> Use this program to convert an existing MD2 file to the MDX format used by this system:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Const MAXFRAMES=40
+Const MAXBONES=30
+
+
+md2file$="dragon.md2":mdxfile$="dragon.mdx"
+firstframe=0:lastframe=84
+
+
+Graphics3D 800,600,32,6
+SetBuffer BackBuffer()
+
+Print "Working...":Flip
+
+MD2toMDX(md2file,mdxfile,firstframe,lastframe)
+
+Print "Done!"
+
+WaitKey
+End
+
+
+
+Function ReadMD2Frame(fname$,frame)		;Read an MD2 file and create a correctly welded, UV-mapped mesh of the specified frame
+	md2head=CreateBank(68)
+	md2file=ReadFile(fname)
+	ReadBytes(md2head,md2file,0,68)	;Grab the file header
+	
+	mesh=CreateMesh():s=CreateSurface(mesh)
+	
+	skinw=PeekInt(md2head,8)	;Texture width
+	skinh=PeekInt(md2head,12)	;Texture height
+	fsize=PeekInt(md2head,16)	;Frame size
+	nskin=PeekInt(md2head,20)	;No. textures
+	nvert=PeekInt(md2head,24)	;No. vertices
+	nstuv=PeekInt(md2head,28)	;No. UVs
+	ntris=PeekInt(md2head,32)	;No. tris
+	names=PeekInt(md2head,44)	;Texture names offset
+	cdata=PeekInt(md2head,48)	;UV data offset
+	tdata=PeekInt(md2head,52)	;Tri data offset
+	fdata=PeekInt(md2head,56)	;Frame data offset
+	
+	md2bank=CreateBank(fsize):md2tris=CreateBank(ntris*12):md2stuv=CreateBank(nstuv*4):md2text=CreateBank(64*nskin)
+	SeekFile(md2file,fdata+fsize*frame)		;Start of data for chosen frame
+	ReadBytes(md2bank,md2file,0,fsize)
+	SeekFile(md2file,cdata)					;UV data
+	ReadBytes(md2stuv,md2file,0,nstuv*4)
+	SeekFile(md2file,tdata)					;Triangle data
+	ReadBytes(md2tris,md2file,0,ntris*12)
+	SeekFile(md2file,names)					;Texture data
+	ReadBytes(md2text,md2file,0,64*nskin)
+	CloseFile md2file
+	
+	scalex#=PeekFloat(md2bank,0) :scaley#=PeekFloat(md2bank,4) :scalez#=PeekFloat(md2bank,8)
+	transx#=PeekFloat(md2bank,12):transy#=PeekFloat(md2bank,16):transz#=PeekFloat(md2bank,20)
+	
+	For t=0 To ntris-1
+		For i=0 To 2
+			v=PeekShort(md2tris,t*12+i*2):c=PeekShort(md2tris,t*12+6+i*2)
+			
+			vu#=Float(PeekShort(md2stuv,c*4))/skinw
+			vv#=Float(PeekShort(md2stuv,c*4+2))/skinh
+			vx#=PeekByte(md2bank,40+v*4)*scalex+transx
+			vy#=PeekByte(md2bank,41+v*4)*scaley+transy
+			vz#=PeekByte(md2bank,42+v*4)*scalez+transz
+			
+			verts=CountVertices(s);t*3+i
+			For v=0 To verts-1
+				If VertexX(s,v)=vx And VertexY(s,v)=vy And VertexZ(s,v)=vz And VertexU(s,v)=vu And VertexV(s,v)=vv
+					found=True:Exit
+				EndIf
+			Next
+			If found=False Then v=AddVertex(s,vx,vy,vz,vu,vv)
+			PokeShort(md2tris,t*12+i*2,v):found=False
+		Next
+		
+		AddTriangle(s,PeekShort(md2tris,t*12+4),PeekShort(md2tris,t*12+2),PeekShort(md2tris,t*12))
+	Next
+	
+	RotateMesh mesh,-90,0,0:RotateMesh mesh,0,-90,0		;...And rotated
+	UpdateNormals mesh		;If not using builtin data...
+	
+	For lev=0 To nskin-1
+		For char=0 To 63
+			texname$=texname+Chr(PeekByte(md2text,64*lev+char))
+		Next
+		texname=Trim(texname)
+		texture=LoadTexture(texname)
+		If texture&lt;&gt;0 Then EntityTexture mesh,texture,0,lev
+		texture=0	;Reset for next pass
+	Next
+	
+	FreeBank md2head:FreeBank md2bank:FreeBank md2tris:FreeBank md2stuv:FreeBank md2text
+	
+	Return mesh
+End Function
+
+Function MD2toMDX(md2file$,mdxfile$,firsttframe,lastframe)	;Convert an animated MD2 to MDX
+	meshbank=CreateBank(34)
+	numframes=lastframe-(firstframe-1)
+	
+	mesh=ReadMD2Frame(md2file$,0)
+	scale#=MaxRadius(mesh)
+	For f=1 To numframes-1		;Try 'em all
+		FreeEntity mesh
+		mesh=ReadMD2Frame(md2file,f+firstframe)
+		nscale#=MaxRadius(mesh)
+		If nscale&gt;scale Then scale=nscale
+	Next
+
+	sfac#=32765.0/scale	;Prevent rounding errors that might result in changing sign
+	PokeFloat meshbank,0,scale:PokeFloat meshbank,4,sfac
+	
+	s=GetSurface(mesh,1)				;Only one surface for now
+	vs=CountVertices(s)
+	PokeShort meshbank,8,numframes		;Number of frames
+	PokeInt meshbank,10,vs*9			;Size of a frame in bytes
+	PokeShort meshbank,28,1				;Number of anim sequences (only one, no way to get sequence data from an MD2. Change it later if necessary)
+	
+	PokeShort meshbank,14,vs:ResizeBank meshbank,34+(vs*4)+2
+	
+	For v=0 To vs-1		;Store the UVs, don't bother with other data yet
+		PokeShort meshbank,34+v*4,VertexU(s,v)*65535
+		PokeShort meshbank,36+v*4,VertexV(s,v)*65535
+	Next
+	
+	ts=CountTriangles(s):np=BankSize(meshbank)
+	PokeShort meshbank,np-2,ts:ResizeBank meshbank,np+ts*6
+	PokeInt meshbank,16,np-2	;Offset for triangle data
+	For t=0 To ts-1		;Triangle data
+		PokeShort meshbank,np+t*6,TriangleVertex(s,t,0)
+		PokeShort meshbank,np+2+t*6,TriangleVertex(s,t,1)
+		PokeShort meshbank,np+4+t*6,TriangleVertex(s,t,2)
+	Next
+	FreeEntity mesh
+	
+	md2=ReadFile(md2file)
+	SeekFile(md2,20):texnum=ReadInt(md2)
+	SeekFile(md2,44):SeekFile(md2,ReadInt(md2))
+	pos=BankSize(meshbank):PokeInt meshbank,20,pos	;Offset for texture name
+	ResizeBank meshbank,pos+1+texnum*4
+	PokeByte(meshbank,pos,texnum)
+	For t=0 To texnum-1
+		texname$=""
+		For v=0 To 63
+			texname=texname+Chr(ReadByte(md2))
+		Next
+		texname=Trim(texname)
+		np=BankSize(meshbank):PokeInt meshbank,pos+1+t*4,np
+		ResizeBank meshbank,np+2+Len(texname):PokeShort(meshbank,np,Len(texname))
+		For v=1 To Len(texname)
+			PokeByte(meshbank,np+1+v,Asc(Mid(texname,v,1)))
+		Next
+	Next
+	CloseFile md2
+	
+	np=BankSize(meshbank):PokeInt meshbank,24,np	;Offset for frame data
+	ResizeBank meshbank,np+numframes*vs*9
+	
+	For f=0 To numframes-1		;Frame data
+		mesh=ReadMD2Frame(md2file,f+firstframe):s=GetSurface(mesh,1)
+		For v=0 To vs-1
+			pos=np+(f*vs+v)*9
+			PokeSShort meshbank,pos,VertexX(s,v)*sfac
+			PokeSShort meshbank,pos+2,VertexY(s,v)*sfac
+			PokeSShort meshbank,pos+4,VertexZ(s,v)*sfac
+			PokeSByte meshbank,pos+6,VertexNX(s,v)*127
+			PokeSByte meshbank,pos+7,VertexNY(s,v)*127
+			PokeSByte meshbank,pos+8,VertexNZ(s,v)*127
+		Next
+		FreeEntity mesh
+	Next
+	
+	np=BankSize(meshbank):PokeInt meshbank,30,np	;Offset for sequence data
+	ResizeBank meshbank,np+8
+	PokeShort meshbank,np,0:PokeShort meshbank,np+2,numframes-1
+	PokeFloat meshbank,np+4,1.0		;Again, have to change this elsewhere as MD2 doesn't store this data to rip
+	
+	fileout=WriteFile(mdxfile)
+	WriteBytes(meshbank,fileout,0,BankSize(meshbank))
+	CloseFile fileout
+	FreeBank meshbank
+End Function
+
+Type B3Dfile	;So we don't need to use Globals for the file handling, that's all
+	Field file,b3d_tos
+	Field b3dstack[100]
+End Type
+
+Function MaxRadius#(body)		;Get the largest radius of a mesh (ie. distance of furthest vertex)
+	Local r#,cs%,s%,ver%		;Obviously only works on single meshes
+	
+	For cs=1 To CountSurfaces(body)
+		s=GetSurface(body,cs)
+		For ver=0 To CountVertices(s)-1
+			dx#=VertexX(s,ver)
+			dy#=VertexY(s,ver)
+			dz#=VertexZ(s,ver)
+			dd#=Sqr(dx*dx+dy*dy+dz*dz)
+			If r&lt;dd Then r=dd
+		Next
+	Next
+	
+	Return r#
+End Function
+
+Function PokeSShort(bank,offset,value)	;Store a signed Short
+	If value&lt;0 Then value=value+65535
+	PokeShort bank,offset,value
+End Function
+
+Function PokeSByte(bank,offset,value)	;Store a signed Byte
+	If value&lt;0 Then value=value+255
+	PokeByte bank,offset,value
+End Function
+
+Function PeekSShort(bank,offset)	;Return a signed short, range -32767,32767
+	s=PeekShort(bank,offset)
+	If s&gt;32767 Then Return s-65535:Else Return s
+End Function
+
+Function PeekSByte(bank,offset)		;Return a signed byte, range -127,127
+	b=PeekByte(bank,offset)
+	If b&gt;127 Then Return b-255:Else Return b
+End Function
+</textarea><br><br>And this one converts B3D files to MDX:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+
+Const MAXVERTS=1000
+
+;Used by recursive child search
+Const recursive_resize=1024
+Global recursive_bank=CreateBank(recursive_resize),recursive_size=recursive_resize
+Global recursive_entity,recursive_parent,recursive_id,recursive_start,recursive_total,recursive_offset
+
+Type TBone
+	Field name$,id,ent
+	Field vnum,vid[MAXVERTS],vw#[MAXVERTS]
+	Field x#,y#,z#		;Base position
+End Type
+
+Type Texture
+	Field name$
+End Type
+
+Type TVertex
+	Field ID	;Handle
+	Field boneid[4]
+	Field weight#[4]
+	Field x#[4],y#[4],z#[4]
+End Type
+
+Global skin		;Using a global makes this simpler - need to make a few changes for multisurface/mesh B3Ds though
+Global texnum	;Ditto
+Global varray.TVertex[MAXVERTS]
+For v=0 To MAXVERTS
+	varray[v]=New TVertex
+Next
+	
+b3dfile$="zombie.b3d":mdxfile$="zombie.mdx"
+firstframe=0:lastframe=100
+
+
+Graphics3D 800,600,32,6
+SetBuffer BackBuffer()
+
+Print "Working...":Flip
+
+B3DtoMDX(b3dfile,mdxfile,firstframe,lastframe)
+
+Print "Done!"
+
+WaitKey
+End
+
+
+
+Function B3DtoMDX(b3dfile$,mdxfile$,firstframe,lastframe)	;Convert an animated B3D to MDX
+	meshbank=CreateBank(34)
+	numframes=lastframe-(firstframe-1)
+	
+	ReadB3DFrame(b3dfile$,0)
+	scale#=MaxRadius(skin)
+	For f=1 To numframes-1		;Try 'em all
+		FreeEntity skin
+		ReadB3DFrame(b3dfile,f+firstframe)
+		nscale#=MaxRadius(skin)
+		If nscale&gt;scale Then scale=nscale
+	Next
+	
+	sfac#=32765.0/scale	;Prevent rounding errors that might result in changing sign
+	PokeFloat meshbank,0,scale:PokeFloat meshbank,4,sfac
+	
+	s=GetSurface(skin,1)				;Only one surface for now
+	vs=CountVertices(s)
+	PokeShort meshbank,8,numframes		;Number of frames
+	PokeInt meshbank,10,vs*9			;Size of a frame in bytes
+	PokeShort meshbank,28,1				;Number of anim sequences (only one, no way to get sequence data from an b3d. Change it later if necessary)
+	
+	PokeShort meshbank,14,vs:ResizeBank meshbank,34+(vs*4)+2
+	
+	For v=0 To vs-1		;Store the UVs, don't bother with other data yet
+		PokeShort meshbank,34+v*4,VertexU(s,v)*65535
+		PokeShort meshbank,36+v*4,VertexV(s,v)*65535
+	Next
+	
+	ts=CountTriangles(s):np=BankSize(meshbank)
+	PokeShort meshbank,np-2,ts:ResizeBank meshbank,np+ts*6
+	PokeInt meshbank,16,np-2	;Offset for triangle data
+	For t=0 To ts-1		;Triangle data
+		PokeShort meshbank,np+t*6,TriangleVertex(s,t,0)
+		PokeShort meshbank,np+2+t*6,TriangleVertex(s,t,1)
+		PokeShort meshbank,np+4+t*6,TriangleVertex(s,t,2)
+	Next
+	FreeEntity mesh
+	
+	pos=BankSize(meshbank):PokeInt meshbank,20,pos	;Offset for texture name
+	ResizeBank meshbank,pos+1+texnum*4
+	PokeByte(meshbank,pos,texnum)
+	tex.Texture=First Texture
+	For t=0 To texnum-1
+		tex\name=Trim(tex\name)
+		np=BankSize(meshbank):PokeInt meshbank,pos+1+t*4,np
+		ResizeBank meshbank,np+2+Len(tex\name):PokeShort(meshbank,np,Len(tex\name))
+		For v=1 To Len(tex\name)
+			PokeByte(meshbank,np+1+v,Asc(Mid(tex\name,v,1)))
+		Next
+	Next
+	texnum=0
+	
+	np=BankSize(meshbank):PokeInt meshbank,24,np	;Offset for frame data
+	ResizeBank meshbank,np+numframes*vs*9
+	
+	For f=0 To numframes-1		;Frame data
+		ReadB3DFrame(b3dfile,f+firstframe):s=GetSurface(skin,1)
+		For v=0 To vs-1
+			pos=np+(f*vs+v)*9
+			PokeSShort meshbank,pos,VertexX(s,v)*sfac
+			PokeSShort meshbank,pos+2,VertexY(s,v)*sfac
+			PokeSShort meshbank,pos+4,VertexZ(s,v)*sfac
+			PokeSByte meshbank,pos+6,VertexNX(s,v)*127
+			PokeSByte meshbank,pos+7,VertexNY(s,v)*127
+			PokeSByte meshbank,pos+8,VertexNZ(s,v)*127
+		Next
+		FreeEntity skin
+	Next
+	
+	np=BankSize(meshbank):PokeInt meshbank,30,np	;Offset for sequence data
+	ResizeBank meshbank,np+8
+	PokeShort meshbank,np,0:PokeShort meshbank,np+2,numframes-1
+	PokeFloat meshbank,np+4,1.0		;Call it one long animseq because I don't know if/how B3D stores those
+	
+	Delete Each Texture		;tidying up
+	
+	fileout=WriteFile(mdxfile)
+	WriteBytes(meshbank,fileout,0,BankSize(meshbank))
+	CloseFile fileout
+	FreeBank meshbank
+End Function
+
+Function ReadB3DFrame(fname$,frame)
+	anim1=LoadAnimMesh(fname)
+	b3dfile=ReadFile(fname)
+	bb3d=ReadInt(b3dfile)		;Check for type error here
+	size=ReadInt(b3dfile)-4
+	version=ReadInt(b3dfile)	;Do something with this?
+	b3dbank=CreateBank(size)
+	ReadBytes(b3dbank,b3dfile,0,size)
+	CloseFile b3dfile
+	
+	ReadChunks(b3dbank,0,size)	;Skin is a global because this doesn't return it
+	s=GetSurface(skin,1):nverts=CountVertices(s)
+	
+	For b.TBone=Each TBone
+		b\ent=FindChildEntity(anim1,b\name)			;Get the correct bone handles
+		b\x=EntityX(b\ent):b\y=EntityY(b\ent):b\z=EntityZ(b\ent)
+	Next
+	
+	For v=0 To nverts-1
+		For i=1 To varray[v]\boneid[0]
+			b.TBone=Object.TBone(varray[v]\boneid[i])
+			TFormPoint VertexX(s,v),VertexY(s,v),VertexZ(s,v),0,b\ent
+			varray[v]\x[i]=TFormedX()
+			varray[v]\y[i]=TFormedY()
+			varray[v]\z[i]=TFormedZ()
+		Next
+	Next
+	
+	SetAnimTime anim1,frame
+	
+	For v=0 To nverts-1
+		For n=1 To varray[v]\boneid[0]	;Number of bones attached to vertex
+			b=Object.TBone(varray[v]\boneid[n])
+			TFormPoint varray[v]\x[n],varray[v]\y[n],varray[v]\z[n],b\ent,0
+			varray[v]\x[n]=TFormedX()*varray[v]\weight[n]
+			varray[v]\y[n]=TFormedY()*varray[v]\weight[n]
+			varray[v]\z[n]=TFormedZ()*varray[v]\weight[n]
+		Next
+		vx#=varray[v]\x[1]+varray[v]\x[2]+varray[v]\x[3]+varray[v]\x[4]
+		vy#=varray[v]\y[1]+varray[v]\y[2]+varray[v]\y[3]+varray[v]\y[4]
+		vz#=varray[v]\z[1]+varray[v]\z[2]+varray[v]\z[3]+varray[v]\z[4]
+		VertexCoords s,v,vx,vy,vz
+	Next
+	
+	FreeEntity anim1:FreeBank b3dbank:Delete Each TBone
+	For v=0 To MAXVERTS
+		varray[v]\boneid[0]=0
+	Next
+	;:Delete Each Texture 	;Instead, do it outside the function so we can access the Textures there
+	;Return skin	;...which is a Global
+End Function
+
+Function ReadChunks(b3dbank,ofptr,size,name$="")
+	pos=ofptr
+	While pos&lt;size+ofptr
+		tag$=Chr(PeekByte(b3dbank,pos))+Chr(PeekByte(b3dbank,pos+1))+Chr(PeekByte(b3dbank,pos+2))+Chr(PeekByte(b3dbank,pos+3))
+		chunksize=PeekInt(b3dbank,pos+4)
+		pos=pos+8	;Move it on to the start of the chunk proper
+		
+		cpos=0
+		Select tag
+			Case "TEXS"
+				While cpos&lt;chunksize
+					tex.texture=New texture
+					texnum=texnum+1		;Global for counting the textures. Zero this when done with the file
+					For i=0 To chunksize-1
+						char=PeekByte(b3dbank,pos+cpos+i)
+						If char=0 Then Exit:Else tex\name=tex\name+Chr(char)
+					Next
+					cpos=cpos+Len(tex\name)+29	;Skip the other data...
+				Wend
+				pos=pos+chunksize
+			Case "MESH"
+				pos=ReadChunks(b3dbank,pos+4,chunksize)	;Ignoring brushes for now
+			Case "VRTS"
+				vflags=PeekInt(b3dbank,pos)
+				csets=PeekInt(b3dbank,pos+4):csetsize=PeekInt(b3dbank,pos+8)
+				skin=CreateMesh():s=CreateSurface(skin):cpos=pos+12
+				
+				cstep=4*csets*csetsize+12+(12*(vflags And 1))+(16*(vflags And 2))
+				
+				For v=0 To ((chunksize-12)/cstep)-1
+					cpos=pos+12+v*cstep
+					x#=PeekFloat(b3dbank,cpos)
+					y#=PeekFloat(b3dbank,cpos+4)
+					z#=PeekFloat(b3dbank,cpos+8)
+					cpos=cpos+12
+					AddVertex(s,x,y,z)
+					
+					If vflags And 1
+						nx#=PeekFloat(b3dbank,cpos+v*cstep)
+						ny#=PeekFloat(b3dbank,cpos+4+v*cstep)
+						nz#=PeekFloat(b3dbank,cpos+8+v*cstep)
+						cpos=cpos+12
+						VertexNormal s,v,nx,ny,nz
+					EndIf
+					If vflags And 2 Then cpos=cpos+16	;Vertex colour info goes here, add if required
+					
+					For cs=0 To csets-1
+					For co=1 To csetsize
+						If co=1 Then uv#=PeekFloat(b3dbank,cpos+i*csetsize*4)
+						If co=2 Then vv#=PeekFloat(b3dbank,cpos+i*csetsize*4)		;Ignoring extended coord options for now
+						cpos=cpos+4
+						VertexTexCoords s,v,uv,vv,1,cs
+					Next
+					Next
+				Next
+				
+				pos=pos+chunksize
+			Case "TRIS"
+				;Ignoring brushes...again
+				s=GetSurface(skin,1)	;Add potential for loading multi-skin/mesh models in this area
+				For i=0 To (chunksize-4)/12-1
+					v0=PeekInt(b3dbank,pos+4+i*12)
+					v1=PeekInt(b3dbank,pos+8+i*12)
+					v2=PeekInt(b3dbank,pos+12+i*12)
+					AddTriangle(s,v0,v1,v2)
+				Next
+				pos=pos+chunksize
+			Case "BONE"
+				b.TBone=New TBone
+				b\name=name
+				b\id=Handle(b)
+				b\vnum=chunksize/8
+				
+				For i=0 To b\vnum-1
+					vid=PeekInt(b3dbank,pos+i*8)
+					b\vid[i]=vid
+					varray[vid]\boneid[0]=varray[vid]\boneid[0]+1
+					varray[vid]\boneid[varray[vid]\boneid[0]]=b\id
+					varray[vid]\weight[varray[vid]\boneid[0]]=PeekFloat(b3dbank,pos+i*8+4)
+				Next
+				pos=pos+chunksize
+			Case "NODE"
+				tname$=""
+				For i=0 To chunksize-1
+					char=PeekByte(b3dbank,pos+cpos+i)
+					If char=0 Then Exit:Else tname=tname+Chr(char)
+				Next
+				cpos=cpos+i+41	;Skip position and rotation
+				pos=ReadChunks(b3dbank,pos+cpos,chunksize-cpos,tname)
+			Default
+				pos=pos+chunksize	;Skip over chunks that don't concern us
+		End Select
+	Wend
+	
+	Return pos
+End Function
+
+Function MaxRadius#(body)		;Get the largest radius of a mesh (ie. distance of furthest vertex)
+	Local r#,cs%,s%,ver%		;Obviously only works on single meshes
+	
+	For cs=1 To CountSurfaces(body)
+		s=GetSurface(body,cs)
+		For ver=0 To CountVertices(s)-1
+			dx#=VertexX(s,ver)
+			dy#=VertexY(s,ver)
+			dz#=VertexZ(s,ver)
+			dd#=Sqr(dx*dx+dy*dy+dz*dz)
+			If r&lt;dd Then r=dd
+		Next
+	Next
+	
+	Return r#
+End Function
+
+Function PokeSShort(bank,offset,value)	;Store a signed Short
+	If value&lt;0 Then value=value+65535
+	PokeShort bank,offset,value
+End Function
+
+Function PokeSByte(bank,offset,value)	;Store a signed Byte
+	If value&lt;0 Then value=value+255
+	PokeByte bank,offset,value
+End Function
+
+Function PeekSShort(bank,offset)	;Return a signed short, range -32767,32767
+	s=PeekShort(bank,offset)
+	If s&gt;32767 Then Return s-65535:Else Return s
+End Function
+
+Function PeekSByte(bank,offset)		;Return a signed byte, range -127,127
+	b=PeekByte(bank,offset)
+	If b&gt;127 Then Return b-255:Else Return b
+End Function
+
+
+;Code archives entry #787
+
+;### name   : 1-call recursive child search ###
+;### by     : jonathan pittock (skn3)       ###
+;### contact: skn3@...                 ###
+;### www    : www.acsv.net                  ###
+
+Function findchildentity(entity,name$)
+	name$=Lower$(name$)
+	recursive_parent=entity
+	recursive_start=1
+	recursive_offset=0
+	.recursive_label
+		recursive_total=CountChildren(recursive_parent)
+		For recursive_id=recursive_start To recursive_total
+			recursive_entity=GetChild(recursive_parent,recursive_id)
+			If name$=Lower$(EntityName$(recursive_entity))
+				Return recursive_entity
+			Else
+				If recursive_offset+8 &gt; recursive_size-1
+					ResizeBank(recursive_bank,recursive_size+recursive_resize)
+					recursive_size=recursive_size+recursive_resize
+				End If
+				PokeInt(recursive_bank,recursive_offset,recursive_id+1)
+				PokeInt(recursive_bank,recursive_offset+4,recursive_parent)
+				recursive_offset=recursive_offset+8
+				recursive_start=1
+				recursive_parent=recursive_entity
+				Goto recursive_label
+			End If
+		Next
+		If recursive_offset=0
+			Return 0
+		Else
+			recursive_start=PeekInt(recursive_bank,recursive_offset-8)
+			recursive_parent=PeekInt(recursive_bank,recursive_offset-4)
+			recursive_offset=recursive_offset-8
+			Goto recursive_label
+		End If
+End Function
+</textarea><br><br>I'm well aware that building a whole static mesh anew for each frame is a thoroughly stupid way to get the frame data, but it works, and I don't expect anyone to want to use these in real time!<br><br>With a little tweaking you could use a version of this to convert B3D to MD2, as well, which I imagine would be infinitely more useful. Anyway, I hope this is helpful to someone! <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Beaker</td><td align="right"><font class=tiny>2009</font></td></tr></table></td></tr><tr ><td class="posttext"> You might gain a little speed by saving the mesh back out as a B3D with one bone per vertex, and animation on each bone (debatable, but worth a try). <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

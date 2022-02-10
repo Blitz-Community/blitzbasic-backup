@@ -1,0 +1,1667 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Flawless TextArea Undo</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Flawless TextArea Undo</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=117" >MaxGUI Module</a>/<a href="#bottom" >Flawless TextArea Undo</a><br><br>
+<a name="1069486"></a>
+
+<a name="1069487"></a>
+
+<a name="1069488"></a>
+
+<a name="1069489"></a>
+
+<a name="1069490"></a>
+
+<a name="1069491"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Please give this a good thrashing.  If you find any incorrect behavior, please report it in VERY precise terms.  Tell me exactly what keystrokes I need to produce a problem.<br><br>Even the MaxIDE text editor occasionally gets its undo stack garbled up.  I took a different approach by recording each event that modifies the textarea in an "Action" class.  And for every Action, there is an equal an opposite reaction:  The Action class records the change, and can progress either way for undo/redo functionality.  I think this approach will give perfectly accurate results, but please test it.<br><br>Next up with be code formatting.  I'll try to make the lexer abstracted so that you can easily switch out code for your own languages.<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Import maxgui.drivers
+Import maxgui.proxygadgets
+
+Private
+
+Type TAction
+	
+	Field add:String
+	Field addpos:Int
+	Field addlen:Int
+	Field remove:String
+	Field removepos:Int
+	Field removelen:Int
+	Field beforepos:Int
+	Field beforelen:Int
+	Field afterpos:Int
+	Field afterlen:Int
+	
+	Method Undo(textarea:TGadget)
+		SetTextAreaText textarea,remove,addpos,addlen
+		SelectTextAreaText textarea,beforepos,beforelen
+		EmitEvent CreateEvent(EVENT_GADGETSELECT,textarea,addpos-remove.length)
+	EndMethod
+	
+	Method Redo(textarea:TGadget)
+		SetTextAreaText textarea,add,removepos,removelen
+		SelectTextAreaText textarea,afterpos,afterlen
+		EmitEvent CreateEvent(EVENT_GADGETSELECT,textarea,removepos+add.length)
+	EndMethod
+	
+EndType
+
+Public
+
+Type TCodeArea Extends TProxyGadget
+	
+	Const COLOR_BACKGROUND:Int=0
+	Const COLOR_PLAINTEXT:Int=1
+	Const COLOR_STRING:Int=2
+	Const COLOR_COMMENT:Int=3
+	Const COLOR_KEYWORD:Int=4
+	
+	Global dummywindow:TGadget
+	Global dummytextarea:TGadget
+	
+	Field textarea:TGadget
+	Field keywords:TMap=New TMap
+	Field color:Int[5,3]
+	Field selpos:Int
+	Field sellen:Int
+	Field text:String
+	Field undoposition:Int=-1
+	Field actions:TAction[]
+	
+	Method ClearUndos()
+		actions=Null
+		undoposition=-1
+	EndMethod
+	
+	Method AddAction(action:TAction)
+		undoposition:+1
+		actions=actions[..undoposition+1]
+		actions[undoposition]=action
+	EndMethod
+	
+	Method Cleanup()
+		RemoveHook EmitEventHook,EventHook,Self
+	EndMethod
+	
+	Method ProcessEvent:Int(event:TEvent)
+		Select event.source
+		Case Self,textarea
+			Select event.id
+			
+			Case EVENT_GADGETACTION
+				text=TextAreaText(textarea)
+				selpos=TextAreaCursor(textarea,TEXTAREA_CHARS)
+				sellen=TextAreaSelLen(textarea,TEXTAREA_CHARS)
+				
+			Case EVENT_GADGETSELECT
+				selpos=TextAreaCursor(textarea,TEXTAREA_CHARS)
+				sellen=TextAreaSelLen(textarea,TEXTAREA_CHARS)
+			
+			EndSelect
+		EndSelect
+		Return True
+	EndMethod
+	
+	Method SetFormatColor(r:Int,g:Int,b:Int,element:Int=COLOR_BACKGROUND)
+		color[element,0]=r
+		color[element,1]=g
+		color[element,2]=b
+		Select element
+		Case COLOR_BACKGROUND
+			SetGadgetColor textarea,color[COLOR_BACKGROUND,0],color[COLOR_BACKGROUND,1],color[COLOR_BACKGROUND,2],True
+		Default
+			
+		EndSelect
+	EndMethod
+	
+	Method Activate(command:Int)
+		Local clipboardtext:String
+		
+		Select command
+		Case ACTIVATE_PASTE
+			SetTextAreaText dummytextarea,""
+			GadgetPaste(dummytextarea)
+			ActivateGadget textarea
+			clipboardtext=TextAreaText(dummytextarea)
+			
+			Update()
+			Local action:TAction
+			action=New TAction
+			AddAction action
+			action.add=clipboardtext
+			action.addpos=selpos
+			action.addlen=clipboardtext.length
+			action.beforepos=selpos
+			action.beforelen=sellen
+			action.remove=Mid(text,selpos+1,sellen)
+			action.removepos=selpos
+			action.removelen=sellen
+			action.afterpos=selpos+clipboardtext.length
+			action.afterlen=0
+			action.Redo(textarea)
+			EmitEvent CreateEvent(EVENT_GADGETACTION,Self)
+			
+		Case ACTIVATE_CUT
+			If sellen
+				textarea.activate(ACTIVATE_COPY)
+				Filter(CreateEvent(EVENT_KEYCHAR,textarea,8))
+			EndIf
+		Default
+			textarea.activate(command)
+		EndSelect
+	EndMethod
+	
+	Method CanUndo:Int()
+		If undoposition&gt;-1 Return True		
+	EndMethod
+	
+	Method CanRedo:Int()
+		If undoposition&lt;=actions.length-2 Return True
+	EndMethod
+	
+	Method Undo()
+		Print undoposition+", "+(actions.length-1)
+		If CanUndo()
+			actions[undoposition].Undo(textarea)
+			undoposition:-1
+		EndIf
+	EndMethod
+	
+	Method Redo()
+		If CanRedo()
+			actions[undoposition+1].Redo(textarea)		
+			undoposition:+1
+		EndIf
+	EndMethod
+	
+	Method FormatLine(line:Int)
+		'FormatTextAreaText 
+	EndMethod
+	
+	Method AddKeyword(word:String)
+		keywords.insert(word,word)
+	EndMethod
+	
+	Method ClearKeywords()
+		keywords=New TMap
+	EndMethod
+	
+	Method KeywordExists:Int(word:String)
+		If keywords.valueforkey(word) Return True
+	EndMethod
+	
+	Method Update()
+		selpos=TextAreaCursor(textarea,TEXTAREA_CHARS)
+		sellen=TextAreaSelLen(textarea,TEXTAREA_CHARS)
+		text=TextAreaText(textarea)
+	EndMethod
+	
+	Method Filter:Int(event:TEvent)
+		Local action:TAction
+		
+		Select event.id
+		Case EVENT_KEYDOWN
+			Select event.data
+			Case KEY_UP,KEY_DOWN,KEY_RIGHT,KEY_LEFT
+				Return True
+			EndSelect
+		Case EVENT_KEYCHAR
+			If MODIFIER_COMMAND &amp; event.mods Return False
+			If MODIFIER_OPTION &amp; event.mods Return False
+			Update()
+			Select event.data
+			Case 8
+				action=New TAction
+				AddAction action
+				action.add=""
+				action.addpos=selpos
+				action.addlen=0
+				action.beforepos=selpos
+				action.beforelen=sellen
+				If sellen=0
+					action.afterpos=selpos-1
+					action.afterlen=0
+					action.removelen=1
+					action.removepos=selpos-action.removelen
+					action.remove=Mid(text,1+selpos-action.removelen,action.removelen)
+				Else
+					action.afterpos=selpos
+					action.afterlen=0
+					action.removepos=selpos
+					action.removelen=sellen
+					action.remove=Mid(text,1+selpos,sellen)
+				EndIf
+				action.Redo(textarea)
+				'action.Undo(textarea)
+				EmitEvent CreateEvent(EVENT_GADGETACTION,Self)
+			Default
+				action=New TAction
+				AddAction action
+				action.add=Chr(event.data)
+				action.addpos=selpos
+				action.addlen=1
+				action.beforepos=selpos
+				action.beforelen=sellen
+				action.remove=Mid(text,selpos+1,sellen)
+				action.removepos=selpos
+				action.removelen=sellen
+				action.afterpos=selpos+1
+				action.afterlen=0
+				action.Redo(textarea)
+				EmitEvent CreateEvent(EVENT_GADGETACTION,Self)
+				'action.Undo(textarea)
+			EndSelect
+		EndSelect
+		Return False
+	EndMethod
+	
+	Function Callback:Int(event:TEvent,context:Object)
+		Local codearea:TCodeArea=New TCodeArea
+		codearea=TCodeArea(context)
+		If codearea
+			Return codearea.Filter(event)
+		EndIf
+	EndFunction
+	
+	Function Create:TCodeArea(x:Int,y:Int,width:Int,height:Int,group:TGadget,style:Int=0)
+		Local codearea:TCodeArea=New TCodeArea
+		
+		If Not dummywindow
+			dummywindow=CreateWindow("",0,0,400,300,Null,WINDOW_HIDDEN)
+			dummytextarea=CreateTextArea(0,0,300,200,dummywindow)
+		EndIf
+		codearea.textarea=CreateTextArea(x,y,width,height,group,0)
+		SetGadgetFilter codearea.textarea,Callback,codearea
+		codearea.SetProxy(codearea.textarea)
+		AddHook EmitEventHook,EventHook,codearea
+		Return codearea
+	EndFunction
+	
+	Function EventHook:Object(id:Int,data:Object,context:Object)
+		Local event:TEvent=TEvent(data)
+		Local codearea:TCodeArea
+		
+		If event
+			codearea=TCodeArea(context)
+			If codearea
+				If Not codearea.ProcessEvent(event) Return data'Null
+			EndIf
+		EndIf
+		Return data
+	EndFunction
+	
+EndType
+
+
+' createtextarea.bmx
+Global window:TGadget = CreateWindow( "My Window", 0, 0, 1024, 768,,WINDOW_DEFAULT|WINDOW_CENTER )
+
+Global textarea:TCodeArea = TCodearea.Create( 0, 0, ClientWidth(window), ClientHeight(window), window )
+SetGadgetLayout( textarea, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED )
+
+Local root:TGadget=CreateMenu("Edit",0,WindowMenu(window))
+Local menu:TGadget[6]
+menu[0]=CreateMenu("Undo",0,root,KEY_Z,MODIFIER_COMMAND)
+menu[1]=CreateMenu("Redo",1,root,KEY_Z,MODIFIER_COMMAND|MODIFIER_OPTION)
+CreateMenu("",0,root)
+'DisableMenu menu[0]
+'DisableMenu menu[1]
+menu[2]=CreateMenu("Clear Undos",2,root)
+CreateMenu("",0,root)
+menu[3]=CreateMenu("Cut",3,root,KEY_X,MODIFIER_COMMAND)
+menu[4]=CreateMenu("Copy",4,root,KEY_C,MODIFIER_COMMAND)
+menu[5]=CreateMenu("Paste",5,root,KEY_V,MODIFIER_COMMAND)
+
+UpdateWindowMenu window
+
+SetGadgetText textarea,"I pledge allegience to the flag of the United States of America~nAnd to the republic for which it stands~nOne nation, under God, indivisible~nWith liberty and justice for all."
+
+	'SetGadgetText( textarea, "A TextArea gadget. :-)~n~nOne line...~n...and then another!")
+	'ActivateGadget( textarea )
+
+' Select the entire third (index: 2 [base-0]) line.
+'SelectTextAreaText( textarea, 2, 1, TEXTAREA_LINES )
+
+' Output the properties of the current text selection (should be 1, 1 as set above).
+'Print "TextAreaCursor(): " + TextAreaCursor( textarea, TEXTAREA_LINES )
+'Print "TextAreaSelLen(): " + TextAreaSelLen( textarea, TEXTAREA_LINES )
+
+While WaitEvent()
+	Select EventID()
+		Case EVENT_GADGETACTION
+			If textarea.canundo() EnableMenu menu[0] Else DisableMenu menu[0]
+			If textarea.canredo() EnableMenu menu[1] Else DisableMenu menu[1]
+			UpdateWindowMenu window			
+		Case EVENT_MENUACTION
+			Select EventData()
+			Case 1 textarea.redo()
+			Case 0 textarea.undo()
+			Case 2 textarea.ClearUndos()
+			Case 3 GadgetCut(textarea)
+			Case 4 GadgetCopy(textarea)
+			Case 5 GadgetPaste(textarea)
+			EndSelect
+			Print "MENU ACTION"
+			If textarea.canundo() EnableMenu menu[0] Else DisableMenu menu[0]
+			If textarea.canredo() EnableMenu menu[1] Else DisableMenu menu[1]
+			UpdateWindowMenu window
+		Case EVENT_WINDOWCLOSE
+			End
+		Case EVENT_APPTERMINATE
+			End
+	End Select
+Wend</textarea><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1069505"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here's an updated version that includes syntax highlighting.  The only thing it doesn't handle is multi-line comments:<br><br>CodeArea.bmx:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Import maxgui.drivers
+Import maxgui.proxygadgets
+Import "Lexer.bmx"
+
+Private
+
+Type TAction
+	
+	Field add:String
+	Field addpos:Int
+	Field addlen:Int
+	Field remove:String
+	Field removepos:Int
+	Field removelen:Int
+	Field beforepos:Int
+	Field beforelen:Int
+	Field afterpos:Int
+	Field afterlen:Int
+	
+	Method Undo(textarea:TGadget,lexer:TLexer)
+		Local n:Int
+		
+		SetTextAreaText textarea,remove,addpos,addlen
+		SelectTextAreaText textarea,beforepos,beforelen
+		If lexer
+			For n=TextAreaLine(textarea,beforepos) To TextAreaLine(textarea,beforepos+beforelen)
+				lexer.FormatLine(textarea,n)
+			Next
+		EndIf
+		EmitEvent CreateEvent(EVENT_GADGETSELECT,textarea,addpos-remove.length)
+	EndMethod
+	
+	Method Redo(textarea:TGadget,lexer:TLexer)
+		Local n:Int
+
+		SetTextAreaText textarea,add,removepos,removelen
+		SelectTextAreaText textarea,afterpos,afterlen
+		If lexer
+			For n=TextAreaLine(textarea,afterpos) To TextAreaLine(textarea,afterpos+afterlen)
+				lexer.FormatLine(textarea,n)
+			Next
+		EndIf
+		EmitEvent CreateEvent(EVENT_GADGETSELECT,textarea,removepos+add.length)
+	EndMethod
+	
+EndType
+
+Public
+
+Type TCodeArea Extends TProxyGadget
+	
+	Global dummywindow:TGadget
+	Global dummytextarea:TGadget
+	
+	Field lexer:TLexer=New TLexer
+	Field textarea:TGadget
+	Field selpos:Int
+	Field sellen:Int
+	Field text:String
+	Field undoposition:Int=-1
+	Field actions:TAction[]
+	
+	Method ClearUndos()
+		actions=Null
+		undoposition=-1
+	EndMethod
+	
+	Method AddAction(action:TAction)
+		undoposition:+1
+		actions=actions[..undoposition+1]
+		actions[undoposition]=action
+	EndMethod
+	
+	Method Cleanup()
+		RemoveHook EmitEventHook,EventHook,Self
+	EndMethod
+	
+	Method ProcessEvent:Int(event:TEvent)
+		Select event.source
+		Case Self,textarea
+			Select event.id
+			
+			Case EVENT_GADGETACTION
+				text=TextAreaText(textarea)
+				selpos=TextAreaCursor(textarea,TEXTAREA_CHARS)
+				sellen=TextAreaSelLen(textarea,TEXTAREA_CHARS)
+				
+			Case EVENT_GADGETSELECT
+				selpos=TextAreaCursor(textarea,TEXTAREA_CHARS)
+				sellen=TextAreaSelLen(textarea,TEXTAREA_CHARS)
+			
+			EndSelect
+		EndSelect
+		Return True
+	EndMethod
+	
+	Method SetText(text:String)
+		Local n:Int
+		
+		textarea.SetText(text)
+		For n=0 To TextAreaLen(textarea,TEXTAREA_LINES)
+			lexer.FormatLine(textarea,n)
+		Next
+	EndMethod
+	
+	Method ReplaceText(pos:Int,count:Int,text:String,units:Int)
+		Local n:Int
+		
+		textarea.ReplaceText(pos,count,text,units)
+		If lexer
+			If units=TEXTAREA_CHARS
+				For n=TextAreaLine(textarea,pos) To TextAreaLine(textarea,pos+count)
+					lexer.FormatLine(textarea,n)
+				Next
+			Else
+				For n=pos To pos+count
+					lexer.FormatLine(textarea,n)
+				Next				
+			EndIf
+		EndIf
+	EndMethod	
+	
+	Method Activate(command:Int)
+		Local n:Int
+		Local clipboardtext:String
+		
+		Select command
+		Case ACTIVATE_PASTE
+			SetTextAreaText dummytextarea,""
+			GadgetPaste(dummytextarea)
+			ActivateGadget textarea
+			clipboardtext=TextAreaText(dummytextarea)
+			
+			Update()
+			Local action:TAction
+			action=New TAction
+			AddAction action
+			action.add=clipboardtext
+			action.addpos=selpos
+			action.addlen=clipboardtext.length
+			action.beforepos=selpos
+			action.beforelen=sellen
+			action.remove=Mid(text,selpos+1,sellen)
+			action.removepos=selpos
+			action.removelen=sellen
+			action.afterpos=selpos+clipboardtext.length
+			action.afterlen=0
+			action.Redo(textarea,lexer)
+			EmitEvent CreateEvent(EVENT_GADGETACTION,Self)
+			If lexer
+				For n=TextAreaLine(textarea,action.afterpos) To TextAreaLine(textarea,action.afterpos+action.afterlen)
+					lexer.FormatLine textarea,n
+				Next
+			EndIf
+			
+		Case ACTIVATE_CUT
+			If sellen
+				textarea.activate(ACTIVATE_COPY)
+				Filter(CreateEvent(EVENT_KEYCHAR,textarea,8))
+			EndIf
+		Default
+			textarea.activate(command)
+		EndSelect
+	EndMethod
+	
+	Method CanUndo:Int()
+		If undoposition&gt;-1 Return True		
+	EndMethod
+	
+	Method CanRedo:Int()
+		If undoposition&lt;=actions.length-2 Return True
+	EndMethod
+	
+	Method Undo()
+		Print undoposition+", "+(actions.length-1)
+		If CanUndo()
+			actions[undoposition].Undo(textarea,lexer)
+			undoposition:-1
+		EndIf
+	EndMethod
+	
+	Method Redo()
+		If CanRedo()
+			actions[undoposition+1].Redo(textarea,lexer)		
+			undoposition:+1
+		EndIf
+	EndMethod
+	
+	Method Update()
+		selpos=TextAreaCursor(textarea,TEXTAREA_CHARS)
+		sellen=TextAreaSelLen(textarea,TEXTAREA_CHARS)
+		text=TextAreaText(textarea)
+	EndMethod
+	
+	Method Filter:Int(event:TEvent)
+		Local action:TAction
+		
+		Select event.id
+		Case EVENT_KEYDOWN
+			Select event.data
+			Case KEY_UP,KEY_DOWN,KEY_RIGHT,KEY_LEFT
+				Return True
+			EndSelect
+		Case EVENT_KEYCHAR
+			If MODIFIER_COMMAND &amp; event.mods Return False
+			If MODIFIER_OPTION &amp; event.mods Return False
+			Update()
+			Select event.data
+			Case 8
+				action=New TAction
+				AddAction action
+				action.add=""
+				action.addpos=selpos
+				action.addlen=0
+				action.beforepos=selpos
+				action.beforelen=sellen
+				If sellen=0
+					action.afterpos=selpos-1
+					action.afterlen=0
+					action.removelen=1
+					action.removepos=selpos-action.removelen
+					action.remove=Mid(text,1+selpos-action.removelen,action.removelen)
+				Else
+					action.afterpos=selpos
+					action.afterlen=0
+					action.removepos=selpos
+					action.removelen=sellen
+					action.remove=Mid(text,1+selpos,sellen)
+				EndIf
+				action.Redo(textarea,lexer)
+				'action.Undo(textarea)
+				EmitEvent CreateEvent(EVENT_GADGETACTION,Self)
+			Default
+				action=New TAction
+				AddAction action
+				action.add=Chr(event.data)
+				action.addpos=selpos
+				action.addlen=1
+				action.beforepos=selpos
+				action.beforelen=sellen
+				action.remove=Mid(text,selpos+1,sellen)
+				action.removepos=selpos
+				action.removelen=sellen
+				action.afterpos=selpos+1
+				action.afterlen=0
+				action.Redo(textarea,lexer)
+				EmitEvent CreateEvent(EVENT_GADGETACTION,Self)
+				'action.Undo(textarea)
+			EndSelect
+		EndSelect
+		Return False
+	EndMethod
+	
+	Function Callback:Int(event:TEvent,context:Object)
+		Local codearea:TCodeArea=New TCodeArea
+		codearea=TCodeArea(context)
+		If codearea
+			Return codearea.Filter(event)
+		EndIf
+	EndFunction
+	
+	Function Create:TCodeArea(x:Int,y:Int,width:Int,height:Int,group:TGadget,style:Int=0)
+		Local codearea:TCodeArea=New TCodeArea
+		
+		If Not dummywindow
+			dummywindow=CreateWindow("",0,0,400,300,Null,WINDOW_HIDDEN)
+			dummytextarea=CreateTextArea(0,0,300,200,dummywindow)
+		EndIf
+		codearea.textarea=CreateTextArea(x,y,width,height,group,0)
+		SetGadgetFilter codearea.textarea,Callback,codearea
+		codearea.SetProxy(codearea.textarea)
+		AddHook EmitEventHook,EventHook,codearea
+		Return codearea
+	EndFunction
+	
+	Function EventHook:Object(id:Int,data:Object,context:Object)
+		Local event:TEvent=TEvent(data)
+		Local codearea:TCodeArea
+		
+		If event
+			codearea=TCodeArea(context)
+			If codearea
+				If Not codearea.ProcessEvent(event) Return data'Null
+			EndIf
+		EndIf
+		Return data
+	EndFunction
+	
+EndType
+
+
+' createtextarea.bmx
+Global window:TGadget = CreateWindow( "My Window", 0, 0, 1024, 768,,WINDOW_DEFAULT|WINDOW_CENTER )
+
+Global textarea:TCodeArea = TCodearea.Create( 0, 0, ClientWidth(window), ClientHeight(window), window )
+SetGadgetLayout( textarea, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED, EDGE_ALIGNED )
+
+Local root:TGadget=CreateMenu("Edit",0,WindowMenu(window))
+Local menu:TGadget[6]
+menu[0]=CreateMenu("Undo",0,root,KEY_Z,MODIFIER_COMMAND)
+menu[1]=CreateMenu("Redo",1,root,KEY_Z,MODIFIER_COMMAND|MODIFIER_OPTION)
+CreateMenu("",0,root)
+DisableMenu menu[0]
+DisableMenu menu[1]
+menu[2]=CreateMenu("Clear Undos",2,root)
+CreateMenu("",0,root)
+menu[3]=CreateMenu("Cut",3,root,KEY_X,MODIFIER_COMMAND)
+menu[4]=CreateMenu("Copy",4,root,KEY_C,MODIFIER_COMMAND)
+menu[5]=CreateMenu("Paste",5,root,KEY_V,MODIFIER_COMMAND)
+DisableMenu menu[3]
+DisableMenu menu[4]
+UpdateWindowMenu window
+
+textarea.lexer.AddKeyword("allegience")
+textarea.lexer.AddKeyword("flag")
+
+SetGadgetFont textarea,LoadGuiFont("courier new",10)
+
+SetGadgetText textarea,"I pledge allegience to the flag of the United States of America~nAnd to the republic for which it stands~n~qOne nation~q, under God, indivisible~n//With liberty and justice for all.~n"
+
+
+	'SetGadgetText( textarea, "A TextArea gadget. :-)~n~nOne line...~n...and then another!")
+	'ActivateGadget( textarea )
+
+' Select the entire third (index: 2 [base-0]) line.
+'SelectTextAreaText( textarea, 2, 1, TEXTAREA_LINES )
+
+' Output the properties of the current text selection (should be 1, 1 as set above).
+'Print "TextAreaCursor(): " + TextAreaCursor( textarea, TEXTAREA_LINES )
+'Print "TextAreaSelLen(): " + TextAreaSelLen( textarea, TEXTAREA_LINES )
+
+While WaitEvent()
+	Select EventID()
+		Case EVENT_GADGETSELECT
+			If TextAreaSelLen(textarea)
+				EnableMenu menu[3]
+				EnableMenu menu[4]
+			Else
+				DisableMenu menu[3]
+				DisableMenu menu[4]
+			EndIf
+			UpdateWindowMenu window	
+		Case EVENT_GADGETACTION
+			If TextAreaSelLen(textarea)
+				EnableMenu menu[3]
+				EnableMenu menu[4]
+			Else
+				DisableMenu menu[3]
+				DisableMenu menu[4]
+			EndIf
+			If textarea.canundo() EnableMenu menu[0] Else DisableMenu menu[0]
+			If textarea.canredo() EnableMenu menu[1] Else DisableMenu menu[1]
+			UpdateWindowMenu window			
+		Case EVENT_MENUACTION
+			Select EventData()
+			Case 1 textarea.redo()
+			Case 0 textarea.undo()
+			Case 2 textarea.ClearUndos()
+			Case 3 GadgetCut(textarea)
+			Case 4 GadgetCopy(textarea)
+			Case 5 GadgetPaste(textarea)
+			EndSelect
+			Print "MENU ACTION"
+			If textarea.canundo() EnableMenu menu[0] Else DisableMenu menu[0]
+			If textarea.canredo() EnableMenu menu[1] Else DisableMenu menu[1]
+			UpdateWindowMenu window
+		Case EVENT_WINDOWCLOSE
+			End
+		Case EVENT_APPTERMINATE
+			End
+	End Select
+Wend</textarea><br><br>Lexer.bmx:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Import maxgui.maxgui
+
+Type TLexer
+	
+	Field commenttoken:String="//"
+	Field multilinecommentbegintoken:String="/*"
+	Field multilinecommentendtoken:String="*/"
+	Field stringtoken:String="~q"
+	
+	Const COLOR_BACKGROUND:Int=0
+	Const COLOR_DEFAULT:Int=1
+	Const COLOR_STRING:Int=2
+	Const COLOR_COMMENT:Int=3
+	Const COLOR_KEYWORD:Int=4
+	
+	Field color:Int[5,3]
+	Field keywords:TMap=New TMap
+	
+	Method New()
+		
+		color[COLOR_BACKGROUND,0]=255
+		color[COLOR_BACKGROUND,1]=255
+		color[COLOR_BACKGROUND,2]=255
+		
+		color[COLOR_DEFAULT,0]=0
+		color[COLOR_DEFAULT,1]=0
+		color[COLOR_DEFAULT,2]=0
+
+		color[COLOR_STRING,0]=0
+		color[COLOR_STRING,1]=128
+		color[COLOR_STRING,2]=0
+
+		color[COLOR_COMMENT,0]=128
+		color[COLOR_COMMENT,1]=0
+		color[COLOR_COMMENT,2]=128
+
+		color[COLOR_KEYWORD,0]=0
+		color[COLOR_KEYWORD,1]=0
+		color[COLOR_KEYWORD,2]=255
+		
+	EndMethod
+	
+	Method AddKeyword(word:String)
+		keywords.insert(word,word)
+	EndMethod
+	
+	Method ClearKeywords()
+		keywords.Clear()
+	EndMethod
+	
+	Method KeywordExists:Int(word:String)
+		If keywords.valueforkey(word) Return True
+	EndMethod
+	
+	Method SetFormatColor(r:Int,g:Int,b:Int,element:Int=COLOR_BACKGROUND)
+		color[element,0]=r
+		color[element,1]=g
+		color[element,2]=b
+		Select element
+		Case COLOR_BACKGROUND
+			'SetGadgetColor textarea,color[COLOR_BACKGROUND,0],color[COLOR_BACKGROUND,1],color[COLOR_BACKGROUND,2],True
+		Default
+			
+		EndSelect
+		
+	EndMethod
+	
+	Method FormatLine(textarea:TGadget,line:Int)
+		Local s:String=TextAreaText(textarea,line,1,TEXTAREA_LINES)
+		Local pos:Int,p2:Int
+		Local l:Int
+		Local word:String
+		Local c:String
+		Local stringopen:Int
+		Local n:Int
+		
+		FormatTextAreaText textarea,color[COLOR_DEFAULT,0],color[COLOR_DEFAULT,1],color[COLOR_DEFAULT,2],0,line,1,TEXTAREA_LINES
+		
+		'Remove trailing comments
+		pos=s.Find(commenttoken)
+		If pos&gt;-1
+			l=s.length-pos+1-commenttoken.length
+			s=s[..pos]
+			pos=TextAreaChar(textarea,line)+pos
+			FormatTextAreaText textarea,color[COLOR_COMMENT,0],color[COLOR_COMMENT,1],color[COLOR_COMMENT,2],0,pos,l,TEXTAREA_CHARS
+		EndIf
+		
+		'Remove multiline comments
+		'pos=s.Find(multilinecommentbegintoken)
+		'If pos&gt;-1
+		'	
+		'EndIf
+		
+		'Format strings
+		pos=s.Find(stringtoken)
+		While pos&gt;-1
+			p2=s.Find(stringtoken,pos+1)
+			If p2&gt;-1
+				FormatTextAreaText textarea,color[COLOR_STRING,0],color[COLOR_STRING,1],color[COLOR_STRING,2],0,TextAreaChar(textarea,line)+pos,p2-pos+1,TEXTAREA_CHARS
+				pos=s.Find(stringtoken,p2+1)
+			Else
+				Exit
+			EndIf			
+		Wend
+		
+		'Format keywords
+		For n=0 To s.length-1
+			c=Chr(s[n])
+			Select c.Trim()
+			Case "a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z","A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","0","1","2","3","4","5","6","7","8","9","_"
+				If Not stringopen
+					word:+c
+				EndIf
+			Case stringtoken
+				word=""
+				stringopen=	Not stringopen
+			Default
+				If Not stringopen
+					If word
+						If KeywordExists(word)
+							FormatTextAreaText textarea,color[COLOR_KEYWORD,0],color[COLOR_KEYWORD,1],color[COLOR_KEYWORD,2],0,TextAreaChar(textarea,line)+n-word.length,word.length,TEXTAREA_CHARS	
+						EndIf
+					EndIf
+				EndIf
+				word=""
+			EndSelect
+		Next
+		
+	EndMethod
+	
+EndType</textarea> <br><br></td></tr></table><br>
+<a name="1069556"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >shinkiro1</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Good one.<br>Tested it on Linux with FLTK and GTK and works without any problems.<br><br>I had to smile when you explained your approach, because I have made a similar undo interface in my game editor (I even have a TAction Type ^^) <br><br></td></tr></table><br>
+<a name="1069621"></a>
+
+<a name="1069627"></a>
+
+<a name="1069632"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Here's a new version with everything in one file.  Still no multi-line comments, but I'm getting there:<br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">SuperStrict
+
+Import maxgui.drivers
+Import maxgui.proxygadgets
+
+'Codearea style constants
+Const CODEAREA_SYNTAXHIGHLIGHTING:Int=1
+Const CODEAREA_CANUNDO:Int=2
+Const CODEAREA_CORRECTCASE:Int=4
+Const CODEAREA_READONLY:Int=8
+Const CODEAREA_DEFAULT:Int=CODEAREA_SYNTAXHIGHLIGHTING|CODEAREA_CANUNDO|CODEAREA_CORRECTCASE
+
+'Codearea format constants
+Const CODEAREA_PLAIN:Int=0
+Const CODEAREA_STRING:Int=1
+Const CODEAREA_COMMENT:Int=2
+Const CODEAREA_KEYWORD:Int=3
+Const CODEAREA_PREPROCESSOR:Int=4
+
+'CodeArea language constants
+Const CODEAREA_CPP:Int=0
+Const CODEAREA_LUA:Int=1
+Const CODEAREA_BMX:Int=2
+
+Private
+
+Type TAction
+	
+	Field add:String
+	Field addpos:Int
+	Field addlen:Int
+	Field remove:String
+	Field removepos:Int
+	Field removelen:Int
+	Field beforepos:Int
+	Field beforelen:Int
+	Field afterpos:Int
+	Field afterlen:Int
+	
+	Method Undo(codearea:TCodeArea)
+		Local n:Int
+		
+		SetTextAreaText codearea,remove,addpos,addlen
+		SelectTextAreaText codearea,beforepos,beforelen
+		If (CODEAREA_SYNTAXHIGHLIGHTING &amp; codearea.style)
+			LockTextArea codearea.textarea
+			For n=TextAreaLine(codearea.textarea,beforepos) To TextAreaLine(codearea.textarea,beforepos+beforelen)
+				codearea.FormatLine n
+			Next
+			UnlockTextArea codearea.textarea
+		EndIf
+		EmitEvent CreateEvent(EVENT_GADGETSELECT,codearea,addpos-remove.length)
+	EndMethod
+	
+	Method Redo(codearea:TCodeArea)
+		Local n:Int
+
+		SetTextAreaText codearea,add,removepos,removelen
+		SelectTextAreaText codearea,afterpos,afterlen
+		If (CODEAREA_SYNTAXHIGHLIGHTING &amp; codearea.style)
+			LockTextArea codearea.textarea
+			For n=TextAreaLine(codearea.textarea,afterpos) To TextAreaLine(codearea.textarea,afterpos+afterlen)
+				codearea.FormatLine n
+			Next
+			UnlockTextArea codearea.textarea
+		EndIf
+		EmitEvent CreateEvent(EVENT_GADGETSELECT,codearea,removepos+add.length)
+	EndMethod
+	
+EndType
+
+Type TFormat
+	
+	Field r:Int
+	Field g:Int
+	Field b:Int
+	Field style:Int
+	
+	Function Create:TFormat(r:Int,g:Int,b:Int,style:Int)
+		Local format:TFormat=New TFormat
+		format.r=r
+		format.g=g
+		format.b=b
+		format.style=style
+		Return format
+	EndFunction
+	
+EndType
+
+Public
+
+Type TCodeArea Extends TProxyGadget
+	
+	Global dummywindow:TGadget' used to hold dummy textarea
+	Global dummytextarea:TGadget' used for paste operations
+	Global maxundolevels:Int=0' set to 0 to disable limit
+	
+	Field textarea:TGadget
+	Field selpos:Int
+	Field sellen:Int
+	Field text:String
+	Field undoposition:Int=-1
+	Field actions:TAction[]
+	Field format:TFormat[6]
+	Field lineiscommented:Byte[]
+	Field needsreformat:Int
+	Field locked:Int
+	Field keywords:TMap=New TMap
+	Field token_comment:String="//"
+	Field token_multilinecommentbegin:String="/*"
+	Field token_multilinecommentend:String="*/"
+	Field token_string:String="~q"
+	Field token_string2:String' Lua uses multiple string tokens
+	Field token_preprocessor:String="#"
+	Field multilinecommentstyle:Int
+	
+	Method New()
+		format[CODEAREA_PLAIN]=TFormat.Create(0,0,0,0)
+		format[CODEAREA_STRING]=TFormat.Create(128,0,128,0)
+		format[CODEAREA_COMMENT]=TFormat.Create(0,128,0,0)
+		format[CODEAREA_PREPROCESSOR]=TFormat.Create(128,0,0,0)
+		format[CODEAREA_KEYWORD]=TFormat.Create(0,0,255,0)
+	EndMethod
+	
+	Method Cleanup()
+		RemoveHook EmitEventHook,EventHook,Self
+	EndMethod
+	
+	'---------------------------------------------------------------------------------------------
+	'Syntax highlighting
+	'---------------------------------------------------------------------------------------------	
+	Method SetLanguage(language:Int)
+		Select language
+		
+		Case CODEAREA_CPP
+			token_comment="//"
+			token_multilinecommentbegin="/*"
+			token_multilinecommentend="*/"
+			token_string="~q"
+			token_string=""
+			token_preprocessor="#"			
+			multilinecommentstyle=0
+		
+		Case CODEAREA_LUA
+			token_comment="--"
+			token_multilinecommentbegin="--[["
+			token_multilinecommentend="]]--"
+			token_string="~q"
+			token_string="'"
+			token_preprocessor=""
+			multilinecommentstyle=0
+		
+		Case CODEAREA_BMX
+			token_comment="'"
+			token_multilinecommentbegin="Rem"
+			token_multilinecommentend="EndRem"
+			token_string="~q"
+			token_string=""
+			token_preprocessor="?"
+			multilinecommentstyle=1
+		
+		EndSelect
+	EndMethod
+	
+	Method LockText()
+		locked=True
+		textarea.LockText()
+	EndMethod
+	
+	Method UnlockText()
+		textarea.UnlockText()
+		locked=False
+		If needsreformat FormatAll()
+	EndMethod
+	
+	Method SetFont(font:TGUIFont)
+		Local n:Int
+		
+		format[CODEAREA_PLAIN].style=FontStyle(font)
+		textarea.SetFont(font)
+		FormatAll()
+	EndMethod
+	
+	Method SetTextColor(r:Int,g:Int,b:Int)
+		Local n:Int
+		
+		format[CODEAREA_PLAIN].r=r
+		format[CODEAREA_PLAIN].g=g
+		format[CODEAREA_PLAIN].b=b
+		FormatAll()
+	EndMethod
+	
+	Method AddKeyword(word:String)
+		keywords.insert(word.tolower(),word)
+	EndMethod
+	
+	Method ClearKeywords()
+		keywords.Clear()
+	EndMethod
+	
+	Method KeywordExists:Int(word:String)
+		Local keyword:String
+		keyword=String(keywords.valueforkey(word.tolower()))
+		If keyword
+			If Not (CODEAREA_CORRECTCASE &amp; style)
+				If keyword=word
+					Return True
+				Else
+					Return False
+				EndIf
+			Else
+				Return True
+			EndIf
+		Else
+			Return False
+		EndIf
+	EndMethod
+	
+	Method SetFormat(element:Int,r:Int,g:Int,b:Int,style:Int)
+		format[element]=TFormat.Create(r,g,b,style)
+		FormatAll()
+	EndMethod
+	
+	Method FormatAll()
+		Local n:Int
+		
+		If locked
+			needsreformat=True
+		Else
+			LockTextArea textarea
+			For n=0 To TextAreaLen(textarea,TEXTAREA_LINES)-1
+				FormatLine n
+			Next
+			UnlockTextArea textarea
+			needsreformat=False			
+		EndIf
+	EndMethod
+	
+	Method CharacterIsInString:Int(s:String,c:Int)
+		Local n:Int
+		Local char:String
+		Local stringopen:Int
+		Local string2open:Int
+		
+		For n=0 To c
+			char=Chr(s[n])
+			Select char
+			Case token_string
+				stringopen=Not stringopen
+			Case token_string2
+				If token_string2&lt;&gt;token_string
+					string2open=Not string2open
+				EndIf
+			EndSelect
+		Next
+		If stringopen Return True
+		If string2open Return True
+	EndMethod
+	
+	Method FormatLine(line:Int)
+		Local s:String=TextAreaText(textarea,line,1,TEXTAREA_LINES)
+		Local pos:Int,p2:Int
+		Local l:Int
+		Local word:String
+		Local c:String
+		Local stringopen:Int
+		Local n:Int
+		Local word2:String
+		Local stringreplacement:String
+		
+		If token_string2="" token_string2=token_string
+		
+		FormatTextAreaText textarea,format[CODEAREA_PLAIN].r,format[CODEAREA_PLAIN].g,format[CODEAREA_PLAIN].b,format[CODEAREA_PLAIN].style,line,1,TEXTAREA_LINES
+		
+		'Remove trailing comments
+		pos=-1
+		Repeat
+			pos=s.Find(token_comment,pos+1)
+			If pos&gt;-1
+				If Not CharacterIsInString(s,pos)
+					l=s.length-pos+1-token_comment.length
+					s=s[..pos]
+					pos=TextAreaChar(textarea,line)+pos
+					FormatTextAreaText textarea,format[CODEAREA_COMMENT].r,format[CODEAREA_COMMENT].g,format[CODEAREA_COMMENT].b,format[CODEAREA_COMMENT].style,pos,l,TEXTAREA_CHARS
+					Exit
+				EndIf
+			Else
+				Exit
+			EndIf
+		Forever
+		
+		'Remove multiline comments
+		Rem
+		pos=-1
+		Repeat
+			pos=s.Find(token_multilinecommentbegin,pos+1)
+			If pos&gt;-1
+				If Not CharacterIsInString(s,pos)
+					l=s.length-pos+1-token_multilinecommentbegin.length
+					s=s[..pos]
+					pos=TextAreaChar(textarea,line)+pos
+					FormatTextAreaText textarea,format[CODEAREA_COMMENT].r,format[CODEAREA_COMMENT].g,format[CODEAREA_COMMENT].b,format[CODEAREA_COMMENT].style,pos,l,TEXTAREA_CHARS
+					Exit
+				EndIf
+			Else
+				Exit
+			EndIf
+		Forever
+		EndRem
+		
+		'Format strings
+		pos=s.Find(token_string)
+		While pos&gt;-1
+			p2=s.Find(token_string,pos+1)
+			If p2&gt;-1
+				FormatTextAreaText textarea,format[CODEAREA_STRING].r,format[CODEAREA_STRING].g,format[CODEAREA_STRING].b,format[CODEAREA_STRING].style,TextAreaChar(textarea,line)+pos,p2-pos+1,TEXTAREA_CHARS
+				pos=s.Find(token_string,p2+1)
+			Else
+				Exit
+			EndIf			
+		Wend
+		
+		'Lua uses two string tokens
+		If token_string2&lt;&gt;token_string
+			pos=s.Find(token_string2)
+			While pos&gt;-1
+				p2=s.Find(token_string2,pos+1)
+				If p2&gt;-1
+					FormatTextAreaText textarea,format[CODEAREA_STRING].r,format[CODEAREA_STRING].g,format[CODEAREA_STRING].b,format[CODEAREA_STRING].style,TextAreaChar(textarea,line)+pos,p2-pos+1,TEXTAREA_CHARS
+					pos=s.Find(token_string2,p2+1)
+				Else
+					Exit
+				EndIf			
+			Wend			
+		EndIf
+				
+		'Remove defines
+		If token_preprocessor
+			pos=s.Trim().Find(token_preprocessor)
+			If pos=0
+				pos=s.Find(token_preprocessor)
+				l=s.length-pos+1-token_preprocessor.length
+				s=s[..pos]
+				pos=TextAreaChar(textarea,line)+pos
+				FormatTextAreaText textarea,format[CODEAREA_PREPROCESSOR].r,format[CODEAREA_PREPROCESSOR].g,format[CODEAREA_PREPROCESSOR].b,format[CODEAREA_PREPROCESSOR].style,pos,l,TEXTAREA_CHARS
+			EndIf
+		EndIf
+
+		'Format keywords
+		For n=0 To s.length-1
+			c=Chr(s[n])
+			Select c.Trim()
+			Case "a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z","A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","0","1","2","3","4","5","6","7","8","9","_"
+				If Not stringopen
+					word:+c
+				EndIf
+			Case token_string,token_string2
+				word=""
+				stringopen=	Not stringopen
+			Default
+				If Not stringopen
+					If word
+						If KeywordExists(word)
+							If (CODEAREA_CORRECTCASE &amp; style)
+								word2=String(keywords.valueforkey(word.tolower()))
+								If word&lt;&gt;word2
+									Print word2
+									SetTextAreaText textarea,word2,TextAreaChar(textarea,line)+n-word.length,word.length
+								EndIf
+							EndIf	
+							FormatTextAreaText textarea,format[CODEAREA_KEYWORD].r,format[CODEAREA_KEYWORD].r,format[CODEAREA_KEYWORD].b,format[CODEAREA_KEYWORD].style,TextAreaChar(textarea,line)+n-word.length,word.length,TEXTAREA_CHARS	
+						EndIf
+					EndIf
+				EndIf
+				word=""
+			EndSelect
+		Next
+		
+	EndMethod
+	
+	'---------------------------------------------------------------------------------------------
+	'Undo/redo functionality
+	'---------------------------------------------------------------------------------------------
+	Method ClearUndos()
+		If (CODEAREA_CANUNDO &amp; style)
+			actions=Null
+			undoposition=-1
+		EndIf
+	EndMethod
+	
+	Method AddAction(action:TAction)
+		If (CODEAREA_CANUNDO &amp; style)
+			undoposition:+1
+			actions=actions[..undoposition+1]
+			actions[undoposition]=action
+			If maxundolevels&gt;0
+				If undoposition&gt;maxundolevels
+					undoposition:-1
+					actions=actions[1..]
+				EndIf
+			EndIf
+		EndIf
+	EndMethod
+	
+	Method CanUndo:Int()
+		If (CODEAREA_CANUNDO &amp; style)
+			If undoposition&gt;-1 Return True		
+		EndIf
+	EndMethod
+	
+	Method CanRedo:Int()
+		If (CODEAREA_CANUNDO &amp; style)
+			If undoposition&lt;=actions.length-2 Return True
+		EndIf
+	EndMethod
+	
+	Method Undo()
+		If CanUndo()
+			actions[undoposition].Undo(Self)
+			undoposition:-1
+		EndIf
+	EndMethod
+	
+	Method Redo()
+		If CanRedo()
+			actions[undoposition+1].Redo(Self)		
+			undoposition:+1
+		EndIf
+	EndMethod
+		
+	'---------------------------------------------------------------------------------------------
+	'Event handling
+	'---------------------------------------------------------------------------------------------
+	Method ProcessEvent:Int(event:TEvent)
+		Select event.source
+		Case Self,textarea
+			Select event.id
+			
+			Case EVENT_GADGETACTION
+				text=TextAreaText(textarea)
+				selpos=TextAreaCursor(textarea,TEXTAREA_CHARS)
+				sellen=TextAreaSelLen(textarea,TEXTAREA_CHARS)
+				
+			Case EVENT_GADGETSELECT
+				selpos=TextAreaCursor(textarea,TEXTAREA_CHARS)
+				sellen=TextAreaSelLen(textarea,TEXTAREA_CHARS)
+			
+			EndSelect
+		EndSelect
+		Return True
+	EndMethod
+	
+	Method SetText(text:String)
+		Local n:Int
+		
+		textarea.SetText(text)
+		If (CODEAREA_SYNTAXHIGHLIGHTING &amp; style)
+			LockTextArea textarea
+			For n=0 To TextAreaLen(textarea,TEXTAREA_LINES)
+				FormatLine n
+			Next
+			UnlockTextArea textarea
+		EndIf
+	EndMethod
+	
+	Method ReplaceText(pos:Int,count:Int,text:String,units:Int)
+		Local n:Int
+		
+		textarea.ReplaceText(pos,count,text,units)
+		If (CODEAREA_SYNTAXHIGHLIGHTING &amp; style)
+			LockTextArea textarea
+			If units=TEXTAREA_CHARS
+				For n=TextAreaLine(textarea,pos) To TextAreaLine(textarea,pos+count)
+					FormatLine n
+				Next
+			Else
+				For n=pos To pos+count
+					FormatLine n
+				Next				
+			EndIf
+			UnlockTextArea textarea
+		EndIf
+	EndMethod	
+	
+	Method Activate(command:Int)
+		Local n:Int
+		Local clipboardtext:String
+		
+		Select command
+		Case ACTIVATE_PASTE
+			SetTextAreaText dummytextarea,""
+			GadgetPaste(dummytextarea)
+			ActivateGadget textarea
+			clipboardtext=TextAreaText(dummytextarea)
+			
+			Update()
+			Local action:TAction
+			action=New TAction
+			AddAction action
+			action.add=clipboardtext
+			action.addpos=selpos
+			action.addlen=clipboardtext.length
+			action.beforepos=selpos
+			action.beforelen=sellen
+			action.remove=Mid(text,selpos+1,sellen)
+			action.removepos=selpos
+			action.removelen=sellen
+			action.afterpos=selpos+clipboardtext.length
+			action.afterlen=0
+			'action.afterpos=selpos
+			'action.afterlen=clipboardtext.length	
+			action.Redo(Self)
+			EmitEvent CreateEvent(EVENT_GADGETACTION,Self)
+			If (CODEAREA_SYNTAXHIGHLIGHTING &amp; style)
+				LockTextArea textarea
+				'Notify TextAreaLine(textarea,action.afterpos)+", "+TextAreaLine(textarea,action.afterpos+action.afterlen)
+				For n=TextAreaLine(textarea,action.beforepos) To TextAreaLine(textarea,action.beforepos+clipboardtext.length)
+					FormatLine n
+				Next
+				UnlockTextArea textarea
+			EndIf
+			
+		Case ACTIVATE_CUT
+			If sellen
+				textarea.activate(ACTIVATE_COPY)
+				Filter(CreateEvent(EVENT_KEYCHAR,textarea,8))
+			EndIf
+		Default
+			textarea.activate(command)
+		EndSelect
+	EndMethod
+	
+	Method Update()
+		selpos=TextAreaCursor(textarea,TEXTAREA_CHARS)
+		sellen=TextAreaSelLen(textarea,TEXTAREA_CHARS)
+		text=TextAreaText(textarea)
+	EndMethod
+	
+	Method Filter:Int(event:TEvent)
+		Local action:TAction
+		
+		Select event.id
+		Case EVENT_KEYDOWN
+			Select event.data
+			Case KEY_UP,KEY_DOWN,KEY_RIGHT,KEY_LEFT
+				Return True
+			EndSelect
+		Case EVENT_KEYCHAR
+			If MODIFIER_COMMAND &amp; event.mods Return False
+			If MODIFIER_OPTION &amp; event.mods Return False
+			Update()
+			Select event.data
+			Case 8
+				action=New TAction
+				AddAction action
+				action.add=""
+				action.addlen=0
+				action.beforepos=selpos
+				action.beforelen=sellen
+				If sellen=0
+					action.addpos=selpos-1
+					action.afterpos=selpos-1
+					action.afterlen=0
+					action.removelen=1
+					action.removepos=selpos-1
+					action.remove=Mid(text,1+selpos-action.removelen,action.removelen)
+				Else
+					action.addpos=selpos
+					action.afterpos=selpos
+					action.afterlen=0
+					action.removepos=selpos
+					action.removelen=sellen
+					action.remove=Mid(text,1+selpos,sellen)
+				EndIf
+				action.Redo(Self)
+				'action.Undo(self)
+				EmitEvent CreateEvent(EVENT_GADGETACTION,Self)
+			Default
+				action=New TAction
+				AddAction action
+				action.add=Chr(event.data)
+				action.addpos=selpos
+				action.addlen=1
+				action.beforepos=selpos
+				action.beforelen=sellen
+				action.remove=Mid(text,selpos+1,sellen)
+				action.removepos=selpos
+				action.removelen=sellen
+				action.afterpos=selpos+1
+				action.afterlen=0
+				action.Redo(Self)
+				EmitEvent CreateEvent(EVENT_GADGETACTION,Self)
+				'action.Undo(self)
+			EndSelect
+		EndSelect
+		Return False
+	EndMethod
+	
+	Function Callback:Int(event:TEvent,context:Object)
+		Local codearea:TCodeArea=New TCodeArea
+		codearea=TCodeArea(context)
+		If codearea
+			Return codearea.Filter(event)
+		EndIf
+	EndFunction
+	
+	Function EventHook:Object(id:Int,data:Object,context:Object)
+		Local event:TEvent=TEvent(data)
+		Local codearea:TCodeArea
+		
+		If event
+			codearea=TCodeArea(context)
+			If codearea
+				If Not codearea.ProcessEvent(event) Return data'Null
+			EndIf
+		EndIf
+		Return data
+	EndFunction
+	
+	'---------------------------------------------------------------------------------------------
+	'Creation
+	'---------------------------------------------------------------------------------------------	
+	Function Create:TCodeArea(x:Int,y:Int,width:Int,height:Int,group:TGadget,style:Int=CODEAREA_DEFAULT)
+		Local codearea:TCodeArea=New TCodeArea
+		Local textareastyle:Int
+		
+		If Not dummywindow
+			dummywindow=CreateWindow("",0,0,400,300,Null,WINDOW_HIDDEN)
+			dummytextarea=CreateTextArea(0,0,300,200,dummywindow)
+		EndIf
+		codearea.style=style
+		If (CODEAREA_READONLY &amp; style) textareastyle=TEXTAREA_READONLY
+		codearea.textarea=CreateTextArea(x,y,width,height,group,textareastyle)
+		SetGadgetFilter codearea.textarea,Callback,codearea
+		codearea.SetProxy(codearea.textarea)
+		AddHook EmitEventHook,EventHook,codearea
+		Return codearea
+	EndFunction
+	
+EndType
+
+'---------------------------------------------------------------------------------------------
+'Procedural functions
+'---------------------------------------------------------------------------------------------
+Function CreateCodeArea:TCodeArea(x:Int,y:Int,width:Int,height:Int,group:TGadget,style:Int=CODEAREA_DEFAULT)
+	Return TCodeArea.Create(x,y,width,height,group,style)
+EndFunction
+
+Function AddCodeAreaKeyword(codearea:TCodeArea,word:String)
+	codearea.AddKeyword(word)
+EndFunction
+
+Function SetCodeAreaFormat(codearea:TCodeArea,element:Int,r:Int,g:Int,b:Int,style:Int=0)
+	codearea.SetFormat(element,r,g,b,style)
+EndFunction
+
+Function CodeAreaClearUndos(codearea:TCodeArea)
+	codearea.ClearUndos()
+EndFunction
+
+Function CodeAreaCanUndo:Int(codearea:TCodeArea)
+	Return codearea.CanUndo()
+EndFunction
+
+Function CodeAreaCanRedo:Int(codearea:TCodeArea)
+	Return codearea.CanRedo()	
+EndFunction
+
+Function CodeAreaUndo(codearea:TCodeArea)
+	codearea.Undo()
+EndFunction
+
+Function CodeAreaRedo(codearea:TCodeArea)
+	codearea.Redo()	
+EndFunction
+
+Function SetCodeAreaLanguage(codearea:TCodeArea,language:Int)
+	codearea.SetLanguage language
+EndFunction
+
+
+'---------------------------------------------------------------------------------------------
+'Example
+'---------------------------------------------------------------------------------------------
+
+'Create window
+Local window:TGadget=CreateWindow("CodeArea Example",0,0,1024,768,Null,WINDOW_DEFAULT|WINDOW_CENTER)
+
+'Create menu
+Local root:TGadget=CreateMenu("Edit",0,WindowMenu(window))
+Local menu:TGadget[6]
+menu[0]=CreateMenu("Undo",0,root,KEY_Z,MODIFIER_COMMAND)
+menu[1]=CreateMenu("Redo",1,root,KEY_Z,MODIFIER_COMMAND|MODIFIER_OPTION)
+CreateMenu("",0,root)
+DisableMenu menu[0]
+DisableMenu menu[1]
+menu[2]=CreateMenu("Clear Undos",2,root)
+CreateMenu("",0,root)
+menu[3]=CreateMenu("Cut",3,root,KEY_X,MODIFIER_COMMAND)
+menu[4]=CreateMenu("Copy",4,root,KEY_C,MODIFIER_COMMAND)
+menu[5]=CreateMenu("Paste",5,root,KEY_V,MODIFIER_COMMAND)
+DisableMenu menu[3]
+DisableMenu menu[4]
+UpdateWindowMenu window
+
+'Create CodeArea gadget
+Local codearea:TCodeArea=CreateCodearea(0,0,ClientWidth(window),ClientHeight(window),window)
+SetGadgetLayout codearea,1,1,1,1
+
+'Add some keywords
+AddCodeAreaKeyword codearea,"Allegience"
+AddCodeAreaKeyword codearea,"Flag"
+AddCodeAreaKeyword codearea,"Justice"
+
+'Adjust the syntax highlighting
+SetCodeAreaFormat codearea,CODEAREA_KEYWORD,0,0,255,FONT_BOLD
+SetCodeAreaFormat codearea,CODEAREA_COMMENT,0,128,0,FONT_ITALIC
+
+'Add some text
+SetGadgetText codearea,"I pledge allegience to the flag of the United States of America~n#And to the republic for which it stands~n~qOne nation~q, under God, indivisible~n//With liberty and justice for all.~n"
+
+'Set the font (we can do this any time)
+SetGadgetFont codearea,LoadGuiFont("Courier New",10)
+
+'Set the gadget text and background colors (we can do this at any time)
+SetGadgetColor codearea,240,240,240,True
+SetGadgetColor codearea,0,0,0,False
+
+While WaitEvent()
+	Select EventID()
+		
+		Case EVENT_GADGETSELECT
+			If TextAreaSelLen(codearea)
+				EnableMenu menu[3]
+				EnableMenu menu[4]
+			Else
+				DisableMenu menu[3]
+				DisableMenu menu[4]
+			EndIf
+			UpdateWindowMenu window	
+			
+		Case EVENT_GADGETACTION
+			If TextAreaSelLen(codearea)
+				EnableMenu menu[3]
+				EnableMenu menu[4]
+			Else
+				DisableMenu menu[3]
+				DisableMenu menu[4]
+			EndIf
+			If codearea.canundo() EnableMenu menu[0] Else DisableMenu menu[0]
+			If codearea.canredo() EnableMenu menu[1] Else DisableMenu menu[1]
+			UpdateWindowMenu window			
+			
+		Case EVENT_MENUACTION
+			Select EventData()
+			Case 1 codearea.redo()
+			Case 0 codearea.undo()
+			Case 2 codearea.ClearUndos()
+			Case 3 GadgetCut(codearea)
+			Case 4 GadgetCopy(codearea)
+			Case 5 GadgetPaste(codearea)
+			EndSelect
+			If codearea.canundo() EnableMenu menu[0] Else DisableMenu menu[0]
+			If codearea.canredo() EnableMenu menu[1] Else DisableMenu menu[1]
+			UpdateWindowMenu window
+			
+		Case EVENT_WINDOWCLOSE
+			End
+			
+	EndSelect
+	Print CurrentEvent.ToString()
+Wend</textarea><br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1069651"></a>
+
+<a name="1069652"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >beanage</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for sharing this!<br><br>Some small glitches I noticed: Del, Home, Ins and End aint working. Also, when you hit Escape, some weird character is inserted.<br><br>(I also love you picked the Pledge of Allegiance as your example content, you know, as opposed to the Lord's Prayer everybody else normally chooses. Nevermind me.)<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1069661"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks.  I fixed the problem.  The CodeArea gadget now supports multi-line comments.  You can set the language to C, Lua, or BlitzMax.  I uploaded the final version here:<br><a href="http://blitzmax.com/codearcs/codearcs.php?code=2816" target="_blank">http://blitzmax.com/codearcs/codearcs.php?code=2816</a><br><br>Please report on that thread if you find anything else wrong. <br><br></td></tr></table><br>
+<a name="1069668"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >beanage</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#7">[#7]</a></td></tr></table></td></tr><tr ><td class="posttext"> Home, Del, Ins And End still dont work! <br><br></td></tr></table><br>
+<a name="1069669"></a>
+
+<a name="1069670"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#8">[#8]</a></td></tr></table></td></tr><tr ><td class="posttext"> Delete is easy to add, but what do you expect those other keys to do?<br><br><font class="tiny">Last edited 2011</font> <br><br></td></tr></table><br>
+<a name="1069671"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#9">[#9]</a></td></tr></table></td></tr><tr ><td class="posttext"> I added support for all those keys:<br><a href="http://blitzmax.com/codearcs/codearcs.php?code=2816#comments" target="_blank">http://blitzmax.com/codearcs/codearcs.php?code=2816#comments</a><br><br>If you find any other problems post in the code archive entry please. <br><br></td></tr></table><br>
+<a name="1070930"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#10">[#10]</a></td></tr></table></td></tr><tr ><td class="posttext"> I got multi-line comments working properly, and made some changes so it will work right on OSX:<br><a href="http://blitzmax.com/codearcs/codearcs.php?code=2816" target="_blank">http://blitzmax.com/codearcs/codearcs.php?code=2816</a><br><br>The Mac textarea is slightly more picky about errors, and this will fix it.<br><br>It should be ready for production use now, but let me know if you find any errors by replying to the post in the code archive or emailing me.  Thanks. <br><br></td></tr></table><br>
+<a name="1071073"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#11">[#11]</a></td></tr></table></td></tr><tr ><td class="posttext"> That's interesting... it does not support non english keyboards properly. I can't write Ñ or Ç ç or [ ], etc. Other than that, seems to work pretty well. <br><br></td></tr></table><br>
+<a name="1071094"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#12">[#12]</a></td></tr></table></td></tr><tr ><td class="posttext"> The code filters out unrecognized keys.  These can be added in. <br><br></td></tr></table><br>
+<a name="1071106"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#13">[#13]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> The code filters out unrecognized keys. <br></div>Why? Are you going to make it unsuport all the UTF-8 charset? Wouldn't it be safer to make it filter the known undesired chars, wich are usually 8 bits chars from 00 to $1F <br><br></td></tr></table><br>
+<a name="1071178"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >JoshK</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#14">[#14]</a></td></tr></table></td></tr><tr ><td class="posttext"> Because they're un-American.<br><br>No, I had to to get the undo/redo working right. <br><br></td></tr></table><br>
+<a name="1071308"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Wiebo</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#15">[#15]</a></td></tr></table></td></tr><tr ><td class="posttext"> Anything un-American should be filtered... I agree...  not...<br><br><br><br><br><br>^this is sarcasm. :) <br><br></td></tr></table><br>
+<a name="1071365"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >ziggy</td><td align="right"><font class=tiny>(Posted 2011)</font>&nbsp;<a href="#16">[#16]</a></td></tr></table></td></tr><tr ><td class="posttext"> <div class="quote"> this is sarcasm <br></div>I thought sarcams was much more British than American... weird world we live in... <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

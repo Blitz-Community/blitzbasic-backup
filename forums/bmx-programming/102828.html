@@ -1,0 +1,157 @@
+<!DOCTYPE html><html lang="en" ><head ><title >MaxLua and arrays</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >MaxLua and arrays</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >MaxLua and arrays</a><br><br>
+<a name="1233228"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dan_upright</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Can anyone explain to me how passing arrays between blitz and lua works? If I return an array from a blitz function, I can call that function from lua, then pass the result to another blitz function that expects an array and it works fine. What I can't figure out is how to do anything with the array inbetween those two points. I thought it'd get passed as a table but apparently it's userdata and I can't figure out what to do with that. <br><br></td></tr></table><br>
+<a name="1233251"></a>
+
+<a name="1233252"></a>
+
+<a name="1233253"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> <textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+	' create a table and load with array contents
+	Method lua_pushArray(obj:Object)
+		Local typeId:TTypeId = TTypeId.ForObject(obj)
+		Local size:Int = typeId.ArrayLength(obj)
+
+		'create a new "table" to store the entries in
+		'lua_newtable(getLuaState())
+
+		'maxlua creates a new table with a given size, dunno if that
+		'increases performance
+		lua_createtable(getLuaState(), size, 0)
+		
+
+		For Local i:Int = 0 until size
+			'lua is 1based not 0based, so entry "0" would be listed at
+			'the end instead of the beginning
+			lua_pushinteger(getLuaState(), i+1)
+			'you could also push a string-key instead
+			'lua_pushstring(getLuaState(), string(i+1))
+
+			Select typeId.ElementType()
+				Case IntTypeId, ShortTypeId, ByteTypeId, LongTypeId
+					lua_pushinteger(getLuaState(), typeId.GetArrayElement(obj, i).ToString().ToInt())
+				Case FloatTypeId
+					lua_pushnumber(getLuaState(), typeId.GetArrayElement(obj, i).ToString().ToFloat())
+				Case DoubleTypeId
+					lua_pushnumber(getLuaState(), typeId.GetArrayElement(obj, i).ToString().ToDouble())
+				Case StringTypeId
+					Local s:String = typeId.GetArrayElement(obj, i).ToString()
+					lua_pushlstring(getLuaState(), s, s.length)
+				Case ArrayTypeId
+					self.lua_pushArray(typeId.GetArrayElement(obj, i))
+				'for everything else, we just push the object...
+				Default
+					self.lua_pushObject(typeId.GetArrayElement(obj, i))
+			End Select
+
+			lua_settable(getLuaState(), -3)
+		Next
+	End Method
+</textarea><br><br>Arrays seem to get packed in a "table". This is like it is done in maxlua.mod (except the 1based approach).<br><br>I just tested it ... and it did not work ...ok so I checked what wents wrong: When invoking a blitzmax function/method from within LUA ... there is a bug avoiding running lua_pusharray:<br><br>Open up maxlua.bmx and search for "Method _invoke":<br><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Replace
+		if object[](t).length &gt; 0 then typeId = ArrayTypeId
+with
+		if object[](t).length &gt; 0 then typeId = ArrayTypeId
+
+		'RON: if methods return value _extends_ from Array the following
+		'     line makes that recognizeable. Without only the type itself
+		'     would be returned
+		if typeId.ExtendsType(ArrayTypeId) then typeId = ArrayTypeId
+</textarea><br><br>It might be needed to add that same thing to other portions of the code too (if you eg. invoke lua functions from blitzmax - and some of the function params are arrays) . But: this would make things just "readable" (as it converts the data to a table/pair of "key,value").<br><br><br>To make it "modifyable" we would need to read/modify the userdata it would send without the above modification:<br><a href="http://www.lua.org/pil/28.1.html" target="_blank">http://www.lua.org/pil/28.1.html</a><br><br>Another optionis the following: provide the array as a field of something, so the "NewIndex"-function gets called. Currently it does not handle "arrays", so we would have to do this on our own. Means you would have to read the size of the array and then for each entry read from the stack and add this to the array.<br><br><br>---<br>Instead of adding "array" handling, it would also be possible to extend "lua_unboxobject" and "lua_boxobject" (c code, I am not that firm in that) so they handle "BBARRAY" too.<br><br>Seems nilium (or noelCower) has done this similar in his LuGI-module:<br><a href="https://github.com/nilium/lugi.mod/blob/master/core.mod/lgcore.cpp" target="_blank">https://github.com/nilium/lugi.mod/blob/master/core.mod/lgcore.cpp</a><br><br><br>I do not know if that works with "local variables" too ...or if this all is restricted to types and their children.<br><br><br>EDIT: I forgot to mention something: To directly manipulate "variables" it might be needed to add specific functions to LUA, so you can access them with "array[index]" in lua, and modifications will then be triggering functions correctly. For an example how nilium has done this, search for<br><i>static int lugi_newindex_array(lua_State *state)</i><br>in the linked lgcore.cpp-file.<br><br>When linking the Blitzmax data with the Lua data you send a copy of your data (exception for "objects" there you send a memory pointer + "information"). I think if you send an array as "userdata", you cannot use them as "table" in lua but must provide your own "custom" functionality (array.Get(), array.Set() ...). These custom functionalities also contain definitions what functions of blitzmax have to get called in the case of modifications (eg. a custom "newIndex" function - newIndex is getting called as soon as a value gets changed).<br><br><br><br><br>PS: currently I avoid the array thing with having functions like "GetItemCount()", "GetItemAtPosition(position)" :D.<br><br>Hope that helps somehow.<br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1233257"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dan_upright</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks for the explainations mate, I'll keep this thread bookmarked in case I want to do a better solution at a later date but for now I went with:<br><pre class=code>
+Type ArrayWrapper
+	Method Create:String[] (sz:Int)
+		Local arr:String[] = New String[sz]
+		Return arr
+	End Method
+	
+	Method Get:String(arr:String[], index:Int)
+		Return arr[index]
+	End Method
+	
+	Method Set(arr:String[], index:Int, value:String)
+		arr[index] = value
+	End Method
+	
+	Method Size:Int(arr:String[])
+		Return arr.Length
+	End Method
+End Type
+
+LuaRegisterObject(New ArrayWrapper, "Array")
+</pre> <br><br></td></tr></table><br>
+<a name="1233384"></a>
+
+<a name="1233385"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dan_upright</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> On a somewhat related note, if I set a blitzmax object to nil in a lua script, I get the dreaded EXCEPTION_ACCESS_VIOLATION message. The object itself is fine - I can assign other values to it without any errors, just not nil. How do I do this without resorting to a SetObjectNull() function?<br><br>The error occurs in MaxLua's NewIndex function, if that helps. <br><br></td></tr></table><br>
+<a name="1233453"></a>
+
+<a name="1233454"></a>
+
+<a name="1233455"></a>
+
+<a name="1233456"></a>
+
+<a name="1233457"></a>
+
+<a name="1233458"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Derron</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#5">[#5]</a></td></tr></table></td></tr><tr ><td class="posttext"> Open up "maxlua.bmx", search for the "NewIndex"-function.<br><br>replace<br><pre class=code>
+		Select fld.TypeId()
+		Case IntTypeId, ShortTypeId, ByteTypeId, LongTypeId
+			fld.SetInt obj,lua_tointeger( L,3 )
+		Case FloatTypeId
+			fld.SetFloat obj,lua_tonumber( L,3 )
+		Case DoubleTypeId
+			fld.SetDouble obj,lua_tonumber( L,3 )
+		Case StringTypeId
+			fld.SetString obj,lua_tostring( L,3 )
+		Default
+			fld.Set obj,lua_unboxobject( L,3 )
+		End Select
+</pre><br><br>with<br><pre class=code>
+		If lua_isnil(L, 3)
+			Select fld.TypeId()
+				Case IntTypeId, ShortTypeId, ByteTypeId, LongTypeId, FloatTypeId, DoubleTypeId, StringTypeId
+					'SetInt/SetFloat/...all convert to a string
+					'"null" is 0/0.0/"" for primitive types in BlitzMax
+					fld.SetString(obj, "")
+				Default
+					fld.Set(obj, null)
+			End Select
+		Else
+			Select fld.TypeId()
+			Case IntTypeId, ShortTypeId, ByteTypeId, LongTypeId
+				fld.SetInt obj,lua_tointeger( L,3 )
+			Case FloatTypeId
+				fld.SetFloat obj,lua_tonumber( L,3 )
+			Case DoubleTypeId
+				fld.SetDouble obj,lua_tonumber( L,3 )
+			Case StringTypeId
+				fld.SetString obj,lua_tostring( L,3 )
+			Default
+				fld.Set obj,lua_unboxobject( L,3 )
+			End Select
+		EndIf
+</pre><br><br><br>if you change it, just also change this:<br><br>from<br><pre class=code>
+Function lua_pushobject( L:Byte Ptr,obj:Object )
+	lua_boxobject L,obj
+	lua_rawgeti L,LUA_REGISTRYINDEX,ObjMetaTable()
+	lua_setmetatable L,-2
+End Function
+</pre><br><br>to<br><br><pre class=code>
+Function lua_pushobject( L:Byte Ptr,obj:Object )
+	'convert BlitzMax "null"-objects to lua compatible "nil" values
+	If obj = null
+		lua_pushnil(L)
+	Else
+		lua_boxobject L,obj
+		lua_rawgeti L,LUA_REGISTRYINDEX,ObjMetaTable()
+		lua_setmetatable L,-2
+	EndIf
+End Function
+</pre><br><br>So "null objects" you send to lua could be correctly recognized as being "nil".<br><br><br><br>PS: similar to this "pushObject"-call one would have to handle "pushArray" if done with a "array-table", instead of "ObjMetaTable" you would then have to send the ArrayMetaTable() you had created before. This metatable would contain other function pointers for "index, newIndex, __set, __get, ...".<br><br><br>bye<br>Ron <br><br></td></tr></table><br>
+<a name="1233478"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >dan_upright</td><td align="right"><font class=tiny>(Posted 2014)</font>&nbsp;<a href="#6">[#6]</a></td></tr></table></td></tr><tr ><td class="posttext"> Cheers mate, that's a big help. =] <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

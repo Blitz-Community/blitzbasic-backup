@@ -1,0 +1,125 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Possible to Grab the Call Stack?</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Possible to Grab the Call Stack?</h1><a href="forums.php" >BlitzMax Forums</a>/<a href="topics.php?forum=102" >BlitzMax Programming</a>/<a href="#bottom" >Possible to Grab the Call Stack?</a><br><br>
+<a name="985206"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Macguffin</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Is it possible to grab the call stack as an object in BlitzMax?  I was thinking that info would be really helpful to attach to events in my event system.  Thanks. <br><br></td></tr></table><br>
+<a name="985217"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> I guess you could do this in debug mode (seeing as the debugger can).<br><br>Release mode is a different story. Its possible, but would require some black magic ;) <br><br></td></tr></table><br>
+<a name="985231"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >grable</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> If anyone wonders,<br>To make a call-chain, one has to trace through the call-frames on the stack, then decode the address from the call instruction before the return ip.<br><br>Heres an example for x86 and win32 (mac &amp; linux should work too, but not tested)<br><b>note that it will crash for functions without a call-frame</b><br><textarea class=codebox name="code" wrap=OFF readonly="true" rows="15" cols="80">
+Framework BRL.StandardIO
+
+Import BRL.Retro
+
+SuperStrict
+
+Global GLOB:TTest = New TTest
+
+Function GetMethodPtr:Byte Ptr( obj:Object, ofs:Int)
+	Local vmt:Byte Ptr = Byte Ptr Int Ptr(Byte Ptr(obj)-8)[0]
+	Return Byte Ptr Int Ptr(vmt + ofs)[0]
+EndFunction
+
+Print "A=" + Hex(Int Byte Ptr A)
+Print "B=" + Hex(Int Byte Ptr B)
+Print "C=" + Hex(Int Byte Ptr C)
+Print "TTest.D=" + Hex(Int GetMethodPtr( GLOB, $30)) ' new methods start at offset $30 (may change in the future)
+Print "-&gt;"
+init_trace()
+A()
+End
+
+Function A()
+	B()
+EndFunction
+
+Function B()
+	C()
+EndFunction
+
+Function C()
+	GLOB.D()
+EndFunction
+
+
+
+Type TTest
+	Method D()
+		trace()
+	EndMethod
+EndType
+
+
+Global main_frame:Int Ptr
+
+Function init_trace()
+	Local dummy:Int = $BAADF00D
+	Local stack:Int Ptr = Int Ptr Varptr dummy
+	' grab main frame pointer
+	main_frame = Int Ptr stack[1]
+EndFunction
+
+Function trace()
+	Function decode_call_addr:Byte Ptr( vmt:Byte Ptr, ip:Byte Ptr)
+		Local call:Byte Ptr
+		
+		' check 5 byte calls
+		call = ip - 5
+		If call[0] = $E8 Then
+			' call $addr
+			Return Byte Ptr(Int ip + Int Ptr(call+1)[0])
+		EndIf
+	
+		'check 3 byte calls
+		call = ip - 3
+		If call[0] = $FF Then
+			If call[1] &gt;= $50 And call[1] &lt;= $57 Then
+				' call [reg+byte]	
+				Return Byte Ptr Int Ptr(vmt + call[2])[0]
+			EndIf
+		EndIf
+		
+		' check 6 byte calls
+		call = ip - 6
+		If call[0] = $FF Then
+			If call[1] &gt;= $90 And call[1] &lt;= $97 Then
+				' call [reg+int]
+				Return Byte Ptr(vmt + Int Ptr(call+2)[0])
+			EndIf
+		EndIf
+		
+		' check 2 byte calls
+		call = ip - 2
+		If call[0] = $FF Then
+			If call[1] &gt;= $D0 And call[1] &lt;= $D7 Then
+				' call reg
+				DebugLog "unhandled: call reg"
+				Return Byte Ptr $BAADF00D
+			ElseIf call[1] &gt;= $10 And call[1] &lt;= $17 Then
+				' call [reg]
+				DebugLog "unhandled: call [reg]"
+				Return Byte Ptr $BAADF00D
+			EndIf
+		EndIf
+		
+		DebugLog "unhandled: unknown"
+		Return Byte Ptr($BAADF00D)
+	EndFunction
+		
+	Local dummy:Int = $BAADF00D
+	Local stack:Int Ptr = Int Ptr Varptr dummy
+	 ' start at calling frame
+	Local sp:Int Ptr = Int Ptr stack[1]
+	While sp &lt; main_frame
+		' bp=sp[0]
+		' ip=sp[1]
+		' this=sp[2] (if method)
+		' vmt=sp[2][0] (if method)
+		Print Hex(Int decode_call_addr( Byte Ptr Int Ptr(sp[2])[0], Byte Ptr sp[1]))
+		' goto last frame
+		sp = Int Ptr sp[0]
+	Wend
+EndFunction
+</textarea><br><br>UPDATE: added decoding of more call instructions, allowing to trace methods as well. <br><br></td></tr></table><br>
+<a name="985868"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Macguffin</td><td align="right"><font class=tiny>(Posted 2009)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks, Grable.  I figured odds were low that it would just mean including a pointer to an object... I'll have to hold off until after we get our IGF entry in.  Appreciate it!<br><br>Scott <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

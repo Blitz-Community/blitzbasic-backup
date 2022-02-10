@@ -1,0 +1,197 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Hashmap and Hashset</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Hashmap and Hashset</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=512" >Monkey Code</a>/<a href="#bottom" >Hashmap and Hashset</a><br><br>
+<a name="2042179"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >maltic</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> In an attempt to learn monkey I created a HashMap class and a HashSet class that extends it. I am putting them here because--in my empirical testing--I noticed both classes consistently outperformed the Red-Black binary tree based Map and Set that come with Monkey, especially for sizes &gt; 1000. Which makes sense given the asymptotic complexity of both.<br><br>Following are the times I saw in bench marking. Diddy's RealMillisecs was used to time the benchmarks. All tests were done in release mode.<br><br>HTML 500:<br>HashSet&lt;string&gt;: 2<br>StringSet: 2<br><br>HTML 5000<br>HashSet&lt;string&gt;: 5<br>StringSet: 13<br><br>HTML 500000:<br>HashSet&lt;string&gt;: 1037<br>StringSet: 2039<br><br>(GLFW was too fast to see a notable difference till the larger test case. Also the timer wasn't fine-grained enough)<br><br>GLFW 5000000:<br>HashSet&lt;string&gt;: 7000<br>StringSet: 21000<br><br>Feel free to use the code, change it or ignore it as you see fit. I hereby release it under public domain.<br><br><pre class=code>
+Class Hasher&lt;T&gt;
+	Method hashCode:int(i:T)
+		Return 0
+	End
+	Method equals:Bool(i:T, i2:T)
+		Return False
+	End
+End
+
+Class IntHasher Extends Hasher&lt;int&gt;
+	Method hashCode:int(i:int)
+		Return i
+	End
+	Method equals:Bool(i:int, i2:int)
+		Return i = i2
+	End
+End
+
+Class StringHasher Extends Hasher&lt;String&gt;
+	Method hashCode:int(i:String)
+		Local hash:Int = 1
+		Local prime:Int = 31
+		For Local j:Int = 0 To i.Length() -1
+			hash = prime * hash + i[j]
+		Next
+		Return hash
+	End
+	Method equals:Bool(i:String, i2:String)
+		Return i.Compare(i2) = 0
+	End
+End
+
+
+'	A hashtable element represents an entry in the hash map/table.
+'	Works like a singly linked list to deal with hash collisions.
+Class HTElem&lt;K, V&gt;
+	Field key:K
+	Field value:V
+	Field nxt:HTElem&lt;K, V&gt;
+	Method New(k:K, v:V, n:HTElem&lt;K, V&gt;)
+		key = k
+		value = v
+		nxt = n
+	End
+End
+
+'	A hash map class that uses chained bucketing to deal with hash collisions.
+' 	K and V represent the classes of the key and value items in the hash map.
+'	To use this class one will have to provide a 'Hasher' object defined above.
+Class HashMap&lt;K, V&gt;
+	Private
+	Field table:HTElem&lt;K, V&gt;[]		'	The array that backs the hash table
+	Field numElems:Int = 0			'	Number of elements in the hash table
+	Const MAX_LOAD:Float = 1.75	'	When the hashtable exceedes this density it will resize itself
+	Const GROWTH_FACTOR:= 3			'	The multiple to with the table resizes
+	Const DEFAULT_HT_SIZE:= 11		'	The default hash table size
+	Const SHRINK_FACTOR:= 0.5
+	Const MIN_LOAD:= 0.3
+	Field hasher:Hasher&lt;K&gt;			'	The hasher object that provides equals and hashCode methods
+	
+	'	Resizes the hash map while keeping all its entries.
+	Method resize:Void(size:int)
+		Local tmp:HTElem&lt;K, V&gt;[] = table
+		table = New HTElem&lt;K, V&gt;[size]
+		For Local i:int = 0 Until tmp.Length
+			Local curr:= tmp[i]
+			While (curr &lt;&gt; Null)
+				Self.add(curr.key, curr.value)
+				curr = curr.nxt
+			Wend
+		Next
+	End
+	
+	'	Gets the location for a key in the current table
+	Method getLoc:Int(key:K)
+		Return Abs(hasher.hashCode(key) Mod table.Length)
+	End
+	
+	Public
+	
+	'	------Constructors-------
+	' Create a new hashmap with a specific size
+	Method New(h:Hasher&lt;K&gt;, size:Int)
+		table = New HTElem&lt;K, V&gt;[size]
+		hasher = h
+	End
+	'	Create a default hashmap
+	Method New(h:Hasher&lt;K&gt;)
+		table = New HTElem&lt;K, V&gt;[DEFAULT_HT_SIZE]
+		hasher = h
+	End
+	
+	'	Check if the hashmap contains a specific element
+	Method contains:Bool(key:K)
+		Local location:Int = Self.getLoc(key)
+		Local curr:HTElem&lt;K, V&gt; = table[location]
+		While (curr &lt;&gt; Null)
+			If (hasher.equals(curr.key, key))
+				Return True
+			EndIf
+			curr = curr.nxt
+		Wend
+		Return False
+	End
+	
+	Method get:V(key:K)
+		Local location:Int = Self.getLoc(key)
+		Local curr:HTElem&lt;K, V&gt; = table[location]
+		While (curr &lt;&gt; Null)
+			If (hasher.equals(curr.key, key))
+				Return curr.value
+			EndIf
+			curr = curr.nxt
+		Wend
+		Throw New Throwable
+	End
+	
+	'	Add a new key/value pair
+	Method add:Void(key:K, value:V)
+		Local location:Int = Self.getLoc(key)
+		Local tst:= table[location]
+		table[location] = New HTElem&lt;K, V&gt;(key, value, table[location])
+		Self.numElems += 1
+		If (Self.numElems / Float(table.Length) &gt;= MAX_LOAD)
+			Self.resize(table.Length * GROWTH_FACTOR)
+		EndIf
+		tst = table[location]
+	End
+	
+	'	Remove all instances of a key
+	Method remove:Void(key:K)
+		Local location:Int = Self.getLoc(key)
+		Local curr:HTElem&lt;K, V&gt; = table[location]
+		Local prev:HTElem&lt;K, V&gt; = Null
+		While (curr &lt;&gt; Null)
+			If (hasher.equals(curr.key, key))
+				If (prev &lt;&gt; Null)
+					prev.nxt = curr.nxt
+				Else
+					table[location] = table[location].nxt
+				EndIf
+			EndIf
+			prev = curr
+			curr = curr.nxt
+		Wend
+	End
+	
+End
+
+
+'	A set that is backed by a hashmap
+Class HashSet&lt;T&gt; Extends HashMap&lt;T, Object&gt;
+	Method New(h:Hasher&lt;K&gt;, size:Int)
+		Super.New(h, size)
+	End
+	Method New(h:Hasher&lt;K&gt;)
+		Super.New(h)
+	End
+	Method add:Void(key:T, value:Object = Null)
+		Super.add(key, Null)
+	End
+	
+	Method remove:bool(key:T)
+		Return Super.remove(key)
+	End
+	
+	Method contains:bool(key:T)
+		Return Super.contains(key)
+	End
+End
+</pre><br><br>Here is an example of how one might use the code:<br><pre class=code>
+Local h:HashSet&lt;String&gt; = New HashSet&lt;String&gt;(New StringHasher())
+h.add("hello hashset!")
+</pre><br><br>You will have to define your own Hasher classes for different classes. However I might be able to make a generic one using reflection.<br><br>When using these classes with your own objects, or for any other type I haven't made a Hasher object for, you need to make sure you define a good hashCode method that spreads out entries evenly over the hash table. I suggest following the method used by StringHasher in the above code for every field element you want to use to form the hash code.<br><br>The hash map will automatically resize itself. However using the right constructor you can give it a starting size other than the default. This can be useful when you know roughly how many elements you will be housing in the hash map and will optimize performance a little.<br><br>The code has been moderately tested for speed and correctness on the HTML5 and GLFW targets. Feel free to report any bugs, ideas or improvements. <br><br></td></tr></table><br>
+<a name="2042166"></a>
+
+<a name="2042165"></a>
+
+<a name="2042162"></a>
+
+<a name="2042163"></a>
+
+<a name="2042280"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Gerry Quinn</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#2">[#2]</a></td></tr></table></td></tr><tr ><td class="posttext"> Looks neat, though I'll admit that my current roguelike project is the first time I've ever used a Map or a Set for anything! <br><br></td></tr></table><br>
+<a name="2042306"></a>
+
+<a name="2042307"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >maltic</td><td align="right"><font class=tiny>(Posted 2012)</font>&nbsp;<a href="#3">[#3]</a></td></tr></table></td></tr><tr ><td class="posttext"> Thanks! I've had to use Maps and Sets for a lot of things. I think of them like a nice swiss army knife for lots of applications. <br><br></td></tr></table><br>
+<a name="2042305"></a>
+
+<a name="2054590"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Goodlookinguy</td><td align="right"><font class=tiny>(Posted 2013)</font>&nbsp;<a href="#4">[#4]</a></td></tr></table></td></tr><tr ><td class="posttext"> I saw these back when you first posted them and didn't get around to testing them until now (5 months later...). Interestingly, on a small scale, both hash map and map typically ran at the same speed. It wasn't until very large sized maps that the speed difference became noticeable.<br><br>These are the results from two of my tests (red = hash multimap; blue = multimap)<br><br><img src="http://dump.nrgs.org/monkey/map_vs_hashmap_10x10000.png"><br><img src="http://dump.nrgs.org/monkey/map_vs_hashmap_10x50000.png"><br><br>All-in-all though, the (A)verage and (T)otal usually leaned towards hash map (most platforms, except flash, which was indecisive).<br><br>Thank you for making these, 'cause they do help with performance in certain cases where you need to squeeze out a bit more without causing major slowdowns. <br><br></td></tr></table><br>
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

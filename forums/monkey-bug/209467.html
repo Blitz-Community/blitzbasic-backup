@@ -1,0 +1,101 @@
+<!DOCTYPE html><html lang="en" ><head ><title >Interfacing with C / C++</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='language:basic, target:desktop, category:game development'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 >Interfacing with C / C++</h1><a href="forums.php" >Monkey Forums</a>/<a href="topics.php?forum=501" >Monkey Bug Reports</a>/<a href="#bottom" >Interfacing with C / C++</a><br><br>
+<a name="2098440"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Pharmhaus</td><td align="right"><font class=tiny>(Posted 2015)</font>&nbsp;<a href="#1">[#1]</a></td></tr></table></td></tr><tr ><td class="posttext"> Hi mark,<br><br>I am sorry for the inconvenience. This is not a bug but it would be nice of you if you could add some #defines to the monkey core so that interfacing with C and C++ based libaries is a lot easier. Since it is possible to link to libaries with GCC directly it would be great if the conversion to C and Uft8 formatted strings could be implemented as native "functions" in monkey. Here is a simple MessageBox example using user32.dll :<br><br>apiTest.cpp<br><pre class=code>
+#define ToCString(_1) (_1).ToCString&lt;char&gt;()
+// To Utf8?
+// To Widestring?
+</pre><br><br>apiTest.monkey<br><pre class=code>
+#CC_OPTS += "-static -lUser32"
+
+Import "apiTest.cpp"
+
+Extern
+
+	'int WINAPI MessageBox(
+	'	_In_opt_  HWND hWnd,
+	'	_In_opt_  LPCTSTR lpText,
+	'	_In_opt_  LPCTSTR lpCaption,
+	'	_In_      UINT uType
+	');
+	
+	Function MessageBox:Int(hwnd:Int, x:CString, y:CString, type:Int) = "MessageBoxA"
+	Function ToCString:CString(str:String)
+	
+	'Fake class to ensure type safety
+	Class CString Abstract
+	End
+	
+Public
+
+Function Main:Int()
+	MessageBox(0, ToCString("HEllo"), ToCString("World!"), 0)
+	Return 0
+End
+</pre><br><br>It would also be very kind of you if you could explain how to interface with external c++ code and how to pass / return monkey object properly. Since c++ always requires prototypes and such, I am currently kind of stuck because I do not know how to handle this and other people have been facing the same problem recently(<a href="http://www.monkey-x.com/Community/posts.php?topic=9469" target="_blank">see here</a> or <a href="http://www.monkey-x.com/Community/posts.php?topic=9030" target="_blank">here</a>). Just for the case that there is currently no way to handle these scenarios I kindly ask you to implement a workaround (maybe a {beforetranscode}  {after transcode} area where headerfiles / regular files could be injected?, Or the possibility to properly order imports?)<br><br><br><br>One of the problems that makes interfacing with c++ extremly hard is monkeys dead code elimination because it removes all code that might be still in use by external c++ code. Reflecting everthing might work for very tiny application but for real projects, this causes a lot of headaches and increases compile time too much. I am currently using this dirty hack which introduces a new preprocessor variable called NO_DEADCODE_ELIMINATION were modules which should be excluded from dead code elimination (for what ever reason) can be added. It would be greatly appreciated if you could implement a similiar solution in further versions of monkey.<br><br>trans/decl.monkey -&gt; AppDecl<br><pre class=code>
+
+	Method OnSemant()
+	
+		_env=Null
+		
+		mainFunc=mainModule.FindFuncDecl( "Main",[] )
+		
+		If Not mainFunc Err "Function 'Main' not found."
+		
+		If Not IntType( mainFunc.retType ) Or mainFunc.argDecls.Length
+			Err "Main function must be of type Main:Int()"
+		Endif
+		
+		PreventDeadCodeElimination
+		FinalizeClasses
+	End
+
+	Method PreventDeadCodeElimination()
+		Local deadCode:= New StringStack(GetConfigVar("NO_DEADCODE_ELIMINATION").Split(";"))
+		Local includedModules:= New StringStack()
+
+		For Local modules:ModuleDecl = EachIn imported.Values
+
+			Local enableModules:Bool = False
+			
+			For Local i:Int = 0 Until deadCode.Length
+				If deadCode.Get(i) = "" Then Continue
+				
+				If deadCode.Get(i).EndsWith("*") And modules.modpath.StartsWith(deadCode.Get(i)[ .. deadCode.Get(i).Length - 2] + ".") Then
+					enableModules = True
+					Exit
+				ElseIf deadCode.Get(i) = modules.modpath
+					enableModules = True
+					Exit
+				EndIf
+			Next
+			
+			If enableModules Then
+				includedModules.Push(modules.rmodpath)
+				modules.SemantAll()
+			EndIf
+		Next
+		
+		Print "&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; The following modules have been excluded from deadcode elimination"
+		For Local i:String = EachIn includedModules
+			Print i
+		Next
+		Print "&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;"
+		
+	End
+</pre> <br><br></td></tr></table><br>
+<a name="2098439"></a>
+
+<a name="2098438"></a>
+
+<a name="2098437"></a>
+
+<a name="2098436"></a>
+
+<a name="2098435"></a>
+
+<a name="2098434"></a>
+
+<a name="2098384"></a>
+
+<a name="bottom"></a>
+<table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">

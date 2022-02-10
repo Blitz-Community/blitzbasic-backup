@@ -1,0 +1,326 @@
+<!DOCTYPE html><html lang="en" ><head ><title >File Date/Time/Attr functions for b+</title><meta name='viewport' content='width=device-width, initial-scale=0.66'><meta name='description' content='File Date/Time Functions, language=bb, category=File Utilities'><meta name='author' content='Snarkbait'><link rel="styleSheet" href="../skins/granite/style.css" type="text/css"><style type="text/css">div.bbcode {padding: 8px;background: #E5E5E5;color: #000000;border: 1px dashed #B4B4BE;}</style></head><body ><table width=100% cellspacing=0 cellpadding=0><tr ><td class="menubarleft"></td><td class="menubar"><table cellspacing="0" cellpadding="0"><tr ><td >&nbsp;</td><td class="menuitemleft"></td><td class="menuitem"><a href="/" class="menuitem">News</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/forums.php" class="menuitem">Forums</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/codearcs.php" class="menuitem">Code</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/logs.php" class="menuitem">Logs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/gallery.php" class="menuitem">Gallery</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/sdkspecs.php" class="menuitem">Specs</a></td><td class="menuitemright"></td><td class="menuitemleft"></td><td class="menuitem"><a href="/search.php" class="menuitem">Search</a></td><td class="menuitemright"></td></tr></table></td><td class="menubarright"></td></tr></table><div class="main"><h1 ><a href=codearcs.php>Code archives</a>/<a href=codearcs.php?cat=8>File Utilities</a>/File Date/Time/Attr functions for b+</h1><div class="quote">This code has been declared by its author to be Public Domain code.</div><br><a href="2177.bb">Download source code</a><br><br><table width="100%" cellspacing="0" cellpadding="0"><tr ><td width="100%"><table width=100% cellspacing=0 cellpadding=0><tr ><td class=headleft></td><td class=head><table width=100% cellspacing=0 cellpadding=0><tr ><td >File Date/Time/Attr functions for b+ by Snarkbait</td><td align="right">2008 </td></tr></table></td><td class=headright></td></tr></table></td></tr><tr ><td class="cell"> Uses kernel32 functions to get file date/time information, also you can get file attribute information. <br><br>GetFileDateStringFromType() function returns date in US format, apologies to those from elsewhere... could easily be altered to your local accepted date/time format. </td></tr><tr ><td class="cell"><pre class="code">; filetime.bb include file
+; File Date &amp; Time, Attributes functions 
+; by snarkbait
+; snarkbait66@gmail.com
+;
+; typical Microsoft - it takes no less than FIVE api function calls to get the proper date!
+;
+; add the following to kernel32.decls
+; .lib "kernel32.dll"
+;
+;api_GetFileTime%(hFile%,lpCreationTime*,lpLastAccessTime*,lpLastWriteTime*):"GetFileTime"
+;api_CreateFile%(FileName$, dwDesiredAccess%, dwShareMode%, lpSecurity%, dwCreationDsp%, dwFlagsAndAttr%, hTemplate%):"CreateFileA"
+;api_FileTimeToSystemTime%(lpFileTime*, lpSystemTime*):"FileTimeToSystemTime"
+;api_CloseHandle%( hObject% ):"CloseHandle"
+;api_FileTimeToLocalFileTime%(lpFileTime*, lpLocalFileTime*):"FileTimeToLocalFileTime" 
+;
+;; also, to get file attributes, add
+; api_GetFileAttributes%( lpFilename$ ):"GetFileAttributesA"
+;
+
+
+Type SYSTEMTIME
+	Field wYear%
+	Field wMonth%
+	Field wDayOfWeek%
+	Field wDay%
+	Field wHour%
+	Field wMinute%
+	Field wSecond%
+	Field wMilliseconds%
+End Type
+
+; API constants
+
+; CreateFile:Desired Access
+Const GENERIC_WRITE = $40000000
+Const GENERIC_READ = $80000000
+; CreateFile:FlagsAndAttributes
+Const FILE_ATTRIBUTE_NORMAL = $80
+; CreateFile:CreationDisposition
+Const OPEN_EXISTING = 3
+; CreateFile:ShareMode
+Const FILE_SHARE_READ = 1
+Const FILE_SHARE_WRITE = 2
+
+; other constants
+Const FILETIMESIZE = 8
+Const SYSTEMTIMESIZE = 16
+Const GET_CREATION = 0
+Const GET_LASTACCESS = 1
+Const GET_LASTMODIFIED = 2
+Const ATTR_STRING$ = "RHSVDALC"
+
+;==========================================================================
+; FUNCTION: FileDateTime()
+; PARAMS:
+;			filename$ : valid filename/path string
+;			[returnType] : default GET_LASTMODIFIED, or GET_CREATION, GET_LASTACCESS
+;						Specifies if you want the file creation, last modified, or last accessed date/time
+;						Last Modified is the generally used 'file date'
+; CALLS:
+;			FileExists()
+;			api_CreateFile() : kernel32.dll function - returns handle for subsequent i/o ops
+;			api_GetFileTime() : kernel32.dll function - fills passed banks with 64-bit UTC date/time value
+;			api_FileTimeToLocalTime : kernel32.dll function - converts from 64bit UTC to systemtime struct
+;			api_FileTimeToSystemTime : kernel32.dll function - converts sytemtime struct to same with localized date/time values
+;			api_CloseHandle : kernel32.dll - Closes file handle opened with api_CreateFile()
+;			GetFileDateFromBank() : constructor method for type SYSTEMTIME, creates instance and
+;									fills it with values from the passed bank
+;
+; RETURNS:
+;	Instance of type SYSTEMTIME 
+; OTHER: If you do not specify dwShareMode for CreateFile, and filename is already opened, WILL CAUSE CRASH.
+;		Keep sharemode to 'FILE_SHARE_READ Or FILE_SHARE_WRITE'
+Function FileDateTime.SYSTEMTIME( filename$, returnType = GET_LASTMODIFIED )
+	Local hFile%
+	Local success%
+	Local retValue%
+	Local bankCreationFileTime = CreateBank(FILETIMESIZE)
+	Local bankLastAccessFileTime = CreateBank(FILETIMESIZE)
+	Local bankLastModifiedFileTime = CreateBank(FILETIMESIZE)
+	Local bankLocalFileTime = CreateBank(FILETIMESIZE)
+	Local bankSystemTime = CreateBank(SYSTEMTIMESIZE)
+	
+	; check file
+	If Not FileExists( filename$ )
+		Return Null
+	EndIf
+	
+	; get api file handle
+	hFile = api_CreateFile( filename$, GENERIC_WRITE Or GENERIC_READ, FILE_SHARE_READ Or FILE_SHARE_WRITE, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0)
+	If hFile &gt; 0
+		; get 64-bit UDT, for all three options
+		success = api_GetFileTime(hFile, bankCreationFileTime, bankLastAccessFileTime, bankLastModifiedFileTime)
+		If success
+			; convert selected return type to local time
+			Select returnType
+				Case GET_CREATION
+					success = api_FileTimeToLocalFileTime( bankCreationFileTime, bankLocalFileTime )
+				Case GET_LASTACCESS
+					success = api_FileTimeToLocalFileTime( bankLastAccessFileTime, bankLocalFileTime )
+				Case GET_LASTMODIFIED
+					success = api_FileTimeToLocalFileTime( bankLastModifiedFileTime, bankLocalFileTime )
+				Default
+					success = False
+			End Select
+			If success
+				; convert to structured time info ( &amp; free unused banks)
+				FreeBank bankCreationFileTime
+				FreeBank bankLastModifiedFileTime
+				FreeBank bankLastAccessFileTime
+				success = api_FileTimeToSystemTime(bankLocalFileTime, bankSystemTime)
+				If success
+					; create type object and fill with bank values
+					FreeBank bankLocalFileTime
+					this.SYSTEMTIME = GetFileDateFromBank( bankSystemTime )
+					FreeBank bankSystemTime
+					; didn't create type properly
+					If this.SYSTEMTIME = Null
+						retValue = False
+					Else
+						; everything OK
+						retValue = True
+					EndIf
+				Else
+					; error, but needs close file
+					retValue = False
+				EndIf
+			Else
+				; error, but needs close file
+				retValue = False
+			EndIf
+		Else
+			; error, but needs close file
+			retValue = False
+		EndIf
+	Else
+		; error
+		Return Null
+	EndIf
+	
+	If retValue
+		; everything OK, close file and return Object
+		api_CloseHandle( hFile)
+		Return this
+	Else
+		; SNAFU, close file and return null
+		api_CloseHandle( hFile)
+		Return Null
+	EndIf
+End Function
+
+;==========================================================================
+; FUNCTION: GetFileDateFromBank()
+; PARAMS:
+;			inBank : 16-byte bank in the SYSTEMTIME format
+; CALLS:
+; RETURNS:
+;	Instance of type SYSTEMTIME, filled with values from bank
+; OTHER:
+;
+
+Function GetFileDateFromBank.SYSTEMTIME( inBank )
+
+	; check bank is the right size
+	If BankSize( inBank ) &lt; SYSTEMTIMESIZE Return Null
+	
+	; create instance
+	Local this.SYSTEMTIME = New SYSTEMTIME
+	
+	; peek 2-byte values from bank
+	this\wYear = PeekShort( inBank, 0 )
+	this\wMonth = PeekShort( inBank, 2 )
+	this\wDayOfWeek = PeekShort( inBank, 4 )
+	this\wDay = PeekShort( inBank, 6 ) 
+	this\wHour = PeekShort( inBank, 8 ) 
+	this\wMinute = PeekShort( inBank, 10 )
+	this\wSecond = PeekShort( inBank, 12 )
+	this\wMilliseconds = PeekShort( inBank, 14 )
+	
+	; return Object
+	Return this
+End Function
+
+;==========================================================================
+; FUNCTION: GetFileDateStringFromType()
+; PARAMS:
+;			this.SYSTEMTIME : object of type SYSTEMTIME
+; CALLS:
+; RETURNS:
+;	String in American date format, i.e. "MM/DD/YYYY HH:MM:SS {AM/PM}"
+; OTHER:		
+;
+
+Function GetFileDateStringFromType$( this.SYSTEMTIME )
+	Local retStr$
+	Local AMPM$
+	Local hrs
+	Local strMin$
+	Local strSec$
+	
+	; meridiem
+	If this\wHour &gt; 11
+		AMPM$ = "PM"
+	Else
+		AMPM$ = "AM"
+	EndIf
+	
+	; convert from military time
+	hrs = this\wHour Mod 12
+	If hrs = 0 hrs = 12
+	
+	; fix minute/second strings to 2 places
+	If this\wMinute &lt; 10
+		strMin = "0" + this\wMinute
+	Else
+		strMin = Str(this\wMinute)
+	EndIf
+	If this\wSecond &lt; 10
+		strSec = "0" + this\wSecond
+	Else
+		strSec = Str(this\wSecond)
+	EndIf
+	
+	;concatenate
+	retStr = Str(this\wMonth) + "/" + Str(this\wDay) + "/" + Str(this\wYear) + " " + Str(hrs) + ":" + strMin + ":" + strSec + " " + AMPM$
+	
+	Return retStr
+	
+End Function
+
+;==========================================================================
+; FUNCTION: GetFileAttributesStr()
+; PARAMS:
+;			filename$ : valid filename/path string
+; CALLS:
+;			FileExists()
+;			api_GetFileAttributes() : kernel32.dll function - returns Long value with file attribute bit flags
+; RETURNS:
+;	String with accumulated file attributes, i.e. "A" for Archive, "D" for folder, "HSA" for Hidden, System and Archive
+;
+; OTHER:	N = normal, R = read only, H = hidden S = system V = volume
+;           	D = directory, A = archive, L = alias, C = compressed
+;	If you want just the integer value, just use the api function api_GetFileAttributes( filename$ ) by itself
+
+Function GetFileAttributesStr$( filename$ )
+	If Not FileExists( filename$ )
+		Return ""
+	EndIf
+	
+	Local fAttr
+	Local retStr$
+	Local a
+	
+	fAttr = api_GetFileAttributes( filename$ )
+	
+	; mask to 8-bits
+	fAttr = fAttr And $FF
+	
+	; attribute normal
+	If fAttr = 0 Then
+      	  	retStr$ = "N"
+    	Else
+      ; loop thru byte to see which bits are set
+        	For a = 1 To 8
+            		If fAttr And 1 Shl (a - 1) Then
+				; bit is set, add proper code from string
+                		retStr = retStr + Mid$(ATTR_STRING, a, 1)
+            		End If
+        	Next
+    	End If
+
+	Return retStr
+End Function
+
+;==========================================================================
+; FUNCTION: FileExists()
+; PARAMS:
+;			filename$ : valid filename/path string
+; CALLS:
+; RETURNS:
+;	True if file exists, False if not
+; OTHER:		
+;
+
+Function FileExists( filename$ )
+	Local retValue
+	If FileType( filename$ ) = 1
+		retValue = True
+	Else
+		retValue = False
+	EndIf
+	Return retValue
+End Function</pre></td></tr></table><br><a name="comments">Comments</a><br><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Andres</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Very good. I definately need it at some point. <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >markcw</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Example code to test out the functions with.<br><pre class=code>;Main
+
+Graphics 640,480,0,2
+SetBuffer BackBuffer()
+
+filename$=RequestFile("Any file..","",False)
+
+pDate.SYSTEMTIME=FileDateTime(filename$)
+USdate$=GetFileDateStringFromType(pDate)
+Attr$=GetFileAttributesStr(filename$)
+
+Date$="Date="+pDate\wDay+"/"+pDate\wMonth+"/"+pDate\wYear
+Date$=Date$+", Time="+pDate\wHour+":"+pDate\wMinute+":"+pDate\wSecond
+
+Text 0,0,"filename="+filename$
+Text 0,12,"USdate="+USdate$
+Text 0,24,Date$+" DayOfWeek="+pDate\wDayOfWeek
+Text 0,36,"Attr="+Attr$
+
+While Not KeyHit(1)
+Wend</pre><br><br>And kernel32.decls to just copy+paste.<br><pre class=code>.lib "kernel32.dll"
+
+Api_GetFileTime%(hFile%,lpCreationTime*,lpLastAccessTime*,lpLastWriteTime*):"GetFileTime"
+Api_CreateFile%(FileName$, dwDesiredAccess%, dwShareMode%, lpSecurity%, dwCreationDsp%, dwFlagsAndAttr%, hTemplate%):"CreateFileA"
+Api_FileTimeToSystemTime%(lpFileTime*, lpSystemTime*):"FileTimeToSystemTime"
+Api_CloseHandle%( hObject% ):"CloseHandle"
+Api_FileTimeToLocalFileTime%(lpFileTime*, lpLocalFileTime*):"FileTimeToLocalFileTime" 
+
+;also, to get file attributes, add
+Api_GetFileAttributes%( lpFilename$ ):"GetFileAttributesA"
+</pre> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >Snarkbait</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Thx, markcw... you don't need the <br><pre class=code>pDate.SYSTEMTIME=New SYSTEMTIME</pre><br><br>as the FileDateTime function instantiates it for you, call it like<br><br><pre class=code>
+pDate.SYSTEMTIME = FileDateTime( filename$ )
+</pre> <br><br></td></tr></table><br><table width=100% cellspacing=0 cellpadding=0><tr ><td class="posthead"><table width=100% cellspacing=0 cellpadding=0><tr ><td >markcw</td><td align="right"><font class=tiny>2008</font></td></tr></table></td></tr><tr ><td class="posttext"> Oops, thanks. Code updated. <br><br></td></tr></table><br><a href="codearcs.php" >Code Archives Forum</a><table width=100% cellspacing=0 cellpadding=0><tr ><td align="right"><a href="http://monkeycoder.co.nz" target="_blank"><img src="/img/monkey2.svg" ></a> <a href="https://github.com/blitz-research" target="_blank"><img src="/img/github.svg" ></a> <a href="https://discord.gg/qJccbSp" target="_blank"><img src="/img/discord.svg" ></a></td></tr></table><br></div><br><table width="100%"><tr><td></body></html lang="en">
