@@ -2,4 +2,4 @@
 
 ### A backup of the BlitzBasic forum
 
-[View as website](https://blitz-community.github.io/blitzbasic-backup)
+[View as website](https://blitz-community.github.io/blitzbasic-backup/)
